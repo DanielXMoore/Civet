@@ -14,6 +14,22 @@ describe "function", ->
   """
 
   testCase """
+    one liner
+    ---
+    (x) -> x
+    ---
+    function(x) { x };
+  """
+
+  testCase """
+    one liner keeps comments
+    ---
+    (/**/x) -> /**/x
+    ---
+    function(/**/x) { /**/x };
+  """
+
+  testCase """
     empty parameters
     ---
     ->
