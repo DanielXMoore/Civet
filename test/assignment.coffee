@@ -27,4 +27,4 @@ describe "assignment operations", ->
     ---
     a =
     b;
-  """, true
+  """
