@@ -1,4 +1,4 @@
-{testCase} = require "./helper"
+{compare, testCase, throws} = require "./helper"
 
 describe "function", ->
   # TODO: var f, return x
@@ -24,7 +24,6 @@ describe "function", ->
     };
   """
 
-
   testCase """
     longhand
     ---
@@ -35,3 +34,20 @@ describe "function", ->
       x;
     };
   """
+
+  testCase """
+    return
+    ---
+    (x) ->
+      return x
+    ---
+    function(x) {
+      return x;
+    };
+  """
+
+  it "doesn't allow import inside of function ", ->
+    throws """
+      (x) ->
+        import * from 'x';
+    """, ""

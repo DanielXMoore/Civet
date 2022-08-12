@@ -12,7 +12,12 @@ testCase = (text) ->
   it desc, ->
     compare src, result
 
+throws = (text) ->
+  assert.throws ->
+    gen(parse(text))
+
 module.exports = {
   compare
   testCase
+  throws
 }
