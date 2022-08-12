@@ -96,11 +96,39 @@ describe "object", ->
     method definition
     ---
     x =
+      id()
+        return 5
+    ---
+    x = {
+      id() {
+        return 5;
+      },
+    };
+  """
+
+  testCase """
+    method get definition
+    ---
+    x =
       get id()
         return 5
     ---
     x = {
       get id() {
+        return 5;
+      },
+    };
+  """
+
+  testCase """
+    method set definition
+    ---
+    x =
+      get set(v)
+        return 5
+    ---
+    x = {
+      get set(v) {
         return 5;
       },
     };
