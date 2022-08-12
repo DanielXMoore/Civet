@@ -18,3 +18,13 @@ describe "assignment operations", ->
     a += b;
     a -= b;
   """
+
+  testCase """
+    allows newlines
+    ---
+    a =
+    b
+    ---
+    a =
+    b;
+  """, true

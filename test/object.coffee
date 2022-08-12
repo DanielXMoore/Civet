@@ -91,3 +91,73 @@ describe "object", ->
       },
     };
   """
+
+  testCase """
+    method definition
+    ---
+    x =
+      get id()
+        return 5
+    ---
+    x = {
+      get id() {
+        return 5;
+      },
+    };
+  """
+
+  testCase """
+    private method definition
+    ---
+    x =
+      get #id()
+        return 5
+    ---
+    x = {
+      get #id() {
+        return 5;
+      },
+    };
+  """
+
+  testCase """
+    async method definition
+    ---
+    x =
+      async x()
+        return 5
+    ---
+    x = {
+      async x() {
+        return 5;
+      },
+    };
+  """
+
+  testCase """
+    generator method definition
+    ---
+    x =
+      *x()
+        return 5
+    ---
+    x = {
+      *x() {
+        return 5;
+      },
+    };
+  """
+
+  testCase """
+    async generator method definition
+    ---
+    x =
+      async * x()
+        return 5
+    ---
+    x = {
+      async * x() {
+        return 5;
+      },
+    };
+  """
