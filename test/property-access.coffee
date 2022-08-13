@@ -16,3 +16,11 @@ describe "property access", ->
     ---
     a?.[2];
   """
+
+  testCase """
+    accessed names are not reserved
+    ---
+    a.case
+    ---
+    a.case;
+  """

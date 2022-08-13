@@ -18,6 +18,19 @@ describe "object", ->
   """
 
   testCase """
+    keys are not reserved
+    ---
+    a =
+      if: "cool"
+      case: 1
+    ---
+    a = {
+      if: "cool",
+      case: 1,
+    };
+  """
+
+  testCase """
     spread
     ---
     y = {...x}
