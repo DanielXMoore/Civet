@@ -1,18 +1,18 @@
 {testCase} = require "./helper"
 
-describe "new", ->
+describe "yield expression", ->
   testCase """
     basic
     ---
-    new x
+    yield x
     ---
-    new x;
+    yield x;
   """
 
   testCase """
-    multiple
+    repeated
     ---
-    new new x
+    yield yield x
     ---
-    new new x;
+    yield yield x;
   """
