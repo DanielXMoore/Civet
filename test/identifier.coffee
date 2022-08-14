@@ -1,6 +1,6 @@
 {testCase} = require "./helper"
 
-describe "array", ->
+describe "identifier", ->
   testCase """
     $
     ---

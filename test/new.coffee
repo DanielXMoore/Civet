@@ -1,18 +1,18 @@
 {testCase} = require "./helper"
 
-describe "function application", ->
+describe.skip "new", ->
   testCase """
     basic
     ---
-    f x
+    new x
     ---
-    f(x);
+    new x;
   """
 
   testCase """
-    chained
+    multiple
     ---
-    f(x)(7)
+    new new x
     ---
-    f(x)(7);
+    new new x;
   """

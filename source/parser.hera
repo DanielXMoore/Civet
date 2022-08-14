@@ -10,30 +10,12 @@ Program
 TopLevelStatement
   EOS? _? ModuleItem StatementDelimiter
 
+# https://262.ecma-international.org/#prod-Expression
 Expression
   # CommaOperator
   # https://262.ecma-international.org/#sec-comma-operator
-  Applied (__ "," __ Applied)*
-
-# Function application:
-# a b
-# a(b)
-# a b, c, d
-# a(b, c, d)
-Applied
-  Operated Application?
-
-# ?? https://262.ecma-international.org/#prod-CallExpression
-Application
-  !EOS __ Arguments
-  # Space then argument list
-  ApplicationStart ArgumentList InsertCloseParen
-  # TODO: nested argument list?
-
-# Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
-ApplicationStart
-  $_+:spacing ->
-    return "(" + spacing.replace(/^ /, "")
+  # NOTE: Eliminated left recursion
+  AssignmentExpression (__ "," __ AssignmentExpression)*
 
 # https://262.ecma-international.org/#prod-Arguments
 Arguments
@@ -46,23 +28,43 @@ ArgumentList
 CommaExpression
   __ "," __ Expression
 
-Operated
-  AssignmentExpression (__ BinaryOp __ AssignmentExpression)*
-  UnaryOp* AssignmentExpression
+BinaryOpExpression
+  UnaryExpression (__ BinaryOp __ UnaryExpression)*
+
+# https://262.ecma-international.org/#prod-UnaryExpression
+UnaryExpression
+  # NOTE: Eliminated left recursion
+  UnaryOp* UpdateExpression
+
+UpdateExpression
+  LeftHandSideExpression
+  # TODO: Add -- and ++ pre and postfix
 
 # https://262.ecma-international.org/#prod-AssignmentExpression
 AssignmentExpression
+  # TODO: YieldExpression
+  ArrowFunction
+  # TODO: AsyncArrowFunction
+
+  # NOTE: Eliminated left recursion
+  # NOTE: Consolidated assignment ops
+
   # TODO: Should be able to simplify this whitespace handling before expressions, also see PropertyDefinition
-  (__ Accessed __ AssignmentOp)+ ((_* Expression) / (__ Expression))
-  Accessed
+  (__ LeftHandSideExpression __ AssignmentOp)+ ((_* Expression) / (__ Expression))
+  ConditionalExpression
 
-Accessed
-  PrimaryExpression Access*
+ArrowFunction
+  # TODO: spec
+  ThinArrowFunction
 
-Access
-  # TODO: can use reserved words here
-  "?"? "." IdentifierName
-  ("?" ( "." / InsertDot ))? "[" Expression "]"
+# https://262.ecma-international.org/#prod-ConditionalExpression
+ConditionalExpression
+  ShortCircuitExpression ( __ "?" __ AssignmentExpression __ ":" __ AssignmentExpression)?
+
+# https://262.ecma-international.org/#prod-ShortCircuitExpression
+ShortCircuitExpression
+  # NOTE: We don't need to track the precedence of all the binary operators so they all collapse into this
+  BinaryOpExpression
 
 # https://262.ecma-international.org/#prod-PrimaryExpression
 PrimaryExpression
@@ -72,12 +74,94 @@ PrimaryExpression
   ArrayLiteral
   ObjectLiteral
   FunctionExpression
-  "(" __ Expression __ ")"
+  ClassExpression
   RegularExpressionLiteral
+  # https://262.ecma-international.org/#prod-ParenthesizedExpression
+  # NOTE: Currently ignoring early error checking in https://262.ecma-international.org/#prod-CoverParenthesizedExpressionAndArrowParameterList
+  "(" __ Expression __ ")"
+
+# https://262.ecma-international.org/#prod-ClassExpression
+ClassExpression
+  "class" ( __ BindingIdentifier )? ( __ ClassHeritage )? ClassBody
+
+# https://262.ecma-international.org/#prod-ClassHeritage
+ClassHeritage
+  "extends" __ LeftHandSideExpression
+
+# https://262.ecma-international.org/#prod-ClassBody
+# NOTE: Nesting and indentation sensitive
+ClassBody
+  __ "{" EOS NestedClassElements "}"
+  InsertOpenBrace EOS NestedClassElements InsertNewline InsertIndent InsertCloseBrace
+
+NestedClassElements
+  PushIndent NestedClassElement*:elements PopIndent ->
+    if (!elements.length) return $skip
+    return elements
+
+NestedClassElement
+  $Nested ClassElement
+
+# https://262.ecma-international.org/#prod-ClassElement
+ClassElement
+  ("static" __)? MethodDefinition
 
 This
   "this"
-  "@"
+  # NOTE: Added '@' as a 'this' shorthand
+  "@" -> "this"
+
+# https://262.ecma-international.org/#prod-LeftHandSideExpression
+LeftHandSideExpression
+  NewExpression
+  CallExpression
+  # TODO: OptionalExpression
+
+# https://262.ecma-international.org/#prod-NewExpression
+NewExpression
+  # NOTE: Eliminated left recursion
+  ("new" __)+ MemberExpression
+
+# https://262.ecma-international.org/#prod-CallExpression
+CallExpression
+  "super" __ Arguments
+  "import" __ "(" __ AssignmentExpression __ ")"
+  MemberExpression CallExpressionRest* Application?
+
+CallExpressionRest
+  # TODO: Optional before arguments
+  Arguments
+  # NOTE: Merged in optional with regular access
+  # NOTE: Added shorthand x?[3] -> x?.[3]
+  ("?" ( "." / InsertDot ))? "[" __ Expression __ "]"
+  "?"? "." (IdentifierName / PrivateIdentifier)
+
+# Function application:
+# a b
+# a(b)
+# a b, c, d
+# a(b, c, d)
+# Applied
+#   Operated Application?
+
+Application
+  !EOS __ Arguments
+  # Space then argument list
+  ApplicationStart ArgumentList InsertCloseParen
+  # TODO: nested argument list?
+
+# Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
+ApplicationStart
+  $_+:spacing ->
+    return "(" + spacing.replace(/^ /, "")
+
+# https://262.ecma-international.org/#prod-MemberExpression
+MemberExpression
+  # NOTE: Eliminated left recursion
+  PrimaryExpression CallExpressionRest*
+  # TODO: SuperProperty
+  # TODO: MetaProperty
+  # TODO: "new" MemberExpression
 
 # https://262.ecma-international.org/#prod-FormalParameters
 # The parameters in a function definition
@@ -110,8 +194,11 @@ BindingRestProperty
   "..." __ BindingIdentifier
 
 FunctionExpression
-  Parameters __ "->" FunctionBody -> ["function", $1, $4]
+  ThinArrowFunction
   "function" __ Parameters FunctionBody
+
+ThinArrowFunction
+  Parameters __ "->" FunctionBody -> ["function", $1, $4]
 
 FunctionBody
   __ "{" EOS NestedBlockExpressions "}"
@@ -285,27 +372,53 @@ BinaryOp
 UnaryOp
   [!~+-]
 
-# https://262.ecma-international.org/#prod-Statement
-Statement
-  KeywordStatement
-  Expression
-
 # https://262.ecma-international.org/#prod-ModuleItem
 ModuleItem
   ImportDeclaration
   ExportDeclaration
   Statement
 
+# https://262.ecma-international.org/#prod-Statement
+Statement
+  KeywordStatement
+  # TODO: BlockStatement
+  # TODO: VariableStatement
+  # TODO: EmptyStatement
+  ExpressionStatement
+  # TODO: IfStatement
+  # TODO: IterationStatement
+  # TODO: SwitchStatement
+  # TODO: TryStatement
+
+  # NOTE: no WithStatement
+  # NOTE: no LabelledStatement
+
+# https://262.ecma-international.org/#prod-ExpressionStatement
+ExpressionStatement
+  # NOTE: semi-colons are being handled elsewhere
+  # NOTE: Shouldn't need negative lookahead if shadowed in the proper order
+  Expression
+
 KeywordStatement
   # https://262.ecma-international.org/#prod-BreakStatement
+  # NOTE: no label
   "break"
+
+  # https://262.ecma-international.org/#prod-ContinueStatement
+  # NOTE: no label
+  "continue"
 
   # https://262.ecma-international.org/#sec-debugger-statement
   "debugger"
 
   # https://262.ecma-international.org/#prod-ReturnStatement
+  # TODO: JS doesn't allow line terminators here
   "return" __ Expression
   "return"
+
+  # https://262.ecma-international.org/#prod-ThrowStatement
+  # TODO: JS doesn't allow line terminators here
+  "throw" __ Expression
 
 # TODO: Actual import grammar
 ImportDeclaration
@@ -371,7 +484,7 @@ RegularExpressionFlags
 
 # https://262.ecma-international.org/#sec-comments
 ReservedWord
-  /(?:await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|new|null|return|super|switch|this|throw|true|try|typeof|var|void|while|with|yield)(?!\p{ID_Continue})/
+  /(?:and|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|new|null|or|return|super|switch|this|throw|true|try|typeof|var|void|while|with|yield)(?!\p{ID_Continue})/
 
 # https://262.ecma-international.org/#sec-comments
 Comment
