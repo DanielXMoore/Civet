@@ -1,0 +1,42 @@
+{testCase} = require "./helper"
+
+describe "import", ->
+  testCase """
+    default import
+    ---
+    import y from "./y"
+    ---
+    import y from "./y";
+  """
+
+  testCase """
+    named imports
+    ---
+    import {x, y} from "./y"
+    ---
+    import {x, y} from "./y";
+  """
+
+  testCase """
+    namespace
+    ---
+    import * as y from "./y"
+    ---
+    import * as y from "./y";
+  """
+
+  testCase """
+    default and namespace
+    ---
+    import z, * as y from "./y"
+    ---
+    import z, * as y from "./y";
+  """
+
+  testCase """
+    default and named imports
+    ---
+    import y, {a, b} from "./y"
+    ---
+    import y, {a, b} from "./y";
+  """
