@@ -16,3 +16,13 @@ describe "new", ->
     ---
     new new x;
   """
+
+  testCase """
+    new property
+    ---
+    new x.Z(a)
+    new x['Y'](a)
+    ---
+    new x.Z(a);
+    new x['Y'](a);
+  """
