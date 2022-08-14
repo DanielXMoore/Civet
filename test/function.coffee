@@ -67,3 +67,13 @@ describe "function", ->
       (x) ->
         import * from 'x';
     """, ""
+
+  testCase """
+    fat arrow
+    ---
+    () => x
+    x => x
+    ---
+    () => x;
+    x => x;
+  """
