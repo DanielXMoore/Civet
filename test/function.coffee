@@ -77,3 +77,15 @@ describe "function", ->
     () => x;
     x => x;
   """
+
+  testCase """
+    decs inside function
+    ---
+    function () {
+      var x = 3
+    }
+    ---
+    function () {
+      var x = 3;
+    };
+  """
