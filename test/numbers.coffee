@@ -26,6 +26,38 @@ describe "Civet", ->
   """
 
   testCase """
+    binary
+    ---
+    x = 0b11
+    ---
+    x = 0b11;
+  """
+
+  testCase """
+    binary _
+    ---
+    x = 0B1010_1010
+    ---
+    x = 0B1010_1010;
+  """
+
+  testCase """
+    octal
+    ---
+    x = 0o77
+    ---
+    x = 0o77;
+  """
+
+  testCase """
+    octal _
+    ---
+    x = 0O7171_0303
+    ---
+    x = 0O7171_0303;
+  """
+
+  testCase """
     big integer
     ---
     x = 0n
