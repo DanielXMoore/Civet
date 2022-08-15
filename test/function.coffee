@@ -1,4 +1,4 @@
-{compare, testCase, throws} = require "./helper"
+{testCase, throws} = require "./helper"
 
 describe "function", ->
   # TODO: var f, return x

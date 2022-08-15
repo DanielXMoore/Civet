@@ -1,4 +1,4 @@
-{testCase, throws} = require "./helper"
+{testCase} = require "./helper"
 
 describe "variable statement", ->
   testCase """
