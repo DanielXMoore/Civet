@@ -76,3 +76,14 @@ describe "if", ->
       return y;
     };
   """
+
+  testCase """
+    unless more complex exp
+    ---
+    unless x + z
+      return y
+    ---
+    if (!(x + z)) {
+      return y;
+    };
+  """
