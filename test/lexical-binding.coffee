@@ -78,3 +78,71 @@ describe "lexical binding", ->
       ],
     ] = a;
   """
+
+  testCase """
+    object destructuring
+    ---
+    let { x, y } = a
+    let {
+      x
+      y
+    } = a
+    ---
+    let { x, y } = a;
+    let {
+      x,
+      y,
+    } = a;
+  """
+
+  testCase """
+    empty object destructuring
+    ---
+    let { } = a
+    ---
+    let { } = a;
+  """
+
+  testCase """
+    simple object destructuring as
+    ---
+    let {x: y} = a
+    ---
+    let {x: y} = a;
+  """
+
+  testCase """
+    object rest
+    ---
+    let { z, ...x } = a
+    ---
+    let { z, ...x } = a;
+  """
+
+  testCase """
+    kitchen sink
+    ---
+    let {
+      x
+      y
+      z=[1, 2, 3]
+      p: [
+        v
+        vv
+        {vvv: b}
+      ]
+      ...q
+    } = a
+    ---
+    let {
+      x,
+      y,
+      z=[1, 2, 3],
+      p: [
+        v,
+        vv,
+        {vvv: b},
+      ],
+      ...q
+    } = a;
+  """
