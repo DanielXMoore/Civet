@@ -54,6 +54,23 @@ describe "object", ->
     { ...x };
   """
 
+  # describe.only "", ->
+  testCase """
+    optional commas
+    ---
+    x = {
+      a
+      b,
+      c
+    }
+    ---
+    x = {
+      a,
+      b,
+      c,
+    };
+  """
+
   it "doesn't allow bare assignments inside", ->
     throws """
       {x=y}
@@ -81,7 +98,7 @@ describe "object", ->
     ---
     x = {
       a:
-              4
+              4,
     };
   """
 

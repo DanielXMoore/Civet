@@ -6,14 +6,11 @@ assert = require "assert"
 compare = (src, result) ->
   assert.equal gen(parse(src)), result
 
-testCase = (text, skip) ->
+testCase = (text) ->
   [desc, src, result] = text.split("\n---\n")
 
-  if skip
-    it.skip desc
-  else
-    it desc, ->
-      compare src, result
+  it desc, ->
+    compare src, result
 
 throws = (text) ->
   assert.throws ->
