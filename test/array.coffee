@@ -10,6 +10,22 @@ describe "array", ->
   """
 
   testCase """
+    optional commas
+    ---
+    [
+      a
+      b,
+      c
+    ]
+    ---
+    [
+      a,
+      b,
+      c,
+    ];
+  """
+
+  testCase """
     spread
     ---
     y = [...x]
