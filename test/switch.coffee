@@ -11,7 +11,7 @@ describe "switch", ->
     ---
     switch (x) {
       case 1:
-        break
+        break;
     };
   """
 
@@ -25,6 +25,32 @@ describe "switch", ->
     ---
     switch (x) {
       case 1:
+        break;
+    };
+  """
+
+  testCase """
+    optional braces
+    ---
+    switch (x)
+      case 1:
         break
+    ---
+    switch (x) {
+      case 1:
+        break;
+    };
+  """
+
+  testCase """
+    when
+    ---
+    switch x
+      when 1
+        console.log y
+    ---
+    switch (x) {
+      case 1:
+        console.log(y);break;
     };
   """
