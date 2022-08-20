@@ -66,7 +66,7 @@ describe "function", ->
     throws """
       (x) ->
         import * from 'x';
-    """, ""
+    """
 
   testCase """
     fat arrow
