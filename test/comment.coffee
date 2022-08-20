@@ -20,3 +20,39 @@ describe "comment", ->
     x;
     /* bye */
   """
+
+  testCase """
+    CoffeeScript style multi-line comments
+    ---
+    ###
+    hi
+    ###
+
+    ---
+    /*
+    hi
+    */
+
+  """
+
+  testCase """
+    remains after empty statement in nested block
+    ---
+    ->
+      ; // Hey
+    ---
+    function() {
+      ; // Hey
+    };
+  """
+
+  testCase """
+    inline stays in empty statement
+    ---
+    ->
+      /**/; // Hey
+    ---
+    function() {
+      /**/; // Hey
+    };
+  """

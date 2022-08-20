@@ -124,7 +124,7 @@ NestedClassElements
     return elements
 
 NestedClassElement
-  $Nested ClassElement StatementDelimiter
+  Nested ClassElement StatementDelimiter
 
 # https://262.ecma-international.org/#prod-ClassElement
 ClassElement
@@ -280,7 +280,7 @@ NestedBlockExpressions
     return exps
 
 BlockExpression
-  $Nested ( Declaration / Statement ) StatementDelimiter
+  Nested ( Declaration / Statement ) StatementDelimiter
 
 Literal
   StringLiteral
@@ -317,7 +317,7 @@ NestedElementList
     return $skip
 
 NestedElement
-  $Nested ArrayElementExpression ArrayElementDelimiter
+  Nested ArrayElementExpression ArrayElementDelimiter
 
 ArrayElementDelimiter
   _* ","
@@ -354,7 +354,7 @@ NestedPropertyDefinitions
 
 NestedPropertyDefinition
   # TODO: This may be a little weird/ambiguous with single identifier shorthand
-  $Nested PropertyDefinition ObjectPropertyDelimiter
+  Nested PropertyDefinition ObjectPropertyDelimiter
 
 ObjectPropertyDelimiter
   _* ","
@@ -386,9 +386,10 @@ PropertyName
 
 # https://262.ecma-international.org/#prod-MethodDefinition
 MethodDefinition
-  "get" __ ClassElementName __ Parameters BracedBlock
+  # TODO: Make compatible with CoffeeScript style comments by being more precise with __ whitespace here
+  "get" TrailingComment* ClassElementName __ Parameters BracedBlock
   # NOTE: Not adding extra validation using PropertySetParameterList yet. TODO?
-  "set" __ ClassElementName __ Parameters BracedBlock
+  "set" TrailingComment* ClassElementName __ Parameters BracedBlock
   AsyncGeneratorMethod
   AsyncMethod
   GeneratorMethod
@@ -485,8 +486,13 @@ BinaryOp
   ">>"
   ">"
   "!=="
+  # NOTE: CoffeeScript converts "!=" -> "!=="
+  # DEFER: Convert if CoffeeScript compat flag is set
   "!="
+  "is" -> "==="
   "==="
+  # NOTE: CoffeeScript converts "==" -> "==="
+  # DEFER: Convert if CoffeeScript compat flag is set
   "=="
   "and" -> "&&"
   "&&"
@@ -520,11 +526,15 @@ Statement
   SwitchStatement
   TryStatement
 
-  # NOTE: Skipping EmptyStatement since semi-colons are handled slightly differently than spec
+  EmptyStatement
   ExpressionStatement
 
   # NOTE: no WithStatement
   # NOTE: no LabelledStatement
+
+# NOTE: EmptyStatement handled differently than spec, consuming inline whitespace and comments then asserting following semi-colon
+EmptyStatement
+  TrailingComment* &";"
 
 # https://262.ecma-international.org/#prod-BlockStatement
 BlockStatement
@@ -604,7 +614,7 @@ NestedCaseClauses
     return $skip
 
 NestedCaseClause
-  $Nested CaseClause
+  Nested CaseClause
 
 # https://262.ecma-international.org/#prod-CaseClause
 CaseClause
@@ -811,7 +821,8 @@ HexLiteral
 
 # https://262.ecma-international.org/#prod-StringLiteral
 StringLiteral
-  # TODO: CoffeeScript """ string
+  # TODO: actual CoffeeScript """ string behaviors
+  "\"\"\"" $TripleDoubleStringCharacter* "\"\"\"" -> ["`", $2, "`"]
   "\"" $DoubleStringCharacter* "\""
   "\'" $SingleStringCharacter* "\'"
 
@@ -822,6 +833,9 @@ DoubleStringCharacter
 SingleStringCharacter
   [^'\\]+
   EscapeSequence
+
+TripleDoubleStringCharacter
+  /(?:"(?!"")|\\.|[^"])+/
 
 EscapeSequence
   $( "\\" . )
@@ -858,7 +872,7 @@ TemplateCharacters
 
 # https://262.ecma-international.org/#sec-comments
 ReservedWord
-  /(?:and|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|new|null|or|return|super|switch|this|throw|true|try|typeof|unless|var|void|while|with|yield)(?!\p{ID_Continue})/
+  /(?:and|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|is|new|null|or|return|super|switch|this|throw|true|try|typeof|unless|var|void|while|with|yield)(?!\p{ID_Continue})/
 
 # https://262.ecma-international.org/#sec-comments
 Comment
@@ -867,12 +881,40 @@ Comment
 
 SingleLineComment
   /\/\/[^\r\n]*/
+  CoffeeSingleLineComment
 
+# https://262.ecma-international.org/#prod-MultiLineComment
 MultiLineComment
-  "/*" (!"*/" . )* "*/"
+  JSMultiLineComment
+  # NOTE: Added CoffeeScript style ### multiline comments
+  CoffeeMultiLineComment
+
+JSMultiLineComment
+  "/*" $(!"*/" . )* "*/"
+
+CoffeeSingleLineComment
+  # NOTE: CoffeeScript style single line comments
+  /#([^\r\n]*)/ ->
+    // DEFER: # comments when CoffeeScript compat flag is set, may be a little tricky to allow with private ids
+    const cs2compat = false
+    if (!cs2compat) return $skip
+    return ["//", $1]
+
+CoffeeMultiLineComment
+  "###" $(!"###" .)* "###" -> ["/*", $2, "*/"]
+
+# InlineComment is a multi-line comment with now line separators
+InlineComment
+  "/*" $(!"*/" [^\r\n] )* "*/"
+
+RestOfLine
+  TrailingComment* EOL
+
+TrailingComment
+  ([\t ]+ / InlineComment / SingleLineComment)
 
 # Non-newline "white space" (includes comments)
-# TODO: JS counts line terminators that appear in multi-line comments
+# TODO: JS counts line terminators that appear in multi-line comments. For example "return /*\n*/5" is different than "return /**/ 5" because of the newline within the comment
 _
   ([\t ]+ / Comment)+
 
@@ -881,12 +923,15 @@ __
   ([\s]+ / Comment)*
 
 StatementDelimiter
-  __ ";"
+  TrailingComment* ";" TrailingComment*
   # Implied semicolon
-  &EOS -> ";"
+  &EOS -> [";", $1]
+
+Shebang
+  /#![^\r\n]*/
 
 EOS
-  $(_* EOL)+
+  RestOfLine+
 
 # End of line
 EOL
@@ -931,10 +976,12 @@ InsertBreak
 # Indentation
 
 Init
-  "" ->
+  Shebang? "" ->
     global.currentIndent = 0
     global.indentLevels = [0]
     global.verbose = false
+
+    return $0
 
 Indent
   ( "  " / "\t" )* ->
@@ -961,7 +1008,7 @@ PopIndent
     return global.currentIndent
 
 Nested
-  EOS? Indent:indent ->
+  EOS?:eos Indent:indent ->
     const currentIndent = global.indentLevels[global.indentLevels.length-1]
     if (global.verbose) {
       console.log("global indent", global.currentIndent)
@@ -973,4 +1020,4 @@ Nested
       }
       return $skip
     }
-    return indent
+    return [eos, "".padStart(indent * 2)]

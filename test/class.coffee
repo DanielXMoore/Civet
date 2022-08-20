@@ -24,6 +24,51 @@ describe "class", ->
   """
 
   testCase """
+    get private method
+    ---
+    class X {
+      get #x ()
+        return "yo"
+    }
+    ---
+    class X {
+      get #x () {
+        return "yo";
+      };
+    };
+  """
+
+  testCase """
+    set private method
+    ---
+    class X {
+      set #x (v)
+        return
+    }
+    ---
+    class X {
+      set #x (v) {
+        return;
+      };
+    };
+  """
+
+  testCase """
+    set private method with inline comments
+    ---
+    class X {
+      set /**/ #x (v)
+        return
+    }
+    ---
+    class X {
+      set /**/ #x (v) {
+        return;
+      };
+    };
+  """
+
+  testCase """
     static block
     ---
     class X {
