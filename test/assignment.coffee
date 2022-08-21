@@ -28,3 +28,26 @@ describe "assignment operations", ->
     a =
     b;
   """
+
+  testCase """
+    assign nested object
+    ---
+    const DefaultCompilerOptions =
+      allowNonTsExtensions: true
+      allowJs: true
+      target: ts.ScriptTarget.Latest
+      moduleResolution: ts.ModuleResolutionKind.NodeJs
+      module: ts.ModuleKind.CommonJS
+      allowSyntheticDefaultImports: true
+      experimentalDecorators: true
+    ---
+    const DefaultCompilerOptions = {
+      allowNonTsExtensions: true,
+      allowJs: true,
+      target: ts.ScriptTarget.Latest,
+      moduleResolution: ts.ModuleResolutionKind.NodeJs,
+      module: ts.ModuleKind.CommonJS,
+      allowSyntheticDefaultImports: true,
+      experimentalDecorators: true,
+    };
+  """

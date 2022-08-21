@@ -84,3 +84,19 @@ describe "binary operations", ->
     a && b;
     a ?? b;
   """
+
+  testCase """
+    weird spacing
+    ---
+    a
+        + 123
+     /*heyy*/    + 1
+
+           + b
+    ---
+    a
+        + 123
+     /*heyy*/    + 1
+
+           + b;
+  """
