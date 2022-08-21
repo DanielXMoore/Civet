@@ -1,7 +1,6 @@
 {testCase} = require "../helper"
 
 describe "[TS] destructuring", ->
-  # TODO: the double semi-colon should be fixed eventually
   testCase """
     basic
     ---
@@ -9,5 +8,5 @@ describe "[TS] destructuring", ->
       `Hello ${first} ${last}!`
     ---
     const hello = ({ first, last }: Person) =>
-      `Hello ${first} ${last}!`;;
+      `Hello ${first} ${last}!`;
   """
