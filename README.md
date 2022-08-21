@@ -15,22 +15,22 @@ Things Kept from CoffeeScript
 - `and` -> `&&`
 - `loop` -> `while(true)`
 - Object literal syntax
-```coffee
-x =
-  a: 1
-  b: 2
-  c:
-    x: "pretty"
-    y: "cool"
-```
+  ```coffee
+  x =
+    a: 1
+    b: 2
+    c:
+      x: "pretty"
+      y: "cool"
+  ```
 - Optional semi-colons
 - Indentation based block syntax
-- OptionalChain shorthand for index and function application `a?[b]`, `a?(b)`
+- OptionalChain shorthand for index and function application `a?[b]` -> `a?.[b]`, `a?(b)` -> `a?.(b)`
 - TODO
-  - Automatic var declarations
+  - Automatic var/let declarations
   - Implicit returns
   - `"""` Strings (for compatibility with existing .coffee code)
-
+  - Rest parameter in any assignment position
 
 Things Removed from CoffeeScript
 ---
@@ -39,11 +39,14 @@ Things Removed from CoffeeScript
 - `off` (use `false`)
 - `do` keyword (replaced with JS `do`)
 - Comprensions (a case could be made for keeping them)
+- Iteration expression results
 
 Things Changed from CoffeeScript
 ---
 
 - `for in` and `for of` become their JS equivalents.
+- `a...` is now `...a` just like JS
+- `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
 
 Things Added that CoffeeScript didn't
 ---
@@ -57,16 +60,14 @@ Things Added that CoffeeScript didn't
   - `while`
   - `do`
 - Convenience for ES6+ Features
-- `<` as `extends` shorthand
+  - `<` as `extends` shorthand
+- ClassStaticBlock
 - `get`/`set` method definitions
 - Private identifiers `#id`
-
-###
-
-### Shebang line
-
-```civet
-#!./node_modules/.bin/ts-node
-console.log "hi"
-
-```
+- Shebang line
+  ```civet
+  #!./node_modules/.bin/ts-node
+  console.log "hi"
+  ```
+- TODO
+  - TypeScript Types
