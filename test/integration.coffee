@@ -12,8 +12,6 @@ describe "integration", ->
   it "should parse CoffeeScript 2 files", ->
     src = fs.readFileSync("integration/example/generate.coffee", "utf8")
 
-    console.log gen parse src
-
     assert compile(src)
 
   # TODO: CoffeeScript single line comments
