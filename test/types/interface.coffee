@@ -27,3 +27,21 @@ describe "[TS] interface", ->
       id: number;
     };
   """
+
+  testCase """
+    nested nested syntax
+    ---
+    interface User
+      name:
+        first: string
+        last: string
+      id: number
+    ---
+    interface User {
+      name: {
+        first: string;
+        last: string;
+      };
+      id: number;
+    };
+  """
