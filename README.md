@@ -26,6 +26,8 @@ Things Kept from CoffeeScript
 - Optional semi-colons
 - Indentation based block syntax
 - OptionalChain shorthand for index and function application `a?[b]` -> `a?.[b]`, `a?(b)` -> `a?.(b)`
+- `@` -> `this`
+- `@id` -> `this.id`
 - TODO
   - Automatic var/let declarations
   - Implicit returns
@@ -61,6 +63,7 @@ Things Added that CoffeeScript didn't
   - `do`
 - Convenience for ES6+ Features
   - `<` as `extends` shorthand
+  - `@#id` -> `this.#id` shorthand for private identifiers
 - ClassStaticBlock
 - `get`/`set` method definitions
 - Private identifiers `#id`
