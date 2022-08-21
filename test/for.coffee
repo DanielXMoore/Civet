@@ -48,6 +48,18 @@ describe "for", ->
   """
 
   testCase """
+    of non-dec
+    ---
+    for (i of x) {
+      console.log(i)
+    }
+    ---
+    for (i of x) {
+      console.log(i);
+    };
+  """
+
+  testCase """
     of optional parens await
     ---
     for await var i of x

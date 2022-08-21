@@ -219,3 +219,61 @@ describe "object", ->
       },
     };
   """
+
+  testCase """
+    shorthand key value notation
+    ---
+    return {
+      x: ->
+        y
+      options
+      z: ->
+        "y"
+    }
+    ---
+    return {
+      x: function() {
+        y;
+      },
+      options,
+      z: function() {
+        "y";
+      },
+    };
+  """
+
+  testCase """
+    identifiers that start with get/set
+    ---
+    return {
+      getx: -> x
+      sety: (y) -> @y = y
+    }
+    ---
+    return {
+      getx: function() { x },
+      sety: function(y) { this.y = y },
+    };
+  """
+
+  testCase """
+    shorthand key value notation
+    ---
+    return {
+      getCompilationSettings: ->
+        options
+      getSourceFile
+      getDefaultLibFileName: ->
+        "lib.d.ts"
+    }
+    ---
+    return {
+      getCompilationSettings: function() {
+        options;
+      },
+      getSourceFile,
+      getDefaultLibFileName: function() {
+        "lib.d.ts";
+      },
+    };
+  """
