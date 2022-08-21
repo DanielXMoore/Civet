@@ -49,6 +49,7 @@ Things Changed from CoffeeScript
 - `for in` and `for of` become their JS equivalents.
 - `a...` is now `...a` just like JS
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
+- Existential `x?` -> `(x != null)` no longer checks for undeclared variables.
 
 Things Added that CoffeeScript didn't
 ---
