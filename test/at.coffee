@@ -24,3 +24,11 @@ describe "@ -> this", ->
     ---
     this[x];
   """
+
+  testCase """
+    private
+    ---
+    @#id
+    ---
+    this.#id;
+  """
