@@ -46,3 +46,51 @@ describe "export", ->
     ---
     export * as x from "./cool.js";
   """
+
+  testCase """
+    optional comma
+    ---
+    export {
+      a
+      b,
+      c
+      d }
+    ---
+    export {
+      a,
+      b,
+      c,
+      d };
+  """
+
+  testCase """
+    optional comma as
+    ---
+    export {
+      a as A
+      b as B,
+      c as C
+      d as D}
+    ---
+    export {
+      a as A,
+      b as B,
+      c as C,
+      d as D};
+  """
+
+  testCase """
+    maintains comments and whitespace
+    ---
+    /**/ export /**/ { // cool
+      a as /**/ A /**/ // ahoy
+      /**/b as B, // ye
+         /**/c as C // hey
+      d as D /**/} // yo
+    ---
+    /**/ export /**/ { // cool
+      a as /**/ A, /**/ // ahoy
+      /**/b as B, // ye
+         /**/c as C, // hey
+      d as D /**/}; // yo
+  """
