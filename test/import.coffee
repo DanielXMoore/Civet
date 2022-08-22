@@ -40,3 +40,17 @@ describe "import", ->
     ---
     import y, {a, b} from "./y";
   """
+
+  testCase """
+    multi-line import block
+    ---
+    import ts, {
+      CompilerOptions
+      ScriptTarget
+    } from "typescript"
+    ---
+    import ts, {
+      CompilerOptions,
+      ScriptTarget,
+    } from "typescript";
+  """
