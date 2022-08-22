@@ -12,3 +12,9 @@ interface User {
   };
   id: number;
 };
+
+interface X<A, B, C,, > {
+  x: A
+  y: B
+  z: C
+}

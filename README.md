@@ -43,7 +43,7 @@ Things Removed from CoffeeScript
 - Comprensions (a case could be made for keeping them)
 - Iteration expression results
 - Implicit declarations
-- Implicit returns (might add later)
+- Implicit returns (will probably add later)
 - Rest parameter in any assignment position (might add later)
 
 Things Changed from CoffeeScript
