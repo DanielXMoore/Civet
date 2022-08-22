@@ -1,6 +1,8 @@
 Civet
 =====
 
+[![Build](https://github.com/DanielXMoore/Civet/actions/workflows/build.yml/badge.svg)](https://github.com/DanielXMoore/Civet/actions/workflows/build.yml)
+
 A new CoffeeScript. Much closer to ES2015+ (for better or worse).
 
 Also TypeScript, the sky is the limit.
