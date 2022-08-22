@@ -3,5 +3,5 @@ gen = require "./generate"
 
 module.exports =
   parse: parse
-  compile: (src) ->
-    gen parse src
+  compile: (src, options) ->
+    gen parse(src), options

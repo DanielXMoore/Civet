@@ -24,3 +24,8 @@ Unofficial Typescript EBNF
 ---
 
 https://github.com/Matts966/TypeScriptC/blob/master/typescript.ebnf
+
+Timesheet
+---
+
+2022-08-22 | 1.75  | esm loader; strip types in js; hera bugfix;

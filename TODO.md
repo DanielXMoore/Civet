@@ -1,6 +1,7 @@
 TODO
 ---
 
+- [ ] Compiler option to strip TypeScript and emit only JS (use in `./register`)
 - [ ] JavaScript Compat (default stance is JS code should "just work")
 - [x] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
 - [x] Keep comments and whitespace
