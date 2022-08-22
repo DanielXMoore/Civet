@@ -30,10 +30,8 @@ describe "real life examples", ->
       getSourceFile = (fileName, languageVersion, onError) ->
         sourceText = ts.sys.readFile(fileName)
 
-        if sourceText != undefined
-          ts.createSourceFile(fileName, sourceText, languageVersion)
-        else
-          undefined
+        if sourceText?
+          return ts.createSourceFile(fileName, sourceText, languageVersion)
 
       resolveModuleNames = (moduleNames, containingFile) ->
         resolvedModules = []
@@ -86,11 +84,8 @@ describe "real life examples", ->
       getSourceFile = function(fileName, languageVersion, onError) {
         sourceText = ts.sys.readFile(fileName);
 
-        if (sourceText != undefined) {
-          ts.createSourceFile(fileName, sourceText, languageVersion);
-        }
-        else {
-          undefined;
+        if (((sourceText) != null)) {
+          return ts.createSourceFile(fileName, sourceText, languageVersion);
         };
       };
 
