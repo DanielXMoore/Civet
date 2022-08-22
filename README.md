@@ -9,6 +9,31 @@ Also TypeScript, the sky is the limit.
 
 ![image](https://user-images.githubusercontent.com/18894/184558519-b675a903-7490-43ba-883e-0d8addacd4b9.png)
 
+Code Sample
+---
+
+```typescript
+import ts, {CompilerOptions} from "typescript"
+
+const DefaultCompilerOptions : CompilerOptions =
+  allowNonTsExtensions: true
+  allowJs: true
+  target: ts.ScriptTarget.Latest
+  moduleResolution: ts.ModuleResolutionKind.NodeJs
+  module: ts.ModuleKind.CommonJS
+  allowSyntheticDefaultImports: true
+  experimentalDecorators: true
+
+const fileCache : Record<string, any> = {}
+
+const createCompilerHost = (options: CompilerOptions, moduleSearchLocations : string[]) ->
+  const fileExists = (fileName: string) : boolean ->
+    return fileCache[fileName]?
+
+  const readFile = (fileName: string) ->
+    return fileCache[fileName]
+```
+
 Things Kept from CoffeeScript
 ---
 
