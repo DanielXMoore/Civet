@@ -1,6 +1,13 @@
 Notes
 ===
 
+TypeScript
+---
+
+Rest parameters in any position:
+https://devblogs.microsoft.com/typescript/announcing-typescript-4-0/#variadic-tuple-types
+https://stackoverflow.com/a/64366348/68210
+
 ECMAScript Specification
 ---
 
