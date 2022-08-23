@@ -93,6 +93,7 @@ Things Added that CoffeeScript didn't
   - `case` statement
   - `while`
   - `do`
+- Const assignment shorthand `a := b` -> `const a = b`; `{a, b} := c` -> `const {a, b} = c`
 - Convenience for ES6+ Features
   - `<` as `extends` shorthand
   - `@#id` -> `this.#id` shorthand for private identifiers
