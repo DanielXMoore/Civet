@@ -28,4 +28,5 @@ https://github.com/Matts966/TypeScriptC/blob/master/typescript.ebnf
 Timesheet
 ---
 
-2022-08-22 | 1.75  | esm loader; strip types in js; hera bugfix;
+2022-08-22 | 2.25  | esm loader; strip types in js; hera bugfix; ts lsp
+2022-08-23 | 3.00  | lsp vs code extension setup;
