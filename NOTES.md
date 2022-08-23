@@ -39,4 +39,4 @@ Timesheet
 ---
 
 2022-08-22 | 2.25  | esm loader; strip types in js; hera bugfix; ts lsp
-2022-08-23 | 3.00  | lsp VSCode extension setup;
+2022-08-23 | 4.25  | lsp vs code extension setup; WSL dev env perf fix; nested arguments list; const assignment shorthand
