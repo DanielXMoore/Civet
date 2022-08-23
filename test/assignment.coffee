@@ -30,6 +30,16 @@ describe "assignment operations", ->
   """
 
   testCase """
+    const assignment shorthand
+    ---
+    a := b
+    {a, b} := c
+    ---
+    const a = b;
+    const {a, b} = c;
+  """
+
+  testCase """
     assign nested object
     ---
     const DefaultCompilerOptions =
