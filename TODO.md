@@ -8,10 +8,11 @@ TODO
 - [ ] TypeScript
   - [x] TS Compiling Experiment
   - [x] `interface` declaration
-  - [ ] `type` declaration
+  - [x] `type` declaration
   - [ ] `infer/extends` and other more exotic typescript constructs
   - [x] Optional Type
   - [x] TypeBinaryOperations `| &`
+  - [x] UnaryOperator `typeof`
 - [x] Keep shebang line
 - [ ] Syntax Experiments
   - [ ] Explore `gen.next(args, ...)` shorthand

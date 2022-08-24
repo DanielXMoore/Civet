@@ -34,3 +34,13 @@ describe "[TS] type declaration", ->
     type X = B | C | D;
     type Y = B & C | D;
   """
+
+  testCase """
+    typeof
+    ---
+    const data = [1, 2, 3]
+    type Data = typeof data
+    ---
+    const data = [1, 2, 3];
+    type Data = typeof data;
+  """
