@@ -16,6 +16,12 @@ TODO
   - [x] TypeBinaryOperations `| &`
   - [x] UnaryOperator `typeof`
   - [x] Parentheses
+  - [x] Type assertions `const x = "" as T`
+  - [x] `keyof`
+  - [x] Indexed Access Types `T['name']`
+  - [ ] Mapped Types
+  - [x] Assertion Signatures
+  - [x] Return Type Predicate
 - [x] Keep shebang line
 - [x] JSX 😿
 - [ ] Infrastructure
