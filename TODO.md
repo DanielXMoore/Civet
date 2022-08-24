@@ -1,14 +1,18 @@
 TODO
 ---
 
-- [ ] Compiler option to strip TypeScript and emit only JS (use in `./register`)
-- [ ] JavaScript Compat (default stance is JS code should "just work")
+- [x] Compiler option to strip TypeScript and emit only JS (use in `./register`)
+- [x] JavaScript Compat (default stance is JS code should "just work")
 - [x] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
 - [x] Keep comments and whitespace
-- [ ] TS Compiling Experiment
+- [ ] TypeScript
+  - [x] TS Compiling Experiment
+  - [x] `interface` declaration
+  - [ ] `type` declaration
+  - [ ] `infer/extends` and other more exotic typescript constructs
 - [x] Keep shebang line
 - [ ] Syntax Experiments
   - [ ] Explore `gen.next(args, ...)` shorthand
 - [ ] Infrastructure
-  - [ ] Syntax Highlighting
+  - [x] Syntax Highlighting
   - [ ] CoffeeSense inspired LSP
