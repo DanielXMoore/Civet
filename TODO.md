@@ -10,7 +10,7 @@ TODO
   - [x] `interface` declaration
   - [ ] `type` declaration
   - [ ] `infer/extends` and other more exotic typescript constructs
-  - [ ] Optional Type
+  - [x] Optional Type
   - [x] TypeBinaryOperations `| &`
 - [x] Keep shebang line
 - [ ] Syntax Experiments

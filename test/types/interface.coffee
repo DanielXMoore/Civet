@@ -29,6 +29,20 @@ describe "[TS] interface", ->
   """
 
   testCase """
+    optional type
+    ---
+    interface User {
+      name?: string;
+      id: number;
+    }
+    ---
+    interface User {
+      name?: string;
+      id: number;
+    };
+  """
+
+  testCase """
     nested nested syntax
     ---
     interface User
