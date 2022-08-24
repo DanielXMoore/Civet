@@ -134,6 +134,19 @@ describe "object", ->
   """
 
   testCase """
+    expression in values
+    ---
+    x =
+      a: getA()
+      b: getB()
+    ---
+    x = {
+      a: getA(),
+      b: getB(),
+    };
+  """
+
+  testCase """
     method definition
     ---
     x =

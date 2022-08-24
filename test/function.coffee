@@ -89,3 +89,19 @@ describe "function", ->
       var x = 3;
     };
   """
+
+  testCase """
+    return nested object
+    ---
+    config = ->
+      return
+        a: getA()
+        b: getB()
+    ---
+    config = function() {
+      return {
+        a: getA(),
+        b: getB(),
+      };
+    };
+  """
