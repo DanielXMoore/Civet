@@ -86,9 +86,21 @@ describe "[TS] type declaration", ->
   """
 
   testCase """
-    yo
+    index signature
     ---
     type Arrayish = { [n: number]: unknown }
     ---
     type Arrayish = { [n: number]: unknown };
+  """
+
+  testCase """
+    mapped type
+    ---
+    type OptionsFlags<Type> = {
+      [Property in keyof Type]: boolean;
+    };
+    ---
+    type OptionsFlags<Type> = {
+      [Property in keyof Type]: boolean;
+    };
   """
