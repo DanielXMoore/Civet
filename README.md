@@ -57,6 +57,7 @@ Things Kept from CoffeeScript
 - `@id` -> `this.id`
 - TODO
   - `"""` Strings (for compatibility with existing .coffee code)
+  - `///` Heregexp
 
 Things Removed from CoffeeScript
 ---
@@ -65,6 +66,7 @@ Things Removed from CoffeeScript
 - `off` (use `false`)
 - `do` keyword (replaced with JS `do`)
 - `for from` (use JS `for of`)
+- Array slices `list[0...2]` (use `list.slice(0, 2)`)
 - Comprensions (a case could be made for keeping them)
 - Iteration expression results
 - Implicit declarations
