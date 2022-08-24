@@ -60,11 +60,11 @@ Things Kept from CoffeeScript
 - OptionalChain shorthand for index and function application `a?[b]` -> `a?.[b]`, `a?(b)` -> `a?.(b)`
 - `@` -> `this`
 - `@id` -> `this.id`
+- JSX 😿
 - TODO
   - [ ] `"""` Strings (for compatibility with existing .coffee code)
   - [ ] `///` Heregexp
   - [ ] Chained comparisons
-  - [ ] JSX (despite it being an abomination)
 
 Things Removed from CoffeeScript
 ---

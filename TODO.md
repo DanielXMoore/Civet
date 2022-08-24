@@ -17,8 +17,9 @@ TODO
   - [x] UnaryOperator `typeof`
   - [x] Parentheses
 - [x] Keep shebang line
-- [ ] Syntax Experiments
-  - [ ] Explore `gen.next(args, ...)` shorthand
+- [x] JSX 😿
 - [ ] Infrastructure
   - [x] Syntax Highlighting
   - [ ] CoffeeSense inspired LSP
+- [ ] Syntax Experiments
+  - [ ] Explore `gen.next(args, ...)` shorthand
