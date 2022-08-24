@@ -56,8 +56,9 @@ Things Kept from CoffeeScript
 - `@` -> `this`
 - `@id` -> `this.id`
 - TODO
-  - `"""` Strings (for compatibility with existing .coffee code)
-  - `///` Heregexp
+  - [ ] `"""` Strings (for compatibility with existing .coffee code)
+  - [ ] `///` Heregexp
+  - [ ] Chained comparisons
 
 Things Removed from CoffeeScript
 ---

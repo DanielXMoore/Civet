@@ -43,6 +43,12 @@ describe "object", ->
       a: b
     """
 
+  it "multi line unnested literal", ->
+    throws """
+      a: b
+      b: c
+    """
+
   testCase """
     keeps comments
     ---
