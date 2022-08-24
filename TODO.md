@@ -20,8 +20,10 @@ TODO
   - [x] `keyof`
   - [x] Indexed Access Types `T['name']`
   - [ ] Mapped Types
+    - [ ] Mapping modifiers
   - [x] Assertion Signatures
   - [x] Return Type Predicate
+  - [x] Index signature
 - [x] Keep shebang line
 - [x] JSX 😿
 - [ ] Infrastructure
