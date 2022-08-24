@@ -45,3 +45,17 @@ describe "[TS] interface", ->
       id: number;
     };
   """
+
+  testCase """
+    export
+    ---
+    export interface Loc {
+      pos: number
+      length: number
+    }
+    ---
+    export interface Loc {
+      pos: number;
+      length: number;
+    };
+  """

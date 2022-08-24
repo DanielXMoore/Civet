@@ -64,6 +64,7 @@ Things Kept from CoffeeScript
   - [ ] `"""` Strings (for compatibility with existing .coffee code)
   - [ ] `///` Heregexp
   - [ ] Chained comparisons
+  - [ ] JSX (despite it being an abomination)
 
 Things Removed from CoffeeScript
 ---
