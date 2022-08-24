@@ -23,6 +23,11 @@ Rest parameters in any position:
 https://devblogs.microsoft.com/typescript/announcing-typescript-4-0/#variadic-tuple-types
 https://stackoverflow.com/a/64366348/68210
 
+JSX Spec
+---
+
+https://facebook.github.io/jsx/
+
 ECMAScript Specification
 ---
 
@@ -45,3 +50,4 @@ Timesheet
 
 2022-08-22 | 2.25  | esm loader; strip types in js; hera bugfix; ts lsp
 2022-08-23 | 5.00  | lsp vs code extension setup; WSL dev env perf fix; nested arguments list; const assignment shorthand; syntax highlighting starting from CoffeeScript
+2022-08-24 | 3.00  | Type binary ops, optional types; conditional types; parentheses in types; JSX
