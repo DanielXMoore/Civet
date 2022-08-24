@@ -11,6 +11,11 @@ The correct fix is to move or copy the project to your home directory in WSL and
 
 Use VSCode and Powershell on windows drives. Use VSCode WSL in /home inside WSL only.
 
+Textmate Grammars
+---
+
+https://macromates.com/manual/en/regular_expressions
+
 TypeScript
 ---
 
@@ -39,4 +44,4 @@ Timesheet
 ---
 
 2022-08-22 | 2.25  | esm loader; strip types in js; hera bugfix; ts lsp
-2022-08-23 | 4.25  | lsp vs code extension setup; WSL dev env perf fix; nested arguments list; const assignment shorthand
+2022-08-23 | 4.50  | lsp vs code extension setup; WSL dev env perf fix; nested arguments list; const assignment shorthand
