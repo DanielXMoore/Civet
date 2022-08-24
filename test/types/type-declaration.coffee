@@ -84,3 +84,11 @@ describe "[TS] type declaration", ->
     ---
     type Age = Person["age"];
   """
+
+  testCase """
+    yo
+    ---
+    type Arrayish = { [n: number]: unknown }
+    ---
+    type Arrayish = { [n: number]: unknown };
+  """
