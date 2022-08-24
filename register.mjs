@@ -22,7 +22,6 @@ export async function resolve(specifier, context, defaultResolve) {
 }
 
 export async function load(url, context, defaultLoad) {
-  debugger
   if (extensionsRegex.test(url)) {
     const { source: rawSource } = await defaultLoad(url, { format: "civet" });
 
