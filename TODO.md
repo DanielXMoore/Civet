@@ -9,10 +9,13 @@ TODO
   - [x] TS Compiling Experiment
   - [x] `interface` declaration
   - [x] `type` declaration
-  - [ ] `infer/extends` and other more exotic typescript constructs
+  - [x] Conditional types
+    - [x] `extends`
+    - [x] `infer`
   - [x] Optional Type
   - [x] TypeBinaryOperations `| &`
   - [x] UnaryOperator `typeof`
+  - [x] Parentheses
 - [x] Keep shebang line
 - [ ] Syntax Experiments
   - [ ] Explore `gen.next(args, ...)` shorthand

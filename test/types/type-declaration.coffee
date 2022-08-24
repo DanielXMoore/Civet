@@ -44,3 +44,27 @@ describe "[TS] type declaration", ->
     const data = [1, 2, 3];
     type Data = typeof data;
   """
+
+  testCase """
+    conditional
+    ---
+    type Example1 = Dog extends Animal ? number : string
+    ---
+    type Example1 = Dog extends Animal ? number : string;
+  """
+
+  testCase """
+    conditional infer
+    ---
+    type Example1 = Dog extends Animal<infer U> ? U : string
+    ---
+    type Example1 = Dog extends Animal<infer U> ? U : string;
+  """
+
+  testCase """
+    parens
+    ---
+    type A = (X & Y) | (T & U)
+    ---
+    type A = (X & Y) | (T & U);
+  """
