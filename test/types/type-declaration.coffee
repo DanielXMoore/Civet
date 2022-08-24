@@ -68,3 +68,19 @@ describe "[TS] type declaration", ->
     ---
     type A = (X & Y) | (T & U);
   """
+
+  testCase """
+    keyof
+    ---
+    type A = keyof B
+    ---
+    type A = keyof B;
+  """
+
+  testCase """
+    indexed access
+    ---
+    type Age = Person["age"]
+    ---
+    type Age = Person["age"];
+  """
