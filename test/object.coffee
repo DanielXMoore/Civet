@@ -38,6 +38,11 @@ describe "object", ->
     y = {...x};
   """
 
+  it "single line literal", ->
+    throws """
+      a: b
+    """
+
   testCase """
     keeps comments
     ---
