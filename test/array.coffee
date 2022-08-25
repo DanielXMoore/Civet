@@ -64,3 +64,31 @@ describe "array", ->
     ---
     [ , ,/*  ea*/ , ,x=y,...z, ,/**/,, ,, ,];
   """
+
+  testCase """
+    multi-objects
+    ---
+    const data = [
+    {
+        key: 1,
+        value: "Some label"
+
+        },
+        {
+        key: 2,
+        value: "Another label"
+        },
+    ];
+    ---
+    const data = [
+    {
+        key: 1,
+        value: "Some label"
+
+        },
+        {
+        key: 2,
+        value: "Another label"
+        },
+    ];
+  """

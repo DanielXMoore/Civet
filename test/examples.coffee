@@ -118,3 +118,39 @@ describe "real life examples", ->
       };
     };
   """
+
+  testCase """
+    react example
+    ---
+    import React from "react"
+
+    data := [
+        {
+            key: 1,
+            value: "Some label"
+
+            },
+            {
+            key: 2,
+            value: "Another label"
+            },
+    ]
+
+    Component := () => <>{data.map x => <h1>{x.value}</h1> }</>
+    ---
+    import React from "react";
+
+    const data = [
+        {
+            key: 1,
+            value: "Some label"
+
+            },
+            {
+            key: 2,
+            value: "Another label"
+            },
+    ];
+
+    const Component = () => <>{data.map(x => <h1>{x.value}</h1>) }</>;
+  """

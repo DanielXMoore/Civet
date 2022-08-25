@@ -13,6 +13,16 @@ describe "[TS] function", ->
   """
 
   testCase """
+    => has types
+    ---
+    () : number => x
+    x : number => x
+    ---
+    () : number => x;
+    x : number => x;
+  """
+
+  testCase """
     'function' has types
     ---
     function add(a: number, b: number) : number
