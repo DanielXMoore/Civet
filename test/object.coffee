@@ -178,12 +178,12 @@ describe "object", ->
     method set definition
     ---
     x =
-      get set(v)
-        return 5
+      set id(v)
+        @id = v
     ---
     x = {
-      get set(v) {
-        return 5;
+      set id(v) {
+        this.id = v;
       },
     };
   """
