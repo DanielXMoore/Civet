@@ -154,3 +154,24 @@ describe "real life examples", ->
 
     const Component = () => <>{data.map(x => <h1>{x.value}</h1>) }</>;
   """
+
+  testCase """
+    variables that start with 'in' should not get confused with 'in' keyword
+    ---
+    outer := 1
+
+    changeNumbers := ->
+      inner := 1
+      outer := 10
+
+    inner = "1"
+    ---
+    const outer = 1;
+
+    const changeNumbers = function() {
+      const inner = 1;
+      const outer = 10;
+    };
+
+    inner = "1";
+  """
