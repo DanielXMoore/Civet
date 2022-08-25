@@ -124,3 +124,28 @@ describe "array", ->
         },
     ];
   """
+
+  describe.skip "maybe later", ->
+    # CoffeeScript allows this but it is weird
+    testCase """
+      weird array
+      ---
+      x := [
+        a: 1
+        b: 2
+      ,
+        a: 1
+        b: 2
+      ]
+      ---
+      const x = [
+        {
+          a: 1,
+          b: 2
+        },
+        {
+          a: 1,
+          b: 2
+        }
+      ];
+    """

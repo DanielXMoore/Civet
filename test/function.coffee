@@ -79,6 +79,30 @@ describe "function", ->
   """
 
   testCase """
+    fat arrow nested body
+    ---
+    x = =>
+      x x
+    ---
+    x = () =>
+      x(x);
+  """
+
+  testCase """
+    fat arrow nested body with multiple statements
+    ---
+    x = =>
+      x x
+      a
+      b
+    ---
+    x = () =>
+      x(x);
+      a;
+      b;
+  """
+
+  testCase """
     decs inside function
     ---
     function () {
