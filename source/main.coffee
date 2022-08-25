@@ -5,3 +5,4 @@ module.exports =
   parse: parse
   compile: (src, options) ->
     gen parse(src), options
+  generate: gen
