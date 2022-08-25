@@ -175,3 +175,12 @@ describe "real life examples", ->
 
     inner = "1";
   """
+
+  describe.skip "maybe later", ->
+    testCase """
+      if else expression
+      ---
+      date := if x==1 "a" else "b"
+      ---
+      const date = x==1 ? "a" : "b";
+    """
