@@ -26,19 +26,19 @@ describe "array", ->
   """
 
   testCase """
-  compact rows
-  ---
-  bitlist := [
-    1, 0, 1
-    0, 0, 1
-    1, 1, 0
-  ]
-  ---
-  const bitlist = [
-    1, 0, 1,
-    0, 0, 1,
-    1, 1, 0,
-  ];
+    compact rows
+    ---
+    bitlist := [
+      1, 0, 1
+      0, 0, 1
+      1, 1, 0
+    ]
+    ---
+    const bitlist = [
+      1, 0, 1,
+      0, 0, 1,
+      1, 1, 0,
+    ];
   """
 
   testCase """
@@ -47,6 +47,22 @@ describe "array", ->
     y = [...x]
     ---
     y = [...x];
+  """
+
+  testCase """
+    compact spread
+    ---
+    bitlist := [
+      ...a, ...b, ...c
+      ...d, ...e, ...f
+      ...g, ...h, ...i
+    ]
+    ---
+    const bitlist = [
+      ...a, ...b, ...c,
+      ...d, ...e, ...f,
+      ...g, ...h, ...i,
+    ];
   """
 
   testCase """
