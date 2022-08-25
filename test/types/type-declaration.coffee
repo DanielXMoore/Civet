@@ -104,3 +104,51 @@ describe "[TS] type declaration", ->
       [Property in keyof Type]: boolean;
     };
   """
+
+  testCase """
+    mapped type
+    ---
+    type OptionsFlags<Type> = {
+      [Property in keyof Type]: boolean;
+    };
+    ---
+    type OptionsFlags<Type> = {
+      [Property in keyof Type]: boolean;
+    };
+  """
+
+  testCase """
+    mapped type modifiers
+    ---
+    type OptionsFlags<Type> = {
+      -readonly [Property in keyof Type]-?: boolean;
+    };
+    ---
+    type OptionsFlags<Type> = {
+      -readonly [Property in keyof Type]-?: boolean;
+    };
+  """
+
+  testCase """
+    remapped type
+    ---
+    type MappedTypeWithNewProperties<Type> = {
+      [Properties in keyof Type as NewKeyType]: Type[Properties];
+    };
+    ---
+    type MappedTypeWithNewProperties<Type> = {
+      [Properties in keyof Type as NewKeyType]: Type[Properties];
+    };
+  """
+
+  testCase """
+    complicated
+    ---
+    type EventConfig<Events extends { kind: string }> = {
+      [E in Events as E["kind"]]: (event: E) => void;
+    };
+    ---
+    type EventConfig<Events extends { kind: string }> = {
+      [E in Events as E["kind"]]: (event: E) => void;
+    };
+  """

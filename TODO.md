@@ -19,8 +19,8 @@ TODO
   - [x] Type assertions `const x = "" as T`
   - [x] `keyof`
   - [x] Indexed Access Types `T['name']`
-  - [ ] Mapped Types
-    - [ ] Mapping modifiers
+  - [x] Mapped Types
+    - [x] Mapping modifiers
   - [x] Assertion Signatures
   - [x] Return Type Predicate
   - [x] Index signature
