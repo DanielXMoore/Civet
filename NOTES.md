@@ -51,3 +51,4 @@ Timesheet
 2022-08-22 | 2.25  | esm loader; strip types in js; hera bugfix; ts lsp
 2022-08-23 | 5.00  | lsp vs code extension setup; WSL dev env perf fix; nested arguments list; const assignment shorthand; syntax highlighting starting from CoffeeScript
 2022-08-24 | 6.00  | Type binary ops, optional types; conditional types; parentheses in types; JSX; async generator function return types; mapped types; more typescript; array multi-elements per line; in keyword word boundary; feedback
+2022-08-25 | 0.75  | concise body; parens around fat arrow args;
