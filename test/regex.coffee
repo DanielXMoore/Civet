@@ -25,6 +25,14 @@ describe "regexp", ->
     /[ab]/;
   """
 
+  testCase """
+    space plus
+    ---
+    / +/
+    ---
+    / +/;
+  """
+
   it "throws when regexp is actually unclosed comment", ->
     throws """
       /*/
