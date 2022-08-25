@@ -72,10 +72,10 @@ describe "function", ->
     fat arrow
     ---
     () => x
-    x => x
+    (x) => x
     ---
     () => x;
-    x => x;
+    (x) => x;
   """
 
   testCase """
@@ -86,6 +86,16 @@ describe "function", ->
     ---
     x = () =>
       x(x);
+  """
+
+  testCase """
+    fat interprets single arg without parens as function application
+    ---
+    x =>
+      5
+    ---
+    x(() =>
+      5);
   """
 
   testCase """

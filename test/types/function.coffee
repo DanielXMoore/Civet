@@ -16,10 +16,10 @@ describe "[TS] function", ->
     => has types
     ---
     () : number => x
-    x : number => x
+    (x) : number => x
     ---
     () : number => x;
-    x : number => x;
+    (x) : number => x;
   """
 
   testCase """

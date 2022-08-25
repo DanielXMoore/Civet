@@ -115,3 +115,11 @@ Things Added that CoffeeScript didn't
   console.log "hi"
   ```
 - TypeScript Types
+
+Things Changed from ES6
+---
+
+- Disallow no parens on single argument arrow function. `x => ...` must become `(x) => ...`
+  The reasoning is `x -> ` => `x(function() ...)` in CoffeeScript and having `->` and `=>`
+  behave more differently than they already do is bad. Passing an anonymous function to an
+  application without parens is also convenient.

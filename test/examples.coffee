@@ -136,7 +136,7 @@ describe "real life examples", ->
             },
     ]
 
-    Component := () => <>{data.map x => <h1>{x.value}</h1> }</>
+    Component := () => <>{data.map (x) => <h1>{x.value}</h1> }</>
     ---
     import React from "react";
 
@@ -152,7 +152,7 @@ describe "real life examples", ->
             },
     ];
 
-    const Component = () => <>{data.map(x => <h1>{x.value}</h1>) }</>;
+    const Component = () => <>{data.map((x) => <h1>{x.value}</h1>) }</>;
   """
 
   testCase """
