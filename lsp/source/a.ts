@@ -1,1 +1,1 @@
-console.log('hi')
+const x: number = 5;

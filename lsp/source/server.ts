@@ -7,14 +7,18 @@ import {
   InitializeParams,
   DidChangeConfigurationNotification,
   TextDocumentSyncKind,
-  InitializeResult
+  InitializeResult,
+  MarkupKind,
 } from 'vscode-languageserver/node';
 
 import {
   TextDocument
 } from 'vscode-languageserver-textdocument';
 
-import Civet from "@danielx/civet"
+import ts, { LanguageService } from "typescript"
+
+import TSService from './lib/typescript-service';
+import * as Previewer from "./lib/previewer"
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -26,6 +30,8 @@ const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
 let hasDiagnosticRelatedInformationCapability = false;
+
+let service: LanguageService;
 
 connection.onInitialize((params: InitializeParams) => {
   const capabilities = params.capabilities;
@@ -56,9 +62,11 @@ connection.onInitialize((params: InitializeParams) => {
       // },
       documentSymbolProvider: true,
       definitionProvider: true,
+      hoverProvider: true,
       referencesProvider: true,
     }
   };
+
   if (hasWorkspaceFolderCapability) {
     result.capabilities.workspace = {
       workspaceFolders: {
@@ -66,6 +74,10 @@ connection.onInitialize((params: InitializeParams) => {
       }
     };
   }
+
+  // TODO: currently only using the first workspace folder
+  service = TSService(params.workspaceFolders?.[0]?.uri)
+
   return result;
 });
 
@@ -81,53 +93,33 @@ connection.onInitialized(() => {
   }
 });
 
-// This handler provides the initial list of the completion items.
-connection.onCompletion((params) => {
-  const doc = documents.get(params.textDocument.uri);
-  if (doc) {
-    return getCompletionsFor(doc, params.position);
-  }
-});
+connection.onHover(({ textDocument, position }) => {
+  const doc = documents.get(textDocument.uri);
+  console.log("hover", textDocument, position);
+  if (!doc) return;
 
-// This handler resolves additional information for the item selected in
-// the completion list.
-connection.onCompletionResolve(onCompletionResolve);
+  // TODO: Map input hover position into output TS position
+  const info = service.getQuickInfoAtPosition(doc.uri.replace("file:///home/daniel/apps/civet/", ""), doc.offsetAt(position))
+  if (!info) return;
 
-// Goto definition
-// textDocument/definitio
-connection.onDefinition((params, token, workDoneProgress, resultProgress) => {
-  const doc = documents.get(params.textDocument.uri);
-  if (doc) {
-    return getDeclarationFor(doc, params.position);
-  }
-});
+  const display = ts.displayPartsToString(info.displayParts);
+  // TODO: Replace Previewer
+  const documentation = Previewer.plain(ts.displayPartsToString(info.documentation));
 
-connection.onHover((params, token) => {
-  service.getQuickInfoAtPosition()
+  // TODO: position source mapping
+
+  return {
+    // TODO: Range
+    contents: {
+      kind: MarkupKind.Markdown,
+      value: [
+        `\`\`\`typescript\n${display}\n\`\`\``,
+        documentation ?? "",
+        ...info.tags?.map(Previewer.getTagDocumentation).filter((t) => !!t) || []
+      ].join("\n\n")
+    }
+  };
 })
-
-// connection.onDocumentLinks((params: DocumentLinkParams) => {
-//   const doc = documents.get(params.textDocument.uri);
-//   if (doc) {
-//     return getDocumentLinksFor(doc);
-//   }
-// });
-
-// connection.onDocumentLinkResolve(onLinkResolve);
-
-connection.onReferences((params) => {
-  const doc = documents.get(params.textDocument.uri);
-  if (doc) {
-    return getReferencesFor(doc, params.position);
-  }
-});
-
-connection.onDocumentSymbol((params) => {
-  const doc = documents.get(params.textDocument.uri);
-  if (doc) {
-    return getDocumentSymbols(doc);
-  }
-});
 
 // The example settings
 interface ExampleSettings {
@@ -180,37 +172,8 @@ documents.onDidClose(e => {
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent(change => {
-  validateTextDocument(change.document);
+  // validateTextDocument(change.document);
 });
-
-async function validateTextDocument(textDocument: TextDocument): Promise<void> {
-  const diagnostics: Diagnostic[] = [];
-
-  try {
-    parseDocument(textDocument);
-  } catch (e: any) {
-    console.log(e);
-    const [_, line, character, message] = e.message.match(/^[^:]*:(\d+):(\d+)\s*(.*)$/s);
-    diagnostics.push({
-      range: {
-        start: {
-          line: line - 1,
-          character: character - 1
-        },
-        end: {
-          line: line - 1,
-          character: character
-        }
-      },
-      severity: DiagnosticSeverity.Error,
-      message: message,
-      source: "civet"
-    });
-  }
-
-  // Send the computed diagnostics to VSCode.
-  connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
-}
 
 connection.onDidChangeWatchedFiles(_change => {
   // Monitored files have change in VSCode

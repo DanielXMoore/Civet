@@ -52,13 +52,9 @@ export function activate(context: ExtensionContext) {
   client.start();
 }
 
-export function deactivate(): Thenable<void> | undefined {
+export function deactivate() {
   if (!client) {
     return undefined;
   }
   return client.stop();
 }
-
-type OptionsFlags<Type> = {
-  -readonly [Property in keyof Type]-?: boolean;
-};
