@@ -5,7 +5,7 @@ Civet
 
 A new CoffeeScript. Much closer to ES2015+ (for better or worse).
 
-Also TypeScript, the sky is the limit.
+Also TypeScript, the sky is the limit. [Online Civet Playground](https://civet-web.vercel.app/)
 
 Quickstart Guide
 ---
