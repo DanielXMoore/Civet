@@ -23,6 +23,14 @@ describe "[TS] function", ->
   """
 
   testCase """
+    no parens is application
+    ---
+    x => y
+    ---
+    x(() => y);
+  """
+
+  testCase """
     'function' has types
     ---
     function add(a: number, b: number) : number
