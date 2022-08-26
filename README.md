@@ -60,17 +60,16 @@ Things Kept from CoffeeScript
 - OptionalChain shorthand for index and function application `a?[b]` -> `a?.[b]`, `a?(b)` -> `a?.(b)`
 - `@` -> `this`
 - `@id` -> `this.id`
+- Postfix `if/unless`
 - JSX 😿
 - TODO
   - [ ] `"""` Strings (for compatibility with existing .coffee code)
-  - [ ] `///` Heregexp
   - [ ] Chained comparisons
 
 Things Removed from CoffeeScript
 ---
 
-- `on` (use `true`)
-- `off` (use `false`)
+- `on/yes/off/no` (use `true/false`)
 - `do` keyword (replaced with JS `do`)
 - `for from` (use JS `for of`)
 - Array slices `list[0...2]` (use `list.slice(0, 2)`)
@@ -79,6 +78,8 @@ Things Removed from CoffeeScript
 - Implicit declarations
 - Implicit returns (will probably add later)
 - Rest parameter in any assignment position (might add later)
+- `///` Heregexp
+- Embedded JS
 
 Things Changed from CoffeeScript
 ---
@@ -89,6 +90,8 @@ Things Changed from CoffeeScript
 - `a...` is now `...a` just like JS
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
 - Existential `x?` -> `(x != null)` no longer checks for undeclared variables.
+- Embedded JS `\`\`` has been replaced with JS template literals.
+- No longer allowing multiple postfix `if/unless` on the same line.
 
 Things Added that CoffeeScript didn't
 ---

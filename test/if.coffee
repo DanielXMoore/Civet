@@ -87,3 +87,19 @@ describe "if", ->
       return y;
     };
   """
+
+  testCase """
+    postfix unless
+    ---
+    return true unless x
+    ---
+     if(!( x)) {return true};
+  """
+
+  testCase """
+    postfix if
+    ---
+    return true if x
+    ---
+     if( x) {return true};
+  """
