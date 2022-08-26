@@ -58,3 +58,7 @@ export function deactivate(): Thenable<void> | undefined {
   }
   return client.stop();
 }
+
+type OptionsFlags<Type> = {
+  -readonly [Property in keyof Type]-?: boolean;
+};
