@@ -7,9 +7,16 @@ A new CoffeeScript. Much closer to ES2015+ (for better or worse).
 
 Also TypeScript, the sky is the limit.
 
+Quickstart Guide
+---
+
 ```bash
+# Install
 npm install -g @danielx/civet
+# Compile civet source file to typescript
 civet < source.civet > output.ts
+# Execute a civet source file in node
+node --loader @danielx/civet/register.mjs source.civet
 ```
 
 ![image](https://user-images.githubusercontent.com/18894/184558519-b675a903-7490-43ba-883e-0d8addacd4b9.png)
