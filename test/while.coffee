@@ -22,3 +22,13 @@ describe "while", ->
       x++;
     };
   """
+
+  testCase """
+    variable that starts with while isn't interpreted as block
+    ---
+    while2
+    x
+    ---
+    while2;
+    x;
+  """

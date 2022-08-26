@@ -20,7 +20,7 @@ Code Sample
 ```typescript
 import ts, {CompilerOptions} from "typescript"
 
-const DefaultCompilerOptions : CompilerOptions =
+DefaultCompilerOptions : CompilerOptions :=
   allowNonTsExtensions: true
   allowJs: true
   target: ts.ScriptTarget.Latest
@@ -29,13 +29,13 @@ const DefaultCompilerOptions : CompilerOptions =
   allowSyntheticDefaultImports: true
   experimentalDecorators: true
 
-const fileCache : Record<string, any> = {}
+fileCache : Record<string, any> := {}
 
-const createCompilerHost = (options: CompilerOptions, moduleSearchLocations : string[]) ->
-  const fileExists = (fileName: string) : boolean ->
+createCompilerHost := (options: CompilerOptions, moduleSearchLocations : string[]) ->
+  fileExists := (fileName: string) : boolean ->
     return fileCache[fileName]?
 
-  const readFile = (fileName: string) ->
+  readFile := (fileName: string) ->
     return fileCache[fileName]
 ```
 
@@ -46,6 +46,7 @@ Things Kept from CoffeeScript
 - `or` -> `||`
 - `and` -> `&&`
 - `loop` -> `while(true)`
+- `unless` conditional (without the `else`)
 - Object literal syntax
   ```coffee
   x =
@@ -65,19 +66,25 @@ Things Kept from CoffeeScript
 - TODO
   - [ ] `"""` Strings (for compatibility with existing .coffee code)
   - [ ] Chained comparisons
+  - [ ] `until`
+  - [ ] Prototype shorthand `X::` -> `X.prototype`, `X::a` -> `X.prototype.a`
 
 Things Removed from CoffeeScript
 ---
 
 - `on/yes/off/no` (use `true/false`)
+- `isnt` (use `!==`)
+- `not` (use `!`)
 - `do` keyword (replaced with JS `do`)
 - `for from` (use JS `for of`)
 - Array slices `list[0...2]` (use `list.slice(0, 2)`)
+- Slice assignment `numbers[3..6] = [-3, -4, -5, -6]`
 - Comprensions (a case could be made for keeping them)
 - Iteration expression results
 - Implicit declarations
 - Implicit returns (will probably add later)
 - Rest parameter in any assignment position (might add later)
+- Postfix `while/until`
 - `///` Heregexp
 - Embedded JS
 
@@ -92,10 +99,15 @@ Things Changed from CoffeeScript
 - Existential `x?` -> `(x != null)` no longer checks for undeclared variables.
 - Embedded JS `\`\`` has been replaced with JS template literals.
 - No longer allowing multiple postfix `if/unless` on the same line.
+- No `else` block on `unless` (negate condition and use `if`)
+- Civet tries to keep the transpiled output verbatim as much as possible.
+  In Coffee `(x)` -> `x;` but in Civet `(x)` -> `(x);`.
+  Also in Coffee `x    +    3` -> `x + 3` but in Civet `x    +    3` remains as is.
 
 Things Added that CoffeeScript didn't
 ---
 
+- TypeScript Types
 - JS Compatability
   - `var`, `let`, `const`
   - JS Comment Syntax `//` and `/* */`
@@ -117,7 +129,6 @@ Things Added that CoffeeScript didn't
   #!./node_modules/.bin/ts-node
   console.log "hi"
   ```
-- TypeScript Types
 
 Things Changed from ES6
 ---

@@ -34,3 +34,17 @@ describe "call-expression", ->
     x?.(y);
     x?.(y);
   """
+
+  describe.skip "TODO", ->
+    testCase """
+      leading .
+      ---
+        $ 'body'
+        .click (e) ->
+          $ '.box'
+          .fadeIn 'fast'
+          .addClass 'show'
+        .css 'background', 'white'
+      ---
+      yo
+    """
