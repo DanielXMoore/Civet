@@ -12,3 +12,6 @@ BIN="dist/civet"
 echo "#!/usr/bin/env node" | cat - dist/cli.js > "$BIN"
 chmod +x "$BIN"
 rm dist/cli.js
+
+# types
+cp types/types.d.ts dist/types.d.ts
