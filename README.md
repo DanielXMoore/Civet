@@ -66,15 +66,14 @@ Things Kept from CoffeeScript
 - Optional semi-colons
 - Indentation based block syntax
 - OptionalChain shorthand for index and function application `a?[b]` -> `a?.[b]`, `a?(b)` -> `a?.(b)`
-- `@` -> `this`
-- `@id` -> `this.id`
+- `@` This shorthand `@` -> `this`, `@id` -> `this.id`
+- Prototype shorthand `X::` -> `X.prototype`, `X::a` -> `X.prototype.a`
 - Postfix `if/unless`
 - JSX 😿
 - TODO
   - [ ] `"""` Strings (for compatibility with existing .coffee code)
   - [ ] Chained comparisons
   - [ ] `until`
-  - [ ] Prototype shorthand `X::` -> `X.prototype`, `X::a` -> `X.prototype.a`
 
 Things Removed from CoffeeScript
 ---
