@@ -54,6 +54,7 @@ Things Kept from CoffeeScript
 - `and` -> `&&`
 - `loop` -> `while(true)`
 - `unless` conditional (without the `else`)
+- `until condition` -> `while(!condition)`
 - Object literal syntax
   ```coffee
   x =
@@ -73,7 +74,6 @@ Things Kept from CoffeeScript
 - TODO
   - [ ] `"""` Strings (for compatibility with existing .coffee code)
   - [ ] Chained comparisons
-  - [ ] `until`
 
 Things Removed from CoffeeScript
 ---
@@ -121,8 +121,7 @@ Things Added that CoffeeScript didn't
   - OptionalChain longhand
   - ConditionalExpression
   - `case` statement
-  - `while`
-  - `do`
+  - `do`, `do { ... } until condition`
 - Const assignment shorthand `a := b` -> `const a = b`; `{a, b} := c` -> `const {a, b} = c`
 - Convenience for ES6+ Features
   - `<` as `extends` shorthand
@@ -130,7 +129,7 @@ Things Added that CoffeeScript didn't
 - ClassStaticBlock
 - `get`/`set` method definitions
 - Private identifiers `#id`
-- Shebang line
+- Shebang line is kept unmodified in output
   ```civet
   #!./node_modules/.bin/ts-node
   console.log "hi"
@@ -140,6 +139,6 @@ Things Changed from ES6
 ---
 
 - Disallow no parens on single argument arrow function. `x => ...` must become `(x) => ...`
-  The reasoning is `x -> ` => `x(function() ...)` in CoffeeScript and having `->` and `=>`
+  The reasoning is `x -> ...` => `x(function() ...)` in CoffeeScript and having `->` and `=>`
   behave more differently than they already do is bad. Passing an anonymous function to an
   application without parens is also convenient.

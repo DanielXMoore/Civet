@@ -32,3 +32,14 @@ describe "while", ->
     while2;
     x;
   """
+
+  testCase """
+    until
+    ---
+    until (x < 3)
+      x--
+    ---
+    while (!(x < 3)) {
+      x--;
+    };
+  """

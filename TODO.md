@@ -24,6 +24,7 @@ TODO
   - [x] Assertion Signatures
   - [x] Return Type Predicate
   - [x] Index signature
+  - [ ] `!` non-null assertion
 - [x] Keep shebang line
 - [x] JSX 😿
 - [ ] Infrastructure

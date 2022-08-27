@@ -26,3 +26,16 @@ describe "do", ->
     }
     while (i < 10);
   """
+
+  testCase """
+    until
+    ---
+    do
+      console.log(i++)
+    until (i > 10)
+    ---
+    do {
+      console.log(i++);
+    }
+    while (!(i > 10));
+  """
