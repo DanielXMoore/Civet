@@ -184,3 +184,30 @@ describe "real life examples", ->
       ---
       const date = x==1 ? "a" : "b";
     """
+
+  testCase """
+    bare return statement
+    ---
+    getSourceFile := (fileName: string, languageVersion: ScriptTarget, onError: (message: string) => void ) ->
+      sourceText := sys.readFile fileName
+
+      if sourceText != undefined
+        return createSourceFile fileName, sourceText, languageVersion
+      return
+
+    resolveModuleNames := (moduleNames: string[], containingFile: string) ->
+      resolvedModules := []
+    ---
+    const getSourceFile = function(fileName: string, languageVersion: ScriptTarget, onError: (message: string) => void ) {
+      const sourceText = sys.readFile(fileName);
+
+      if (sourceText != undefined) {
+        return createSourceFile(fileName, sourceText, languageVersion);
+      };
+      return;
+    };
+
+    const resolveModuleNames = function(moduleNames: string[], containingFile: string) {
+      const resolvedModules = [];
+    };
+  """

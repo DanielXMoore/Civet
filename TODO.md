@@ -3,7 +3,11 @@ TODO
 
 - [x] Compiler option to strip TypeScript and emit only JS (use in `./register`)
 - [x] JavaScript Compat (default stance is JS code should "just work")
-- [x] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
+- [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
+  - [ ] Implicit Returns
+  - [ ] """
+  - [ ] ###
+  - [ ] Heregex (Defer)
 - [x] Keep comments and whitespace
 - [ ] TypeScript
   - [x] TS Compiling Experiment
@@ -28,7 +32,14 @@ TODO
 - [x] Keep shebang line
 - [x] JSX 😿
 - [ ] Infrastructure
-  - [x] Syntax Highlighting
   - [ ] CoffeeSense inspired LSP
+    - [x] Syntax Highlighting
+    - [ ] Sourcemapping
+    - [ ] Hover docs
+    - [ ] Completions
+    - [ ] References
+    - [ ] Diagnostics
+  - [x] ESM Loader
+  - [x] esbuild plugin
 - [ ] Syntax Experiments
   - [ ] Explore `gen.next(args, ...)` shorthand

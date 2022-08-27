@@ -53,3 +53,4 @@ Timesheet
 2022-08-24 | 6.00  | Type binary ops, optional types; conditional types; parentheses in types; JSX; async generator function return types; mapped types; more typescript; array multi-elements per line; in keyword word boundary; feedback
 2022-08-25 | 3.00  | concise body; parens around fat arrow args; lsp
 2022-08-26 | 2.50  | lsp experiment; hover; prototype shorthand; until
+2022-08-27 | 1.00  | bugfix return followed by non-nested expression; esbuild plugin;

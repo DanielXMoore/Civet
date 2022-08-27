@@ -125,7 +125,23 @@ describe "function", ->
   """
 
   testCase """
-    return nested object
+    return nested braceless object
+    ---
+    config = ->
+      return
+        a: x
+        b: y
+    ---
+    config = function() {
+      return {
+        a: x,
+        b: y,
+      };
+    };
+  """
+
+  testCase """
+    return nested braceless object with methods
     ---
     config = ->
       return
