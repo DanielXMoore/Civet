@@ -3,14 +3,16 @@ gen = require "../source/generate"
 
 assert = require "assert"
 
-compare = (src, result) ->
-  assert.equal gen(parse(src)), result
+verbose = false
+
+compare = (src, result, filename) ->
+  assert.equal gen(parse(src, {filename, verbose})), result
 
 testCase = (text) ->
   [desc, src, result] = text.split("\n---\n")
 
   it desc, ->
-    compare src, result
+    compare src, result, desc
 
 throws = (text) ->
   assert.throws ->
