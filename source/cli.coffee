@@ -8,9 +8,11 @@ input = fs.readFileSync process.stdin.fd, encoding
 
 ast = parse input
 
+js = process.argv.includes "--js"
+
 if process.argv.includes "--ast"
   process.stdout.write JSON.stringify(ast, null, 2)
   return
 
-output = generate ast
+output = generate ast, {js}
 process.stdout.write output
