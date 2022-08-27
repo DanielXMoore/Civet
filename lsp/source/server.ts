@@ -32,6 +32,7 @@ let hasWorkspaceFolderCapability = false;
 let hasDiagnosticRelatedInformationCapability = false;
 
 let service: LanguageService;
+let rootDir: string;
 
 connection.onInitialize((params: InitializeParams) => {
   const capabilities = params.capabilities;
@@ -76,7 +77,14 @@ connection.onInitialize((params: InitializeParams) => {
   }
 
   // TODO: currently only using the first workspace folder
-  service = TSService(params.workspaceFolders?.[0]?.uri)
+  const baseDir = params.workspaceFolders?.[0]?.uri.toString()
+  if (!baseDir)
+    throw new Error("Could not initialize without workspace folders")
+
+  rootDir = baseDir + "/"
+
+  console.log("Init", rootDir)
+  service = TSService(rootDir)
 
   return result;
 });
@@ -96,10 +104,13 @@ connection.onInitialized(() => {
 connection.onHover(({ textDocument, position }) => {
   const doc = documents.get(textDocument.uri);
   console.log("hover", textDocument, position);
+
   if (!doc) return;
+  const sourcePath = doc.uri.replace(rootDir, "")
+  console.log("path", sourcePath)
 
   // TODO: Map input hover position into output TS position
-  const info = service.getQuickInfoAtPosition(doc.uri.replace("file:///home/daniel/apps/civet/", ""), doc.offsetAt(position))
+  const info = service.getQuickInfoAtPosition(sourcePath, doc.offsetAt(position))
   if (!info) return;
 
   const display = ts.displayPartsToString(info.displayParts);

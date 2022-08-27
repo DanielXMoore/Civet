@@ -1,5 +1,5 @@
 import Civet from "@danielx/civet"
-import ts, { CompilerOptions, LanguageServiceHost } from "typescript"
+import ts, { CompilerOptions, LanguageServiceHost, MapLike, SourceFile } from "typescript"
 import fs from "fs"
 
 const {
@@ -12,9 +12,9 @@ const {
   sys,
 } = ts
 
-const scriptFileNames: Set<string> = new Set
-
 function TSService(projectPath = "./") {
+  const files: MapLike<{ version: number }> = {};
+
   const tsConfigPath = "tsconfig.json"
   const { config } = readConfigFile(tsConfigPath, sys.readFile)
 
@@ -77,7 +77,15 @@ function TSService(projectPath = "./") {
   const service = createLanguageService(host);
 
   console.log(config2)
-  console.log("SourceFiles", service.getProgram()?.getSourceFiles())
+
+  const sourceFiles: readonly SourceFile[] = service.getProgram()?.getSourceFiles() || []
+
+  console.log("SourceFiles", sourceFiles.map((f) => f.fileName))
+
+  // initialize the list of files
+  sourceFiles.forEach(file => {
+    files[file.fileName] = { version: 0 };
+  });
 
   // const program = service.getProgram();
   // console.log(program?.getSourceFile("source/a.civet"));
