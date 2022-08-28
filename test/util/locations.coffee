@@ -3,7 +3,7 @@ assert = require "assert"
 
 describe "util", ->
   describe "locationTable", ->
-    it.only "should create a table to map positions to line/column", ->
+    it "should create a table to map positions to line/column", ->
       text = """
         1 2 3
         4 5 6
