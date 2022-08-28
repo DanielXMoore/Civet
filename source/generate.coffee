@@ -17,9 +17,7 @@ gen = (node, options) ->
     if !node.children
       throw new Error("Unknown node", JSON.stringify(node))
 
-    return node.children.map (child) ->
-      gen child, options
-    .join('')
+    return gen node.children, options
 
   throw new Error("Unknown node", JSON.stringify(node))
 
