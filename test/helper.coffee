@@ -6,7 +6,8 @@ assert = require "assert"
 verbose = false
 
 compare = (src, result, filename) ->
-  assert.equal gen(parse(src, {filename, verbose})), result
+  ast = parse(src, {filename, verbose})
+  assert.equal gen(gen.prune(ast), {}), result
 
 testCase = (text) ->
   [desc, src, result] = text.split("\n---\n")

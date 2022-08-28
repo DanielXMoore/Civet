@@ -6,7 +6,7 @@ gen = require "../source/generate"
 assert = require "assert"
 
 compile = (src) ->
-  Function gen parse src
+  Function gen (parse src), {}
 
 describe "integration", ->
   it "should parse CoffeeScript 2 files", ->
