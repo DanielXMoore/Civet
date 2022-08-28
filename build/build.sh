@@ -13,5 +13,8 @@ echo "#!/usr/bin/env node" | cat - dist/cli.js > "$BIN"
 chmod +x "$BIN"
 rm dist/cli.js
 
+# esbuild-plugin
+./dist/civet < esbuild-plugin.civet > esbuild-plugin.js
+
 # types
 cp types/types.d.ts dist/types.d.ts
