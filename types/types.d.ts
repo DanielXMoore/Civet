@@ -1,6 +1,7 @@
 declare module "@danielx/civet" {
   export type CivetAST = unknown;
   export type CompileOptions = {
+    filename?: string
     js?: boolean
   }
 
