@@ -21,3 +21,18 @@ describe "util", ->
       assert.deepEqual lookupLineColumn(table, 6), [1, 0]
       assert.deepEqual lookupLineColumn(table, 12), [2, 0]
       assert.deepEqual lookupLineColumn(table, 17), [3, 0]
+
+      assert.deepEqual table, [6, 12, 17]
+
+    it "civet src", ->
+      src = """
+        x := a + b
+        y++
+      """
+
+      table = locationTable(src)
+
+      assert.deepEqual table, [11, 14]
+
+      assert.deepEqual lookupLineColumn(table, 0), [0, 0]
+      assert.deepEqual lookupLineColumn(table, 11), [1, 0]

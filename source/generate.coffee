@@ -10,7 +10,7 @@ gen = (node, options) ->
 
   if typeof node is "string"
     # increment output line/column
-    updateOutputPosition options.sourceMap, node
+    options?.updateSourceMap? node
 
     return node
 
@@ -25,7 +25,7 @@ gen = (node, options) ->
 
     if node.$loc?
       {token, $loc} = node
-      updateOutputPosition(options.sourceMap, token)
+      options?.updateSourceMap?(token, $loc.pos)
       return token
 
     if !node.children
@@ -36,23 +36,6 @@ gen = (node, options) ->
   throw new Error("Unknown node", JSON.stringify(node))
 
 module.exports = gen
-
-EOL = /\r?\n|\r/
-
-updateOutputPosition = (state, str) ->
-  return unless state
-
-  outLines = str.split(EOL)
-
-  if outLines.length > 1 # there was a line break
-    lineNum += outLines.length - 1
-    colNum = outLines[outLines.length - 1].length
-  else
-    colNum += str.length
-
-  # Update state
-  state.lineNum = lineNum
-  state.colNum = colNum
 
 # Remove empty arrays, empty string, null, undefined from node tree
 # Useful for debugging so I don't need to step though tons of empty nodes
