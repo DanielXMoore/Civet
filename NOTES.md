@@ -13,6 +13,8 @@ outColDelta is reset each line
 srcLineDelta is absolute on first occurence, relative for each other occurence (does not reset at the end of the generated line)
 srcColDelta is absolute on first occurence, relative for each other occurence (does not reset at the end of the generated line)
 
+SourceMap Viz: https://evanw.github.io/source-map-visualization/
+
 Windows Dev Env
 ---
 
