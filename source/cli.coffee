@@ -1,3 +1,7 @@
+if process.argv.includes "--version"
+  process.stdout.write require("../package.json").version + "\n"
+  process.exit(0)
+
 {parse} = require "./main"
 generate = require "./generate"
 
