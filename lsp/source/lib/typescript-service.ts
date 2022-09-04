@@ -1,6 +1,11 @@
 import Civet from "@danielx/civet"
-import ts, { CompilerOptions, LanguageServiceHost, MapLike, SourceFile } from "typescript"
+import ts, { CompilerHost, CompilerOptions, LanguageServiceHost } from "typescript"
 import fs from "fs"
+import assert from "assert"
+
+interface Host extends LanguageServiceHost {
+  addPath(path: string): void;
+}
 
 const {
   ScriptKind,
@@ -12,9 +17,64 @@ const {
   sys,
 } = ts
 
-function TSService(projectPath = "./") {
-  const files: MapLike<{ version: number }> = {};
+function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): Host {
+  // TODO: Actual files
+  const scriptFileNames = new Set(["source/lsp.civet"])
+  const fileMetaData: Map<string, { version: number }> = new Map;
 
+  let projectVersion = 0;
+
+  return Object.assign(baseHost, {
+    addPath(path: string) {
+      if (scriptFileNames.has(path)) return
+
+      scriptFileNames.add(path)
+      fileMetaData.set(path, { version: 0 })
+      projectVersion++
+    },
+    getProjectVersion() {
+      return projectVersion.toString();
+    },
+    getCompilationSettings() {
+      return compilationSettings;
+    },
+    getScriptSnapshot(fileName: string) {
+      if (!fs.existsSync(fileName)) {
+        return undefined;
+      }
+
+      const src = fs.readFileSync(fileName, "utf8")
+
+      // Compile .civet files to TS
+      if (fileName.match(/\.civet$/)) {
+        try {
+          //@ts-ignore
+          const tsSrc = Civet.compile(src, { filename: fileName })
+          return ScriptSnapshot.fromString(tsSrc)
+        } catch (e) {
+          console.error(e)
+          return
+        }
+      }
+
+      return ScriptSnapshot.fromString(src)
+    },
+    getScriptVersion(path: string) {
+      const fileMeta = fileMetaData.get(path)
+      assert(fileMeta)
+
+      return fileMeta.version.toString()
+    },
+    getScriptFileNames() {
+      return Array.from(scriptFileNames)
+    },
+    writeFile(fileName: string, content: string) {
+      console.log("write", fileName, content)
+    }
+  });
+}
+
+function TSService(projectPath = "./") {
   const tsConfigPath = "tsconfig.json"
   const { config } = readConfigFile(tsConfigPath, sys.readFile)
 
@@ -43,56 +103,21 @@ function TSService(projectPath = "./") {
   Object.assign(config2.options, defaultCompilerOptions);
 
   const baseHost = createCompilerHost(config2.options)
+  const host = TSHost(config2.options, baseHost)
 
-  const host: LanguageServiceHost = Object.assign(baseHost, {
-    getCompilationSettings() {
-      return config2.options;
-    },
-    getScriptSnapshot(fileName: string) {
-      if (!fs.existsSync(fileName)) {
-        return undefined;
-      }
-
-      const src = fs.readFileSync(fileName, "utf8")
-
-      // Compile .civet files to TS
-      if (fileName.match(/\.civet$/)) {
-        const tsSrc = Civet.compile(src)
-        return ScriptSnapshot.fromString(tsSrc)
-      }
-
-      return ScriptSnapshot.fromString(src)
-    },
-    getScriptVersion() {
-      return "0"
-    },
-    getScriptFileNames() {
-      return ["source/lsp.civet"]
-    },
-    writeFile(fileName: string, content: string) {
-      console.log("write", fileName, content)
-    }
-  });
-
+  host.getScriptVersion
   const service = createLanguageService(host);
 
   console.log(config2)
-
-  const sourceFiles: readonly SourceFile[] = service.getProgram()?.getSourceFiles() || []
-
-  console.log("SourceFiles", sourceFiles.map((f) => f.fileName))
-
-  // initialize the list of files
-  sourceFiles.forEach(file => {
-    files[file.fileName] = { version: 0 };
-  });
 
   // const program = service.getProgram();
   // console.log(program?.getSourceFile("source/a.civet"));
   // for (let i = 0; i < 25; i++)
   //   console.log(i, service.getQuickInfoAtPosition("source/a.civet", i))
 
-  return service
+  return Object.assign(service, {
+    host
+  })
 }
 
 export default TSService

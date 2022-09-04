@@ -15,10 +15,11 @@ import {
   TextDocument
 } from 'vscode-languageserver-textdocument';
 
-import ts, { LanguageService } from "typescript"
+import ts from "typescript"
 
 import TSService from './lib/typescript-service';
-import * as Previewer from "./lib/previewer"
+import * as Previewer from "./lib/previewer";
+// import { toCompletionItemKind } from './util';
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -31,7 +32,7 @@ let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
 let hasDiagnosticRelatedInformationCapability = false;
 
-let service: LanguageService;
+let service: ReturnType<typeof TSService>;
 let rootDir: string;
 
 connection.onInitialize((params: InitializeParams) => {
@@ -109,7 +110,11 @@ connection.onHover(({ textDocument, position }) => {
   const sourcePath = doc.uri.replace(rootDir, "")
   console.log("path", sourcePath)
 
+  // Make sure doc is in ts-server
+  service.host.addPath(sourcePath)
+
   // TODO: Map input hover position into output TS position
+
   const info = service.getQuickInfoAtPosition(sourcePath, doc.offsetAt(position))
   if (!info) return;
 
@@ -130,6 +135,41 @@ connection.onHover(({ textDocument, position }) => {
       ].join("\n\n")
     }
   };
+})
+
+// This handler provides the initial list of the completion items.
+connection.onCompletion(() => {
+  // ({ textDocument, position, context }) => {
+  // const doc = documents.get(textDocument.uri);
+  // console.log("completion", textDocument, position)
+  // if (!doc) return;
+
+  // const sourcePath = doc.uri.replace(rootDir, "")
+  // const completionInfo = service.getCompletionsAtPosition(sourcePath, doc.offsetAt(position), {})
+
+  // return completionInfo?.entries.map((e) => ({
+  //   label: e.name,
+  //   kind: 1,
+  // }));
+
+  return [{
+    label: "hi",
+    kind: 1
+  }]
+});
+
+// TODO
+connection.onCompletionResolve(() => {
+  return {
+    label: "ahopy",
+    documentation: "yolo"
+  }
+})
+
+// TODO
+connection.onDocumentSymbol((p) => {
+  console.log(p)
+  return undefined
 })
 
 // The example settings

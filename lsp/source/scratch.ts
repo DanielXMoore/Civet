@@ -1,12 +1,4 @@
 
-// This handler provides the initial list of the completion items.
-connection.onCompletion((params) => {
-  const doc = documents.get(params.textDocument.uri);
-  if (doc) {
-    return getCompletionsFor(doc, params.position);
-  }
-});
-
 // This handler resolves additional information for the item selected in
 // the completion list.
 connection.onCompletionResolve(onCompletionResolve);

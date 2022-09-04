@@ -5,7 +5,7 @@ This Language Server works for `.civet` files.
 Features
 ---
 
-- [ ] Syntax Highlighting
+- [x] Syntax Highlighting
 - [ ] Go to definition
 - [ ] Find all references
 - [ ] Completions
