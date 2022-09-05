@@ -7,23 +7,24 @@ const baseURL = pathToFileURL(process.cwd() + '/').href;
 
 const extensionsRegex = /\.civet$/;
 
-export async function resolve(specifier, context, defaultResolve) {
+export async function resolve(specifier, context, next) {
   const { parentURL = baseURL } = context;
 
   if (extensionsRegex.test(specifier)) {
     return {
-      format: "civet",
+      shortCircuit: true,
+      format: "module",
       url: new URL(specifier, parentURL).href,
     };
   }
 
   // Let Node.js handle all other specifiers.
-  return defaultResolve(specifier, context, defaultResolve);
+  return next(specifier, context);
 }
 
-export async function load(url, context, defaultLoad) {
+export async function load(url, context, next) {
   if (extensionsRegex.test(url)) {
-    const { source: rawSource } = await defaultLoad(url, { format: "civet" });
+    const { source: rawSource } = await next(url, { format: "module" });
 
     return {
       format: "module",
@@ -32,7 +33,7 @@ export async function load(url, context, defaultLoad) {
   }
 
   // Let Node.js handle all other URLs.
-  return defaultLoad(url, context, defaultLoad);
+  return next(url, context);
 }
 
 // Also transform CommonJS files.
