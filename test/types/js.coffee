@@ -3,18 +3,32 @@ assert = require "assert"
 
 describe "Types", ->
   describe "JS", ->
-    it "omits types in JS mode", ->
+    it "omits interface declarations in JS mode", ->
       js = compile """
         interface User {
           name: string
           id: number
         }
-
-        const u : User = z
       """, js: true
 
       assert.equal js, """
         ;
+      """
 
-        const u = z;
+    it "omits 'as' in JS mode", ->
+      js = compile """
+        x := 3 as ID
+      """, js: true
+
+      assert.equal js, """
+        const x = 3;
+      """
+
+    it "omits type suffix in JS mode", ->
+      js = compile """
+        const items: DocumentSymbol[] = []
+      """, js: true
+
+      assert.equal js, """
+        const items = [];
       """
