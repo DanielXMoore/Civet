@@ -9,7 +9,10 @@ import {
   TextDocumentSyncKind,
   InitializeResult,
   MarkupKind,
-} from 'vscode-languageserver/node';
+  TextDocumentIdentifier,
+  HandlerResult,
+  DocumentSymbol,
+} from 'vscode-languageserver';
 
 import {
   TextDocument
@@ -19,6 +22,8 @@ import ts from "typescript"
 
 import TSService from './lib/typescript-service';
 import * as Previewer from "./lib/previewer";
+import { convertNavTree } from './lib/util';
+import assert from "assert"
 // import { toCompletionItemKind } from './util';
 
 // Create a connection for the server, using Node's IPC as a transport.
@@ -103,12 +108,11 @@ connection.onInitialized(() => {
 });
 
 connection.onHover(({ textDocument, position }) => {
-  const doc = documents.get(textDocument.uri);
-  console.log("hover", textDocument, position);
+  const sourcePath = documentToSourcePath(textDocument)
+  if (!sourcePath) return;
 
-  if (!doc) return;
-  const sourcePath = doc.uri.replace(rootDir, "")
-  console.log("path", sourcePath)
+  const doc = documents.get(textDocument.uri);
+  assert(doc)
 
   // Make sure doc is in ts-server
   service.host.addPath(sourcePath)
@@ -167,57 +171,43 @@ connection.onCompletionResolve(() => {
 })
 
 // TODO
-connection.onDocumentSymbol((p) => {
-  console.log(p)
-  return undefined
+connection.onDocumentSymbol(({ textDocument }) => {
+  const sourcePath = documentToSourcePath(textDocument);
+  console.log("document symbol", textDocument, sourcePath)
+  if (!sourcePath) return undefined
+
+  // Make sure doc is in ts-server
+  service.host.addPath(sourcePath)
+
+  // return [{
+  //   name: "test",
+  //   kind: 10,
+  //   location: {
+  //     uri: textDocument.uri,
+  //     range: {
+  //       start: {
+  //         line: 0,
+  //         character: 0
+  //       },
+  //       end: {
+  //         line: 0,
+  //         character: 10
+  //       }
+  //     }
+  //   }
+  // }]
+
+  const items: DocumentSymbol[] = []
+  const navTree = service.getNavigationTree(sourcePath)
+  console.dir(navTree)
+  convertNavTree(textDocument.uri, items, navTree)
+
+  return items
 })
 
-// The example settings
-interface ExampleSettings {
-  maxNumberOfProblems: number;
-}
-
-// The global settings, used when the `workspace/configuration` request is not supported by the client.
-// Please note that this is not the case when using this server with the client provided in this example
-// but could happen with other clients.
-const defaultSettings: ExampleSettings = { maxNumberOfProblems: 1000 };
-let globalSettings: ExampleSettings = defaultSettings;
-
-// Cache the settings of all open documents
-const documentSettings: Map<string, Thenable<ExampleSettings>> = new Map();
-
-connection.onDidChangeConfiguration(change => {
-  if (hasConfigurationCapability) {
-    // Reset all cached document settings
-    documentSettings.clear();
-  } else {
-    globalSettings = <ExampleSettings>(
-      (change.settings.languageServerExample || defaultSettings)
-    );
-  }
-
-  // Revalidate all open text documents
-  documents.all().forEach(validateTextDocument);
-});
-
-function getDocumentSettings(resource: string): Thenable<ExampleSettings> {
-  if (!hasConfigurationCapability) {
-    return Promise.resolve(globalSettings);
-  }
-  let result = documentSettings.get(resource);
-  if (!result) {
-    result = connection.workspace.getConfiguration({
-      scopeUri: resource,
-      section: 'languageServerExample'
-    });
-    documentSettings.set(resource, result);
-  }
-  return result;
-}
-
-// Only keep settings for open documents
+// TODO
 documents.onDidClose(e => {
-  documentSettings.delete(e.document.uri);
+
 });
 
 // The content of a text document has changed. This event is emitted
@@ -237,3 +227,10 @@ documents.listen(connection);
 
 // Listen on the connection
 connection.listen();
+
+// Utils
+
+function documentToSourcePath(textDocument: TextDocumentIdentifier) {
+  const doc = documents.get(textDocument.uri);
+  return doc?.uri.replace(rootDir, "")
+}

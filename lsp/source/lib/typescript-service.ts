@@ -61,7 +61,7 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
     },
     getScriptVersion(path: string) {
       const fileMeta = fileMetaData.get(path)
-      assert(fileMeta)
+      assert(fileMeta, `No file meta found for path: ${path}`)
 
       return fileMeta.version.toString()
     },
@@ -75,6 +75,7 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
 }
 
 function TSService(projectPath = "./") {
+  debugger
   const tsConfigPath = "tsconfig.json"
   const { config } = readConfigFile(tsConfigPath, sys.readFile)
 
