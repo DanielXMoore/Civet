@@ -59,6 +59,33 @@ Unofficial Typescript EBNF
 
 https://github.com/Matts966/TypeScriptC/blob/master/typescript.ebnf
 
+How does Mocha --loader work?
+---
+
+Where does it read the option in the mocha source?
+
+https://github.com/mochajs/mocha/blob/master/lib/cli/node-flags.js#L9
+
+Mocha uses `process.allowedNodeEnvironmentFlags` to decide about node flags like `--loader`.
+
+Debugging Mocha
+---
+
+Mocha uses `debug` for debugging. By looking at mocha source code you can find calls to debug.
+By passing a comma separated list of values to the DEBUG env variable you can toggle them to
+output to stderr.
+
+```bash
+DEBUG=mocha:cli:mocha yarn test
+```
+
+Node.js --loader
+---
+
+https://dev.to/jakobjingleheimer/custom-esm-loaders-who-what-when-where-why-how-4i1o
+
+
+
 Timesheet
 ---
 
@@ -69,3 +96,6 @@ Timesheet
 2022-08-26 | 2.50  | lsp experiment; hover; prototype shorthand; until
 2022-08-27 | 1.00  | bugfix return followed by non-nested expression; esbuild plugin;
 2022-08-28 | 2.00  | Source maps
+2022-09-03 | 0.25  | LSP
+2022-09-04 | 4.50  | LSP
+2022-09-05 | 2.50  | running mocha with .civet and .ts files; remove 'as' suffix from js transpilation
