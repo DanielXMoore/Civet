@@ -15,12 +15,8 @@ describe "source map", ->
     """
 
     sm = Sourcemap src
-
     ast = prune parse src
-
     table = locationTable src
-
-    assert.deepEqual lookupLineColumn(table, 11), [1, 0]
 
     code = generate ast,
       updateSourceMap: sm.updateSourceMap
@@ -38,4 +34,5 @@ describe "source map", ->
     base64Encode = (src) ->
       Buffer.from(src).toString('base64')
 
+    # Use this to log the code + sourcemap which can be pasted into https://evanw.github.io/source-map-visualization/ see how it works
     # console.log "#{code}\n//# sourceMappingURL=data:application/json;base64,#{base64Encode JSON.stringify(srcMapJSON)}"
