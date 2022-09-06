@@ -1,10 +1,13 @@
-import Civet from "@danielx/civet"
+import Civet, { Sourcemap } from "@danielx/civet"
 import ts, { CompilerHost, CompilerOptions, LanguageServiceHost } from "typescript"
 import fs from "fs"
 import assert from "assert"
 
+const { Sourcemap } = Civet.util
+
 interface Host extends LanguageServiceHost {
   addPath(path: string): void;
+  getSourcemap(path: string): unknown
 }
 
 const {
@@ -20,7 +23,10 @@ const {
 function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): Host {
   // TODO: Actual files
   const scriptFileNames = new Set(["source/lsp.civet"])
-  const fileMetaData: Map<string, { version: number }> = new Map;
+  const fileMetaData: Map<string, {
+    version: number
+    sourcemapLines?: unknown
+  }> = new Map;
 
   let projectVersion = 0;
 
@@ -31,6 +37,9 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
       scriptFileNames.add(path)
       fileMetaData.set(path, { version: 0 })
       projectVersion++
+    },
+    getSourcemap(fileName: string) {
+      return fileMetaData.get(fileName)?.sourcemapLines
     },
     getProjectVersion() {
       return projectVersion.toString();
@@ -48,8 +57,17 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
       // Compile .civet files to TS
       if (fileName.match(/\.civet$/)) {
         try {
+          const sm = Sourcemap(src)
           //@ts-ignore
-          const tsSrc = Civet.compile(src, { filename: fileName })
+          const tsSrc = Civet.compile(src, {
+            filename: fileName,
+            updateSourceMap: sm.updateSourceMap
+          })
+
+          const meta = fileMetaData.get(fileName)
+          //@ts-ignore
+          meta!.sourcemapLines = sm.data.lines
+
           return ScriptSnapshot.fromString(tsSrc)
         } catch (e) {
           console.error(e)

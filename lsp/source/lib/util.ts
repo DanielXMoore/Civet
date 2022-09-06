@@ -1,6 +1,9 @@
 import { NavigationBarItem, NavigationTree, ScriptElementKind, ScriptElementKindModifier, TextSpan } from "typescript";
 import { SymbolKind, SymbolTag, DocumentSymbol, Range } from "vscode-languageserver";
 
+import Civet from "@danielx/civet"
+const { util: { lookupLineColumn } } = Civet
+
 // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/documentSymbol.ts#L63
 
 const getSymbolKind = (kind: string): SymbolKind => {
@@ -25,7 +28,7 @@ const getSymbolKind = (kind: string): SymbolKind => {
 };
 
 export function convertNavTree(
-  resource: string,
+  lineTable: number[],
   output: DocumentSymbol[],
   item: NavigationTree,
 ): boolean {
@@ -36,12 +39,12 @@ export function convertNavTree(
 
   const children = new Set(item.childItems || []);
   for (const span of item.spans) {
-    const range = rangeFromTextSpan(span);
-    const symbolInfo = convertSymbol(item, range);
+    const range = rangeFromTextSpan(lineTable, span);
+    const symbolInfo = convertSymbol(item, range, lineTable);
 
     for (const child of children) {
-      if (child.spans.some(span => !!intersectRanges(range, rangeFromTextSpan(span)))) {
-        const includedChild = convertNavTree(resource, symbolInfo.children || [], child);
+      if (child.spans.some(span => !!intersectRanges(range, rangeFromTextSpan(lineTable, span)))) {
+        const includedChild = convertNavTree(lineTable, symbolInfo.children!, child);
         shouldInclude = shouldInclude || includedChild;
         children.delete(child);
       }
@@ -55,8 +58,8 @@ export function convertNavTree(
   return shouldInclude;
 }
 
-function convertSymbol(item: NavigationTree, range: Range): DocumentSymbol {
-  const selectionRange = item.nameSpan ? rangeFromTextSpan(item.nameSpan) : range;
+function convertSymbol(item: NavigationTree, range: Range, lineTable: number[]): DocumentSymbol {
+  const selectionRange = item.nameSpan ? rangeFromTextSpan(lineTable, item.nameSpan) : range;
   let label = item.text;
 
   switch (item.kind) {
@@ -69,8 +72,8 @@ function convertSymbol(item: NavigationTree, range: Range): DocumentSymbol {
     '',
     getSymbolKind(item.kind),
     range,
-    containsRange(range, selectionRange) ? selectionRange : range);
-
+    containsRange(range, selectionRange) ? selectionRange : range
+  );
 
   const kindModifiers = parseKindModifier(item.kindModifiers);
   if (kindModifiers.has(ScriptElementKindModifier.deprecatedModifier)) {
@@ -91,12 +94,15 @@ function parseKindModifier(kindModifiers: string): Set<string> {
   return new Set(kindModifiers.split(/,|\s+/g));
 }
 
-function rangeFromTextSpan(span: TextSpan): Range {
+function rangeFromTextSpan(lineTable: number[], span: TextSpan): Range {
+  const [l1, c1] = lookupLineColumn(lineTable, span.start)
+  const [l2, c2] = lookupLineColumn(lineTable, span.start + span.length)
+
   // TODO: Actual Range lines and columns, needs doc text
-  return makeRange(0, span.start, 0, span.start + span.length)
+  return makeRange(l1, c1, l2, c2)
 }
 
-function makeRange(l1: number, c1: number, l2: number, c2: number) {
+export function makeRange(l1: number, c1: number, l2: number, c2: number) {
   return {
     start: {
       line: l1,
@@ -125,14 +131,14 @@ function makeDocumentSymbol(name: string, detail: string, kind: SymbolKind, rang
     kind,
     range,
     selectionRange,
+    children: []
   }
 }
 
-
 /**
-   * A intersection of the two ranges.
-   */
-function intersectRanges(a: Range, b: Range): Range | null {
+ * A intersection of the two ranges.
+ */
+export function intersectRanges(a: Range, b: Range): Range | null {
   let { line: resultStartLineNumber, character: resultStartColumn } = a.start;
   let { line: resultEndLineNumber, character: resultEndColumn } = a.end;
   let { line: otherStartLineNumber, character: otherStartColumn } = b.start;
@@ -165,7 +171,7 @@ function intersectRanges(a: Range, b: Range): Range | null {
 /**
  * Test if `otherRange` is in `range`. If the ranges are equal, will return true.
  */
-function containsRange(range: Range, otherRange: Range): boolean {
+export function containsRange(range: Range, otherRange: Range): boolean {
   if (otherRange.start.line < range.start.line || otherRange.end.line < range.start.line) {
     return false;
   }

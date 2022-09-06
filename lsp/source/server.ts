@@ -24,7 +24,9 @@ import TSService from './lib/typescript-service';
 import * as Previewer from "./lib/previewer";
 import { convertNavTree } from './lib/util';
 import assert from "assert"
-// import { toCompletionItemKind } from './util';
+
+import Civet from "@danielx/civet"
+const { util: { locationTable } } = Civet
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -170,37 +172,33 @@ connection.onCompletionResolve(() => {
   }
 })
 
-// TODO
 connection.onDocumentSymbol(({ textDocument }) => {
-  const sourcePath = documentToSourcePath(textDocument);
-  console.log("document symbol", textDocument, sourcePath)
+  const sourcePath = documentToSourcePath(textDocument)
   if (!sourcePath) return undefined
 
   // Make sure doc is in ts-server
   service.host.addPath(sourcePath)
 
-  // return [{
-  //   name: "test",
-  //   kind: 10,
-  //   location: {
-  //     uri: textDocument.uri,
-  //     range: {
-  //       start: {
-  //         line: 0,
-  //         character: 0
-  //       },
-  //       end: {
-  //         line: 0,
-  //         character: 10
-  //       }
-  //     }
-  //   }
-  // }]
-
   const items: DocumentSymbol[] = []
   const navTree = service.getNavigationTree(sourcePath)
-  console.dir(navTree)
-  convertNavTree(textDocument.uri, items, navTree)
+
+  // Need to use the transpiled source to convert from text spans (pos, length) to (line, column)
+  const snapshot = service.host.getScriptSnapshot(sourcePath)
+  const transpiled = snapshot?.getText(0, snapshot.getLength())
+  if (!transpiled) return
+
+  const lineTable = locationTable(transpiled)
+
+  // need to sourcemap the line/columns
+  const sourcemapLines = service.host.getSourcemap(sourcePath)
+  // TODO: map the line/column
+
+  console.log(transpiled, lineTable, sourcemapLines)
+
+  // The root represents the file. Ignore this when showing in the UI
+  for (const child of navTree.childItems!) {
+    convertNavTree(lineTable, items, child)
+  }
 
   return items
 })
