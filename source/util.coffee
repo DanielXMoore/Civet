@@ -64,7 +64,6 @@ Sourcemap = (sourceString) ->
       sourcesContent: [sourceString]
 
     updateSourceMap: (outputStr, inputPos) ->
-      debugger
       outLines = outputStr.split(EOL)
 
       outLines.forEach (line, i) ->
@@ -82,6 +81,8 @@ Sourcemap = (sourceString) ->
           sm.lines[sm.lineNum].push [l, 0, srcLine, srcCol]
         else if l != 0
           sm.lines[sm.lineNum].push [l]
+
+      return
 
 
 VLQ_SHIFT            = 5

@@ -6,3 +6,4 @@ module.exports =
   compile: (src, options) ->
     gen parse(src, {filename: options?.filename}), options
   generate: gen
+  util: require "./util"
