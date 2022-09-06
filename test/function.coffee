@@ -1,7 +1,6 @@
 {testCase, throws} = require "./helper"
 
 describe "function", ->
-  # TODO: var f, return x
   testCase """
     basic
     ---
@@ -19,6 +18,14 @@ describe "function", ->
     (x) -> x
     ---
     function(x) { x };
+  """
+
+  testCase """
+    no-op
+    ---
+    ->
+    ---
+    function() {};
   """
 
   testCase """
