@@ -23,7 +23,7 @@ lookupLineColumn = (table, pos) ->
   # [line, column]; zero based
   return [l, pos - prevEnd]
 
-Sourcemap = (sourceString) ->
+SourceMap = (sourceString) ->
   srcTable = locationTable sourceString
 
   sm = {
@@ -55,7 +55,7 @@ Sourcemap = (sourceString) ->
         .join(",")
       .join(";")
 
-    srcMap: (srcFileName, outFileName) ->
+    json: (srcFileName, outFileName) ->
       version: 3
       file: outFileName
       sources: [srcFileName]
@@ -115,5 +115,5 @@ encodeBase64 = (value) ->
 module.exports = {
   locationTable
   lookupLineColumn
-  Sourcemap
+  SourceMap
 }

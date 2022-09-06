@@ -3,14 +3,23 @@ declare module "@danielx/civet" {
   export type CompileOptions = {
     filename?: string
     js?: boolean
-    updateSourceMap?: Sourcemap["updateSourceMap"]
+    sourceMap?: boolean
   }
 
-  export interface Sourcemap {
+  export type SourceMapping = [number] | [number, number, number, number]
+
+  export interface SourceMap {
     updateSourceMap?(outputStr: string, inputPos: number): void
+    json(srcFileName: string, outFileName: string): unknown
+    data: {
+      lines: SourceMapping[][]
+    }
   }
 
-  export function compile(source: string, options?: CompileOptions): string
+  export function compile<T extends CompileOptions>(source: string, options?: T): T extends { sourceMap: true } ? {
+    code: string,
+    sourceMap: SourceMap,
+  } : string
   export function parse(source: string): CivetAST
   export function generate(ast: CivetAST, options?: CompileOptions): string
 
@@ -21,7 +30,7 @@ declare module "@danielx/civet" {
     util: {
       locationTable(input: string): number[]
       lookupLineColumn(table: number[], pos: number): [number, number]
-      Sourcemap(input: string): Sourcemap
+      SourceMap(input: string): SourceMap
     }
   }
 

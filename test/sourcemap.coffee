@@ -1,8 +1,4 @@
-{parse} = require "../source/parser"
-{prune} = generate = require "../source/generate"
-
-{locationTable, lookupLineColumn, Sourcemap} = require "../source/util"
-
+{compile} = require "../source/main"
 assert = require "assert"
 
 describe "source map", ->
@@ -14,19 +10,13 @@ describe "source map", ->
       y = x + a
     """
 
-    sm = Sourcemap src
-    ast = prune parse src
-    table = locationTable src
+    {code, sourceMap} = compile(src, {
+      sourceMap: true
+    })
 
-    code = generate ast,
-      updateSourceMap: sm.updateSourceMap
-
-    srcMapJSON = sm.srcMap("yo.civet", "yo.ts")
+    srcMapJSON = sourceMap.json("yo.civet", "yo.ts")
 
     # console.log src, code
-
-    # console.dir ast,
-    #   depth: null
 
     # console.dir sm.data,
     #   depth: 8
