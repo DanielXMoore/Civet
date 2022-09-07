@@ -39,6 +39,15 @@ describe "assignment operations", ->
     const {a, b} = c;
   """
 
+  describe.skip "TODO (maybe)", ->
+    testCase """
+      multiple single line const assignments
+      ---
+      x := 1, y := 2
+      ---
+      const x = 1, y = 2;
+    """
+
   testCase """
     assign nested object
     ---
