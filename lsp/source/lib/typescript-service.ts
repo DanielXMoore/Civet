@@ -1,14 +1,8 @@
-import Civet from "@danielx/civet"
-import ts, { CompilerHost, CompilerOptions, LanguageServiceHost } from "typescript"
-import fs from "fs"
-import assert from "assert"
-
-interface Host extends LanguageServiceHost {
-  addPath(path: string): void;
-  getSourcemap(path: string): unknown
-}
-
-const {
+import Civet, { SourceMap } from "@danielx/civet"
+import {
+  CompilerHost,
+  CompilerOptions,
+  LanguageServiceHost,
   ScriptKind,
   ScriptSnapshot,
   createCompilerHost,
@@ -16,14 +10,21 @@ const {
   parseJsonConfigFileContent,
   readConfigFile,
   sys,
-} = ts
+} from "typescript"
+import fs from "fs"
+import assert from "assert"
+
+interface Host extends LanguageServiceHost {
+  addPath(path: string): void;
+  getSourcemap(path: string): SourceMap["data"]["lines"] | undefined
+}
 
 function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): Host {
   // TODO: Actual files
   const scriptFileNames = new Set(["source/lsp.civet"])
   const fileMetaData: Map<string, {
     version: number
-    sourcemapLines?: unknown
+    sourcemapLines?: SourceMap["data"]["lines"]
   }> = new Map;
 
   let projectVersion = 0;
@@ -70,13 +71,11 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
         }
       }
 
+      // Return non-civet files as normal
       return ScriptSnapshot.fromString(src)
     },
     getScriptVersion(path: string) {
-      const fileMeta = fileMetaData.get(path)
-      assert(fileMeta, `No file meta found for path: ${path}`)
-
-      return fileMeta.version.toString()
+      return fileMetaData.get(path)?.version.toString() || "0"
     },
     getScriptFileNames() {
       return Array.from(scriptFileNames)

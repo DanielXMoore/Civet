@@ -2,6 +2,7 @@ import { build } from 'esbuild';
 
 const watch = process.argv.includes('--watch');
 const minify = false // !watch || process.argv.includes('--minify');
+const sourcemap = false
 
 build({
   entryPoints: ['source/extension.ts'],
@@ -9,7 +10,7 @@ build({
   bundle: true,
   external: ['vscode'],
   format: "cjs",
-  sourcemap: watch,
+  sourcemap,
   minify,
   watch,
   platform: 'node',
@@ -21,7 +22,7 @@ build({
   tsconfig: "./tsconfig.json",
   bundle: true,
   external: ['vscode'],
-  sourcemap: watch,
+  sourcemap,
   minify,
   watch,
   platform: 'node',

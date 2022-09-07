@@ -18,14 +18,13 @@ import {
   TextDocument
 } from 'vscode-languageserver-textdocument';
 
-import ts from "typescript"
-
 import TSService from './lib/typescript-service';
 import * as Previewer from "./lib/previewer";
-import { convertNavTree, SourcemapLines } from './lib/util';
+import { convertNavTree, forwardMap, SourcemapLines } from './lib/util';
 import assert from "assert"
 
 import Civet from "@danielx/civet"
+import { displayPartsToString } from 'typescript';
 const { util: { locationTable } } = Civet
 
 // Create a connection for the server, using Node's IPC as a transport.
@@ -110,37 +109,50 @@ connection.onInitialized(() => {
 });
 
 connection.onHover(({ textDocument, position }) => {
-  const sourcePath = documentToSourcePath(textDocument)
-  if (!sourcePath) return;
+  try {
+    const sourcePath = documentToSourcePath(textDocument)
+    if (!sourcePath) return;
 
-  const doc = documents.get(textDocument.uri);
-  assert(doc)
+    console.log("hover", sourcePath, position)
 
-  // Make sure doc is in ts-server
-  service.host.addPath(sourcePath)
+    const doc = documents.get(textDocument.uri);
+    assert(doc)
 
-  // TODO: Map input hover position into output TS position
+    // Make sure doc is in ts-server
+    service.host.addPath(sourcePath)
 
-  const info = service.getQuickInfoAtPosition(sourcePath, doc.offsetAt(position))
-  if (!info) return;
+    // need to sourcemap the line/columns
+    const sourcemapLines = service.host.getSourcemap(sourcePath)
 
-  const display = ts.displayPartsToString(info.displayParts);
-  // TODO: Replace Previewer
-  const documentation = Previewer.plain(ts.displayPartsToString(info.documentation));
-
-  // TODO: position source mapping
-
-  return {
-    // TODO: Range
-    contents: {
-      kind: MarkupKind.Markdown,
-      value: [
-        `\`\`\`typescript\n${display}\n\`\`\``,
-        documentation ?? "",
-        ...info.tags?.map(Previewer.getTagDocumentation).filter((t) => !!t) || []
-      ].join("\n\n")
+    // Map input hover position into output TS position
+    // Don't map for files that don't have a sourcemap (plain .ts for example)
+    if (sourcemapLines) {
+      position = forwardMap(sourcemapLines, position)
     }
-  };
+
+    service.getProgram()
+
+    const info = service.getQuickInfoAtPosition(sourcePath, doc.offsetAt(position))
+    if (!info) return;
+
+    const display = displayPartsToString(info.displayParts);
+    // TODO: Replace Previewer
+    const documentation = Previewer.plain(displayPartsToString(info.documentation));
+
+    return {
+      // TODO: Range
+      contents: {
+        kind: MarkupKind.Markdown,
+        value: [
+          `\`\`\`typescript\n${display}\n\`\`\``,
+          documentation ?? "",
+          ...info.tags?.map(Previewer.getTagDocumentation).filter((t) => !!t) || []
+        ].join("\n\n")
+      }
+    };
+  } catch (e) {
+    console.error(e)
+  }
 })
 
 // This handler provides the initial list of the completion items.
@@ -191,11 +203,10 @@ connection.onDocumentSymbol(({ textDocument }) => {
 
   // need to sourcemap the line/columns
   const sourcemapLines = service.host.getSourcemap(sourcePath)
-  console.log(transpiled, lineTable, sourcemapLines)
 
   // The root represents the file. Ignore this when showing in the UI
   for (const child of navTree.childItems!) {
-    convertNavTree(lineTable, sourcemapLines as SourcemapLines, items, child)
+    convertNavTree(lineTable, sourcemapLines, items, child)
   }
 
   return items

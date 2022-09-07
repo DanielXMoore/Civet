@@ -3,12 +3,12 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { JSDocTagInfo, SymbolDisplayPart } from "typescript";
+
 /* tslint:disable:max-line-length */
 /**
  * Adapted from https://github.com/microsoft/vscode/blob/8ba70d8bdc3a10e3143cc4a131f333263bc48eef/extensions/typescript-language-features/src/utils/previewer.ts
  */
-
-import type ts from 'typescript';
 
 function replaceLinks(text: string): string {
   return (
@@ -33,7 +33,7 @@ function processInlineTags(text: string): string {
   return replaceLinks(text);
 }
 
-function getTagBodyText(tag: ts.JSDocTagInfo): string | undefined {
+function getTagBodyText(tag: JSDocTagInfo): string | undefined {
   if (!tag.text) {
     return undefined;
   }
@@ -71,7 +71,7 @@ function getTagBodyText(tag: ts.JSDocTagInfo): string | undefined {
   return processInlineTags(plain(tag.text));
 }
 
-export function getTagDocumentation(tag: ts.JSDocTagInfo): string | undefined {
+export function getTagDocumentation(tag: JSDocTagInfo): string | undefined {
   switch (tag.name) {
     case 'augments':
     case 'extends':
@@ -98,6 +98,6 @@ export function getTagDocumentation(tag: ts.JSDocTagInfo): string | undefined {
   return label + (text.match(/\r\n|\n/g) ? '  \n' + text : ` — ${text}`);
 }
 
-export function plain(parts: ts.SymbolDisplayPart[] | string): string {
+export function plain(parts: SymbolDisplayPart[] | string): string {
   return processInlineTags(typeof parts === 'string' ? parts : parts.map(part => part.text).join(''));
 }

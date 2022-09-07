@@ -1,11 +1,10 @@
 import { NavigationBarItem, NavigationTree, ScriptElementKind, ScriptElementKindModifier, TextSpan } from "typescript";
 import { SymbolKind, SymbolTag, DocumentSymbol, Range, Position } from "vscode-languageserver";
 
-import Civet from "@danielx/civet"
+import Civet, { SourceMap } from "@danielx/civet"
 const { util: { lookupLineColumn } } = Civet
 
-export type SourcemapEntry = [number] | [number, number, number, number]
-export type SourcemapLines = SourcemapEntry[][]
+export type SourcemapLines = SourceMap["data"]["lines"]
 
 // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/documentSymbol.ts#L63
 
@@ -232,19 +231,56 @@ export function remapPosition(sourcemapLines: SourcemapLines, position: Position
     const srcLine = lastMapping[2]
     const srcChar = lastMapping[3]
     const newChar = srcChar + character - lastMappingPosition
-    console.log("lastIndex", i)
-    console.log(`${srcChar} + ${p} - ${character}`)
-    console.log("remapping position:", [line, character], "=>", [srcLine, newChar])
 
     return {
       line: srcLine,
       character: newChar,
     }
   } else {
-    console.log("no mapping for ", position)
+    console.error("no mapping for ", position)
     return position
   }
+}
 
+export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
+  debugger
+  const { line: origLine, character: origOffset } = position
+
+  let col = 0
+  let bestLine = -1,
+    bestOffset = -1,
+    foundLine = -1,
+    foundOffset = -1
+
+  sourcemapLines.forEach((line, i) => {
+    col = 0
+    line.forEach((mapping) => {
+      col += mapping[0]
+
+      if (mapping.length === 4) {
+        // find best line without going beyond
+        const [_p, _f, srcLine, srcOffset] = mapping
+        if (srcLine <= origLine) {
+          if (srcLine >= bestLine && (srcOffset <= origOffset)) {
+            bestLine = srcLine
+            bestOffset = srcOffset
+            foundLine = i
+            foundOffset = col
+          }
+        }
+      }
+    })
+  })
+
+  if (foundLine >= 0) {
+    return {
+      line: foundLine + origLine - bestLine,
+      character: foundOffset + origOffset - bestOffset
+    }
+  }
+
+  console.warn(`couldn't forward map src position: ${[origLine, origOffset]}`)
+  return position
 }
 
 /**
