@@ -12,6 +12,14 @@ describe "lexical binding", ->
   """
 
   testCase """
+    let multiple assignments
+    ---
+    let x = 2, y = 3
+    ---
+    let x = 2, y = 3;
+  """
+
+  testCase """
     array destructuring
     ---
     let [ x, y ] = a
