@@ -89,9 +89,10 @@ Things Kept from CoffeeScript
 - `@` This shorthand `@` -> `this`, `@id` -> `this.id`
 - Prototype shorthand `X::` -> `X.prototype`, `X::a` -> `X.prototype.a`
 - Postfix `if/unless`
+- Block Strings `"""` / `'''`
 - JSX 😿
 - TODO
-  - [ ] `"""` Strings (for compatibility with existing .coffee code)
+  - [ ] `"""` String interpolation (for compatibility with existing .coffee code)
   - [ ] Chained comparisons
 
 Things Removed from CoffeeScript
@@ -103,11 +104,11 @@ Things Removed from CoffeeScript
 - `do` keyword (replaced with JS `do`)
 - `for from` (use JS `for of`)
 - Array slices `list[0...2]` (use `list.slice(0, 2)`)
-- Slice assignment `numbers[3..6] = [-3, -4, -5, -6]`
+- Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` (use `numbers.splice(3, 4, -3, -4, -5, -6)`)
 - Comprensions (a case could be made for keeping them)
 - Iteration expression results
 - Implicit declarations
-- Implicit returns (will probably add later)
+- Implicit returns (will probably add later at least for single line functions)
 - Rest parameter in any assignment position (might add later)
 - Postfix `while/until`
 - `///` Heregexp
