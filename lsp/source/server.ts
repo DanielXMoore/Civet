@@ -22,7 +22,7 @@ import ts from "typescript"
 
 import TSService from './lib/typescript-service';
 import * as Previewer from "./lib/previewer";
-import { convertNavTree } from './lib/util';
+import { convertNavTree, SourcemapLines } from './lib/util';
 import assert from "assert"
 
 import Civet from "@danielx/civet"
@@ -191,13 +191,11 @@ connection.onDocumentSymbol(({ textDocument }) => {
 
   // need to sourcemap the line/columns
   const sourcemapLines = service.host.getSourcemap(sourcePath)
-  // TODO: map the line/column
-
   console.log(transpiled, lineTable, sourcemapLines)
 
   // The root represents the file. Ignore this when showing in the UI
   for (const child of navTree.childItems!) {
-    convertNavTree(lineTable, items, child)
+    convertNavTree(lineTable, sourcemapLines as SourcemapLines, items, child)
   }
 
   return items

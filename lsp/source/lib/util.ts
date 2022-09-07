@@ -1,8 +1,11 @@
 import { NavigationBarItem, NavigationTree, ScriptElementKind, ScriptElementKindModifier, TextSpan } from "typescript";
-import { SymbolKind, SymbolTag, DocumentSymbol, Range } from "vscode-languageserver";
+import { SymbolKind, SymbolTag, DocumentSymbol, Range, Position } from "vscode-languageserver";
 
 import Civet from "@danielx/civet"
 const { util: { lookupLineColumn } } = Civet
+
+export type SourcemapEntry = [number] | [number, number, number, number]
+export type SourcemapLines = SourcemapEntry[][]
 
 // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/documentSymbol.ts#L63
 
@@ -27,8 +30,15 @@ const getSymbolKind = (kind: string): SymbolKind => {
   return SymbolKind.Variable;
 };
 
+/**
+ * @param lineTable Table of line lengths in generated TypeScript code
+ * @param sourcemapLines Lines of sourcemapping to convert generated TypeScript positions to source Civet positions
+ * @param output Symbols to display in VSCode Outline
+ * @param item
+ */
 export function convertNavTree(
   lineTable: number[],
+  sourcemapLines: SourcemapLines | undefined,
   output: DocumentSymbol[],
   item: NavigationTree,
 ): boolean {
@@ -39,12 +49,12 @@ export function convertNavTree(
 
   const children = new Set(item.childItems || []);
   for (const span of item.spans) {
-    const range = rangeFromTextSpan(lineTable, span);
-    const symbolInfo = convertSymbol(item, range, lineTable);
+    const range = rangeFromTextSpan(span, lineTable, sourcemapLines);
+    const symbolInfo = convertSymbol(item, range, lineTable, sourcemapLines);
 
     for (const child of children) {
-      if (child.spans.some(span => !!intersectRanges(range, rangeFromTextSpan(lineTable, span)))) {
-        const includedChild = convertNavTree(lineTable, symbolInfo.children!, child);
+      if (child.spans.some(span => !!intersectRanges(range, rangeFromTextSpan(span, lineTable, sourcemapLines)))) {
+        const includedChild = convertNavTree(lineTable, sourcemapLines, symbolInfo.children!, child);
         shouldInclude = shouldInclude || includedChild;
         children.delete(child);
       }
@@ -58,8 +68,8 @@ export function convertNavTree(
   return shouldInclude;
 }
 
-function convertSymbol(item: NavigationTree, range: Range, lineTable: number[]): DocumentSymbol {
-  const selectionRange = item.nameSpan ? rangeFromTextSpan(lineTable, item.nameSpan) : range;
+function convertSymbol(item: NavigationTree, range: Range, lineTable: number[], sourcemapLines?: SourcemapLines): DocumentSymbol {
+  const selectionRange = item.nameSpan ? rangeFromTextSpan(item.nameSpan, lineTable, sourcemapLines) : range;
   let label = item.text;
 
   switch (item.kind) {
@@ -94,12 +104,17 @@ function parseKindModifier(kindModifiers: string): Set<string> {
   return new Set(kindModifiers.split(/,|\s+/g));
 }
 
-function rangeFromTextSpan(lineTable: number[], span: TextSpan): Range {
+function rangeFromTextSpan(span: TextSpan, lineTable: number[], sourcemapLines?: SourcemapLines): Range {
   const [l1, c1] = lookupLineColumn(lineTable, span.start)
   const [l2, c2] = lookupLineColumn(lineTable, span.start + span.length)
 
-  // TODO: Actual Range lines and columns, needs doc text
-  return makeRange(l1, c1, l2, c2)
+  const range = makeRange(l1, c1, l2, c2)
+
+  if (sourcemapLines) {
+    return remapRange(range, sourcemapLines)
+  }
+
+  return range
 }
 
 export function makeRange(l1: number, c1: number, l2: number, c2: number) {
@@ -185,4 +200,60 @@ export function containsRange(range: Range, otherRange: Range): boolean {
     return false;
   }
   return true;
+}
+
+export function remapPosition(sourcemapLines: SourcemapLines, position: Position): Position {
+  const { line, character } = position
+
+  const textLine = sourcemapLines[line]
+  // Return original position if no mapping at this line
+  if (!textLine?.length) return position
+
+  let i = 0, p = 0, l = textLine.length,
+    lastMapping, lastMappingPosition = 0
+
+  while (i < l) {
+    const mapping = textLine[i]!
+    p += mapping[0]!
+
+    if (mapping.length === 4) {
+      lastMapping = mapping
+      lastMappingPosition = p
+    }
+
+    if (p >= character) {
+      break
+    }
+
+    i++
+  }
+
+  if (lastMapping) {
+    const srcLine = lastMapping[2]
+    const srcChar = lastMapping[3]
+    const newChar = srcChar + character - lastMappingPosition
+    console.log("lastIndex", i)
+    console.log(`${srcChar} + ${p} - ${character}`)
+    console.log("remapping position:", [line, character], "=>", [srcLine, newChar])
+
+    return {
+      line: srcLine,
+      character: newChar,
+    }
+  } else {
+    console.log("no mapping for ", position)
+    return position
+  }
+
+}
+
+/**
+ * Use sourcemap lines to remap the start and end position of a range.
+ */
+export function remapRange(range: Range, sourcemapLines: SourcemapLines,): Range {
+  debugger
+  return {
+    start: remapPosition(sourcemapLines, range.start),
+    end: remapPosition(sourcemapLines, range.end)
+  }
 }

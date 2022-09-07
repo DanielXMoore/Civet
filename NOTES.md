@@ -99,3 +99,4 @@ Timesheet
 2022-09-03 | 0.25  | LSP
 2022-09-04 | 4.50  | LSP
 2022-09-05 | 5.00  | running mocha with .civet and .ts files; remove 'as' suffix from js transpilation; document symbols; sourcemapping
+2022-09-06 | 2.50  | more source mapping in parser; noop ->; sourcemap cleanup; sourcemapping document symbols

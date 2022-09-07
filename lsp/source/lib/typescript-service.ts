@@ -1,9 +1,7 @@
-import Civet, { Sourcemap } from "@danielx/civet"
+import Civet from "@danielx/civet"
 import ts, { CompilerHost, CompilerOptions, LanguageServiceHost } from "typescript"
 import fs from "fs"
 import assert from "assert"
-
-const { Sourcemap } = Civet.util
 
 interface Host extends LanguageServiceHost {
   addPath(path: string): void;
@@ -57,18 +55,15 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
       // Compile .civet files to TS
       if (fileName.match(/\.civet$/)) {
         try {
-          const sm = Sourcemap(src)
-          //@ts-ignore
-          const tsSrc = Civet.compile(src, {
+          const { code, sourceMap } = Civet.compile(src, {
             filename: fileName,
-            updateSourceMap: sm.updateSourceMap
+            sourceMap: true
           })
 
           const meta = fileMetaData.get(fileName)
-          //@ts-ignore
-          meta!.sourcemapLines = sm.data.lines
+          meta!.sourcemapLines = sourceMap.data.lines
 
-          return ScriptSnapshot.fromString(tsSrc)
+          return ScriptSnapshot.fromString(code)
         } catch (e) {
           console.error(e)
           return
