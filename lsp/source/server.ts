@@ -128,11 +128,19 @@ connection.onHover(({ textDocument, position }) => {
     // Don't map for files that don't have a sourcemap (plain .ts for example)
     if (sourcemapLines) {
       position = forwardMap(sourcemapLines, position)
+      console.log('remapped')
     }
 
-    service.getProgram()
+    // service.getProgram()
+    // TODO: simplify
+    const snapshot = service.host.getScriptSnapshot(sourcePath)
+    const transpiled = snapshot?.getText(0, snapshot.getLength())
+    if (!transpiled) return
 
-    const info = service.getQuickInfoAtPosition(sourcePath, doc.offsetAt(position))
+    const transpiledDoc = TextDocument.create("dummy", "typescript", 0, transpiled)
+    const p = transpiledDoc.offsetAt(position)
+
+    const info = service.getQuickInfoAtPosition(sourcePath, p)
     if (!info) return;
 
     const display = displayPartsToString(info.displayParts);

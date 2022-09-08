@@ -84,7 +84,12 @@ Node.js --loader
 
 https://dev.to/jakobjingleheimer/custom-esm-loaders-who-what-when-where-why-how-4i1o
 
+Why is TypeScript humongous?
+---
 
+https://github.com/microsoft/TypeScript/pull/35561#issuecomment-696382520
+
+Also it cannot be tree shaken when included in esbuild.
 
 Timesheet
 ---
@@ -100,3 +105,4 @@ Timesheet
 2022-09-04 | 4.50  | LSP
 2022-09-05 | 5.00  | running mocha with .civet and .ts files; remove 'as' suffix from js transpilation; document symbols; sourcemapping
 2022-09-06 | 2.50  | more source mapping in parser; noop ->; sourcemap cleanup; sourcemapping document symbols
+2022-09-07 | 4.75  | block strings; forward source mapping; onHover

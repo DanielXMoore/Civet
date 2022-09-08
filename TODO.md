@@ -36,14 +36,17 @@ TODO
     - [x] Syntax Highlighting
     - [ ] Handle .civet docs outside of project root
     - [ ] Handle multi-root projects
+    - [ ] Handle file updates
     - [ ] Sourcemapping
-      - [ ] Finish adding source mappings to parser/transpiler
-      - [ ] Unpessimize source mapping output
-      - [ ] Translate back and forth between source line/column and generated line/column (use a library)
-    - [ ] Hover docs
-    - [ ] Completions
+      - [x] Finish adding source mappings to parser/transpiler
+      - [ ] Unpessimize source mapping output (later)
+      - [x] Translate from generated line/column to source line/column (reverse map)
+      - [ ] Translate from source line/column to generated line/column
+    - [x] Document Symbols
+    - [ ] Hover docs (forward map)
+    - [ ] Completions (forward map)
     - [ ] References
-    - [ ] Diagnostics
+    - [ ] Diagnostics (reverse map)
   - [x] ESM Loader
   - [x] esbuild plugin
 - [ ] Syntax Experiments

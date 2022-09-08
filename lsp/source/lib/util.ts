@@ -273,9 +273,14 @@ export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
   })
 
   if (foundLine >= 0) {
+    const genLine = foundLine + origLine - bestLine
+    const genOffset = foundOffset + origOffset - bestOffset
+
+    console.log(`transformed position ${[origLine, origOffset]} => ${[genLine, genOffset]}`)
+
     return {
-      line: foundLine + origLine - bestLine,
-      character: foundOffset + origOffset - bestOffset
+      line: genLine,
+      character: genOffset
     }
   }
 

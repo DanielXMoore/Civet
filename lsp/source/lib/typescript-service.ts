@@ -12,7 +12,6 @@ import {
   sys,
 } from "typescript"
 import fs from "fs"
-import assert from "assert"
 
 interface Host extends LanguageServiceHost {
   addPath(path: string): void;
