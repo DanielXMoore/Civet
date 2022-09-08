@@ -12,6 +12,7 @@ import {
   TextDocumentIdentifier,
   HandlerResult,
   DocumentSymbol,
+  CompletionItem,
 } from 'vscode-languageserver';
 
 import {
@@ -20,7 +21,7 @@ import {
 
 import TSService from './lib/typescript-service';
 import * as Previewer from "./lib/previewer";
-import { convertNavTree, forwardMap, SourcemapLines } from './lib/util';
+import { convertNavTree, forwardMap, getCompletionItemKind, SourcemapLines } from './lib/util';
 import assert from "assert"
 
 import Civet from "@danielx/civet"
@@ -164,32 +165,64 @@ connection.onHover(({ textDocument, position }) => {
 })
 
 // This handler provides the initial list of the completion items.
-connection.onCompletion(() => {
-  // ({ textDocument, position, context }) => {
-  // const doc = documents.get(textDocument.uri);
-  // console.log("completion", textDocument, position)
-  // if (!doc) return;
+connection.onCompletion(({ textDocument, position }) => {
+  const sourcePath = documentToSourcePath(textDocument)
+  if (!sourcePath) return;
 
-  // const sourcePath = doc.uri.replace(rootDir, "")
-  // const completionInfo = service.getCompletionsAtPosition(sourcePath, doc.offsetAt(position), {})
+  console.log("hover", sourcePath, position)
 
-  // return completionInfo?.entries.map((e) => ({
-  //   label: e.name,
-  //   kind: 1,
-  // }));
+  const doc = documents.get(textDocument.uri);
+  assert(doc)
 
-  return [{
-    label: "hi",
-    kind: 1
-  }]
+  // Make sure doc is in ts-server
+  service.host.addPath(sourcePath)
+
+  // need to sourcemap the line/columns
+  const sourcemapLines = service.host.getSourcemap(sourcePath)
+
+  // Map input hover position into output TS position
+  // Don't map for files that don't have a sourcemap (plain .ts for example)
+  if (sourcemapLines) {
+    position = forwardMap(sourcemapLines, position)
+    console.log('remapped')
+  }
+
+  // service.getProgram()
+  // TODO: simplify
+  const snapshot = service.host.getScriptSnapshot(sourcePath)
+  const transpiled = snapshot?.getText(0, snapshot.getLength())
+  if (!transpiled) return
+
+  const transpiledDoc = TextDocument.create("dummy", "typescript", 0, transpiled)
+  const p = transpiledDoc.offsetAt(position)
+
+  const completions = service.getCompletionsAtPosition(sourcePath, p, undefined)
+  if (!completions) return;
+
+  // TODO: TS is doing a lot more here and some of it might be useful
+
+  const { entries } = completions;
+
+  const items: CompletionItem[] = [];
+  for (const entry of entries) {
+    const item: CompletionItem = {
+      label: entry.name,
+      kind: getCompletionItemKind(entry.kind)
+    };
+
+    if (entry.insertText) {
+      item.insertText = entry.insertText
+    }
+
+    items.push(item);
+  }
+
+  return items
 });
 
 // TODO
-connection.onCompletionResolve(() => {
-  return {
-    label: "ahopy",
-    documentation: "yolo"
-  }
+connection.onCompletionResolve((item) => {
+  return item;
 })
 
 connection.onDocumentSymbol(({ textDocument }) => {

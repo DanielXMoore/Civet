@@ -37,6 +37,8 @@ Rest parameters in any position:
 https://devblogs.microsoft.com/typescript/announcing-typescript-4-0/#variadic-tuple-types
 https://stackoverflow.com/a/64366348/68210
 
+Implementing TS features in VS Code extensions: https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/
+
 JSX Spec
 ---
 
@@ -105,4 +107,4 @@ Timesheet
 2022-09-04 | 4.50  | LSP
 2022-09-05 | 5.00  | running mocha with .civet and .ts files; remove 'as' suffix from js transpilation; document symbols; sourcemapping
 2022-09-06 | 2.50  | more source mapping in parser; noop ->; sourcemap cleanup; sourcemapping document symbols
-2022-09-07 | 4.75  | block strings; forward source mapping; onHover
+2022-09-07 | 5.75  | block strings; forward source mapping; onHover; starting onCompletion

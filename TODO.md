@@ -37,6 +37,7 @@ TODO
     - [ ] Handle .civet docs outside of project root
     - [ ] Handle multi-root projects
     - [ ] Handle file updates
+    - [ ] Language Icon https://stackoverflow.com/a/70930298/68210
     - [ ] Sourcemapping
       - [x] Finish adding source mappings to parser/transpiler
       - [ ] Unpessimize source mapping output (later)

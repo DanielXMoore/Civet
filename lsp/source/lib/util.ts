@@ -1,5 +1,5 @@
 import { NavigationBarItem, NavigationTree, ScriptElementKind, ScriptElementKindModifier, TextSpan } from "typescript";
-import { SymbolKind, SymbolTag, DocumentSymbol, Range, Position } from "vscode-languageserver";
+import { SymbolKind, SymbolTag, DocumentSymbol, Range, Position, CompletionItemKind } from "vscode-languageserver";
 
 import Civet, { SourceMap } from "@danielx/civet"
 const { util: { lookupLineColumn } } = Civet
@@ -8,7 +8,7 @@ export type SourcemapLines = SourceMap["data"]["lines"]
 
 // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/documentSymbol.ts#L63
 
-const getSymbolKind = (kind: string): SymbolKind => {
+const getSymbolKind = (kind: ScriptElementKind): SymbolKind => {
   switch (kind) {
     case ScriptElementKind.moduleElement: return SymbolKind.Module;
     case ScriptElementKind.classElement: return SymbolKind.Class;
@@ -28,6 +28,69 @@ const getSymbolKind = (kind: string): SymbolKind => {
   }
   return SymbolKind.Variable;
 };
+
+// https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
+export function getCompletionItemKind(kind: string): CompletionItemKind {
+  switch (kind) {
+    case ScriptElementKind.primitiveType:
+    case ScriptElementKind.keyword:
+      return CompletionItemKind.Keyword;
+
+    case ScriptElementKind.constElement:
+    case ScriptElementKind.letElement:
+    case ScriptElementKind.variableElement:
+    case ScriptElementKind.localVariableElement:
+    case ScriptElementKind.alias:
+    case ScriptElementKind.parameterElement:
+      return CompletionItemKind.Variable;
+
+    case ScriptElementKind.memberVariableElement:
+    case ScriptElementKind.memberGetAccessorElement:
+    case ScriptElementKind.memberSetAccessorElement:
+      return CompletionItemKind.Field;
+
+    case ScriptElementKind.functionElement:
+    case ScriptElementKind.localFunctionElement:
+      return CompletionItemKind.Function;
+
+    case ScriptElementKind.constructSignatureElement:
+    case ScriptElementKind.callSignatureElement:
+    case ScriptElementKind.indexSignatureElement:
+      return CompletionItemKind.Method;
+
+    case ScriptElementKind.enumElement:
+      return CompletionItemKind.Enum;
+
+    case ScriptElementKind.enumMemberElement:
+      return CompletionItemKind.EnumMember;
+
+    case ScriptElementKind.moduleElement:
+    case ScriptElementKind.externalModuleName:
+      return CompletionItemKind.Module;
+
+    case ScriptElementKind.classElement:
+    case ScriptElementKind.typeElement:
+      return CompletionItemKind.Class;
+
+    case ScriptElementKind.interfaceElement:
+      return CompletionItemKind.Interface;
+
+    case ScriptElementKind.warning:
+      return CompletionItemKind.Text;
+
+    case ScriptElementKind.scriptElement:
+      return CompletionItemKind.File;
+
+    case ScriptElementKind.directory:
+      return CompletionItemKind.Folder;
+
+    case ScriptElementKind.string:
+      return CompletionItemKind.Constant;
+
+    default:
+      return CompletionItemKind.Property;
+  }
+}
 
 /**
  * @param lineTable Table of line lengths in generated TypeScript code
