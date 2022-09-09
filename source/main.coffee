@@ -2,11 +2,13 @@
 {prune} = gen = require "./generate"
 {SourceMap} = util = require "./util"
 
+defaultOptions = {}
+
 module.exports =
   parse: parse
-  compile: (src, options) ->
+  compile: (src, options=defaultOptions) ->
     ast = prune parse(src, {
-      filename: options?.filename
+      filename: options.filename
     })
 
     if options.sourceMap
