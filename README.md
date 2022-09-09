@@ -15,8 +15,8 @@ Quickstart Guide
 npm install -g @danielx/civet
 # Compile civet source file to typescript
 civet < source.civet > output.ts
-# Execute a civet source file in node
-node --loader @danielx/civet/register.mjs source.civet
+# Execute a civet source file in node using ts-node
+node --loader ts-node/esm --loader @danielx/civet/esm source.civet
 ```
 
 ![image](https://user-images.githubusercontent.com/18894/184558519-b675a903-7490-43ba-883e-0d8addacd4b9.png)
