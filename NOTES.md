@@ -108,3 +108,4 @@ Timesheet
 2022-09-05 | 5.00  | running mocha with .civet and .ts files; remove 'as' suffix from js transpilation; document symbols; sourcemapping
 2022-09-06 | 2.50  | more source mapping in parser; noop ->; sourcemap cleanup; sourcemapping document symbols
 2022-09-07 | 5.75  | block strings; forward source mapping; onHover; starting onCompletion
+2022-09-08 | 6.50  | onCompletion; ts-node config
