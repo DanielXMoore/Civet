@@ -192,7 +192,6 @@ connection.onCompletion(({ textDocument, position, context: _context }) => {
     console.log('remapped')
   }
 
-  // service.getProgram()
   // TODO: simplify
   const snapshot = service.host.getScriptSnapshot(sourcePath)
   const transpiled = snapshot?.getText(0, snapshot.getLength())
@@ -286,10 +285,18 @@ documents.onDidChangeContent(({ document }) => {
 
 function updateDiagnostics(document: TextDocument) {
   const sourcePath = documentToSourcePath(document)
-  if (!sourcePath) return undefined
+  if (!sourcePath) return
 
   // Make sure doc is in ts-server
   service.host.addPath(sourcePath)
+
+  // TODO: simplify and cache, merge into host?
+  const snapshot = service.host.getScriptSnapshot(sourcePath)
+  const sourcemapLines = service.host.getSourcemap(sourcePath)
+  const transpiled = snapshot?.getText(0, snapshot.getLength())
+  if (!transpiled) return
+  const transpiledDoc = TextDocument.create("dummy", "typescript", 0, transpiled)
+
 
   const diagnostics: Diagnostic[] = [];
   [
@@ -297,13 +304,15 @@ function updateDiagnostics(document: TextDocument) {
     ...service.getSemanticDiagnostics(sourcePath),
     ...service.getSuggestionDiagnostics(sourcePath),
   ].forEach((diagnostic) => {
-    diagnostics.push(convertDiagnostic(diagnostic))
+    diagnostics.push(convertDiagnostic(diagnostic, sourcemapLines, transpiledDoc))
   })
 
   connection.sendDiagnostics({
     uri: document.uri,
     diagnostics
   })
+
+  return
 }
 
 connection.onDidChangeWatchedFiles(_change => {

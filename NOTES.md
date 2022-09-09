@@ -109,3 +109,4 @@ Timesheet
 2022-09-06 | 2.50  | more source mapping in parser; noop ->; sourcemap cleanup; sourcemapping document symbols
 2022-09-07 | 5.75  | block strings; forward source mapping; onHover; starting onCompletion
 2022-09-08 | 6.50  | onCompletion; ts-node config
+2022-09-09 | 1.25  | TS diagnostics

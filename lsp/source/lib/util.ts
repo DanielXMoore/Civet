@@ -19,6 +19,7 @@ import vs, {
 } from "vscode-languageserver";
 
 import Civet, { SourceMap } from "@danielx/civet"
+import { TextDocument } from "vscode-languageserver-textdocument";
 const { util: { lookupLineColumn } } = Civet
 
 export type SourcemapLines = SourceMap["data"]["lines"]
@@ -281,6 +282,10 @@ export function containsRange(range: Range, otherRange: Range): boolean {
   return true;
 }
 
+/**
+ * Take a position in generated code and map it into a position in source code.
+ * Reverse mapping.
+ */
 export function remapPosition(sourcemapLines: SourcemapLines, position: Position): Position {
   const { line, character } = position
 
@@ -378,14 +383,32 @@ export function remapRange(range: Range, sourcemapLines: SourcemapLines,): Range
   }
 }
 
-function spanToRange(start?: number, length?: number): Range {
+function spanToRange(sourcemapLines: SourcemapLines | undefined, generatedDoc: TextDocument, start?: number, length?: number): Range {
+  // No position so just put it on the first line
+  if (start == null) {
+    return {
+      start: {
+        line: 0,
+        character: 0,
+      }, end: {
+        line: 0,
+        character: 999,
+      }
+    }
+  }
+
+  let position = generatedDoc.positionAt(start)
+  if (sourcemapLines) {
+    position = remapPosition(sourcemapLines, position)
+  }
+
   return {
-    start: {
-      line: 0,
-      character: 0,
-    }, end: {
-      line: 0,
-      character: 100,
+    start: position,
+    end: {
+      line: position.line,
+      // I don't like multi-line red squiglies so just preted the length is on the same line
+      // TODO: see if this makes it weird? it may need sourcemapping too
+      character: position.character + (length || 2)
     }
   }
 }
@@ -417,11 +440,10 @@ export function flattenDiagnosticMessageText(
   return result;
 }
 
-export function convertDiagnostic(diagnostic: Diagnostic): vs.Diagnostic {
-
+export function convertDiagnostic(diagnostic: Diagnostic, sourcemapLines: SourcemapLines[][], generatedDoc: TextDocument): vs.Diagnostic {
   return {
     message: flattenDiagnosticMessageText(diagnostic.messageText),
-    range: spanToRange(diagnostic.start, diagnostic.length),
+    range: spanToRange(sourcemapLines, generatedDoc, diagnostic.start, diagnostic.length),
     severity: diagnosticCategoryToSeverity(diagnostic.category),
     code: diagnostic.code,
     source: diagnostic.source || "typescript",
