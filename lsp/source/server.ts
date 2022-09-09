@@ -2,7 +2,6 @@ import {
   createConnection,
   TextDocuments,
   Diagnostic,
-  DiagnosticSeverity,
   ProposedFeatures,
   InitializeParams,
   DidChangeConfigurationNotification,
@@ -21,11 +20,11 @@ import {
 
 import TSService from './lib/typescript-service';
 import * as Previewer from "./lib/previewer";
-import { convertNavTree, forwardMap, getCompletionItemKind, SourcemapLines } from './lib/util';
+import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic } from './lib/util';
 import assert from "assert"
 
 import Civet from "@danielx/civet"
-import { displayPartsToString } from 'typescript';
+import { displayPartsToString, GetCompletionsAtPositionOptions } from 'typescript';
 const { util: { locationTable } } = Civet
 
 // Create a connection for the server, using Node's IPC as a transport.
@@ -73,6 +72,7 @@ connection.onInitialize((params: InitializeParams) => {
       definitionProvider: true,
       hoverProvider: true,
       referencesProvider: true,
+
     }
   };
 
@@ -165,7 +165,12 @@ connection.onHover(({ textDocument, position }) => {
 })
 
 // This handler provides the initial list of the completion items.
-connection.onCompletion(({ textDocument, position }) => {
+connection.onCompletion(({ textDocument, position, context: _context }) => {
+  const context = _context as {
+    triggerKind?: GetCompletionsAtPositionOptions["triggerKind"],
+    triggerCharacter?: GetCompletionsAtPositionOptions["triggerCharacter"]
+  }
+
   const sourcePath = documentToSourcePath(textDocument)
   if (!sourcePath) return;
 
@@ -196,7 +201,21 @@ connection.onCompletion(({ textDocument, position }) => {
   const transpiledDoc = TextDocument.create("dummy", "typescript", 0, transpiled)
   const p = transpiledDoc.offsetAt(position)
 
-  const completions = service.getCompletionsAtPosition(sourcePath, p, undefined)
+  const completionConfiguration = {
+    useCodeSnippetsOnMethodSuggest: false,
+    pathSuggestions: true,
+    autoImportSuggestions: true,
+    nameSuggestions: true,
+    importStatementSuggestions: true,
+  }
+
+  const completionOptions: GetCompletionsAtPositionOptions = {
+    includeExternalModuleExports: completionConfiguration.autoImportSuggestions,
+    includeInsertTextCompletions: true,
+    ...context,
+  }
+
+  const completions = service.getCompletionsAtPosition(sourcePath, p, completionOptions)
   if (!completions) return;
 
   // TODO: TS is doing a lot more here and some of it might be useful
@@ -260,9 +279,32 @@ documents.onDidClose(e => {
 
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
-documents.onDidChangeContent(change => {
-  // validateTextDocument(change.document);
+documents.onDidChangeContent(({ document }) => {
+
+  updateDiagnostics(document)
 });
+
+function updateDiagnostics(document: TextDocument) {
+  const sourcePath = documentToSourcePath(document)
+  if (!sourcePath) return undefined
+
+  // Make sure doc is in ts-server
+  service.host.addPath(sourcePath)
+
+  const diagnostics: Diagnostic[] = [];
+  [
+    ...service.getSyntacticDiagnostics(sourcePath),
+    ...service.getSemanticDiagnostics(sourcePath),
+    ...service.getSuggestionDiagnostics(sourcePath),
+  ].forEach((diagnostic) => {
+    diagnostics.push(convertDiagnostic(diagnostic))
+  })
+
+  connection.sendDiagnostics({
+    uri: document.uri,
+    diagnostics
+  })
+}
 
 connection.onDidChangeWatchedFiles(_change => {
   // Monitored files have change in VSCode

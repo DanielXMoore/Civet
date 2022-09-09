@@ -132,4 +132,4 @@ function TSService(projectPath = "./") {
   })
 }
 
-export default TSService
+export = TSService

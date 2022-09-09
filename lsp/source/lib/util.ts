@@ -1,5 +1,22 @@
-import { NavigationBarItem, NavigationTree, ScriptElementKind, ScriptElementKindModifier, TextSpan } from "typescript";
-import { SymbolKind, SymbolTag, DocumentSymbol, Range, Position, CompletionItemKind } from "vscode-languageserver";
+import {
+  Diagnostic,
+  DiagnosticCategory,
+  DiagnosticMessageChain,
+  NavigationBarItem,
+  NavigationTree,
+  ScriptElementKind,
+  ScriptElementKindModifier,
+  TextSpan,
+} from "typescript";
+import vs, {
+  CompletionItemKind,
+  DiagnosticSeverity,
+  DocumentSymbol,
+  Position,
+  Range,
+  SymbolKind,
+  SymbolTag,
+} from "vscode-languageserver";
 
 import Civet, { SourceMap } from "@danielx/civet"
 const { util: { lookupLineColumn } } = Civet
@@ -355,9 +372,72 @@ export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
  * Use sourcemap lines to remap the start and end position of a range.
  */
 export function remapRange(range: Range, sourcemapLines: SourcemapLines,): Range {
-  debugger
   return {
     start: remapPosition(sourcemapLines, range.start),
     end: remapPosition(sourcemapLines, range.end)
+  }
+}
+
+function spanToRange(start?: number, length?: number): Range {
+  return {
+    start: {
+      line: 0,
+      character: 0,
+    }, end: {
+      line: 0,
+      character: 100,
+    }
+  }
+}
+
+export function flattenDiagnosticMessageText(
+  diag: string | DiagnosticMessageChain | undefined,
+  indent = 0
+): string {
+  if (typeof diag === 'string') {
+    return diag;
+  } else if (diag === undefined) {
+    return '';
+  }
+  let result = '';
+  if (indent) {
+    result += "\n";
+
+    for (let i = 0; i < indent; i++) {
+      result += '  ';
+    }
+  }
+  result += diag.messageText;
+  indent++;
+  if (diag.next) {
+    for (const kid of diag.next) {
+      result += flattenDiagnosticMessageText(kid, indent);
+    }
+  }
+  return result;
+}
+
+export function convertDiagnostic(diagnostic: Diagnostic): vs.Diagnostic {
+
+  return {
+    message: flattenDiagnosticMessageText(diagnostic.messageText),
+    range: spanToRange(diagnostic.start, diagnostic.length),
+    severity: diagnosticCategoryToSeverity(diagnostic.category),
+    code: diagnostic.code,
+    source: diagnostic.source || "typescript",
+
+  }
+}
+
+function diagnosticCategoryToSeverity(category: DiagnosticCategory): DiagnosticSeverity {
+  switch (category) {
+    case DiagnosticCategory.Warning:
+      return DiagnosticSeverity.Warning
+    case DiagnosticCategory.Error:
+      return DiagnosticSeverity.Error
+    case DiagnosticCategory.Suggestion:
+      return DiagnosticSeverity.Hint
+    case DiagnosticCategory.Message:
+      return DiagnosticSeverity.Information
   }
 }
