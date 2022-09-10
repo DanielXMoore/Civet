@@ -7,7 +7,6 @@ TODO
   - [ ] Implicit Returns
   - [ ] """
   - [ ] ###
-  - [ ] Heregex (Defer)
 - [x] Keep comments and whitespace
 - [ ] TypeScript
   - [x] TS Compiling Experiment
@@ -37,18 +36,30 @@ TODO
     - [ ] Handle .civet docs outside of project root
     - [ ] Handle multi-root projects
     - [ ] Handle file updates
+      - [x] Add TextDocuments to service
+      - [x] Update docs on changes
+      - [x] Update sourcemap/meta on changes
     - [ ] Language Icon https://stackoverflow.com/a/70930298/68210
-    - [ ] Sourcemapping
+    - [x] Sourcemapping
       - [x] Finish adding source mappings to parser/transpiler
       - [ ] Unpessimize source mapping output (later)
       - [x] Translate from generated line/column to source line/column (reverse map)
-      - [ ] Translate from source line/column to generated line/column
+      - [x] Translate from source line/column to generated line/column
     - [x] Document Symbols
-    - [ ] Hover docs (forward map)
+    - [x] Hover docs (forward map)
     - [ ] Completions (forward map)
     - [ ] References
+    - [ ] Load installed @types/*
     - [ ] Diagnostics (reverse map)
+      - [x] Display Diagnostics
+      - [ ] Find out why diagnostic hint jumps around wierdly (source map error or is it using an older map when the file updates?)
   - [x] ESM Loader
   - [x] esbuild plugin
 - [ ] Syntax Experiments
   - [ ] Explore `gen.next(args, ...)` shorthand
+
+TODONT
+---
+
+- [ ] CoffeeScript features
+  - [ ] Heregex

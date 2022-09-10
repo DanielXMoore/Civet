@@ -322,7 +322,7 @@ export function remapPosition(sourcemapLines: SourcemapLines, position: Position
       character: newChar,
     }
   } else {
-    console.error("no mapping for ", position)
+    // console.error("no mapping for ", position)
     return position
   }
 }
@@ -361,7 +361,7 @@ export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
     const genLine = foundLine + origLine - bestLine
     const genOffset = foundOffset + origOffset - bestOffset
 
-    console.log(`transformed position ${[origLine, origOffset]} => ${[genLine, genOffset]}`)
+    // console.log(`transformed position ${[origLine, origOffset]} => ${[genLine, genOffset]}`)
 
     return {
       line: genLine,
@@ -369,7 +369,7 @@ export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
     }
   }
 
-  console.warn(`couldn't forward map src position: ${[origLine, origOffset]}`)
+  // console.warn(`couldn't forward map src position: ${[origLine, origOffset]}`)
   return position
 }
 

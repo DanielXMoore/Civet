@@ -14,6 +14,7 @@ import {
 import fs from "fs"
 import { TextDocument } from "vscode-languageserver-textdocument";
 import assert from "assert"
+import { fileURLToPath } from "url";
 
 interface FileMeta {
   sourcemapLines: SourceMap["data"]["lines"]
@@ -69,6 +70,7 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
     },
     // TODO: Handle source documents and document updates
     getScriptSnapshot(path: string) {
+      console.log("getScriptSnapshot", path)
       let source;
       // Get the source from the open VSCode document if it exists
       const doc = pathMap.get(path)
@@ -77,6 +79,7 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
       } else {
         // Otherwise get it from the file system
         if (!fs.existsSync(path)) {
+          console.warn("no file found at path", path)
           return undefined;
         }
         source = fs.readFileSync(path, "utf8")
@@ -135,7 +138,7 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
 }
 
 function TSService(projectPath = "./") {
-  const tsConfigPath = `${projectPath}tsconfig.json`
+  const tsConfigPath = fileURLToPath(`${projectPath}tsconfig.json`)
   const { config } = readConfigFile(tsConfigPath, sys.readFile)
 
   const existingOptions = {
@@ -166,7 +169,7 @@ function TSService(projectPath = "./") {
   host.getScriptVersion
   const service = createLanguageService(host);
 
-  console.log(parsedConfig)
+  console.log("parsed", parsedConfig)
 
   // const program = service.getProgram();
   // console.log(program?.getSourceFile("source/a.civet"));

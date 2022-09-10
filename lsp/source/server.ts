@@ -113,7 +113,7 @@ connection.onHover(({ textDocument, position }) => {
   const sourcePath = documentToSourcePath(textDocument)
   if (!sourcePath) return;
 
-  console.log("hover", sourcePath, position)
+  // console.log("hover", sourcePath, position)
 
   const doc = documents.get(textDocument.uri);
   assert(doc)
