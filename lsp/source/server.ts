@@ -118,9 +118,6 @@ connection.onHover(({ textDocument, position }) => {
   const doc = documents.get(textDocument.uri);
   assert(doc)
 
-  // Make sure doc is in ts-server
-  service.host.addPath(sourcePath)
-
   // need to sourcemap the line/columns
   const meta = service.host.getMeta(sourcePath)
   if (!meta) return
@@ -170,9 +167,6 @@ connection.onCompletion(({ textDocument, position, context: _context }) => {
 
   const doc = documents.get(textDocument.uri);
   assert(doc)
-
-  // Make sure doc is in ts-server
-  service.host.addPath(sourcePath)
 
   // need to sourcemap the line/columns
   const meta = service.host.getMeta(sourcePath)
@@ -237,9 +231,6 @@ connection.onDocumentSymbol(({ textDocument }) => {
   const sourcePath = documentToSourcePath(textDocument)
   if (!sourcePath) return undefined
 
-  // Make sure doc is in ts-server
-  service.host.addPath(sourcePath)
-
   const items: DocumentSymbol[] = []
   const navTree = service.getNavigationTree(sourcePath)
 
@@ -269,16 +260,13 @@ documents.onDidClose(e => {
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent(({ document }) => {
-
+  service.host.addDocument(document)
   updateDiagnostics(document)
 });
 
 function updateDiagnostics(document: TextDocument) {
   const sourcePath = documentToSourcePath(document)
   if (!sourcePath) return
-
-  // Make sure doc is in ts-server
-  service.host.addPath(sourcePath)
 
   const meta = service.host.getMeta(sourcePath)
   if (!meta) {
