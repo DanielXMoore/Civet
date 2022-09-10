@@ -12,6 +12,7 @@ import {
   HandlerResult,
   DocumentSymbol,
   CompletionItem,
+  Location,
 } from 'vscode-languageserver';
 
 import {
@@ -163,10 +164,7 @@ connection.onCompletion(({ textDocument, position, context: _context }) => {
   const sourcePath = documentToSourcePath(textDocument)
   if (!sourcePath) return;
 
-  console.log("hover", sourcePath, position)
-
-  const doc = documents.get(textDocument.uri);
-  assert(doc)
+  console.log("completion", sourcePath, position)
 
   // need to sourcemap the line/columns
   const meta = service.host.getMeta(sourcePath)
@@ -225,6 +223,47 @@ connection.onCompletion(({ textDocument, position, context: _context }) => {
 // TODO
 connection.onCompletionResolve((item) => {
   return item;
+})
+
+connection.onDefinition(({ textDocument, position }) => {
+  const sourcePath = documentToSourcePath(textDocument)
+  if (!sourcePath) return undefined
+
+  // need to sourcemap the line/columns
+  const meta = service.host.getMeta(sourcePath)
+  if (!meta) return
+  const sourcemapLines = meta.sourcemapLines
+  const transpiledDoc = meta.transpiledDoc
+  if (!transpiledDoc) return
+
+  // Map input hover position into output TS position
+  // Don't map for files that don't have a sourcemap (plain .ts for example)
+  if (sourcemapLines) {
+    position = forwardMap(sourcemapLines, position)
+  }
+
+  const p = transpiledDoc.offsetAt(position)
+
+  const program = service.getProgram()
+  if (!program) return
+
+  const definitions = service.getDefinitionAtPosition(sourcePath, p)
+  if (!definitions) return
+
+  return definitions.map<Location | undefined>((definition) => {
+    const { fileName, textSpan } = definition
+    const sourceFile = program.getSourceFile(fileName)
+    if (!sourceFile) return
+
+    return {
+      uri: fileName,
+      range: {
+        start: sourceFile.getLineAndCharacterOfPosition(textSpan.start),
+        end: sourceFile.getLineAndCharacterOfPosition(textSpan.start + textSpan.length)
+      }
+    }
+  }).filter((d) => !!d) as Location[]
+
 })
 
 connection.onDocumentSymbol(({ textDocument }) => {
