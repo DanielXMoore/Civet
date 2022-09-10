@@ -110,58 +110,50 @@ connection.onInitialized(() => {
 });
 
 connection.onHover(({ textDocument, position }) => {
-  try {
-    const sourcePath = documentToSourcePath(textDocument)
-    if (!sourcePath) return;
+  const sourcePath = documentToSourcePath(textDocument)
+  if (!sourcePath) return;
 
-    console.log("hover", sourcePath, position)
+  console.log("hover", sourcePath, position)
 
-    const doc = documents.get(textDocument.uri);
-    assert(doc)
+  const doc = documents.get(textDocument.uri);
+  assert(doc)
 
-    // Make sure doc is in ts-server
-    service.host.addPath(sourcePath)
+  // Make sure doc is in ts-server
+  service.host.addPath(sourcePath)
 
-    // need to sourcemap the line/columns
-    const sourcemapLines = service.host.getSourcemap(sourcePath)
+  // need to sourcemap the line/columns
+  const meta = service.host.getMeta(sourcePath)
+  if (!meta) return
+  const sourcemapLines = meta.sourcemapLines
+  const transpiledDoc = meta.transpiledDoc
+  if (!transpiledDoc) return
 
-    // Map input hover position into output TS position
-    // Don't map for files that don't have a sourcemap (plain .ts for example)
-    if (sourcemapLines) {
-      position = forwardMap(sourcemapLines, position)
-      console.log('remapped')
-    }
-
-    // service.getProgram()
-    // TODO: simplify
-    const snapshot = service.host.getScriptSnapshot(sourcePath)
-    const transpiled = snapshot?.getText(0, snapshot.getLength())
-    if (!transpiled) return
-
-    const transpiledDoc = TextDocument.create("dummy", "typescript", 0, transpiled)
-    const p = transpiledDoc.offsetAt(position)
-
-    const info = service.getQuickInfoAtPosition(sourcePath, p)
-    if (!info) return;
-
-    const display = displayPartsToString(info.displayParts);
-    // TODO: Replace Previewer
-    const documentation = Previewer.plain(displayPartsToString(info.documentation));
-
-    return {
-      // TODO: Range
-      contents: {
-        kind: MarkupKind.Markdown,
-        value: [
-          `\`\`\`typescript\n${display}\n\`\`\``,
-          documentation ?? "",
-          ...info.tags?.map(Previewer.getTagDocumentation).filter((t) => !!t) || []
-        ].join("\n\n")
-      }
-    };
-  } catch (e) {
-    console.error(e)
+  // Map input hover position into output TS position
+  // Don't map for files that don't have a sourcemap (plain .ts for example)
+  if (sourcemapLines) {
+    position = forwardMap(sourcemapLines, position)
   }
+
+  const p = transpiledDoc.offsetAt(position)
+
+  const info = service.getQuickInfoAtPosition(sourcePath, p)
+  if (!info) return;
+
+  const display = displayPartsToString(info.displayParts);
+  // TODO: Replace Previewer
+  const documentation = Previewer.plain(displayPartsToString(info.documentation));
+
+  return {
+    // TODO: Range
+    contents: {
+      kind: MarkupKind.Markdown,
+      value: [
+        `\`\`\`typescript\n${display}\n\`\`\``,
+        documentation ?? "",
+        ...info.tags?.map(Previewer.getTagDocumentation).filter((t) => !!t) || []
+      ].join("\n\n")
+    }
+  };
 })
 
 // This handler provides the initial list of the completion items.
@@ -183,7 +175,11 @@ connection.onCompletion(({ textDocument, position, context: _context }) => {
   service.host.addPath(sourcePath)
 
   // need to sourcemap the line/columns
-  const sourcemapLines = service.host.getSourcemap(sourcePath)
+  const meta = service.host.getMeta(sourcePath)
+  if (!meta) return
+  const sourcemapLines = meta.sourcemapLines
+  const transpiledDoc = meta.transpiledDoc
+  if (!transpiledDoc) return
 
   // Map input hover position into output TS position
   // Don't map for files that don't have a sourcemap (plain .ts for example)
@@ -192,12 +188,6 @@ connection.onCompletion(({ textDocument, position, context: _context }) => {
     console.log('remapped')
   }
 
-  // TODO: simplify
-  const snapshot = service.host.getScriptSnapshot(sourcePath)
-  const transpiled = snapshot?.getText(0, snapshot.getLength())
-  if (!transpiled) return
-
-  const transpiledDoc = TextDocument.create("dummy", "typescript", 0, transpiled)
   const p = transpiledDoc.offsetAt(position)
 
   const completionConfiguration = {
@@ -261,7 +251,7 @@ connection.onDocumentSymbol(({ textDocument }) => {
   const lineTable = locationTable(transpiled)
 
   // need to sourcemap the line/columns
-  const sourcemapLines = service.host.getSourcemap(sourcePath)
+  const sourcemapLines = service.host.getMeta(sourcePath)?.sourcemapLines
 
   // The root represents the file. Ignore this when showing in the UI
   for (const child of navTree.childItems!) {
@@ -290,13 +280,14 @@ function updateDiagnostics(document: TextDocument) {
   // Make sure doc is in ts-server
   service.host.addPath(sourcePath)
 
-  // TODO: simplify and cache, merge into host?
-  const snapshot = service.host.getScriptSnapshot(sourcePath)
-  const sourcemapLines = service.host.getSourcemap(sourcePath)
-  const transpiled = snapshot?.getText(0, snapshot.getLength())
-  if (!transpiled) return
-  const transpiledDoc = TextDocument.create("dummy", "typescript", 0, transpiled)
-
+  const meta = service.host.getMeta(sourcePath)
+  if (!meta) {
+    console.log("no meta for ", sourcePath)
+    return
+  }
+  const sourcemapLines = meta.sourcemapLines
+  const transpiledDoc = meta.transpiledDoc
+  if (!transpiledDoc) return
 
   const diagnostics: Diagnostic[] = [];
   [
@@ -304,7 +295,7 @@ function updateDiagnostics(document: TextDocument) {
     ...service.getSemanticDiagnostics(sourcePath),
     ...service.getSuggestionDiagnostics(sourcePath),
   ].forEach((diagnostic) => {
-    diagnostics.push(convertDiagnostic(diagnostic, sourcemapLines, transpiledDoc))
+    diagnostics.push(convertDiagnostic(diagnostic, transpiledDoc, sourcemapLines))
   })
 
   connection.sendDiagnostics({

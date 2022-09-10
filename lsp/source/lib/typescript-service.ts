@@ -12,19 +12,26 @@ import {
   sys,
 } from "typescript"
 import fs from "fs"
+import { TextDocument } from "vscode-languageserver-textdocument";
+import assert from "assert"
+
+interface FileMeta {
+  version: number
+  sourcemapLines?: SourceMap["data"]["lines"]
+  transpiledDoc?: TextDocument
+}
 
 interface Host extends LanguageServiceHost {
   addPath(path: string): void;
-  getSourcemap(path: string): SourceMap["data"]["lines"] | undefined
+  getMeta(path: string): FileMeta | undefined
 }
+
+const civetExtension = /\.civet$/
 
 function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): Host {
   // TODO: Actual files
   const scriptFileNames = new Set(["source/lsp.civet"])
-  const fileMetaData: Map<string, {
-    version: number
-    sourcemapLines?: SourceMap["data"]["lines"]
-  }> = new Map;
+  const fileMetaData: Map<string, FileMeta> = new Map;
 
   let projectVersion = 0;
 
@@ -36,8 +43,8 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
       fileMetaData.set(path, { version: 0 })
       projectVersion++
     },
-    getSourcemap(fileName: string) {
-      return fileMetaData.get(fileName)?.sourcemapLines
+    getMeta(path: string) {
+      return fileMetaData.get(path)
     },
     getProjectVersion() {
       return projectVersion.toString();
@@ -45,6 +52,7 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
     getCompilationSettings() {
       return compilationSettings;
     },
+    // TODO: Handle source documents and document updates
     getScriptSnapshot(fileName: string) {
       if (!fs.existsSync(fileName)) {
         return undefined;
@@ -53,7 +61,8 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
       const src = fs.readFileSync(fileName, "utf8")
 
       // Compile .civet files to TS
-      if (fileName.match(/\.civet$/)) {
+      // cache sourcemap and transpiled code
+      if (fileName.match(civetExtension)) {
         try {
           const { code, sourceMap } = Civet.compile(src, {
             filename: fileName,
@@ -61,7 +70,16 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
           })
 
           const meta = fileMetaData.get(fileName)
-          meta!.sourcemapLines = sourceMap.data.lines
+          assert(meta, "File meta must exist")
+
+          meta.sourcemapLines = sourceMap.data.lines
+
+          let doc = meta.transpiledDoc
+          if (doc) {
+            TextDocument.update(doc, [{ text: code }], doc.version + 1)
+          } else {
+            meta.transpiledDoc = TextDocument.create(fileName.replace(civetExtension, ".ts"), "typescript", 0, code)
+          }
 
           return ScriptSnapshot.fromString(code)
         } catch (e) {
@@ -86,8 +104,7 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
 }
 
 function TSService(projectPath = "./") {
-  debugger
-  const tsConfigPath = "tsconfig.json"
+  const tsConfigPath = `${projectPath}tsconfig.json`
   const { config } = readConfigFile(tsConfigPath, sys.readFile)
 
   const existingOptions = {}

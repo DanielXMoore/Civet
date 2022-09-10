@@ -440,7 +440,7 @@ export function flattenDiagnosticMessageText(
   return result;
 }
 
-export function convertDiagnostic(diagnostic: Diagnostic, sourcemapLines: SourcemapLines[][], generatedDoc: TextDocument): vs.Diagnostic {
+export function convertDiagnostic(diagnostic: Diagnostic, generatedDoc: TextDocument, sourcemapLines?: SourcemapLines): vs.Diagnostic {
   return {
     message: flattenDiagnosticMessageText(diagnostic.messageText),
     range: spanToRange(sourcemapLines, generatedDoc, diagnostic.start, diagnostic.length),
