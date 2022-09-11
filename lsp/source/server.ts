@@ -26,6 +26,7 @@ import assert from "assert"
 
 import Civet from "@danielx/civet"
 import { displayPartsToString, GetCompletionsAtPositionOptions } from 'typescript';
+import { fileURLToPath } from 'url';
 const { util: { locationTable } } = Civet
 
 // Create a connection for the server, using Node's IPC as a transport.
@@ -292,13 +293,18 @@ connection.onDocumentSymbol(({ textDocument }) => {
 })
 
 // TODO
-documents.onDidClose(e => {
-
+documents.onDidClose(({ document }) => {
+  console.log("close", document.uri)
 });
+
+documents.onDidOpen(({ document }) => {
+  console.log("open", document.uri)
+})
 
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent(({ document }) => {
+  console.log("onDidChangeContent", document.uri)
   service.host.addDocument(document)
   updateDiagnostics(document)
 });
@@ -348,6 +354,5 @@ connection.listen();
 // Utils
 
 function documentToSourcePath(textDocument: TextDocumentIdentifier) {
-  const doc = documents.get(textDocument.uri);
-  return doc?.uri.replace(rootDir, "")
+  return fileURLToPath(textDocument.uri);
 }

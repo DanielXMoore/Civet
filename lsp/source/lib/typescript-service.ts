@@ -10,6 +10,7 @@ import {
   parseJsonConfigFileContent,
   readConfigFile,
   sys,
+  createDocumentRegistry,
 } from "typescript"
 import fs from "fs"
 import { TextDocument } from "vscode-languageserver-textdocument";
@@ -47,7 +48,7 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
      * I think we just need to update the project version on change events.
      */
     addDocument(doc: TextDocument) {
-      const path = doc.uri.replace(rootDir, "")
+      const path = fileURLToPath(doc.uri)
       if (scriptFileNames.has(path)) {
         // We already have the document but it may have updated
         projectVersion++
@@ -138,7 +139,8 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
 }
 
 function TSService(projectPath = "./") {
-  const tsConfigPath = fileURLToPath(`${projectPath}tsconfig.json`)
+  projectPath = fileURLToPath(projectPath)
+  const tsConfigPath = `${projectPath}tsconfig.json`
   const { config } = readConfigFile(tsConfigPath, sys.readFile)
 
   const existingOptions = {
@@ -166,8 +168,8 @@ function TSService(projectPath = "./") {
   const baseHost = createCompilerHost(parsedConfig.options)
   const host = TSHost(parsedConfig.options, baseHost)
 
-  host.getScriptVersion
-  const service = createLanguageService(host);
+  const documentRegistry = createDocumentRegistry(true, projectPath)
+  const service = createLanguageService(host, documentRegistry);
 
   console.log("parsed", parsedConfig)
 
