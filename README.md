@@ -3,9 +3,10 @@ Civet
 
 [![Build](https://github.com/DanielXMoore/Civet/actions/workflows/build.yml/badge.svg)](https://github.com/DanielXMoore/Civet/actions/workflows/build.yml)
 
-A new CoffeeScript. Much closer to ES2015+ (for better or worse).
+The CoffeeScript of TypeScript. Much closer to ES2015+ (for better or worse).
 
-Also TypeScript, the sky is the limit. [Online Civet Playground](https://civet-web.vercel.app/)
+- [Online Civet Playground](https://civet-web.vercel.app/)
+- [Civet VSCode Extension](https://marketplace.visualstudio.com/items?itemName=DanielX.civet)
 
 Quickstart Guide
 ---
