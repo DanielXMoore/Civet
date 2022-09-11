@@ -6,9 +6,9 @@ Features
 ---
 
 - [x] Syntax Highlighting
-- [ ] Go to definition
+- [x] Go to definition
 - [ ] Find all references
-- [ ] Completions
+- [x] Completions
 - [ ] Comment/Uncomment
-- [ ] Symbols outline
+- [x] Symbols outline
 - [ ] Diagnostics regenerated on each file change or configuration change
