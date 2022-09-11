@@ -111,3 +111,4 @@ Timesheet
 2022-09-08 | 6.50  | onCompletion; ts-node config
 2022-09-09 | 2.00  | TS diagnostics; consolidating host
 2022-09-10 | 4.00  | use vscode docs to update ts service; tsservice config; fix ts-server root dir handling
+2022-09-11 | 0.50  | await expression
