@@ -125,3 +125,4 @@ Timesheet
 2022-09-10 | 4.00  | use vscode docs to update ts service; tsservice config; fix ts-server root dir handling
 2022-09-11 | 5.00  | await expression; ts-node configuration wild goose chase
 2022-09-12 | 4.0   | resolving `.civet` files with `ts.LanguageServiceHost`; require/import ts-node + coffee + hera
+3:50pm Convert tests to .civet

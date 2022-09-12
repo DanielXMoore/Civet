@@ -27,7 +27,7 @@ export async function load(url, context, next) {
   if (context.format === "civet") {
     const path = fileURLToPath(url)
     const source = await readFile(path, "utf8")
-    const tsSource = compile(source)
+    const tsSource = compile(source, { filename: path })
 
     // NOTE: Assuming ts-node hook follows load hook
     // NOTE: This causes .civet files to show up as .ts in ts-node error reporting (TODO: May be able to add a sourcemapping)
