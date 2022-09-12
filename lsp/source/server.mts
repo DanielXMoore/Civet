@@ -19,9 +19,9 @@ import {
   TextDocument
 } from 'vscode-languageserver-textdocument';
 
-import TSService from './lib/typescript-service';
-import * as Previewer from "./lib/previewer";
-import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic } from './lib/util';
+import TSService from './lib/typescript-service.mjs';
+import * as Previewer from "./lib/previewer.mjs";
+import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic } from './lib/util.mjs';
 import assert from "assert"
 
 import Civet from "@danielx/civet"

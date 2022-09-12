@@ -1,13 +1,16 @@
-import {
+import ts from "typescript";
+import type {
   Diagnostic,
-  DiagnosticCategory,
   DiagnosticMessageChain,
   NavigationBarItem,
   NavigationTree,
+  TextSpan,
+} from "typescript"
+const {
+  DiagnosticCategory,
   ScriptElementKind,
   ScriptElementKindModifier,
-  TextSpan,
-} from "typescript";
+} = ts
 import vs, {
   CompletionItemKind,
   DiagnosticSeverity,
@@ -26,7 +29,7 @@ export type SourcemapLines = SourceMap["data"]["lines"]
 
 // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/documentSymbol.ts#L63
 
-const getSymbolKind = (kind: ScriptElementKind): SymbolKind => {
+const getSymbolKind = (kind: ts.ScriptElementKind): SymbolKind => {
   switch (kind) {
     case ScriptElementKind.moduleElement: return SymbolKind.Module;
     case ScriptElementKind.classElement: return SymbolKind.Class;
@@ -451,7 +454,7 @@ export function convertDiagnostic(diagnostic: Diagnostic, generatedDoc: TextDocu
   }
 }
 
-function diagnosticCategoryToSeverity(category: DiagnosticCategory): DiagnosticSeverity {
+function diagnosticCategoryToSeverity(category: ts.DiagnosticCategory): DiagnosticSeverity {
   switch (category) {
     case DiagnosticCategory.Warning:
       return DiagnosticSeverity.Warning

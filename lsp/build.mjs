@@ -5,7 +5,7 @@ const minify = false // !watch || process.argv.includes('--minify');
 const sourcemap = false
 
 build({
-  entryPoints: ['source/extension.ts'],
+  entryPoints: ['source/extension.mts'],
   tsconfig: "./tsconfig.json",
   bundle: true,
   external: ['vscode'],
@@ -18,7 +18,7 @@ build({
 }).catch(() => process.exit(1))
 
 build({
-  entryPoints: ['source/server.ts'],
+  entryPoints: ['source/server.mts'],
   tsconfig: "./tsconfig.json",
   bundle: true,
   external: ['vscode'],
