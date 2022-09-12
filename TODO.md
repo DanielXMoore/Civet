@@ -31,12 +31,14 @@ TODO
 - [x] Keep shebang line
 - [x] JSX 😿
 - [ ] Infrastructure
-  - [ ] TS-node compatibility (may need to create a custom loader wrapping ts.LanguageServiceHost). The purpose of this feature is so we can run tests written in .civet.
-    - [ ] Extensible transpiled TS/JS esm loader (.hera, .coffee, .civet)
+  - [x] TS-node compatibility (may need to create a custom loader wrapping ts.LanguageServiceHost). The purpose of this feature is so we can run tests written in .civet.
+    - [x] Extensible transpiled TS/JS esm loader (.hera, .coffee, .civet)
     - [x] Basic ESM Loader
   - [x] esbuild plugin so we can package up projects that contain `.civet` files
   - [ ] CoffeeSense inspired LSP
     - [x] Syntax Highlighting
+    - [ ] Resolve .coffee files
+    - [ ] Resolve .hera files
     - [ ] Handle .civet docs outside of project root
     - [ ] Handle multi-root projects
     - [ ] Use @danielx/civet installed in node_modules if present
