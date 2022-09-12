@@ -307,8 +307,6 @@ documents.onDidChangeContent(({ document }) => {
   console.log("onDidChangeContent", document.uri)
   service.host.addDocument(document)
 
-  service.get
-
   updateDiagnostics(document)
 });
 

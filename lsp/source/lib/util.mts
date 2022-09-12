@@ -331,7 +331,6 @@ export function remapPosition(sourcemapLines: SourcemapLines, position: Position
 }
 
 export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
-  debugger
   const { line: origLine, character: origOffset } = position
 
   let col = 0

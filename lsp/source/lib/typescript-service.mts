@@ -7,7 +7,9 @@ import ts, {
   CompilerHost,
   CompilerOptions,
   LanguageServiceHost,
-  ScriptKind,
+} from "typescript"
+
+const {
   ScriptSnapshot,
   createCompilerHost,
   createDocumentRegistry,
@@ -15,7 +17,7 @@ import ts, {
   parseJsonConfigFileContent,
   readConfigFile,
   sys,
-} from "typescript"
+} = ts
 
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { fileURLToPath } from "url";
@@ -55,12 +57,12 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
 
   return self = Object.assign({}, baseHost, {
     getModuleResolutionCache: () => resolutionCache,
-    resolveModuleNames(moduleNames: string[], containingFile: string, reusedNames: string[] | undefined, redirectedReference: ts.ResolvedProjectReference | undefined, compilerOptions: CompilerOptions, containingSourceFile?: ts.SourceFile) {
+    resolveModuleNames(moduleNames: string[], containingFile: string, _reusedNames: string[] | undefined, _redirectedReference: ts.ResolvedProjectReference | undefined, compilerOptions: CompilerOptions, _containingSourceFile?: ts.SourceFile) {
       console.log("resolveModuleNames", moduleNames, containingFile)
 
       return moduleNames.map(name => {
         // Try to resolve the module using the standard TypeScript logic
-        let resolution = ts.resolveModuleName(name, containingFile, compilerOptions, self) as ResolvedModuleWithFailedLookupLocations
+        let resolution = ts.resolveModuleName(name, containingFile, compilerOptions, self, resolutionCache) as ResolvedModuleWithFailedLookupLocations
         let { resolvedModule } = resolution
         if (resolvedModule) {
           console.log("resolved", resolvedModule.resolvedFileName)
@@ -68,13 +70,14 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
         }
 
         if (name.match(civetExtension)) {
+          debugger
           const resolved = path.resolve(path.dirname(containingFile), name)
           console.log("civet", name, resolved)
           if (fs.existsSync(resolved)) {
-            console.log("civet resolved", resolved + ".ts")
+            console.log("civet resolved", resolved)
             return {
-              resolvedFileName: resolved + ".ts",
-              extension: ".ts",
+              resolvedFileName: resolved,
+              extension: ".civet",
               isExternalLibraryImport: false,
             }
           } else {
@@ -201,6 +204,8 @@ function TSService(projectPath = "./") {
     rootDir: projectPath,
     // This is necessary to load .civet files
     allowNonTsExtensions: true,
+    // Better described as "allow non-ts, non-json extensions"
+    allowJs: true,
   }
 
   const parsedConfig = parseJsonConfigFileContent(
@@ -215,7 +220,7 @@ function TSService(projectPath = "./") {
       isMixedContent: false,
       // Note: in order for parsed config to include *.ext files, scriptKind must be set to Deferred.
       // See: https://github.com/microsoft/TypeScript/blob/2106b07f22d6d8f2affe34b9869767fa5bc7a4d9/src/compiler/utilities.ts#L6356
-      scriptKind: ScriptKind.Deferred
+      scriptKind: ts.ScriptKind.Deferred
     }]
   )
 
@@ -238,4 +243,4 @@ function TSService(projectPath = "./") {
   })
 }
 
-export = TSService
+export default TSService
