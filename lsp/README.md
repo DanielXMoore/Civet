@@ -11,4 +11,4 @@ Features
 - [x] Completions
 - [ ] Comment/Uncomment
 - [x] Symbols outline
-- [ ] Diagnostics regenerated on each file change or configuration change
+- [x] Diagnostics
