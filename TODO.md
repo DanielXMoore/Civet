@@ -31,10 +31,15 @@ TODO
 - [x] Keep shebang line
 - [x] JSX 😿
 - [ ] Infrastructure
+  - [ ] TS-node compatibility (may need to create a custom loader wrapping ts.LanguageServiceHost). The purpose of this feature is so we can run tests written in .civet.
+    - [ ] Extensible transpiled TS/JS esm loader (.hera, .coffee, .civet)
+    - [x] Basic ESM Loader
+  - [x] esbuild plugin so we can package up projects that contain `.civet` files
   - [ ] CoffeeSense inspired LSP
     - [x] Syntax Highlighting
     - [ ] Handle .civet docs outside of project root
     - [ ] Handle multi-root projects
+    - [ ] Use @danielx/civet installed in node_modules if present
     - [ ] Handle file updates
       - [x] Add TextDocuments to service
       - [x] Update docs on changes
@@ -47,14 +52,12 @@ TODO
       - [x] Translate from source line/column to generated line/column
     - [x] Document Symbols
     - [x] Hover docs (forward map)
-    - [ ] Completions (forward map)
+    - [x] Completions (forward map)
     - [ ] References
-    - [ ] Load installed @types/*
+    - [x] Load installed @types/*
     - [ ] Diagnostics (reverse map)
       - [x] Display Diagnostics
       - [ ] Find out why diagnostic hint jumps around wierdly (source map error or is it using an older map when the file updates?)
-  - [x] ESM Loader
-  - [x] esbuild plugin
 - [ ] Syntax Experiments
   - [ ] Explore `gen.next(args, ...)` shorthand
 

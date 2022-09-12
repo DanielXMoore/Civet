@@ -57,6 +57,13 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
 
   return self = Object.assign({}, baseHost, {
     getModuleResolutionCache: () => resolutionCache,
+    /**
+     * This is how TypeScript resolves module names when it finds things like `import { foo } from "bar"`.
+     * We need to modify this to make sure that TypeScript can resolve our `.civet` files.
+     * We default to the original behavior, but if it is a `.civet` file, we resolve it with the `.civet` extension.
+     * This requires the `allowNonTsExtensions` option and `allowJs` options to be set to true.
+     * Then TypeScript will call `getScriptSnapshot` with the `.civet` extension and we can do the transpilation there.
+     */
     resolveModuleNames(moduleNames: string[], containingFile: string, _reusedNames: string[] | undefined, _redirectedReference: ts.ResolvedProjectReference | undefined, compilerOptions: CompilerOptions, _containingSourceFile?: ts.SourceFile) {
       console.log("resolveModuleNames", moduleNames, containingFile)
 
@@ -69,30 +76,24 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
           return resolvedModule
         }
 
+        // TODO: account for module resolution configuration options 'node', etc.
+
         if (name.match(civetExtension)) {
-          debugger
           const resolved = path.resolve(path.dirname(containingFile), name)
-          console.log("civet", name, resolved)
-          if (fs.existsSync(resolved)) {
-            console.log("civet resolved", resolved)
+          if (sys.fileExists(resolved)) {
+            // TODO: add to resolution cache?
             return {
               resolvedFileName: resolved,
               extension: ".civet",
               isExternalLibraryImport: false,
             }
-          } else {
-            console.log("doesn't exist", name, resolved)
           }
         }
 
         console.log("failed to resolve", name, containingFile)//, resolution.failedLookupLocations)
         return undefined
       });
-
     },
-    getDirectories: sys.getDirectories,
-    directoryExists: sys.directoryExists,
-    fileExists: sys.fileExists,
     readDirectory(path: string, extensions?: readonly string[], exclude?: readonly string[], include?: readonly string[], depth?: number): string[] {
       // Add .civet extension to the list of extensions
       extensions = extensions?.concat([".civet"])

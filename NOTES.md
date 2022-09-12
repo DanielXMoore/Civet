@@ -93,6 +93,18 @@ https://github.com/microsoft/TypeScript/pull/35561#issuecomment-696382520
 
 Also it cannot be tree shaken when included in esbuild.
 
+How to require CoffeeScript with ts-node?
+---
+
+```bash
+# a.ts requires b.coffee
+node --require coffeescript/register --loader ts-node/esm a.ts
+```
+
+Explore creating an alternative ts-node loader to experiment and learn.
+
+Maybe make everything .mts?
+
 Timesheet
 ---
 
@@ -111,4 +123,6 @@ Timesheet
 2022-09-08 | 6.50  | onCompletion; ts-node config
 2022-09-09 | 2.00  | TS diagnostics; consolidating host
 2022-09-10 | 4.00  | use vscode docs to update ts service; tsservice config; fix ts-server root dir handling
-2022-09-11 | 0.50  | await expression
+2022-09-11 | 5.00  | await expression; ts-node configuration wild goose chase
+2022-09-12 | 2.0   | resolving `.civet` files with `ts.LanguageServiceHost`
+require/import ts-node + coffee + hera
