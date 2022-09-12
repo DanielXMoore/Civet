@@ -1,21 +1,29 @@
+import assert from "assert"
+import fs from "fs"
+import path from "path";
+
 import Civet, { SourceMap } from "@danielx/civet"
-import {
+import ts, {
   CompilerHost,
   CompilerOptions,
   LanguageServiceHost,
   ScriptKind,
   ScriptSnapshot,
   createCompilerHost,
+  createDocumentRegistry,
   createLanguageService,
   parseJsonConfigFileContent,
   readConfigFile,
   sys,
-  createDocumentRegistry,
 } from "typescript"
-import fs from "fs"
+
 import { TextDocument } from "vscode-languageserver-textdocument";
-import assert from "assert"
 import { fileURLToPath } from "url";
+
+// ts doesn't have this key in the type
+interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithFailedLookupLocations {
+  failedLookupLocations: string[];
+}
 
 interface FileMeta {
   sourcemapLines: SourceMap["data"]["lines"]
@@ -41,7 +49,53 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
 
   let projectVersion = 0;
 
-  return Object.assign(baseHost, {
+  const resolutionCache: ts.ModuleResolutionCache = ts.createModuleResolutionCache(rootDir, (fileName) => fileName, compilationSettings);
+
+  let self: Host;
+
+  return self = Object.assign({}, baseHost, {
+    getModuleResolutionCache: () => resolutionCache,
+    resolveModuleNames(moduleNames: string[], containingFile: string, reusedNames: string[] | undefined, redirectedReference: ts.ResolvedProjectReference | undefined, compilerOptions: CompilerOptions, containingSourceFile?: ts.SourceFile) {
+      console.log("resolveModuleNames", moduleNames, containingFile)
+
+      return moduleNames.map(name => {
+        // Try to resolve the module using the standard TypeScript logic
+        let resolution = ts.resolveModuleName(name, containingFile, compilerOptions, self) as ResolvedModuleWithFailedLookupLocations
+        let { resolvedModule } = resolution
+        if (resolvedModule) {
+          console.log("resolved", resolvedModule.resolvedFileName)
+          return resolvedModule
+        }
+
+        if (name.match(civetExtension)) {
+          const resolved = path.resolve(path.dirname(containingFile), name)
+          console.log("civet", name, resolved)
+          if (fs.existsSync(resolved)) {
+            console.log("civet resolved", resolved + ".ts")
+            return {
+              resolvedFileName: resolved + ".ts",
+              extension: ".ts",
+              isExternalLibraryImport: false,
+            }
+          } else {
+            console.log("doesn't exist", name, resolved)
+          }
+        }
+
+        console.log("failed to resolve", name, containingFile)//, resolution.failedLookupLocations)
+        return undefined
+      });
+
+    },
+    getDirectories: sys.getDirectories,
+    directoryExists: sys.directoryExists,
+    fileExists: sys.fileExists,
+    readDirectory(path: string, extensions?: readonly string[], exclude?: readonly string[], include?: readonly string[], depth?: number): string[] {
+      // Add .civet extension to the list of extensions
+      extensions = extensions?.concat([".civet"])
+      console.log("readDirectory", path, extensions, exclude, include, depth)
+      return sys.readDirectory(path, extensions, exclude, include, depth)
+    },
     /**
      * Add a VSCode TextDocument source file.
      * The VSCode document should keep track of its contents and version.
@@ -165,7 +219,8 @@ function TSService(projectPath = "./") {
     }]
   )
 
-  const baseHost = createCompilerHost(parsedConfig.options)
+  // @ts-ignore
+  const baseHost = createCompilerHost(parsedConfig)
   const host = TSHost(parsedConfig.options, baseHost)
 
   const documentRegistry = createDocumentRegistry(true, projectPath)
