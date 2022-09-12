@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { createRequire } from 'module';
 import { pathToFileURL, fileURLToPath } from 'url';
@@ -6,8 +7,6 @@ import { compile } from "./dist/main.js";
 
 const baseURL = pathToFileURL(process.cwd() + '/').href;
 const extensionsRegex = /\.civet$/;
-
-const cache = new Map
 
 export async function resolve(specifier, context, next) {
   const { parentURL = baseURL } = context;
@@ -40,15 +39,6 @@ export async function load(url, context, next) {
       source: tsSource
     });
 
-    // NOTE: If I don't set the format to 'commonjs' then I get
-    // "ReferenceError: exports is not defined in ES module scope"
-    // setting the format to commonjs causes the require.extensions
-    // handler to be invoked. So we cache the ts-node transpilation
-    // result, hook into require.extensions, and return the result there.
-    // Hopefully node loaders simplify this in the future.
-    result.format = "commonjs"
-    cache.set(path, result.source)
-
     return result
   }
 
@@ -56,13 +46,11 @@ export async function load(url, context, next) {
   return next(url, context);
 }
 
-// Cache our double transpiled sources (.civet -> .ts -> .js)
 const require = createRequire(import.meta.url);
 require.extensions[".civet"] = function (m, filename) {
-  const code = cache.get(filename)
-  if (!code) throw new Error(`Code for ${filename} wasn't in transpiled cache.`)
+  // We end up here when being required from cjs
+  const source = readFileSync(filename, "utf8")
+  const code = compile(source, { filename, js: true })
 
   m._compile(code, filename)
-  // Module should be cached after the first load so we can release the memory
-  cache.delete(filename)
 }
