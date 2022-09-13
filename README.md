@@ -135,7 +135,7 @@ Things Added that CoffeeScript didn't
 ---
 
 - TypeScript Types
-  - Function annotaions
+  - Function annotations
   - `namespace`
   - `interface`
   - TypeParameters
