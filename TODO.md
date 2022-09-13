@@ -30,7 +30,9 @@ TODO
   - [x] Index signature
   - [ ] `!` non-null assertion
 - [x] Keep shebang line
-- [x] JSX 😿
+- [ ] JSX 😿
+  - [x] Basic Support
+  - [ ] Indentation based JSX
 - [ ] Infrastructure
   - [x] TS-node compatibility (may need to create a custom loader wrapping ts.LanguageServiceHost). The purpose of this feature is so we can run tests written in .civet.
     - [x] Extensible transpiled TS/JS esm loader (.hera, .coffee, .civet)
