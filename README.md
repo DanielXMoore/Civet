@@ -135,6 +135,10 @@ Things Added that CoffeeScript didn't
 ---
 
 - TypeScript Types
+  - Function annotaions
+  - `namespace`
+  - `interface`
+  - TypeParameters
 - JS Compatability
   - `var`, `let`, `const`
   - JS Comment Syntax `//` and `/* */`
