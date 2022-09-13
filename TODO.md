@@ -39,6 +39,12 @@ TODO
     - [x] Syntax Highlighting
     - [ ] Resolve .coffee files
     - [ ] Resolve .hera files
+    - [ ] Load specifically included files (consistent with VSCode TS Extension)
+    - [ ] Some libraries are not loading?
+      ```
+        resolveModuleNames [ 'tslib', './main.js' ] /home/daniel/apps/civet/source/esm.civet
+        failed to resolve tslib /home/daniel/apps/civet/source/esm.civet
+      ```
     - [ ] Handle .civet docs outside of project root
     - [ ] Handle multi-root projects
     - [ ] Use @danielx/civet installed in node_modules if present
