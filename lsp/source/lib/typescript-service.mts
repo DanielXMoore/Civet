@@ -1,18 +1,17 @@
 import assert from "assert"
-import fs from "fs"
 import path from "path";
 
 import Civet, { SourceMap } from "@danielx/civet"
 import ts, {
   CompilerHost,
   CompilerOptions,
+  IScriptSnapshot,
   LanguageServiceHost,
 } from "typescript"
 
 const {
   ScriptSnapshot,
   createCompilerHost,
-  createDocumentRegistry,
   createLanguageService,
   parseJsonConfigFileContent,
   readConfigFile,
@@ -37,9 +36,16 @@ interface Host extends LanguageServiceHost {
   addDocument(doc: TextDocument): void
 }
 
+interface Transpiler {
+  (path: string, source: string): {
+    code: string,
+    sourceMap: SourceMap
+  } | undefined
+}
+
 const civetExtension = /\.civet$/
 
-function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): Host {
+function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, transpilers: Map<string, Transpiler>): Host {
   const { rootDir } = compilationSettings
   assert(rootDir, "Most have root dir for now")
 
@@ -48,6 +54,7 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
 
   const documents: Set<TextDocument> = new Set();
   const pathMap: Map<string, TextDocument> = new Map
+  const snapshotMap: Map<string, IScriptSnapshot> = new Map
 
   let projectVersion = 0;
 
@@ -130,40 +137,8 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
     // TODO: Handle source documents and document updates
     getScriptSnapshot(path: string) {
       console.log("getScriptSnapshot", path)
-      let source;
-      // Get the source from the open VSCode document if it exists
-      const doc = pathMap.get(path)
-      if (doc) {
-        source = doc.getText()
-      } else {
-        // Otherwise get it from the file system
-        if (!fs.existsSync(path)) {
-          console.warn("no file found at path", path)
-          return undefined;
-        }
-        source = fs.readFileSync(path, "utf8")
-      }
 
-      // Compile .civet files to TS
-      // cache sourcemap and transpiled code
-      if (path.match(civetExtension)) {
-        try {
-          const { code, sourceMap } = Civet.compile(source, {
-            filename: path,
-            sourceMap: true
-          })
-
-          createOrUpdateMeta(path, sourceMap.data.lines, code)
-
-          return ScriptSnapshot.fromString(code)
-        } catch (e) {
-          console.error(e)
-          return
-        }
-      }
-
-      // Return non-civet files as normal
-      return ScriptSnapshot.fromString(source)
+      return getOrCreatePathSnapshot(path)
     },
     getScriptVersion(path: string) {
       return pathMap.get(path)?.version.toString() || "0"
@@ -175,6 +150,46 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost): H
       console.log("write", fileName, content)
     }
   });
+
+  /**
+   * Get the source code for a path.
+   * Use the VSCode document if it exists otherwise use the file system.
+   */
+  function getPathSource(path: string): string {
+    const doc = pathMap.get(path)
+    if (doc) {
+      return doc.getText()
+    }
+
+    if (sys.fileExists(path)) {
+      return sys.readFile(path)!
+    }
+
+    return ""
+  }
+
+  function getOrCreatePathSnapshot(path: string) {
+    let snapshot = snapshotMap.get(path)
+    if (snapshot) return snapshot
+
+    const source = getPathSource(path)
+    const ext = getExtensionFromPath(path)
+
+    const transpiler = transpilers.get(ext)
+    if (transpiler) {
+      const result = transpiler(path, source)
+      if (!result) return
+
+      const { code: transpiledCode, sourceMap } = result
+      createOrUpdateMeta(path, sourceMap.data.lines, transpiledCode)
+      snapshot = ScriptSnapshot.fromString(transpiledCode)
+    } else {
+      snapshot = ScriptSnapshot.fromString(source)
+    }
+
+    snapshotMap.set(path, snapshot)
+    return snapshot
+  }
 
   function createOrUpdateMeta(path: string, sourcemapLines: SourceMap["data"]["lines"], code: string) {
     let meta = fileMetaData.get(path)
@@ -227,10 +242,14 @@ function TSService(projectPath = "./") {
 
   // @ts-ignore
   const baseHost = createCompilerHost(parsedConfig)
-  const host = TSHost(parsedConfig.options, baseHost)
 
-  const documentRegistry = createDocumentRegistry(true, projectPath)
-  const service = createLanguageService(host, documentRegistry);
+  const transpilers = new Map<string, Transpiler>([
+    ["civet", transpileCivet]
+  ])
+
+  const host = TSHost(parsedConfig.options, baseHost, transpilers)
+
+  const service = createLanguageService(host)
 
   console.log("parsed", parsedConfig)
 
@@ -242,6 +261,22 @@ function TSService(projectPath = "./") {
   return Object.assign(service, {
     host
   })
+}
+
+function transpileCivet(path: string, source: string) {
+  try {
+    return Civet.compile(source, {
+      filename: path,
+      sourceMap: true
+    })
+  } catch (e) {
+    console.error(e)
+    return
+  }
+}
+
+function getExtensionFromPath(path: string) {
+  return path.split(".").pop() || ""
 }
 
 export default TSService

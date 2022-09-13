@@ -13,7 +13,7 @@ import {
   DocumentSymbol,
   CompletionItem,
   Location,
-} from 'vscode-languageserver';
+} from 'vscode-languageserver/node';
 
 import {
   TextDocument
@@ -31,7 +31,7 @@ const { util: { locationTable } } = Civet
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
-const connection = createConnection(ProposedFeatures.all);
+const connection = createConnection(ProposedFeatures.all)
 
 // Create a simple text document manager.
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
