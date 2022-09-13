@@ -5,7 +5,7 @@ TODO
 - [x] JavaScript Compat (default stance is JS code should "just work")
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
   - [ ] Implicit Returns
-  - [ ] """
+  - [ ] """ Interpolations
   - [ ] ###
 - [x] Import shorthand
 - [x] Keep comments and whitespace
@@ -29,6 +29,10 @@ TODO
   - [x] Return Type Predicate
   - [x] Index signature
   - [ ] `!` non-null assertion
+  - [x] `declare`
+  - [x] `namespace`
+  - [x] `interface` methods
+  - [ ] `abstract` class and fields
 - [x] Keep shebang line
 - [ ] JSX 😿
   - [x] Basic Support
@@ -40,6 +44,7 @@ TODO
   - [x] esbuild plugin so we can package up projects that contain `.civet` files
   - [ ] CoffeeSense inspired LSP
     - [x] Syntax Highlighting
+    - [ ] Proper caching/versioning for scriptSnapshots
     - [ ] Resolve .coffee files
     - [ ] Resolve .hera files
     - [ ] Load specifically included files (consistent with VSCode TS Extension)
