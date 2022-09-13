@@ -147,6 +147,7 @@ Things Added that CoffeeScript didn't
 - Convenience for ES6+ Features
   - `<` as `extends` shorthand
   - `@#id` -> `this.#id` shorthand for private identifiers
+  - `import` shorthand `x from "./x"` -> `import x from "./x"`
 - ClassStaticBlock
 - `get`/`set` method definitions
 - Private identifiers `#id`

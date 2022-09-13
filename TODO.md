@@ -7,6 +7,7 @@ TODO
   - [ ] Implicit Returns
   - [ ] """
   - [ ] ###
+- [x] Import shorthand
 - [x] Keep comments and whitespace
 - [ ] TypeScript
   - [x] TS Compiling Experiment
