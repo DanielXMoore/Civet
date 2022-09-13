@@ -1,9 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-rm -r dist/ || true
-mkdir -p dist
-
 # normal files
 coffee build/esbuild.coffee
 
@@ -14,7 +11,10 @@ chmod +x "$BIN"
 rm dist/cli.js
 
 # esbuild-plugin
-./dist/civet < esbuild-plugin.civet > esbuild-plugin.js
+./dist/civet < source/esbuild-plugin.civet > dist/esbuild-plugin.js
+
+# esm loader
+./dist/civet --js < source/esm.civet > dist/esm.mjs
 
 # types
 cp types/types.d.ts dist/types.d.ts
