@@ -126,5 +126,6 @@ Timesheet
 2022-09-11 | 5.00  | await expression; ts-node configuration wild goose chase
 2022-09-12 | 5.75  | resolving `.civet` files with `ts.LanguageServiceHost`; require/import ts-node + coffee + hera; Convert tests to .civet; developing civet in civet; fix esm.civet
 2022-09-13 | 5.25  | Import shorthand; fix fat arrow single expression; declare; namespace; interface methods; type parameters; Use project's local Civet in extension if available
+2022-09-14 | 2.00  | feedback; := class fields (readonly); static class fields
 
 TODO: resolve .coffee files, resolve .hera files

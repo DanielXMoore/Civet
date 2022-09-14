@@ -139,6 +139,16 @@ Things Added that CoffeeScript didn't
   - `namespace`
   - `interface`
   - TypeParameters
+  - `:=` readonly class field initializer
+    ```typescript
+      class A
+        x := 3
+    ```
+    ```typescript
+      class A {
+        readonly x = 3;
+      };
+    ```
 - JS Compatability
   - `var`, `let`, `const`
   - JS Comment Syntax `//` and `/* */`
