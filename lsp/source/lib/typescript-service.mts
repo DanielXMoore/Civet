@@ -1,7 +1,8 @@
 import assert from "assert"
 import path from "path";
 
-import Civet, { SourceMap } from "@danielx/civet"
+import BundledCivetModule, { SourceMap } from "@danielx/civet"
+
 import ts, {
   CompilerHost,
   CompilerOptions,
@@ -20,6 +21,7 @@ const {
 
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
 
 // ts doesn't have this key in the type
 interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithFailedLookupLocations {
@@ -85,6 +87,7 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
 
         // TODO: account for module resolution configuration options 'node', etc.
 
+        // TODO: check extension against all transpilers
         if (name.match(civetExtension)) {
           const resolved = path.resolve(path.dirname(containingFile), name)
           if (sys.fileExists(resolved)) {
@@ -114,6 +117,10 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
      */
     addDocument(doc: TextDocument) {
       const path = fileURLToPath(doc.uri)
+
+      // Clear the cached snapshot for this document
+      snapshotMap.delete(path)
+
       if (scriptFileNames.has(path)) {
         // We already have the document but it may have updated
         projectVersion++
@@ -211,8 +218,9 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
   }
 }
 
-function TSService(projectPath = "./") {
-  projectPath = fileURLToPath(projectPath)
+function TSService(projectURL = "./") {
+  const logger = console
+  const projectPath = fileURLToPath(projectURL)
   const tsConfigPath = `${projectPath}tsconfig.json`
   const { config } = readConfigFile(tsConfigPath, sys.readFile)
 
@@ -244,34 +252,60 @@ function TSService(projectPath = "./") {
   const baseHost = createCompilerHost(parsedConfig)
 
   const transpilers = new Map<string, Transpiler>([
-    ["civet", transpileCivet]
+    ["civet", transpileCivet],
+    ["coffee", transpileCoffee],
   ])
 
   const host = TSHost(parsedConfig.options, baseHost, transpilers)
 
   const service = createLanguageService(host)
 
-  console.log("parsed", parsedConfig)
+  logger.info("PARSED CONFIG\n", parsedConfig, "\n\n")
 
-  // const program = service.getProgram();
-  // console.log(program?.getSourceFile("source/a.civet"));
-  // for (let i = 0; i < 25; i++)
-  //   console.log(i, service.getQuickInfoAtPosition("source/a.civet", i))
+  // Use Civet from the project if present
+  let Civet: typeof BundledCivetModule
+  try {
+    const projectRequire = createRequire(projectURL)
+    const civetPath = "@danielx/civet"
+    Civet = projectRequire(civetPath)
+
+    console.info(`LOADED CIVET: ${path.join(projectURL, civetPath)} \n\n`)
+  } catch (e) {
+    console.info("USING BUNDLED CIVET")
+    Civet = BundledCivetModule
+  }
 
   return Object.assign(service, {
     host
   })
+
+  function transpileCivet(path: string, source: string) {
+    try {
+      return Civet.compile(source, {
+        filename: path,
+        sourceMap: true
+      })
+    } catch (e) {
+      console.error(e)
+      return
+    }
+  }
 }
 
-function transpileCivet(path: string, source: string) {
-  try {
-    return Civet.compile(source, {
-      filename: path,
-      sourceMap: true
-    })
-  } catch (e) {
-    console.error(e)
-    return
+function transpileCoffee(path: string, source: string) {
+  return // TODO
+  //@ts-ignore
+  const { js, sourceMap } = coffeeCompile(source, {
+    bare: true,
+    filename: path,
+    header: false,
+    sourceMap: true
+  })
+
+  return {
+    code: js,
+    //@ts-ignore
+    sourceMap: sourceMap as SourceMap // TODO: Use same sourcemap format between civet and coffee
   }
 }
 

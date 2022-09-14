@@ -21,6 +21,7 @@ build({
   entryPoints: ['source/server.mts'],
   tsconfig: "./tsconfig.json",
   bundle: true,
+  format: "cjs",
   external: ['vscode'],
   sourcemap,
   minify,
