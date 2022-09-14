@@ -44,7 +44,11 @@ TODO
     - [x] Basic ESM Loader
   - [x] esbuild plugin so we can package up projects that contain `.civet` files
   - [ ] CoffeeSense inspired LSP
-    - [x] Syntax Highlighting
+    - [ ] Syntax Highlighting
+      - [x] Basic highlighting
+      - [ ] Shebang line
+      - [ ] Short imports
+      - [ ] TS Keywords
     - [ ] Proper caching/versioning for scriptSnapshots
     - [ ] Resolve .coffee files
     - [ ] Resolve .hera files
