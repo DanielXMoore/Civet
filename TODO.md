@@ -8,6 +8,7 @@ TODO
   - [ ] """ Interpolations
   - [ ] ###
 - [x] Import shorthand
+- [x] `:=` `readonly` field shorthand
 - [x] Keep comments and whitespace
 - [ ] TypeScript
   - [x] TS Compiling Experiment
@@ -28,7 +29,7 @@ TODO
   - [x] Assertion Signatures
   - [x] Return Type Predicate
   - [x] Index signature
-  - [ ] `!` non-null assertion
+  - [x] `!` non-null assertion
   - [x] `declare`
   - [x] `namespace`
   - [x] `interface` methods

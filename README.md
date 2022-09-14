@@ -134,11 +134,12 @@ Things Changed from CoffeeScript
 Things Added that CoffeeScript didn't
 ---
 
-- TypeScript Types
+- TypeScript Compatibility
   - Function annotations
   - `namespace`
   - `interface`
   - TypeParameters
+  - `!` non-null assertions
   - `:=` readonly class field initializer
     ```typescript
       class A
