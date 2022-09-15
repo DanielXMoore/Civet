@@ -23,13 +23,15 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 
+import { compile as coffeeCompile } from "coffeescript"
+
 // ts doesn't have this key in the type
 interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithFailedLookupLocations {
   failedLookupLocations: string[];
 }
 
 interface FileMeta {
-  sourcemapLines: SourceMap["data"]["lines"]
+  sourcemapLines: SourceMap["data"]["lines"] | undefined
   transpiledDoc: TextDocument
 }
 
@@ -41,7 +43,7 @@ interface Host extends LanguageServiceHost {
 interface Transpiler {
   (path: string, source: string): {
     code: string,
-    sourceMap: SourceMap
+    sourceMap?: SourceMap
   } | undefined
 }
 
@@ -59,6 +61,8 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
   const snapshotMap: Map<string, IScriptSnapshot> = new Map
 
   let projectVersion = 0;
+
+  const transpiledExtensions = new Set(transpilers.keys())
 
   const resolutionCache: ts.ModuleResolutionCache = ts.createModuleResolutionCache(rootDir, (fileName) => fileName, compilationSettings);
 
@@ -88,19 +92,21 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
         // TODO: account for module resolution configuration options 'node', etc.
 
         // TODO: check extension against all transpilers
-        if (name.match(civetExtension)) {
+        for (const ext of transpiledExtensions) {
+          const extension = `.${ext}`
           const resolved = path.resolve(path.dirname(containingFile), name)
-          if (sys.fileExists(resolved)) {
+          if (name.endsWith(extension)) {
             // TODO: add to resolution cache?
+            console.log("resolved", resolved)
             return {
               resolvedFileName: resolved,
-              extension: ".civet",
+              extension,
               isExternalLibraryImport: false,
             }
           }
         }
 
-        console.log("failed to resolve", name, containingFile)//, resolution.failedLookupLocations)
+        // console.log("failed to resolve", name, containingFile)//, resolution.failedLookupLocations)
         return undefined
       });
     },
@@ -143,7 +149,7 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
     },
     // TODO: Handle source documents and document updates
     getScriptSnapshot(path: string) {
-      console.log("getScriptSnapshot", path)
+      // console.log("getScriptSnapshot", path)
 
       return getOrCreatePathSnapshot(path)
     },
@@ -188,7 +194,8 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
       if (!result) return
 
       const { code: transpiledCode, sourceMap } = result
-      createOrUpdateMeta(path, sourceMap.data.lines, transpiledCode)
+
+      createOrUpdateMeta(path, transpiledCode, sourceMap?.data.lines)
       snapshot = ScriptSnapshot.fromString(transpiledCode)
     } else {
       snapshot = ScriptSnapshot.fromString(source)
@@ -198,10 +205,11 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
     return snapshot
   }
 
-  function createOrUpdateMeta(path: string, sourcemapLines: SourceMap["data"]["lines"], code: string) {
+  function createOrUpdateMeta(path: string, code: string, sourcemapLines?: SourceMap["data"]["lines"]) {
     let meta = fileMetaData.get(path)
 
     if (!meta) {
+      // TODO: does this extension matter?
       const transpiledDoc = TextDocument.create(path.replace(civetExtension, ".ts"), "typescript", 0, code)
 
       meta = {
@@ -244,7 +252,11 @@ function TSService(projectURL = "./") {
       isMixedContent: false,
       // Note: in order for parsed config to include *.ext files, scriptKind must be set to Deferred.
       // See: https://github.com/microsoft/TypeScript/blob/2106b07f22d6d8f2affe34b9869767fa5bc7a4d9/src/compiler/utilities.ts#L6356
-      scriptKind: ts.ScriptKind.Deferred
+      scriptKind: ts.ScriptKind.Deferred,
+    }, {
+      extension: "coffee",
+      isMixedContent: false,
+      scriptKind: ts.ScriptKind.Deferred,
     }]
   )
 
@@ -293,8 +305,6 @@ function TSService(projectURL = "./") {
 }
 
 function transpileCoffee(path: string, source: string) {
-  return // TODO
-  //@ts-ignore
   const { js, sourceMap } = coffeeCompile(source, {
     bare: true,
     filename: path,
@@ -303,9 +313,7 @@ function transpileCoffee(path: string, source: string) {
   })
 
   return {
-    code: js,
-    //@ts-ignore
-    sourceMap: sourceMap as SourceMap // TODO: Use same sourcemap format between civet and coffee
+    code: js
   }
 }
 
