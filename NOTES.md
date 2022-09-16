@@ -177,3 +177,13 @@ Timesheet
 2022-09-13 | 5.25  | Import shorthand; fix fat arrow single expression; declare; namespace; interface methods; type parameters; Use project's local Civet in extension if available
 2022-09-14 | 3.50  | feedback; := class fields (readonly); static class fields; `!` non-null assertion; fix `#` comment after first line of `"use coffee-compat"` directive prologue; shebang + prologue directive bug; LSP resolve .coffee files
 2022-09-15 | 6.50  | ts module resolution figuring out module vs commonjs in LanguageServiceHost; resolve .hera files; transpilation overhaul
+2022-09-16 | 3.00  | foundation for transpiled module resolution; updated extension server to use new transpilation
+
+TODO:
+
+- [x] import .civet/.coffee/.hera/.ts/.js from .civet
+- [ ] Package Hera compiler properly so we can transpile hera from within the extension
+- [ ] resolve .civet/.coffee/.hera/.ts/.js imports from .ts
+- [ ] import .civet/.hera/.ts/.js from .coffee
+- [ ] sourcemap .coffee
+- [ ] update imported file exports, see errors in importing file
