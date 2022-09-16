@@ -135,6 +135,7 @@ Things Added that CoffeeScript didn't
 ---
 
 - TypeScript Compatibility
+  - Auto-rewrite `.[mc]ts` -> `.[mc]js` in imports (workaround for: https://github.com/microsoft/TypeScript/issues/37582)
   - Function annotations
   - `namespace`
   - `interface`
