@@ -115,8 +115,6 @@ connection.onHover(({ textDocument, position }) => {
   const sourcePath = documentToSourcePath(textDocument)
   if (!sourcePath) return;
 
-  // console.log("hover", sourcePath, position)
-
   const doc = documents.get(textDocument.uri);
   assert(doc)
 
@@ -134,8 +132,7 @@ connection.onHover(({ textDocument, position }) => {
   }
 
   const p = transpiledDoc.offsetAt(position)
-
-  const info = service.getQuickInfoAtPosition(sourcePath, p)
+  const info = service.getQuickInfoAtPosition(transpiledDoc.uri, p)
   if (!info) return;
 
   const display = displayPartsToString(info.displayParts);
@@ -197,7 +194,7 @@ connection.onCompletion(({ textDocument, position, context: _context }) => {
     ...context,
   }
 
-  const completions = service.getCompletionsAtPosition(sourcePath, p, completionOptions)
+  const completions = service.getCompletionsAtPosition(transpiledDoc.uri, p, completionOptions)
   if (!completions) return;
 
   // TODO: TS is doing a lot more here and some of it might be useful
@@ -248,11 +245,12 @@ connection.onDefinition(({ textDocument, position }) => {
   const program = service.getProgram()
   if (!program) return
 
-  const definitions = service.getDefinitionAtPosition(sourcePath, p)
+  const definitions = service.getDefinitionAtPosition(transpiledDoc.uri, p)
   if (!definitions) return
 
   return definitions.map<Location | undefined>((definition) => {
     const { fileName, textSpan } = definition
+    // TODO: May need to remap fileNames back to sourceFileNames
     const sourceFile = program.getSourceFile(fileName)
     if (!sourceFile) return
 
@@ -271,12 +269,17 @@ connection.onDocumentSymbol(({ textDocument }) => {
   const sourcePath = documentToSourcePath(textDocument)
   if (!sourcePath) return undefined
 
+  const meta = service.host.getMeta(sourcePath)
+  if (!meta) return
+
+  const { transpiledDoc } = meta
+  if (!transpiledDoc) return
+
   const items: DocumentSymbol[] = []
-  const navTree = service.getNavigationTree(sourcePath)
+  const navTree = service.getNavigationTree(transpiledDoc.uri)
 
   // Need to use the transpiled source to convert from text spans (pos, length) to (line, column)
-  const snapshot = service.host.getScriptSnapshot(sourcePath)
-  const transpiled = snapshot?.getText(0, snapshot.getLength())
+  const transpiled = transpiledDoc.getText()
   if (!transpiled) return
 
   const lineTable = locationTable(transpiled)
@@ -305,7 +308,7 @@ documents.onDidOpen(({ document }) => {
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent(({ document }) => {
   console.log("onDidChangeContent", document.uri)
-  service.host.addDocument(document)
+  service.host.addOrUpdateDocument(document)
 
   updateDiagnostics(document)
 });
@@ -323,11 +326,12 @@ function updateDiagnostics(document: TextDocument) {
   const transpiledDoc = meta.transpiledDoc
   if (!transpiledDoc) return
 
+  const transpiledPath = transpiledDoc.uri
   const diagnostics: Diagnostic[] = [];
   [
-    ...service.getSyntacticDiagnostics(sourcePath),
-    ...service.getSemanticDiagnostics(sourcePath),
-    ...service.getSuggestionDiagnostics(sourcePath),
+    ...service.getSyntacticDiagnostics(transpiledPath),
+    ...service.getSemanticDiagnostics(transpiledPath),
+    ...service.getSuggestionDiagnostics(transpiledPath),
   ].forEach((diagnostic) => {
     diagnostics.push(convertDiagnostic(diagnostic, transpiledDoc, sourcemapLines))
   })

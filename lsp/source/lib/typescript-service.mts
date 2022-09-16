@@ -34,6 +34,7 @@ interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithF
 
 interface FileMeta {
   sourcemapLines: SourceMap["data"]["lines"] | undefined
+  transpiledDoc: TextDocument | undefined
 }
 
 interface Host extends LanguageServiceHost {
@@ -56,9 +57,6 @@ interface Transpiler {
 }
 
 function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, transpilers: Map<string, Transpiler>): Host {
-
-  baseHost.getSourceFile
-
   const { rootDir } = compilationSettings
   assert(rootDir, "Most have root dir for now")
 
@@ -76,7 +74,9 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
   let self: Host;
 
   return self = Object.assign({}, baseHost, {
-    getModuleResolutionCache: () => resolutionCache,
+    getModuleResolutionCache() {
+      return resolutionCache
+    },
     /**
      * This is how TypeScript resolves module names when it finds things like `import { foo } from "bar"`.
      * We need to modify this to make sure that TypeScript can resolve our `.civet` files.
@@ -85,27 +85,24 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
      * Then TypeScript will call `getScriptSnapshot` with the `.civet` extension and we can do the transpilation there.
      */
     resolveModuleNames(moduleNames: string[], containingFile: string, _reusedNames: string[] | undefined, _redirectedReference: ts.ResolvedProjectReference | undefined, compilerOptions: CompilerOptions, _containingSourceFile?: ts.SourceFile) {
-      console.log("resolveModuleNames", moduleNames, containingFile)
-
       return moduleNames.map(name => {
+        let resolution
         // Try to resolve the module using the standard TypeScript logic
-        let resolution = ts.resolveModuleName(name, containingFile, compilerOptions, self, resolutionCache) as ResolvedModuleWithFailedLookupLocations
+        resolution = ts.resolveModuleName(name, containingFile, compilerOptions, self, resolutionCache) as ResolvedModuleWithFailedLookupLocations
+
         let { resolvedModule } = resolution
         if (resolvedModule) {
-          console.log("default TS resolved", resolvedModule.resolvedFileName)
           return resolvedModule
         }
 
         // get the transpiler for the extension
         const extension = getExtensionFromPath(name)
         const transpiler = transpilers.get(extension)
-        // console.log("transpiler", extension, transpiler)
         if (transpiler) {
           const { target } = transpiler
           const resolved = path.resolve(path.dirname(containingFile), name)
           if (sys.fileExists(resolved)) {
             // TODO: add to resolution cache?
-            console.log("resolved with transpiler target", resolved)
             return {
               resolvedFileName: resolved + target,
               target,
@@ -114,7 +111,6 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
           }
         }
 
-        // console.log("failed to resolve", name, containingFile)//, resolution.failedLookupLocations)
         return undefined
       });
     },
@@ -134,8 +130,6 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
 
       const extension = getExtensionFromPath(path)
       const transpiler = transpilers.get(extension)
-
-      console.log("addOrUpdateDocument", path, extension, transpiler)
 
       if (transpiler) {
         const { target } = transpiler
@@ -169,6 +163,10 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
       return
     },
     getMeta(path: string) {
+      const transpiledPath = getTranspiledPath(path)
+      // This ensures that the transpiled meta data is created
+      getOrCreatePathSnapshot(transpiledPath)
+
       return fileMetaData.get(path)
     },
     getProjectVersion() {
@@ -179,14 +177,11 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
     },
     // TODO: Handle source documents and document updates
     getScriptSnapshot(path: string) {
-      console.log("getScriptSnapshot", path)
-
-      debugger
-
       return getOrCreatePathSnapshot(path)
     },
     getScriptVersion(path: string) {
-      return pathMap.get(path)?.version.toString() || "0"
+      const version = pathMap.get(path)?.version.toString() || "0"
+      return version
     },
     getScriptFileNames() {
       return Array.from(scriptFileNames)
@@ -233,8 +228,6 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
     // path comes in as transformed (transpiler target extension added), check for 2nd to last extension for transpiler
     // ie .coffee.js or .civet.ts or .hera.cjs
 
-    debugger
-
     const exts = getTranspiledExtensionsFromPath(path)
     if (exts && (transpiler = transpilers.get(exts[0]))) {
       // this is a possibly transpiled file
@@ -246,8 +239,6 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
         transpiledDoc = initTranspiledDoc(path)
       }
 
-      console.log("transpiled snapshot", sourcePath, path)
-
       let source, sourceDocVersion = 0
       if (!sourceDoc) {
         // A source file from the file system
@@ -258,8 +249,8 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
       }
 
       // The source document is ahead of the transpiled document
-      if (sourceDocVersion > transpiledDoc.version) {
-        const transpiledCode = doTranspileAndUpdateMeta(transpiler, sourcePath, source)
+      if (source && sourceDocVersion > transpiledDoc.version) {
+        const transpiledCode = doTranspileAndUpdateMeta(transpiledDoc, sourceDocVersion, transpiler, sourcePath, source)
         snapshot = ScriptSnapshot.fromString(transpiledCode)
       }
 
@@ -278,12 +269,13 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
     return snapshot
   }
 
-  function createOrUpdateMeta(path: string, code: string, target: TranspileTarget, sourcemapLines?: SourceMap["data"]["lines"]) {
+  function createOrUpdateMeta(path: string, transpiledDoc: TextDocument, sourcemapLines?: SourceMap["data"]["lines"]) {
     let meta = fileMetaData.get(path)
 
     if (!meta) {
       meta = {
         sourcemapLines,
+        transpiledDoc,
       }
 
       fileMetaData.set(path, meta)
@@ -292,11 +284,19 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
     }
   }
 
-  function doTranspileAndUpdateMeta(transpiler: Transpiler, sourcePath: string, sourceCode: string): string {
-    const result = transpiler.compile(sourcePath, sourceCode)
+  function doTranspileAndUpdateMeta(transpiledDoc: TextDocument, version: number, transpiler: Transpiler, sourcePath: string, sourceCode: string): string {
+    // Definitely do not want to throw errors here, it can make TypeScript very unhappy if it can't get a snapshot/version
+    try {
+      var result = transpiler.compile(sourcePath, sourceCode)
+    } catch (e) {
+      // TODO: add error to diagnostics
+      console.error(e)
+    }
+
     if (result) {
       const { code: transpiledCode, sourceMap } = result
-      createOrUpdateMeta(sourcePath, transpiledCode, transpiler.target, sourceMap?.data.lines)
+      createOrUpdateMeta(sourcePath, transpiledDoc, sourceMap?.data.lines)
+      TextDocument.update(transpiledDoc, [{ text: transpiledCode }], version)
 
       return transpiledCode
     }
@@ -305,6 +305,7 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
 
   function initTranspiledDoc(path: string) {
     // Create an empty document, it will be updated on-demand when `getScriptSnapshot` is called
+    // `path` must be the in the format that TypeScript Language Service expects
     const transpiledDoc = TextDocument.create(path, "none", -1, "")
     // Add transpiled doc
     documents.add(transpiledDoc)
@@ -386,7 +387,7 @@ function TSService(projectURL = "./") {
     const civetPath = "@danielx/civet"
     Civet = projectRequire(civetPath)
 
-    console.info(`LOADED CIVET: ${path.join(projectURL, civetPath)} \n\n`)
+    console.info(`LOADED PROJECT CIVET: ${path.join(projectURL, civetPath)} \n\n`)
   } catch (e) {
     console.info("USING BUNDLED CIVET")
     Civet = BundledCivetModule

@@ -23,6 +23,7 @@ import vs, {
 
 import Civet, { SourceMap } from "@danielx/civet"
 import { TextDocument } from "vscode-languageserver-textdocument";
+import assert from "assert";
 const { util: { lookupLineColumn } } = Civet
 
 export type SourcemapLines = SourceMap["data"]["lines"]
@@ -331,6 +332,9 @@ export function remapPosition(sourcemapLines: SourcemapLines, position: Position
 }
 
 export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
+  assert("line" in position, "position must have line")
+  assert("character" in position, "position must have character")
+
   const { line: origLine, character: origOffset } = position
 
   let col = 0
