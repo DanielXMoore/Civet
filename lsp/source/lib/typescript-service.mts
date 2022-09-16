@@ -24,6 +24,8 @@ import { fileURLToPath } from "url";
 import { createRequire } from "module";
 
 import { compile as coffeeCompile } from "coffeescript"
+import Hera from "@danielx/hera"
+const { compile: heraCompile } = Hera
 
 // ts doesn't have this key in the type
 interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithFailedLookupLocations {
@@ -32,24 +34,31 @@ interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithF
 
 interface FileMeta {
   sourcemapLines: SourceMap["data"]["lines"] | undefined
-  transpiledDoc: TextDocument
 }
 
 interface Host extends LanguageServiceHost {
   getMeta(path: string): FileMeta | undefined
-  addDocument(doc: TextDocument): void
+  addOrUpdateDocument(doc: TextDocument): void
 }
 
+type TranspileTarget =
+  ".mjs" | ".cjs" | ".js" |
+  ".mts" | ".cts" | ".ts"
+
 interface Transpiler {
-  (path: string, source: string): {
+  extension: string
+  /** The target extension of the transpiler (used to force module/commonjs via .mjs, .cjs, .mts, .cts, etc) */
+  target: TranspileTarget
+  compile(path: string, source: string): {
     code: string,
     sourceMap?: SourceMap
   } | undefined
 }
 
-const civetExtension = /\.civet$/
-
 function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, transpilers: Map<string, Transpiler>): Host {
+
+  baseHost.getSourceFile
+
   const { rootDir } = compilationSettings
   assert(rootDir, "Most have root dir for now")
 
@@ -61,8 +70,6 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
   const snapshotMap: Map<string, IScriptSnapshot> = new Map
 
   let projectVersion = 0;
-
-  const transpiledExtensions = new Set(transpilers.keys())
 
   const resolutionCache: ts.ModuleResolutionCache = ts.createModuleResolutionCache(rootDir, (fileName) => fileName, compilationSettings);
 
@@ -85,22 +92,23 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
         let resolution = ts.resolveModuleName(name, containingFile, compilerOptions, self, resolutionCache) as ResolvedModuleWithFailedLookupLocations
         let { resolvedModule } = resolution
         if (resolvedModule) {
-          console.log("resolved", resolvedModule.resolvedFileName)
+          console.log("default TS resolved", resolvedModule.resolvedFileName)
           return resolvedModule
         }
 
-        // TODO: account for module resolution configuration options 'node', etc.
-
-        // TODO: check extension against all transpilers
-        for (const ext of transpiledExtensions) {
-          const extension = `.${ext}`
+        // get the transpiler for the extension
+        const extension = getExtensionFromPath(name)
+        const transpiler = transpilers.get(extension)
+        // console.log("transpiler", extension, transpiler)
+        if (transpiler) {
+          const { target } = transpiler
           const resolved = path.resolve(path.dirname(containingFile), name)
-          if (name.endsWith(extension)) {
+          if (sys.fileExists(resolved)) {
             // TODO: add to resolution cache?
-            console.log("resolved", resolved)
+            console.log("resolved with transpiler target", resolved)
             return {
-              resolvedFileName: resolved,
-              extension,
+              resolvedFileName: resolved + target,
+              target,
               isExternalLibraryImport: false,
             }
           }
@@ -119,24 +127,46 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
     /**
      * Add a VSCode TextDocument source file.
      * The VSCode document should keep track of its contents and version.
-     * I think we just need to update the project version on change events.
+     * This accepts both `.civet` and `.ts` adding the transpiled targets to `scriptFileNames`.
      */
-    addDocument(doc: TextDocument) {
+    addOrUpdateDocument(doc: TextDocument): void {
       const path = fileURLToPath(doc.uri)
 
-      // Clear the cached snapshot for this document
-      snapshotMap.delete(path)
+      const extension = getExtensionFromPath(path)
+      const transpiler = transpilers.get(extension)
 
-      if (scriptFileNames.has(path)) {
-        // We already have the document but it may have updated
-        projectVersion++
+      console.log("addOrUpdateDocument", path, extension, transpiler)
+
+      if (transpiler) {
+        const { target } = transpiler
+        const transpiledPath = path + target
+
+        let transpiledDoc = pathMap.get(transpiledPath)
+
+        if (!transpiledDoc) {
+          initTranspiledDoc(transpiledPath)
+
+          // Add source doc
+          documents.add(doc)
+          pathMap.set(path, doc)
+        }
+
+        // Deleting the snapshot will force a new one to be created when requested
+        snapshotMap.delete(transpiledPath)
+
         return
       }
 
-      documents.add(doc)
-      scriptFileNames.add(path)
-      pathMap.set(path, doc)
-      projectVersion++
+      // Plain non-transpiled document
+      if (!scriptFileNames.has(path)) {
+        documents.add(doc)
+        scriptFileNames.add(path)
+        pathMap.set(path, doc)
+      }
+
+      // Clear the cached snapshot for this document
+      snapshotMap.delete(path)
+      return
     },
     getMeta(path: string) {
       return fileMetaData.get(path)
@@ -149,7 +179,9 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
     },
     // TODO: Handle source documents and document updates
     getScriptSnapshot(path: string) {
-      // console.log("getScriptSnapshot", path)
+      console.log("getScriptSnapshot", path)
+
+      debugger
 
       return getOrCreatePathSnapshot(path)
     },
@@ -169,6 +201,7 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
    * Use the VSCode document if it exists otherwise use the file system.
    */
   function getPathSource(path: string): string {
+    // Open VSCode docs and transpiled files should all be in the pathMap
     const doc = pathMap.get(path)
     if (doc) {
       return doc.getText()
@@ -181,48 +214,105 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
     return ""
   }
 
+  function getTranspiledPath(path: string) {
+    const extension = getExtensionFromPath(path)
+    const transpiler = transpilers.get(extension)
+
+    if (transpiler) {
+      return path + transpiler.target
+    }
+    return path
+  }
+
   function getOrCreatePathSnapshot(path: string) {
     let snapshot = snapshotMap.get(path)
     if (snapshot) return snapshot
 
-    const source = getPathSource(path)
-    const ext = getExtensionFromPath(path)
+    let transpiler
 
-    const transpiler = transpilers.get(ext)
-    if (transpiler) {
-      const result = transpiler(path, source)
-      if (!result) return
+    // path comes in as transformed (transpiler target extension added), check for 2nd to last extension for transpiler
+    // ie .coffee.js or .civet.ts or .hera.cjs
 
-      const { code: transpiledCode, sourceMap } = result
+    debugger
 
-      createOrUpdateMeta(path, transpiledCode, sourceMap?.data.lines)
-      snapshot = ScriptSnapshot.fromString(transpiledCode)
-    } else {
-      snapshot = ScriptSnapshot.fromString(source)
+    const exts = getTranspiledExtensionsFromPath(path)
+    if (exts && (transpiler = transpilers.get(exts[0]))) {
+      // this is a possibly transpiled file
+
+      const sourcePath = removeExtension(path)
+      const sourceDoc = pathMap.get(sourcePath)
+      let transpiledDoc = pathMap.get(path)
+      if (!transpiledDoc) {
+        transpiledDoc = initTranspiledDoc(path)
+      }
+
+      console.log("transpiled snapshot", sourcePath, path)
+
+      let source, sourceDocVersion = 0
+      if (!sourceDoc) {
+        // A source file from the file system
+        source = sys.readFile(sourcePath)
+      } else {
+        source = sourceDoc.getText()
+        sourceDocVersion = sourceDoc.version
+      }
+
+      // The source document is ahead of the transpiled document
+      if (sourceDocVersion > transpiledDoc.version) {
+        const transpiledCode = doTranspileAndUpdateMeta(transpiler, sourcePath, source)
+        snapshot = ScriptSnapshot.fromString(transpiledCode)
+      }
+
+      if (!snapshot) {
+        // Use the old version if there was an error
+        snapshot = ScriptSnapshot.fromString(transpiledDoc.getText())
+      }
+
+      snapshotMap.set(path, snapshot)
+      return snapshot
     }
 
+    // Regular non-transpiled file
+    snapshot = ScriptSnapshot.fromString(getPathSource(path))
     snapshotMap.set(path, snapshot)
     return snapshot
   }
 
-  function createOrUpdateMeta(path: string, code: string, sourcemapLines?: SourceMap["data"]["lines"]) {
+  function createOrUpdateMeta(path: string, code: string, target: TranspileTarget, sourcemapLines?: SourceMap["data"]["lines"]) {
     let meta = fileMetaData.get(path)
 
     if (!meta) {
-      // TODO: does this extension matter?
-      const transpiledDoc = TextDocument.create(path.replace(civetExtension, ".ts"), "typescript", 0, code)
-
       meta = {
         sourcemapLines,
-        transpiledDoc,
       }
 
       fileMetaData.set(path, meta)
     } else {
       meta.sourcemapLines = sourcemapLines
-      const doc = meta.transpiledDoc
-      TextDocument.update(doc, [{ text: code }], doc.version + 1)
     }
+  }
+
+  function doTranspileAndUpdateMeta(transpiler: Transpiler, sourcePath: string, sourceCode: string): string {
+    const result = transpiler.compile(sourcePath, sourceCode)
+    if (result) {
+      const { code: transpiledCode, sourceMap } = result
+      createOrUpdateMeta(sourcePath, transpiledCode, transpiler.target, sourceMap?.data.lines)
+
+      return transpiledCode
+    }
+    return ""
+  }
+
+  function initTranspiledDoc(path: string) {
+    // Create an empty document, it will be updated on-demand when `getScriptSnapshot` is called
+    const transpiledDoc = TextDocument.create(path, "none", -1, "")
+    // Add transpiled doc
+    documents.add(transpiledDoc)
+    pathMap.set(path, transpiledDoc)
+    // Transpiled doc gets added to scriptFileNames
+    scriptFileNames.add(path)
+
+    return transpiledDoc
   }
 }
 
@@ -247,26 +337,41 @@ function TSService(projectURL = "./") {
     existingOptions,
     tsConfigPath,
     undefined,
-    [{
-      extension: "civet",
-      isMixedContent: false,
-      // Note: in order for parsed config to include *.ext files, scriptKind must be set to Deferred.
-      // See: https://github.com/microsoft/TypeScript/blob/2106b07f22d6d8f2affe34b9869767fa5bc7a4d9/src/compiler/utilities.ts#L6356
-      scriptKind: ts.ScriptKind.Deferred,
-    }, {
-      extension: "coffee",
-      isMixedContent: false,
-      scriptKind: ts.ScriptKind.Deferred,
-    }]
+    // [{
+    //   extension: "civet",
+    //   isMixedContent: false,
+    //   // Note: in order for parsed config to include *.ext files, scriptKind must be set to Deferred.
+    //   // See: https://github.com/microsoft/TypeScript/blob/2106b07f22d6d8f2affe34b9869767fa5bc7a4d9/src/compiler/utilities.ts#L6356
+    //   scriptKind: ts.ScriptKind.Deferred,
+    // }, {
+    //   extension: "coffee",
+    //   isMixedContent: false,
+    //   scriptKind: ts.ScriptKind.Deferred,
+    // }, {
+    //   extension: "hera",
+    //   isMixedContent: false,
+    //   scriptKind: ts.ScriptKind.Deferred,
+    // }]
   )
 
-  // @ts-ignore
+  //@ts-ignore
   const baseHost = createCompilerHost(parsedConfig)
 
-  const transpilers = new Map<string, Transpiler>([
-    ["civet", transpileCivet],
-    ["coffee", transpileCoffee],
-  ])
+  const transpilerDefinitions = [{
+    extension: ".civet" as const,
+    target: ".ts" as const,
+    compile: transpileCivet,
+  }, {
+    extension: ".coffee",
+    target: ".js" as const,
+    compile: transpileCoffee,
+  }, {
+    extension: ".hera" as const,
+    target: ".cjs" as const,
+    compile: transpileHera,
+  }].map<[string, Transpiler]>(def => [def.extension, def])
+
+  const transpilers = new Map<string, Transpiler>(transpilerDefinitions)
 
   const host = TSHost(parsedConfig.options, baseHost, transpilers)
 
@@ -317,8 +422,52 @@ function transpileCoffee(path: string, source: string) {
   }
 }
 
-function getExtensionFromPath(path: string) {
-  return path.split(".").pop() || ""
+function transpileHera(path: string, source: string) {
+  const code = heraCompile(source, {
+    filename: path,
+  })
+
+  return {
+    code
+  }
+}
+
+/**
+ * Returns the extension of the file including the dot.
+ * @example
+ * getExtension('foo/bar/baz.js') // => '.js'
+ * @example
+ * getExtension('foo/bar/baz') // => ''
+ * @example
+ * getExtension('foo/bar/baz.') // => ''
+ */
+function getExtensionFromPath(path: string): string {
+  const match = path.match(lastExtension)
+  if (!match) return ""
+  return match[0]
+}
+
+// Regex to match last extension including dot
+const lastExtension = /(?:\.(?:[^.]+))?$/
+const lastTwoExtensions = /(\.[^.\/]*)(\.[^./]*)$/
+
+/**
+ * Returns the last two extensions of a path.
+ *
+ * @example getExtensionFromPath("foo/bar/baz.civet.ts") // => ".civet.ts"
+ */
+function getTranspiledExtensionsFromPath(path: string): [string, string] | undefined {
+  const match = path.match(lastTwoExtensions)
+  if (!match) return
+
+  return [match[1], match[2]]
+}
+
+/**
+ * Removes the last extension from a path.
+ */
+function removeExtension(path: string) {
+  return path.replace(/\.[^.]+$/, "")
 }
 
 export default TSService

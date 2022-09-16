@@ -1,1 +1,1 @@
-export default "coffee"
+module.exports.default = "yo"

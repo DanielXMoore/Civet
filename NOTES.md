@@ -105,6 +105,55 @@ Explore creating an alternative ts-node loader to experiment and learn.
 
 Maybe make everything .mts?
 
+The answer is to use `--transpile-only` option.
+
+How does TypeScript.LanguageServiceHost signal "commonjs" vs "module" when resolving modules?
+---
+
+It probably has to do with the TypeScript configuration options, maybe the resolved filename as well?
+
+(perhaps ../path/a.ts will resolve based on config whereas ../path/a.mts is always module)
+
+How does it work with non-`.[cm]?(ts|js)` extensions? Is there a way to configure it in code?
+
+if sourceFile.symbol isn't found then it failed to resolve
+there is an internal `mode` that picks between `commonjs` and `module`
+
+`getImpliedNodeFormatForFileWorker` in ts internals checks the `type` field of the project's `package.json`
+
+For ts config option `moduleResolution` `node16` and `nodenext` it checks a hardcoded set of specific extensions:
+
+[.d.mts, .mts, .mjs] -> esnext (module?)
+[.d.cts, .cts, .cjs] -> commonjs
+[.d.ts, .ts, .tsx, .js, .jsx] -> lookup from package.json
+others are undefined
+
+I tried modifying the resolver to add .ts/js to the end of paths that match transpilers but that doesn't work for when root files are included directly. It also adds/changes the bookkeeping for matching source maps and introduces "virtual" documents that correspond to the transpiled content... this may be a fine way but is a bit
+tricky so far.
+
+An alternative would be to wrap `ts.CompilerHost.getSourceFile` to set/override `impliedNodeFormat` in the `languageVersionOrOptions` parameter. Seems promising. Can't patch directly since `DocumentRegistry` calls `ts.createLanguageServiceSourceFile` directly. Could maybe patch DocumentRegistry though?
+
+New strategy: Don't give any non ts/js files to language service, it gets confused.
+
+- Use `resolveModuleNames` to resolve transpiled files to their correctly appended target suffix.
+- When VSCode extension requests information for a `.civet` file the service will translate that to `.civet.ts` and pass it along to TS.
+- Sourcemap to return the values to their original filename and location.
+- Forward map in a similar way.
+- Maybe create a structure to hold source/transpiledCode/sourcemap
+
+How do you configure TypeScript to resolve/process non .ts extensions?
+---
+
+- Customize the resolver in `ts.LanguageServiceHost.resolveModuleNames`.
+- Customize `ts.LanguageServiceHost.getScriptSnapshot` to transpile sources as needed
+- Specify `extraFileExtensions` to pass to `parseJsonConfigFileContent` and call `createCompilerHost(parsedConfig)` instead of `createCompilerHost(parsedConfig.options)` (this doesn't seem necessary depending on the customized resolver but does add the files to the list of `fileNames`)
+
+How does `getProjectVersion` work?
+---
+
+Is it for when any script file changes or only for when node_modules or configuration files change?
+How does it relate to `getScriptVersion`?
+
 Timesheet
 ---
 
@@ -127,5 +176,4 @@ Timesheet
 2022-09-12 | 5.75  | resolving `.civet` files with `ts.LanguageServiceHost`; require/import ts-node + coffee + hera; Convert tests to .civet; developing civet in civet; fix esm.civet
 2022-09-13 | 5.25  | Import shorthand; fix fat arrow single expression; declare; namespace; interface methods; type parameters; Use project's local Civet in extension if available
 2022-09-14 | 3.50  | feedback; := class fields (readonly); static class fields; `!` non-null assertion; fix `#` comment after first line of `"use coffee-compat"` directive prologue; shebang + prologue directive bug; LSP resolve .coffee files
-
-TODO: resolve .hera files
+2022-09-15 | 6.50  | ts module resolution figuring out module vs commonjs in LanguageServiceHost; resolve .hera files; transpilation overhaul
