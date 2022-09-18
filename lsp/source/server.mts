@@ -43,7 +43,7 @@ let hasDiagnosticRelatedInformationCapability = false;
 let service: ReturnType<typeof TSService>;
 let rootDir: string;
 
-connection.onInitialize((params: InitializeParams) => {
+connection.onInitialize(async (params: InitializeParams) => {
   const capabilities = params.capabilities;
 
   // Does the client support the `workspace/configuration` request?
@@ -95,6 +95,7 @@ connection.onInitialize((params: InitializeParams) => {
 
   console.log("Init", rootDir)
   service = TSService(rootDir)
+  await service.loadPlugins()
 
   return result;
 });

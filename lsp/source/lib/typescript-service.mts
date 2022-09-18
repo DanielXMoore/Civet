@@ -1,5 +1,5 @@
 import assert from "assert"
-import path from "path";
+import path from "path"
 
 import BundledCivetModule, { SourceMap } from "@danielx/civet"
 
@@ -19,13 +19,10 @@ const {
   sys,
 } = ts
 
-import { TextDocument } from "vscode-languageserver-textdocument";
-import { fileURLToPath } from "url";
-import { createRequire } from "module";
-
+import { TextDocument } from "vscode-languageserver-textdocument"
+import { fileURLToPath } from "url"
+import { createRequire } from "module"
 import { compile as coffeeCompile } from "coffeescript"
-import Hera from "@danielx/hera"
-const { compile: heraCompile } = Hera
 
 // ts doesn't have this key in the type
 interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithFailedLookupLocations {
@@ -54,6 +51,10 @@ interface Transpiler {
     code: string,
     sourceMap?: SourceMap
   } | undefined
+}
+
+interface Plugin {
+  transpilers?: Transpiler[]
 }
 
 function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, transpilers: Map<string, Transpiler>): Host {
@@ -128,6 +129,10 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
     addOrUpdateDocument(doc: TextDocument): void {
       const path = fileURLToPath(doc.uri)
 
+      // Something may have changed so notify TS by updating the project version
+      // Still not too sure exactly how TS uses this. Read `sychronizeHostData` in `typescript/src/sercivces/services.ts` for more info.
+      projectVersion++
+
       const extension = getExtensionFromPath(path)
       const transpiler = transpilers.get(extension)
 
@@ -177,10 +182,13 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
     },
     // TODO: Handle source documents and document updates
     getScriptSnapshot(path: string) {
-      return getOrCreatePathSnapshot(path)
+      const snap = getOrCreatePathSnapshot(path)
+      // console.log("getScriptSnapshot", path, snap)
+      return snap
     },
     getScriptVersion(path: string) {
       const version = pathMap.get(path)?.version.toString() || "0"
+      // console.log("getScriptVersion", path, version)
       return version
     },
     getScriptFileNames() {
@@ -338,22 +346,8 @@ function TSService(projectURL = "./") {
     existingOptions,
     tsConfigPath,
     undefined,
-    // [{
-    //   extension: "civet",
-    //   isMixedContent: false,
-    //   // Note: in order for parsed config to include *.ext files, scriptKind must be set to Deferred.
-    //   // See: https://github.com/microsoft/TypeScript/blob/2106b07f22d6d8f2affe34b9869767fa5bc7a4d9/src/compiler/utilities.ts#L6356
-    //   scriptKind: ts.ScriptKind.Deferred,
-    // }, {
-    //   extension: "coffee",
-    //   isMixedContent: false,
-    //   scriptKind: ts.ScriptKind.Deferred,
-    // }, {
-    //   extension: "hera",
-    //   isMixedContent: false,
-    //   scriptKind: ts.ScriptKind.Deferred,
-    // }]
   )
+  logger.info("PARSED CONFIG\n", parsedConfig, "\n\n")
 
   //@ts-ignore
   const baseHost = createCompilerHost(parsedConfig)
@@ -366,24 +360,17 @@ function TSService(projectURL = "./") {
     extension: ".coffee",
     target: ".js" as const,
     compile: transpileCoffee,
-  }, {
-    extension: ".hera" as const,
-    target: ".cjs" as const,
-    compile: transpileHera,
   }].map<[string, Transpiler]>(def => [def.extension, def])
 
   const transpilers = new Map<string, Transpiler>(transpilerDefinitions)
-
   const host = TSHost(parsedConfig.options, baseHost, transpilers)
-
   const service = createLanguageService(host)
 
-  logger.info("PARSED CONFIG\n", parsedConfig, "\n\n")
+  const projectRequire = createRequire(projectURL)
 
   // Use Civet from the project if present
   let Civet: typeof BundledCivetModule
   try {
-    const projectRequire = createRequire(projectURL)
     const civetPath = "@danielx/civet"
     Civet = projectRequire(civetPath)
 
@@ -394,8 +381,35 @@ function TSService(projectURL = "./") {
   }
 
   return Object.assign(service, {
-    host
+    host,
+    loadPlugins: async function () {
+      const civetFolder = path.join(projectPath, "./.civet/")
+      // List files in civet folder
+      const civetFiles = sys.readDirectory(civetFolder)
+
+      // One day it would be nice to load plugins that could be transpiled but that is a whole can of worms.
+      // VSCode Node verions, esm loaders, etc.
+      const pluginFiles = civetFiles.filter(file => file.endsWith("plugin.mjs"))
+
+      for (const filePath of pluginFiles) {
+        console.info("Loading plugin", filePath)
+        await loadPlugin(filePath)
+      }
+    }
   })
+
+  async function loadPlugin(path: string) {
+    await import(path)
+      .then(({ default: plugin }: { default: Plugin }) => {
+        console.info("Loaded plugin", plugin)
+        plugin.transpilers?.forEach((transpiler: Transpiler) => {
+          transpilers.set(transpiler.extension, transpiler)
+        })
+      })
+      .catch(e => {
+        console.error("Error loading plugin", path, e)
+      })
+  }
 
   function transpileCivet(path: string, source: string) {
     try {
@@ -423,16 +437,6 @@ function transpileCoffee(path: string, source: string) {
   }
 }
 
-function transpileHera(path: string, source: string) {
-  const code = heraCompile(source, {
-    filename: path,
-  })
-
-  return {
-    code
-  }
-}
-
 /**
  * Returns the extension of the file including the dot.
  * @example
@@ -455,7 +459,12 @@ const lastTwoExtensions = /(\.[^.\/]*)(\.[^./]*)$/
 /**
  * Returns the last two extensions of a path.
  *
- * @example getExtensionFromPath("foo/bar/baz.civet.ts") // => ".civet.ts"
+ * @example
+ * getLastTwoExtensions('foo/bar/baz.js') // => undefined
+ * @example
+ * getLastTwoExtensions('foo/bar/baz') // => undefined
+ * @example
+ * getLastTwoExtensions('foo/bar/baz.civet.ts') // => ['.civet', '.ts']
  */
 function getTranspiledExtensionsFromPath(path: string): [string, string] | undefined {
   const match = path.match(lastTwoExtensions)
