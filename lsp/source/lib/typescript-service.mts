@@ -1,7 +1,8 @@
 import assert from "assert"
 import path from "path"
 
-import BundledCivetModule, { SourceMap } from "@danielx/civet"
+import BundledCivetModule from "@danielx/civet"
+import type { SourceMap as CivetSourceMap } from "@danielx/civet"
 
 import ts, {
   CompilerHost,
@@ -22,7 +23,15 @@ const {
 import { TextDocument } from "vscode-languageserver-textdocument"
 import { fileURLToPath } from "url"
 import { createRequire } from "module"
+// TODO: project Coffee version?
 import { compile as coffeeCompile } from "coffeescript"
+import { convertCoffeeScriptSourceMap } from "./util.mjs"
+
+interface SourceMap {
+  data: {
+    lines: CivetSourceMap["data"]["lines"]
+  }
+}
 
 // ts doesn't have this key in the type
 interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithFailedLookupLocations {
@@ -114,12 +123,6 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
 
         return undefined
       });
-    },
-    readDirectory(path: string, extensions?: readonly string[], exclude?: readonly string[], include?: readonly string[], depth?: number): string[] {
-      // Add .civet extension to the list of extensions
-      extensions = extensions?.concat([".civet"])
-      console.log("readDirectory", path, extensions, exclude, include, depth)
-      return sys.readDirectory(path, extensions, exclude, include, depth)
     },
     /**
      * Add a VSCode TextDocument source file.
@@ -432,8 +435,17 @@ function transpileCoffee(path: string, source: string) {
     sourceMap: true
   })
 
+  const convertedSourceMap = convertCoffeeScriptSourceMap(sourceMap)
+
+  console.log("COFFEE SOURCE MAP", sourceMap, convertedSourceMap)
+
   return {
-    code: js
+    code: js,
+    sourceMap: {
+      data: {
+        lines: convertedSourceMap
+      }
+    }
   }
 }
 

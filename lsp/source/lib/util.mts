@@ -469,3 +469,34 @@ function diagnosticCategoryToSeverity(category: ts.DiagnosticCategory): Diagnost
       return DiagnosticSeverity.Information
   }
 }
+
+import type { SourceMap as CoffeeSourceMap } from "coffeescript"
+export function convertCoffeeScriptSourceMap(sourceMap: CoffeeSourceMap): SourceMap["data"]["lines"] {
+  const lines: SourceMap["data"]["lines"] = []
+  let columnDelta = 0
+
+  debugger
+
+  for (const entry of sourceMap.lines) {
+    if (!entry) {
+      lines.push([])
+    } else {
+      let lastColumn = columnDelta = 0
+      let lastSourceColumn = -1
+      lines.push(entry.columns.filter(x => x).map(function ({ column, sourceLine, sourceColumn }) {
+        // Gross Hack to prevent coffeescript mapping punctuation to the start of the line
+        if (sourceColumn <= lastSourceColumn) {
+          return [0]
+        }
+        lastSourceColumn = sourceColumn
+
+        columnDelta = column - lastColumn
+        lastColumn = column
+
+        return [columnDelta, 0, sourceLine, sourceColumn]
+      }))
+    }
+  }
+
+  return lines
+}

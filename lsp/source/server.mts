@@ -113,6 +113,7 @@ connection.onInitialized(() => {
 });
 
 connection.onHover(({ textDocument, position }) => {
+  console.log("hover", position)
   const sourcePath = documentToSourcePath(textDocument)
   if (!sourcePath) return;
 
@@ -132,8 +133,11 @@ connection.onHover(({ textDocument, position }) => {
     position = forwardMap(sourcemapLines, position)
   }
 
+  console.log("onHover2", sourcePath, position)
+
   const p = transpiledDoc.offsetAt(position)
   const info = service.getQuickInfoAtPosition(transpiledDoc.uri, p)
+  console.log("onHover3", info)
   if (!info) return;
 
   const display = displayPartsToString(info.displayParts);
