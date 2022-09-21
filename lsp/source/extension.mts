@@ -1,5 +1,8 @@
+import type { ExtensionContext } from 'vscode';
+
 import * as path from 'path';
-import { workspace, ExtensionContext } from 'vscode';
+import * as vscode from 'vscode';
+const { workspace } = vscode;
 
 import {
   LanguageClient,
@@ -32,8 +35,14 @@ export function activate(context: ExtensionContext) {
 
   // Options to control the language client
   const clientOptions: LanguageClientOptions = {
-    // Register the server for plain civet documents
-    documentSelector: [{ scheme: 'file', language: 'civet' }],
+    // TODO: this is where we could add more based on plugins
+    // Register the server for language files we care about
+    documentSelector: [
+      { scheme: 'file', language: 'civet' },
+      { scheme: 'file', language: 'coffeescript' },
+      { scheme: 'file', language: 'javascript' },
+      { scheme: 'file', language: 'typescript' },
+    ],
     synchronize: {
       // Notify the server about file changes to '.clientrc files contained in the workspace
       fileEvents: workspace.createFileSystemWatcher('**/.clientrc')

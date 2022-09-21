@@ -46,6 +46,7 @@ TODO
   - [ ] CoffeeSense inspired LSP
     - [ ] Syntax Highlighting
       - [x] Basic highlighting
+      - [ ] Interpolated template strings
       - [ ] Shebang line
       - [ ] Short imports
       - [ ] TS Keywords

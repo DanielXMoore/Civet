@@ -23,6 +23,7 @@ import vs, {
 
 import Civet, { SourceMap } from "@danielx/civet"
 import { TextDocument } from "vscode-languageserver-textdocument";
+import assert from "assert";
 const { util: { lookupLineColumn } } = Civet
 
 export type SourcemapLines = SourceMap["data"]["lines"]
@@ -120,10 +121,11 @@ export function getCompletionItemKind(kind: string): CompletionItemKind {
  * @param item
  */
 export function convertNavTree(
-  lineTable: number[],
-  sourcemapLines: SourcemapLines | undefined,
-  output: DocumentSymbol[],
   item: NavigationTree,
+  output: DocumentSymbol[],
+  document: TextDocument,
+  sourcemapLines: SourcemapLines | undefined,
+
 ): boolean {
   let shouldInclude = shouldIncludeEntry(item);
   if (!shouldInclude && !item.childItems?.length) {
@@ -132,12 +134,12 @@ export function convertNavTree(
 
   const children = new Set(item.childItems || []);
   for (const span of item.spans) {
-    const range = rangeFromTextSpan(span, lineTable, sourcemapLines);
-    const symbolInfo = convertSymbol(item, range, lineTable, sourcemapLines);
+    const range = remapRange(rangeFromTextSpan(span, document), sourcemapLines)
+    const symbolInfo = convertSymbol(item, range, document, sourcemapLines);
 
     for (const child of children) {
-      if (child.spans.some(span => !!intersectRanges(range, rangeFromTextSpan(span, lineTable, sourcemapLines)))) {
-        const includedChild = convertNavTree(lineTable, sourcemapLines, symbolInfo.children!, child);
+      if (child.spans.some(span => !!intersectRanges(range, remapRange(rangeFromTextSpan(span, document), sourcemapLines)))) {
+        const includedChild = convertNavTree(child, symbolInfo.children!, document, sourcemapLines);
         shouldInclude = shouldInclude || includedChild;
         children.delete(child);
       }
@@ -151,9 +153,17 @@ export function convertNavTree(
   return shouldInclude;
 }
 
-function convertSymbol(item: NavigationTree, range: Range, lineTable: number[], sourcemapLines?: SourcemapLines): DocumentSymbol {
-  const selectionRange = item.nameSpan ? rangeFromTextSpan(item.nameSpan, lineTable, sourcemapLines) : range;
-  let label = item.text;
+function convertSymbol(item: NavigationTree, range: Range, document: TextDocument, sourcemapLines?: SourcemapLines): DocumentSymbol {
+  let nameRange
+  if (item.nameSpan) {
+    nameRange = rangeFromTextSpan(item.nameSpan, document)
+    if (sourcemapLines) {
+      nameRange = remapRange(nameRange, sourcemapLines)
+    }
+  }
+
+  const selectionRange = nameRange || range;
+  let label = item.text
 
   switch (item.kind) {
     case ScriptElementKind.memberGetAccessorElement: label = `(get) ${label}`; break;
@@ -187,17 +197,11 @@ function parseKindModifier(kindModifiers: string): Set<string> {
   return new Set(kindModifiers.split(/,|\s+/g));
 }
 
-function rangeFromTextSpan(span: TextSpan, lineTable: number[], sourcemapLines?: SourcemapLines): Range {
-  const [l1, c1] = lookupLineColumn(lineTable, span.start)
-  const [l2, c2] = lookupLineColumn(lineTable, span.start + span.length)
-
-  const range = makeRange(l1, c1, l2, c2)
-
-  if (sourcemapLines) {
-    return remapRange(range, sourcemapLines)
+function rangeFromTextSpan(span: TextSpan, document: TextDocument): Range {
+  return {
+    start: document.positionAt(span.start),
+    end: document.positionAt(span.start + span.length),
   }
-
-  return range
 }
 
 export function makeRange(l1: number, c1: number, l2: number, c2: number) {
@@ -288,8 +292,12 @@ export function containsRange(range: Range, otherRange: Range): boolean {
 /**
  * Take a position in generated code and map it into a position in source code.
  * Reverse mapping.
+ *
+ * Return position as-is if no sourcemap is available.
  */
-export function remapPosition(sourcemapLines: SourcemapLines, position: Position): Position {
+export function remapPosition(position: Position, sourcemapLines?: SourcemapLines): Position {
+  if (!sourcemapLines) return position
+
   const { line, character } = position
 
   const textLine = sourcemapLines[line]
@@ -331,6 +339,9 @@ export function remapPosition(sourcemapLines: SourcemapLines, position: Position
 }
 
 export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
+  assert("line" in position, "position must have line")
+  assert("character" in position, "position must have character")
+
   const { line: origLine, character: origOffset } = position
 
   let col = 0
@@ -378,40 +389,10 @@ export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
 /**
  * Use sourcemap lines to remap the start and end position of a range.
  */
-export function remapRange(range: Range, sourcemapLines: SourcemapLines,): Range {
+export function remapRange(range: Range, sourcemapLines?: SourcemapLines,): Range {
   return {
-    start: remapPosition(sourcemapLines, range.start),
-    end: remapPosition(sourcemapLines, range.end)
-  }
-}
-
-function spanToRange(sourcemapLines: SourcemapLines | undefined, generatedDoc: TextDocument, start?: number, length?: number): Range {
-  // No position so just put it on the first line
-  if (start == null) {
-    return {
-      start: {
-        line: 0,
-        character: 0,
-      }, end: {
-        line: 0,
-        character: 999,
-      }
-    }
-  }
-
-  let position = generatedDoc.positionAt(start)
-  if (sourcemapLines) {
-    position = remapPosition(sourcemapLines, position)
-  }
-
-  return {
-    start: position,
-    end: {
-      line: position.line,
-      // I don't like multi-line red squiglies so just preted the length is on the same line
-      // TODO: see if this makes it weird? it may need sourcemapping too
-      character: position.character + (length || 2)
-    }
+    start: remapPosition(range.start, sourcemapLines),
+    end: remapPosition(range.end, sourcemapLines)
   }
 }
 
@@ -442,14 +423,16 @@ export function flattenDiagnosticMessageText(
   return result;
 }
 
-export function convertDiagnostic(diagnostic: Diagnostic, generatedDoc: TextDocument, sourcemapLines?: SourcemapLines): vs.Diagnostic {
+export function convertDiagnostic(diagnostic: Diagnostic, document: TextDocument, sourcemapLines?: SourcemapLines): vs.Diagnostic {
   return {
     message: flattenDiagnosticMessageText(diagnostic.messageText),
-    range: spanToRange(sourcemapLines, generatedDoc, diagnostic.start, diagnostic.length),
+    range: remapRange(rangeFromTextSpan({
+      start: diagnostic.start || 0,
+      length: diagnostic.length ?? 1
+    }, document), sourcemapLines),
     severity: diagnosticCategoryToSeverity(diagnostic.category),
     code: diagnostic.code,
     source: diagnostic.source || "typescript",
-
   }
 }
 
@@ -464,4 +447,35 @@ function diagnosticCategoryToSeverity(category: ts.DiagnosticCategory): Diagnost
     case DiagnosticCategory.Message:
       return DiagnosticSeverity.Information
   }
+}
+
+import type { SourceMap as CoffeeSourceMap } from "coffeescript"
+export function convertCoffeeScriptSourceMap(sourceMap: CoffeeSourceMap): SourceMap["data"]["lines"] {
+  const lines: SourceMap["data"]["lines"] = []
+  let columnDelta = 0
+
+  debugger
+
+  for (const entry of sourceMap.lines) {
+    if (!entry) {
+      lines.push([])
+    } else {
+      let lastColumn = columnDelta = 0
+      let lastSourceColumn = -1
+      lines.push(entry.columns.filter(x => x).map(function ({ column, sourceLine, sourceColumn }) {
+        // Gross Hack to prevent coffeescript mapping punctuation to the start of the line
+        if (sourceColumn <= lastSourceColumn) {
+          return [0]
+        }
+        lastSourceColumn = sourceColumn
+
+        columnDelta = column - lastColumn
+        lastColumn = column
+
+        return [columnDelta, 0, sourceLine, sourceColumn]
+      }))
+    }
+  }
+
+  return lines
 }

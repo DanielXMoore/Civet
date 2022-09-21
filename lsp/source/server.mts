@@ -24,10 +24,8 @@ import * as Previewer from "./lib/previewer.mjs";
 import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic } from './lib/util.mjs';
 import assert from "assert"
 
-import Civet from "@danielx/civet"
-import { displayPartsToString, GetCompletionsAtPositionOptions } from 'typescript';
+import ts, { displayPartsToString, GetCompletionsAtPositionOptions } from 'typescript';
 import { fileURLToPath } from 'url';
-const { util: { locationTable } } = Civet
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -43,7 +41,7 @@ let hasDiagnosticRelatedInformationCapability = false;
 let service: ReturnType<typeof TSService>;
 let rootDir: string;
 
-connection.onInitialize((params: InitializeParams) => {
+connection.onInitialize(async (params: InitializeParams) => {
   const capabilities = params.capabilities;
 
   // Does the client support the `workspace/configuration` request?
@@ -95,6 +93,7 @@ connection.onInitialize((params: InitializeParams) => {
 
   console.log("Init", rootDir)
   service = TSService(rootDir)
+  await service.loadPlugins()
 
   return result;
 });
@@ -111,32 +110,42 @@ connection.onInitialized(() => {
   }
 });
 
+const tsSuffix = /\.[cm]?[jt]s$|\.json|\.[jt]sx/
+
 connection.onHover(({ textDocument, position }) => {
+  console.log("hover", position)
   const sourcePath = documentToSourcePath(textDocument)
-  if (!sourcePath) return;
+  assert(sourcePath)
 
-  // console.log("hover", sourcePath, position)
-
-  const doc = documents.get(textDocument.uri);
+  const doc = documents.get(textDocument.uri)
   assert(doc)
 
-  // need to sourcemap the line/columns
-  const meta = service.host.getMeta(sourcePath)
-  if (!meta) return
-  const sourcemapLines = meta.sourcemapLines
-  const transpiledDoc = meta.transpiledDoc
-  if (!transpiledDoc) return
+  let info
+  if (sourcePath.match(tsSuffix)) { // non-transpiled
+    const p = doc.offsetAt(position)
+    info = service.getQuickInfoAtPosition(sourcePath, p)
+  } else { // Transpiled
+    // need to sourcemap the line/columns
+    const meta = service.host.getMeta(sourcePath)
+    if (!meta) return
+    const sourcemapLines = meta.sourcemapLines
+    const transpiledDoc = meta.transpiledDoc
+    if (!transpiledDoc) return
 
-  // Map input hover position into output TS position
-  // Don't map for files that don't have a sourcemap (plain .ts for example)
-  if (sourcemapLines) {
-    position = forwardMap(sourcemapLines, position)
+    // Map input hover position into output TS position
+    // Don't map for files that don't have a sourcemap (plain .ts for example)
+    if (sourcemapLines) {
+      position = forwardMap(sourcemapLines, position)
+    }
+
+    console.log("onHover2", sourcePath, position)
+
+    const p = transpiledDoc.offsetAt(position)
+    info = service.getQuickInfoAtPosition(transpiledDoc.uri, p)
+    console.log("onHover3", info)
+
   }
-
-  const p = transpiledDoc.offsetAt(position)
-
-  const info = service.getQuickInfoAtPosition(sourcePath, p)
-  if (!info) return;
+  if (!info) return
 
   const display = displayPartsToString(info.displayParts);
   // TODO: Replace Previewer
@@ -157,15 +166,38 @@ connection.onHover(({ textDocument, position }) => {
 
 // This handler provides the initial list of the completion items.
 connection.onCompletion(({ textDocument, position, context: _context }) => {
+  const completionConfiguration = {
+    useCodeSnippetsOnMethodSuggest: false,
+    pathSuggestions: true,
+    autoImportSuggestions: true,
+    nameSuggestions: true,
+    importStatementSuggestions: true,
+  }
+
   const context = _context as {
     triggerKind?: GetCompletionsAtPositionOptions["triggerKind"],
     triggerCharacter?: GetCompletionsAtPositionOptions["triggerCharacter"]
   }
 
+  const completionOptions: GetCompletionsAtPositionOptions = {
+    includeExternalModuleExports: completionConfiguration.autoImportSuggestions,
+    includeInsertTextCompletions: true,
+    ...context,
+  }
+
   const sourcePath = documentToSourcePath(textDocument)
-  if (!sourcePath) return;
+  assert(sourcePath)
 
   console.log("completion", sourcePath, position)
+
+  if (sourcePath.match(tsSuffix)) { // non-transpiled
+    const document = documents.get(textDocument.uri)
+    assert(document)
+    const p = document.offsetAt(position)
+    const completions = service.getCompletionsAtPosition(sourcePath, p, completionOptions)
+    if (!completions) return
+    return convertCompletions(completions)
+  }
 
   // need to sourcemap the line/columns
   const meta = service.host.getMeta(sourcePath)
@@ -182,43 +214,10 @@ connection.onCompletion(({ textDocument, position, context: _context }) => {
   }
 
   const p = transpiledDoc.offsetAt(position)
-
-  const completionConfiguration = {
-    useCodeSnippetsOnMethodSuggest: false,
-    pathSuggestions: true,
-    autoImportSuggestions: true,
-    nameSuggestions: true,
-    importStatementSuggestions: true,
-  }
-
-  const completionOptions: GetCompletionsAtPositionOptions = {
-    includeExternalModuleExports: completionConfiguration.autoImportSuggestions,
-    includeInsertTextCompletions: true,
-    ...context,
-  }
-
-  const completions = service.getCompletionsAtPosition(sourcePath, p, completionOptions)
+  const completions = service.getCompletionsAtPosition(transpiledDoc.uri, p, completionOptions)
   if (!completions) return;
 
-  // TODO: TS is doing a lot more here and some of it might be useful
-
-  const { entries } = completions;
-
-  const items: CompletionItem[] = [];
-  for (const entry of entries) {
-    const item: CompletionItem = {
-      label: entry.name,
-      kind: getCompletionItemKind(entry.kind)
-    };
-
-    if (entry.insertText) {
-      item.insertText = entry.insertText
-    }
-
-    items.push(item);
-  }
-
-  return items
+  return convertCompletions(completions)
 });
 
 // TODO
@@ -228,36 +227,48 @@ connection.onCompletionResolve((item) => {
 
 connection.onDefinition(({ textDocument, position }) => {
   const sourcePath = documentToSourcePath(textDocument)
-  if (!sourcePath) return undefined
+  assert(sourcePath)
 
-  // need to sourcemap the line/columns
-  const meta = service.host.getMeta(sourcePath)
-  if (!meta) return
-  const sourcemapLines = meta.sourcemapLines
-  const transpiledDoc = meta.transpiledDoc
-  if (!transpiledDoc) return
+  let definitions
 
-  // Map input hover position into output TS position
-  // Don't map for files that don't have a sourcemap (plain .ts for example)
-  if (sourcemapLines) {
-    position = forwardMap(sourcemapLines, position)
+  // Non-transpiled
+  if (sourcePath.match(tsSuffix)) {
+    const document = documents.get(textDocument.uri)
+    assert(document)
+    const p = document.offsetAt(position)
+    definitions = service.getDefinitionAtPosition(sourcePath, p)
+  } else {
+
+    // need to sourcemap the line/columns
+    const meta = service.host.getMeta(sourcePath)
+    if (!meta) return
+    const sourcemapLines = meta.sourcemapLines
+    const transpiledDoc = meta.transpiledDoc
+    if (!transpiledDoc) return
+
+    // Map input hover position into output TS position
+    // Don't map for files that don't have a sourcemap (plain .ts for example)
+    if (sourcemapLines) {
+      position = forwardMap(sourcemapLines, position)
+    }
+
+    const p = transpiledDoc.offsetAt(position)
+    definitions = service.getDefinitionAtPosition(transpiledDoc.uri, p)
   }
 
-  const p = transpiledDoc.offsetAt(position)
+  if (!definitions) return
 
   const program = service.getProgram()
-  if (!program) return
-
-  const definitions = service.getDefinitionAtPosition(sourcePath, p)
-  if (!definitions) return
+  assert(program)
 
   return definitions.map<Location | undefined>((definition) => {
     const { fileName, textSpan } = definition
+    // TODO: May need to remap fileNames back to sourceFileNames
     const sourceFile = program.getSourceFile(fileName)
     if (!sourceFile) return
 
     return {
-      uri: fileName,
+      uri: service.getSourceFileName(fileName),
       range: {
         start: sourceFile.getLineAndCharacterOfPosition(textSpan.start),
         end: sourceFile.getLineAndCharacterOfPosition(textSpan.start + textSpan.length)
@@ -269,24 +280,31 @@ connection.onDefinition(({ textDocument, position }) => {
 
 connection.onDocumentSymbol(({ textDocument }) => {
   const sourcePath = documentToSourcePath(textDocument)
-  if (!sourcePath) return undefined
+  assert(sourcePath)
+
+  let document, navTree, sourcemapLines
+
+  if (sourcePath.match(tsSuffix)) { // non-transpiled
+    document = documents.get(textDocument.uri)
+    assert(document)
+    navTree = service.getNavigationTree(sourcePath)
+  } else {
+    // Transpiled
+    const meta = service.host.getMeta(sourcePath)
+    assert(meta)
+    const { transpiledDoc } = meta
+    assert(transpiledDoc)
+
+    document = transpiledDoc
+    navTree = service.getNavigationTree(transpiledDoc.uri)
+    sourcemapLines = meta.sourcemapLines
+  }
 
   const items: DocumentSymbol[] = []
-  const navTree = service.getNavigationTree(sourcePath)
-
-  // Need to use the transpiled source to convert from text spans (pos, length) to (line, column)
-  const snapshot = service.host.getScriptSnapshot(sourcePath)
-  const transpiled = snapshot?.getText(0, snapshot.getLength())
-  if (!transpiled) return
-
-  const lineTable = locationTable(transpiled)
-
-  // need to sourcemap the line/columns
-  const sourcemapLines = service.host.getMeta(sourcePath)?.sourcemapLines
 
   // The root represents the file. Ignore this when showing in the UI
   for (const child of navTree.childItems!) {
-    convertNavTree(lineTable, sourcemapLines, items, child)
+    convertNavTree(child, items, document, sourcemapLines)
   }
 
   return items
@@ -299,21 +317,38 @@ documents.onDidClose(({ document }) => {
 
 documents.onDidOpen(({ document }) => {
   console.log("open", document.uri)
+
+  service.host.addOrUpdateDocument(document)
 })
 
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent(({ document }) => {
   console.log("onDidChangeContent", document.uri)
-  service.host.addDocument(document)
+  service.host.addOrUpdateDocument(document)
 
   updateDiagnostics(document)
 });
 
 function updateDiagnostics(document: TextDocument) {
   const sourcePath = documentToSourcePath(document)
-  if (!sourcePath) return
+  assert(sourcePath)
 
+  // Non-transpiled
+  if (sourcePath.match(tsSuffix)) {
+    const diagnostics : Diagnostic[] = [
+      ...service.getSyntacticDiagnostics(sourcePath),
+      ...service.getSemanticDiagnostics(sourcePath),
+      ...service.getSuggestionDiagnostics(sourcePath),
+    ].map((diagnostic) => convertDiagnostic(diagnostic, document))
+
+    return connection.sendDiagnostics({
+      uri: document.uri,
+      diagnostics
+    })
+  }
+
+  // Transpiled file
   const meta = service.host.getMeta(sourcePath)
   if (!meta) {
     console.log("no meta for ", sourcePath)
@@ -323,11 +358,12 @@ function updateDiagnostics(document: TextDocument) {
   const transpiledDoc = meta.transpiledDoc
   if (!transpiledDoc) return
 
+  const transpiledPath = transpiledDoc.uri
   const diagnostics: Diagnostic[] = [];
   [
-    ...service.getSyntacticDiagnostics(sourcePath),
-    ...service.getSemanticDiagnostics(sourcePath),
-    ...service.getSuggestionDiagnostics(sourcePath),
+    ...service.getSyntacticDiagnostics(transpiledPath),
+    ...service.getSemanticDiagnostics(transpiledPath),
+    ...service.getSuggestionDiagnostics(transpiledPath),
   ].forEach((diagnostic) => {
     diagnostics.push(convertDiagnostic(diagnostic, transpiledDoc, sourcemapLines))
   })
@@ -356,4 +392,25 @@ connection.listen();
 
 function documentToSourcePath(textDocument: TextDocumentIdentifier) {
   return fileURLToPath(textDocument.uri);
+}
+
+function convertCompletions(completions: ts.CompletionInfo): CompletionItem[] {
+  // TODO: TS is doing a lot more here and some of it might be useful
+  const { entries } = completions;
+
+  const items: CompletionItem[] = [];
+  for (const entry of entries) {
+    const item: CompletionItem = {
+      label: entry.name,
+      kind: getCompletionItemKind(entry.kind)
+    };
+
+    if (entry.insertText) {
+      item.insertText = entry.insertText
+    }
+
+    items.push(item);
+  }
+
+  return items
 }
