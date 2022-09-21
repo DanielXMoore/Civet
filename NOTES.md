@@ -321,9 +321,9 @@ TODO:
 - [x] Test out loading host project plugin
 - [x] Handle hover in `.coffee` files
   - [x] convert coffee sourcemaps
-- [ ] Rewrite transpiled files names/locations in Go to Definition
+- [x] Rewrite transpiled files names/locations in Go to Definition
 - [x] Handle hover in .ts files
-- [ ] Make sure to load lib files listed in tsconfig
+- [x] Make sure to load lib files listed in tsconfig
   should fix errors like
   ```
     An async function or method must return a 'Promise'. Make sure you have a declaration for 'Promise' or include 'ES2015' in your '--lib' option.typescript(2697)

@@ -155,6 +155,8 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
       const extension = getExtensionFromPath(path)
       const transpiler = transpilers.get(extension)
 
+      // console.log("addOrUpdateDocument", path, extension, transpiler)
+
       if (transpiler) {
         const { target } = transpiler
         const transpiledPath = path + target
