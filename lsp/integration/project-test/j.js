@@ -1,4 +1,5 @@
 export default "j";
+/** the j export */
 export const j = 1;
 
 import b from "./b.civet";

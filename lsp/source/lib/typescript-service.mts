@@ -27,6 +27,17 @@ import { createRequire } from "module"
 import { compile as coffeeCompile } from "coffeescript"
 import { convertCoffeeScriptSourceMap } from "./util.mjs"
 
+// HACK to get __dirname working in tests with ts-node
+// ts-node needs everything to be modules for .civet files to work
+// and modules don't have __dirname
+var dir : string
+try {
+  dir = __dirname
+} catch (e) {
+  //@ts-ignore
+  dir = fileURLToPath(import.meta.url)
+}
+
 interface SourceMap {
   data: {
     lines: CivetSourceMap["data"]["lines"]
@@ -66,11 +77,11 @@ interface Plugin {
   transpilers?: Transpiler[]
 }
 
-function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, transpilers: Map<string, Transpiler>): Host {
+function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[], baseHost: CompilerHost, transpilers: Map<string, Transpiler>): Host {
   const { rootDir } = compilationSettings
   assert(rootDir, "Most have root dir for now")
 
-  const scriptFileNames: Set<string> = new Set([])
+  const scriptFileNames: Set<string> = new Set(initialFileNames)
   const fileMetaData: Map<string, FileMeta> = new Map;
 
   const documents: Set<TextDocument> = new Set();
@@ -84,6 +95,11 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
   let self: Host;
 
   return self = Object.assign({}, baseHost, {
+    getDefaultLibFileName(options: ts.CompilerOptions) {
+      const result = path.join(dir, "lib", ts.getDefaultLibFileName(options))
+      console.log("getDefaultLibFileName", result)
+      return result
+    },
     getModuleResolutionCache() {
       return resolutionCache
     },
@@ -113,11 +129,12 @@ function TSHost(compilationSettings: CompilerOptions, baseHost: CompilerHost, tr
           const resolved = path.resolve(path.dirname(containingFile), name)
           if (sys.fileExists(resolved)) {
             // TODO: add to resolution cache?
-            return {
+            resolvedModule = {
               resolvedFileName: resolved + target,
-              target,
+              extension: target,
               isExternalLibraryImport: false,
             }
+            return resolvedModule
           }
         }
 
@@ -366,7 +383,8 @@ function TSService(projectURL = "./") {
   }].map<[string, Transpiler]>(def => [def.extension, def])
 
   const transpilers = new Map<string, Transpiler>(transpilerDefinitions)
-  const host = TSHost(parsedConfig.options, baseHost, transpilers)
+  // TODO: May want to add transpiled files to fileNames
+  const host = TSHost(parsedConfig.options, parsedConfig.fileNames, baseHost, transpilers)
   const service = createLanguageService(host)
 
   const projectRequire = createRequire(projectURL)
