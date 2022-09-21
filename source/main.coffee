@@ -1,6 +1,6 @@
-{parse} = require "./parser"
-{prune} = gen = require "./generate"
-{SourceMap} = util = require "./util"
+{ parse } = require "./parser"
+{ prune } = gen = require "./generate"
+{ SourceMap } = util = require "./util"
 
 defaultOptions = {}
 
