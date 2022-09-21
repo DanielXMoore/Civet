@@ -268,7 +268,7 @@ connection.onDefinition(({ textDocument, position }) => {
     if (!sourceFile) return
 
     return {
-      uri: fileName,
+      uri: service.getSourceFileName(fileName),
       range: {
         start: sourceFile.getLineAndCharacterOfPosition(textSpan.start),
         end: sourceFile.getLineAndCharacterOfPosition(textSpan.start + textSpan.length)

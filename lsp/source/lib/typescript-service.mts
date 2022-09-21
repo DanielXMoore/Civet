@@ -59,14 +59,13 @@ interface Host extends LanguageServiceHost {
   addOrUpdateDocument(doc: TextDocument): void
 }
 
-type TranspileTarget =
-  ".mjs" | ".cjs" | ".js" |
-  ".mts" | ".cts" | ".ts"
-
 interface Transpiler {
   extension: string
-  /** The target extension of the transpiler (used to force module/commonjs via .mjs, .cjs, .mts, .cts, etc) */
-  target: TranspileTarget
+  /**
+   * The target extension of the transpiler (used to force module/commonjs via .mjs, .cjs, .mts, .cts, etc)
+   * Must be a valid ts.Extension because those are the kinds that TypeScript understands.
+   */
+  target: ts.Extension
   compile(path: string, source: string): {
     code: string,
     sourceMap?: SourceMap
@@ -374,11 +373,11 @@ function TSService(projectURL = "./") {
 
   const transpilerDefinitions = [{
     extension: ".civet" as const,
-    target: ".ts" as const,
+    target: ".ts" as ts.Extension,
     compile: transpileCivet,
   }, {
     extension: ".coffee",
-    target: ".js" as const,
+    target: ".js" as ts.Extension,
     compile: transpileCoffee,
   }].map<[string, Transpiler]>(def => [def.extension, def])
 
@@ -401,8 +400,11 @@ function TSService(projectURL = "./") {
     Civet = BundledCivetModule
   }
 
-  return Object.assign(service, {
+  return Object.assign({}, service, {
     host,
+    getSourceFileName(fileName: string) {
+      return remapFileName(fileName, transpilers)
+    },
     loadPlugins: async function () {
       const civetFolder = path.join(projectPath, "./.civet/")
       // List files in civet folder
@@ -505,9 +507,33 @@ function getTranspiledExtensionsFromPath(path: string): [string, string] | undef
 
 /**
  * Removes the last extension from a path.
+ * @example
+ * removeExtension('foo/bar/baz.js') // => 'foo/bar/baz'
+ * @example
+ * removeExtension('foo/bar/baz') // => 'foo/bar/baz'
+ * @example
+ * removeExtension('foo/bar/baz.') // => 'foo/bar/baz.'
+ * @example
+ * removeExtension('foo/bar/baz.civet.ts') // => 'foo/bar/baz.civet'
+ * @example
+ * removeExtension('foo/bar.js/baz') // => 'foo/bar.js/baz'
  */
 function removeExtension(path: string) {
-  return path.replace(/\.[^.]+$/, "")
+  return path.replace(/\.[^\/.]+$/, "")
+}
+
+function remapFileName(fileName: string, transpilers: Map<string, Transpiler>): string {
+  const [extension, target] = getTranspiledExtensionsFromPath(fileName) || []
+
+  if (!extension) return fileName
+  const transpiler = transpilers.get(extension)
+  if (!transpiler) return fileName
+
+  if (transpiler.target === target) {
+    return removeExtension(fileName)
+  }
+
+  return fileName
 }
 
 export default TSService
