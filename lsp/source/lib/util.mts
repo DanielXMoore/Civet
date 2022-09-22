@@ -21,10 +21,9 @@ import vs, {
   SymbolTag,
 } from "vscode-languageserver";
 
-import Civet, { SourceMap } from "@danielx/civet"
+import { SourceMap } from "@danielx/civet"
 import { TextDocument } from "vscode-languageserver-textdocument";
 import assert from "assert";
-const { util: { lookupLineColumn } } = Civet
 
 export type SourcemapLines = SourceMap["data"]["lines"]
 
