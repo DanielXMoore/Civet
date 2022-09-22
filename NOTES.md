@@ -312,6 +312,7 @@ Timesheet
 2022-09-19 | 2.00  | template string syntax highlighting; hover in .js/.ts; update completions, documentSymbol, diagnostics, definition, for non-transpiled filse
 2022-09-20 | 4.50  | stepping through tsc.js
 2022-09-21 | 6.00  | bundling lib; learned how ts resolves types better; go to definition for transpiled files; started building extension with Civet
+2022-09-22 | 3.25  | extra array comma bug; republish extension; smaller npm bundle; community feedback; bug fixes from hera compiler.coffee conversion
 
 TODO:
 
