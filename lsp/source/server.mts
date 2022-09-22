@@ -113,7 +113,7 @@ connection.onInitialized(() => {
 const tsSuffix = /\.[cm]?[jt]s$|\.json|\.[jt]sx/
 
 connection.onHover(({ textDocument, position }) => {
-  console.log("hover", position)
+  // console.log("hover", position)
   const sourcePath = documentToSourcePath(textDocument)
   assert(sourcePath)
 
@@ -138,11 +138,11 @@ connection.onHover(({ textDocument, position }) => {
       position = forwardMap(sourcemapLines, position)
     }
 
-    console.log("onHover2", sourcePath, position)
+    // console.log("onHover2", sourcePath, position)
 
     const p = transpiledDoc.offsetAt(position)
     info = service.getQuickInfoAtPosition(transpiledDoc.uri, p)
-    console.log("onHover3", info)
+    // console.log("onHover3", info)
 
   }
   if (!info) return

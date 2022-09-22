@@ -95,8 +95,8 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
 
   return self = Object.assign({}, baseHost, {
     getDefaultLibFileName(options: ts.CompilerOptions) {
+      // TODO: this might not be correct for dev dev/test envs
       const result = path.join(dir, "lib", ts.getDefaultLibFileName(options))
-      console.log("getDefaultLibFileName", result)
       return result
     },
     getModuleResolutionCache() {
