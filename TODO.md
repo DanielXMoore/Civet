@@ -46,15 +46,16 @@ TODO
   - [ ] CoffeeSense inspired LSP
     - [ ] Syntax Highlighting
       - [x] Basic highlighting
+      - [ ] Highlight Type Suffixes
       - [ ] Interpolated template strings
       - [ ] Shebang line
       - [ ] Short imports
       - [ ] TS Keywords
-    - [ ] Proper caching/versioning for scriptSnapshots
-    - [ ] Resolve .coffee files
-    - [ ] Resolve .hera files
-    - [ ] Load specifically included files (consistent with VSCode TS Extension)
-    - [ ] Some libraries are not loading?
+    - [x] Proper caching/versioning for scriptSnapshots
+    - [x] Resolve .coffee files
+    - [x] Resolve .hera files
+    - [x] Load specifically included files (consistent with VSCode TS Extension)
+    - [x] Some libraries are not loading?
       ```
         resolveModuleNames [ 'tslib', './main.js' ] /home/daniel/apps/civet/source/esm.civet
         failed to resolve tslib /home/daniel/apps/civet/source/esm.civet
@@ -79,7 +80,7 @@ TODO
     - [x] Load installed @types/*
     - [ ] Diagnostics (reverse map)
       - [x] Display Diagnostics
-      - [ ] Find out why diagnostic hint jumps around wierdly (source map error or is it using an older map when the file updates?)
+      - [ ] Find out why diagnostic has weird `| undefined` in array types
 - [ ] Syntax Experiments
   - [ ] Explore `gen.next(args, ...)` shorthand
 
