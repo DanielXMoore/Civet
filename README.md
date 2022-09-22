@@ -87,7 +87,8 @@ Things Kept from CoffeeScript
 - Optional semi-colons
 - Indentation based block syntax
 - OptionalChain shorthand for index and function application `a?[b]` -> `a?.[b]`, `a?(b)` -> `a?.(b)`
-- `@` This shorthand `@` -> `this`, `@id` -> `this.id`
+- `?=` null-coalescing assignment shorthand
+- `@` `this` shorthand `@` -> `this`, `@id` -> `this.id`
 - Prototype shorthand `X::` -> `X.prototype`, `X::a` -> `X.prototype.a`
 - Postfix `if/unless`
 - Block Strings `"""` / `'''`
@@ -104,8 +105,10 @@ Things Removed from CoffeeScript
 - `not` (use `!`)
 - `do` keyword (replaced with JS `do`)
 - `for from` (use JS `for of`)
+- `and=`, `or=` (don't mix and match words and symbols)
 - Array slices `list[0...2]` (use `list.slice(0, 2)`)
 - Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` (use `numbers.splice(3, 4, -3, -4, -5, -6)`)
+- Ranges `[0...10]`
 - Comprensions (a case could be made for keeping them)
 - Iteration expression results
 - Implicit declarations
