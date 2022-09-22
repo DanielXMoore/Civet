@@ -3,8 +3,8 @@ coffeeScriptPlugin = require "esbuild-coffeescript"
 heraPlugin = require "@danielx/hera/esbuild-plugin"
 
 watch = process.argv.includes '--watch'
-minify = !watch || process.argv.includes '--minify'
-sourcemap = true
+minify = false
+sourcemap = false
 
 path = require "path"
 {access} = require "fs/promises"
@@ -34,7 +34,7 @@ resolveExtensions = extensionResolverPlugin(["hera", "coffee"])
 
 esbuild.build({
   entryPoints: ['source/cli.coffee']
-  bundle: true
+  bundle: false
   sourcemap
   minify
   watch

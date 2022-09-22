@@ -2,15 +2,15 @@ if process.argv.includes "--version"
   process.stdout.write require("../package.json").version + "\n"
   process.exit(0)
 
-{parse} = require "./main"
-generate = require "./generate"
+{parse, generate} = require "./main"
+{prune} = generate
 
 encoding = "utf8"
 fs = require "fs"
 
 input = fs.readFileSync process.stdin.fd, encoding
 
-ast = parse input
+ast = prune parse input
 
 js = process.argv.includes "--js"
 
