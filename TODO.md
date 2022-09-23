@@ -34,6 +34,7 @@ TODO
   - [x] `namespace`
   - [x] `interface` methods
   - [ ] `abstract` class and fields
+  - [x] nested | under a `type =` are being confused with nested object syntax
 - [x] Keep shebang line
 - [ ] JSX 😿
   - [x] Basic Support
@@ -47,6 +48,7 @@ TODO
     - [ ] Syntax Highlighting
       - [x] Basic highlighting
       - [ ] Highlight Type Suffixes
+      - [x] `case` should be same as `when` in control flow
       - [ ] Interpolated template strings
       - [ ] Shebang line
       - [ ] Short imports
