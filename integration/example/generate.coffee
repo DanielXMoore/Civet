@@ -13,8 +13,8 @@ gen = (node) ->
     return node.map(gen).join('')
 
   if typeof node is "object"
-    ; // TODO
-  // heyy
+    ; # TODO
+  # heyy
 
   throw new Error("Unknown node", JSON.stringify(node))
 

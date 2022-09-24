@@ -2,7 +2,7 @@ if process.argv.includes "--version"
   process.stdout.write require("../package.json").version + "\n"
   process.exit(0)
 
-{parse, generate} = require "./main"
+{parse, compile, generate} = require "./main"
 {prune} = generate
 
 encoding = "utf8"
@@ -10,13 +10,14 @@ fs = require "fs"
 
 input = fs.readFileSync process.stdin.fd, encoding
 
-ast = prune parse input
-
+process.argv.includes "--ast"
 js = process.argv.includes "--js"
+inlineMap = process.argv.includes "--inline-map"
 
-if process.argv.includes "--ast"
+if ast
+  ast = prune parse input
   process.stdout.write JSON.stringify(ast, null, 2)
-  return
+  process.exit(0)
 
-output = generate ast, {js}
+output = compile input, {js, inlineMap}
 process.stdout.write output
