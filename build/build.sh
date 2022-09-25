@@ -11,7 +11,7 @@ chmod +x "$BIN"
 rm dist/cli.js
 
 # esbuild-plugin
-./dist/civet < source/esbuild-plugin.civet > dist/esbuild-plugin.js
+./dist/civet --js < source/esbuild-plugin.civet > dist/esbuild-plugin.js
 
 # esm loader
 ./dist/civet --js < source/esm.civet > dist/esm.mjs
