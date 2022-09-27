@@ -79,7 +79,7 @@ TODO
       - [x] Finish adding source mappings to parser/transpiler
       - [ ] Minor Issues
         - [x] Postfix conditionals
-        - [ ] Block String sourcemapping
+        - [x] Block String sourcemapping
         - [x] `=`
         - [x] Multi-line comment sourcemapping (tsc doesn't map multi-line comments though)
         - [x] `const/readonly` in `:=`
