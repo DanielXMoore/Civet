@@ -344,11 +344,11 @@ Timesheet
 2022-09-24 | 0.25  | --inline-map compiler option
 2022-09-25 | 4.75  | source map parsing for composition; source map composition testing
 2022-09-26 | 9.00  | compose source maps in esm loader; source maps remapping; source mapping working with c8
-2022-09-26 | 2.00  | sourcemapping implied imports; const/readonly assignment; multiline-comment; postfix conditionals
+2022-09-26 | 3.00  | sourcemapping implied imports; const/readonly assignment; multiline-comment; postfix conditionals; source map errors in esm loader; readme;
 
 TODO:
 
-- [ ] figure out how to correctly use source-map-support to remap exception numbers (source-map-support)
+- [x] figure out how to correctly use source-map-support to remap exception numbers (source-map-support)
 - [x] Figure out how c8 coverage uses source maps
 - [x] import .civet/.coffee/.hera/.ts/.js from .civet
 - ~~[ ] Package Hera compiler properly so we can transpile hera from within the extension~~

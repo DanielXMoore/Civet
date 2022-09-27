@@ -183,3 +183,109 @@ Things Changed from ES6
   The reasoning is `x -> ...` => `x(function() ...)` in CoffeeScript and having `->` and `=>`
   behave more differently than they already do is bad. Passing an anonymous function to an
   application without parens is also convenient.
+
+Using Civet in your Node.js Environment
+---
+
+You have now been convinced that Civet is right for your current/next project. Here is how
+to set up your environment to get productive right away and have a Good Time℠.
+
+### Testing
+
+Code coverage with [c8](https://github.com/bcoe/c8) "just works" thanks to their source map
+integration and Civet's source maps.
+
+Currently Civet's ESM loader depends on [ts-node](https://www.npmjs.com/package/ts-node)
+
+#### c8 + Mocha
+
+`package.json`
+```json
+  "scripts": {
+    "test": "c8 mocha",
+    ...
+  },
+  "c8": {
+    "extension": [
+      ".civet"
+    ]
+  },
+  "mocha": {
+    "extension": [
+      "civet"
+    ],
+    "loader": [
+      "ts-node/esm",
+      "@danielx/civet/esm.mjs"
+    ],
+    ...
+  ...
+```
+
+`ts-node` must be configured with `transpileOnly` (it can't resolve alternative extensions). Also I think `module` needs to be at least `ES2020` for the Civet ESM loader to work.
+
+`tsconfig.json`
+```json
+  ...
+  "ts-node": {
+    "transpileOnly": true,
+    "compilerOptions": {
+      "module": "ES2020"
+    }
+  }
+```
+
+If you don't care for code coverage you can skip c8 (but it is so easy why not keep it?).
+
+You can also add `.js` and `.ts` extensions if you want to mix and match! Even `.coffee` will work if you require `coffeescript/register` or add a loader for it.
+
+Execute the tests
+
+```bash
+yarn test
+```
+
+Step 4: Enjoy!
+
+### Developing
+
+Use the alpha version of [Civet Language Server](https://marketplace.visualstudio.com/items?itemName=DanielX.civet)
+
+The language server provides syntax highlighting, completions, hover documentation, symbols outline, red squigglies, and go to definition.
+
+---
+
+*Q?* Why can't I just use the built-in VSCode TypeScript LSP?
+
+*A:* VSCode's built in TypeScript LSP can't resolve non `.ts/.js`, not even with plugins. Maybe one day they'll allow for
+plugins that let you adjust the resolver and insert a transpilation step but until then a separate language server is necessary.
+
+---
+
+*Q?* Sometimes the file outline disappears and the red squigglies are all in the wrong place and maybe a notification pops up
+about some kind of LSP error.
+
+*A:* I'm sorry that happened to you but the Civet Language Server is still alpha and improving rapidly. Please let me know
+exactly what happened and I'll try to do better next time.
+
+It may happen when there is a syntax error in your Civet file. You can check and see if it compiles using the CLI tool in the meantime.
+
+Please do submit bug reports / feature requests.
+
+### Building
+
+I strongly recommend using [esbuild](https://esbuild.github.io/) for building / packaging your Civet project.
+
+```javascript
+import esbuild from 'esbuild'
+import civetPlugin from '@danielx/civet/esbuild-plugin'
+
+esbuild.build({
+  ...,
+  plugins: [
+    civetPlugin
+  ]
+}).catch(() => process.exit(1))
+```
+
+It's super fast and works great!

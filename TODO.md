@@ -6,7 +6,8 @@ TODO
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
   - [ ] Implicit Returns
   - [ ] """ Interpolations
-  - [ ] ###
+  - [ ] " Interpolations
+  - [x] ###
 - [x] Import shorthand
 - [x] `:=` `readonly` field shorthand
 - [x] Keep comments and whitespace
@@ -76,6 +77,7 @@ TODO
       - [x] Update sourcemap/meta on changes
     - [ ] Language Icon https://stackoverflow.com/a/70930298/68210
     - [x] Sourcemapping
+      - [x] Correctly map runtime errors using source-map-support in esm loader
       - [x] Finish adding source mappings to parser/transpiler
       - [ ] Minor Issues
         - [x] Postfix conditionals
