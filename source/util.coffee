@@ -68,19 +68,22 @@ SourceMap = (sourceString) ->
     updateSourceMap: (outputStr, inputPos) ->
       outLines = outputStr.split(EOL)
 
+      if inputPos?
+        [srcLine, srcCol] = lookupLineColumn(srcTable, inputPos)
+
       outLines.forEach (line, i) ->
         if i > 0
           sm.lineNum++
           sm.colOffset = 0
           sm.lines[sm.lineNum] = []
+          srcCol = 0
 
         l = sm.colOffset
         sm.colOffset = line.length
 
         if inputPos?
-          [srcLine, srcCol] = lookupLineColumn(srcTable, inputPos)
           # srcLine and srcCol are absolute here
-          sm.lines[sm.lineNum].push [l, 0, srcLine, srcCol]
+          sm.lines[sm.lineNum].push [l, 0, srcLine+i, srcCol]
         else if l != 0
           sm.lines[sm.lineNum].push [l]
 

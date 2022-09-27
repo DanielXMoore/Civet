@@ -344,6 +344,7 @@ Timesheet
 2022-09-24 | 0.25  | --inline-map compiler option
 2022-09-25 | 4.75  | source map parsing for composition; source map composition testing
 2022-09-26 | 9.00  | compose source maps in esm loader; source maps remapping; source mapping working with c8
+2022-09-26 | 1.50  | sourcemapping implied imports; const/readonly assignment; multiline-comment; postfix conditionals
 
 TODO:
 
