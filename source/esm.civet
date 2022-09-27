@@ -1,12 +1,48 @@
-import { readFileSync } from 'fs'
-import { createRequire } from 'module'
-import { pathToFileURL, fileURLToPath } from 'url'
+{ readFileSync } from fs
+{ createRequire } from module
+{ pathToFileURL, fileURLToPath } from url
 
-//@ts-ignore Note: this is the compiled name
-import { compile } from "./main.js"
+sourceMapSupport from @cspotcode/source-map-support
+
+// NOTE: this references the built version of the module, not the source
+Civet from ../dist/main.js
+{ compile, util } := Civet
+{ SourceMap } := util
 
 baseURL := pathToFileURL(process.cwd() + '/').href
 extensionsRegex := /\.civet$/
+
+let registered = false
+outputCache: Map<string, {content: string}> := new Map
+
+directorySeparator := '/'
+backslashRegExp := /\\/g
+/**
+ * Replace backslashes with forward slashes.
+ */
+function normalizeSlashes(value: string): string {
+  return value.replace(backslashRegExp, directorySeparator);
+}
+
+ensureRegister := ->
+  return if registered
+
+  installation :=
+    environment: 'node'
+    retrieveFile(pathOrUrl: string)
+      let path = pathOrUrl
+      // If it's a file URL, convert to local path
+      // I could not find a way to handle non-URLs except to swallow an error
+      if path.startsWith('file://')
+        try
+          path = fileURLToPath(path)
+      path = normalizeSlashes(path)
+
+      return outputCache.get(path)?.content or ''
+
+  sourceMapSupport.install installation
+
+  registered = true
 
 export function resolve(specifier: string, context: any, next: any)
   { parentURL = baseURL } := context
@@ -20,27 +56,37 @@ export function resolve(specifier: string, context: any, next: any)
   // Let Node.js handle all other specifiers.
   return next specifier, context
 
-export function load(url: string, context: any, next: any)
+export async function load(url: string, context: any, next: any)
   if context.format is "civet"
     path := fileURLToPath url
     source := readFileSync path, "utf8"
-    tsSource := compile source,
+    {code: tsSource, sourceMap} := compile source,
       filename: path
-      inlineMap: true
+      sourceMap: true
+
+    transpiledPath := url + ".ts"
 
     // NOTE: Assuming ts-node hook follows load hook
-    // NOTE: This causes .civet files to show up as .ts in ts-node error reporting
-    // TODO: compose source maps with ts-node
-    return next url.replace(extensionsRegex, ".ts"),
+    result := await next transpiledPath,
       // ts-node won't transpile unless this is module
       // can't use commonjs since we don't rewrite imports
       format: "module"
       // NOTE: Setting the source in the context makes it available when ts-node uses defaultLoad
       source: tsSource
 
+    // NOTE: we must install our source map support after ts-node does to take priority
+    ensureRegister()
+
+    // parse source map from downstream (ts-node) result
+    // compose with civet source map
+    result.source = SourceMap.remap(result.source, sourceMap, url, "")
+    // NOTE: This path needs to match what ts-node uses so we can override the source map
+    outputCache.set(normalizeSlashes(path + ".ts"), result.source)
+
+    return result
+
   // Other URLs continue unchanged.
   return next url, context
-
 
 // commonjs hook
 require := createRequire import.meta.url

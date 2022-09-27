@@ -15,6 +15,22 @@ srcColDelta is absolute on first occurence, relative for each other occurence (d
 
 SourceMap Viz: https://evanw.github.io/source-map-visualization/
 
+Inserting location data for symbols that don't appear in the source can cause trouble for forward mapping:
+
+```civet
+x := 3
+```
+
+```
+const x = 3
+```
+
+In this case if a mapping of const to the left of x is inserted then hovering 'x' in the source may think it is hovering 'const' in the generated.
+
+Better is to omit mappings using the [outColDelta] form.
+
+However... open and close braces may be significant for tracking code coverage
+
 Windows Dev Env
 ---
 
@@ -315,9 +331,13 @@ Timesheet
 2022-09-22 | 3.50  | extra array comma bug; republish extension; smaller npm bundle; community feedback; bug fixes from hera compiler.coffee conversion; simplified const assignment and readonly
 2022-09-23 | 1.75  | coffee2civet; TypeScript binary ops continue line
 2022-09-24 | 0.25  | --inline-map compiler option
+2022-09-25 | 4.75  | source map parsing for composition; source map composition testing
+2022-09-26 | 6.75   | compose source maps in esm loader; source maps remapping
 
 TODO:
 
+- [ ] figure out how to correctly use source-map-support to remap exception numbers
+- [ ] Figure out how c8 coverage uses source maps
 - [x] import .civet/.coffee/.hera/.ts/.js from .civet
 - ~~[ ] Package Hera compiler properly so we can transpile hera from within the extension~~
 - [x] or hera plugin

@@ -1,6 +1,6 @@
 { parse } = require "./parser"
 { prune } = gen = require "./generate"
-{ SourceMap } = util = require "./util"
+{ SourceMap, base64Encode } = util = require "./util.coffee"
 
 defaultOptions = {}
 
@@ -21,8 +21,9 @@ module.exports =
       code = gen ast, options
 
       if options.inlineMap
-        srcMapJSON = sm.json(filename, filename.replace(/(?:\.civet$)?/, ".ts"))
-        return "#{code}\n//# sourceMappingURL=data:application/json;base64,#{base64Encode JSON.stringify(srcMapJSON)}\n"
+        srcMapJSON = sm.json(filename, "")
+        # NOTE: separate comment to prevent this string getting picked up as actual sourceMappingURL in tools
+        return "#{code}\n#{"//#"} sourceMappingURL=data:application/json;base64,#{base64Encode JSON.stringify(srcMapJSON)}\n"
       else
         return {
           code,
@@ -32,7 +33,3 @@ module.exports =
     gen ast, options
   generate: gen
   util: util
-
-# Note: currently only works in node
-base64Encode = (src) ->
-  return Buffer.from(src).toString('base64')
