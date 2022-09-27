@@ -77,7 +77,12 @@ TODO
     - [ ] Language Icon https://stackoverflow.com/a/70930298/68210
     - [x] Sourcemapping
       - [x] Finish adding source mappings to parser/transpiler
-      - [ ] Unpessimize source mapping output (later)
+      - [ ] Minor Issues
+        - [ ] Postfix conditionals
+        - [ ] Multi-line comment sourcemapping
+        - [ ] `const/readonly` in `:=`
+        - [ ] implied `imports`
+      - [ ] ~~Unpessimize source mapping output (later)~~ we actually need nearly every mapping so we can reliably remap from ts-node
       - [x] Translate from generated line/column to source line/column (reverse map)
       - [x] Translate from source line/column to generated line/column
     - [x] Document Symbols

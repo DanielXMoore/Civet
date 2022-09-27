@@ -33,6 +33,15 @@ However... open and close braces may be significant for tracking code coverage
 
 c8 sourcemapping details on how V8 traces get mapped to istanbul coverage https://github.com/istanbuljs/v8-to-istanbul/blob/aac059d8a234b69af8da762f4eb8ef44f8edc34a/lib/source.js#L131
 
+Final thoughts:
+
+Ideally we'd ship very small and compact source maps that imply a lot of info (like joining runs of tokens together)
+
+... but once we need to remap from ts-node and pass through to c8 for coverage this causes things to get lost.
+
+So in practice the most robust way is to have a mapping for each token, including implied tokens, *especially braces*, and have each mapping be
+small and precise. That way when mapping back we will be unlikely to hit "in between" mappings and need to assume or infer things.
+
 Windows Dev Env
 ---
 
@@ -334,14 +343,12 @@ Timesheet
 2022-09-23 | 1.75  | coffee2civet; TypeScript binary ops continue line
 2022-09-24 | 0.25  | --inline-map compiler option
 2022-09-25 | 4.75  | source map parsing for composition; source map composition testing
-2022-09-26 | 8.75  | compose source maps in esm loader; source maps remapping; source mapping working with c8
+2022-09-26 | 9.00  | compose source maps in esm loader; source maps remapping; source mapping working with c8
 
 TODO:
 
-
-- [ ] Multi-line comment sourcemapping
-- [ ] figure out how to correctly use source-map-support to remap exception numbers
-- [ ] Figure out how c8 coverage uses source maps
+- [ ] figure out how to correctly use source-map-support to remap exception numbers (source-map-support)
+- [x] Figure out how c8 coverage uses source maps
 - [x] import .civet/.coffee/.hera/.ts/.js from .civet
 - ~~[ ] Package Hera compiler properly so we can transpile hera from within the extension~~
 - [x] or hera plugin
