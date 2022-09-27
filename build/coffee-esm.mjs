@@ -29,9 +29,13 @@ export async function load(url, context, next) {
   if (context.format === "coffee") {
     const path = fileURLToPath(url)
     const source = await readFile(path, "utf8")
-    const jsSource = compile(source)
+    const jsSource = compile(source, {
+      bare: true,
+      inlineMap: true,
+      noHeader: true,
+    })
 
-    return next(url.replace(extensionsRegex, ".cjs"), {
+    return next(url + ".cjs", {
       format: "commonjs",
       source: jsSource
     });
