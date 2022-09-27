@@ -31,6 +31,8 @@ Better is to omit mappings using the [outColDelta] form.
 
 However... open and close braces may be significant for tracking code coverage
 
+c8 sourcemapping details on how V8 traces get mapped to istanbul coverage https://github.com/istanbuljs/v8-to-istanbul/blob/aac059d8a234b69af8da762f4eb8ef44f8edc34a/lib/source.js#L131
+
 Windows Dev Env
 ---
 
@@ -332,10 +334,12 @@ Timesheet
 2022-09-23 | 1.75  | coffee2civet; TypeScript binary ops continue line
 2022-09-24 | 0.25  | --inline-map compiler option
 2022-09-25 | 4.75  | source map parsing for composition; source map composition testing
-2022-09-26 | 6.75   | compose source maps in esm loader; source maps remapping
+2022-09-26 | 8.75  | compose source maps in esm loader; source maps remapping; source mapping working with c8
 
 TODO:
 
+
+- [ ] Multi-line comment sourcemapping
 - [ ] figure out how to correctly use source-map-support to remap exception numbers
 - [ ] Figure out how c8 coverage uses source maps
 - [x] import .civet/.coffee/.hera/.ts/.js from .civet

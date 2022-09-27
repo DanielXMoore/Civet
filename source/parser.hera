@@ -15,11 +15,11 @@ Expression
   # CommaOperator
   # https://262.ecma-international.org/#sec-comma-operator
   # NOTE: Eliminated left recursion
-  AssignmentExpression (__ "," AssignmentExpression)*
+  AssignmentExpression (__ Comma AssignmentExpression)*
 
 # https://262.ecma-international.org/#prod-Arguments
 Arguments
-  "(" ArgumentList? ( __ "," )? __ ")"
+  OpenParen ArgumentList? ( __ Comma )? __ CloseParen
 
 # https://262.ecma-international.org/#prod-ArgumentList
 ArgumentList
@@ -36,7 +36,7 @@ NestedArgument
   Nested Expression ParameterElementDelimiter
 
 CommaExpression
-  __ "," __ Expression
+  __ Comma __ Expression
 
 BinaryOpExpression
   UnaryExpression (__ BinaryOp __ UnaryExpression)*
@@ -46,7 +46,7 @@ UnaryExpression
   # NOTE: Eliminated left recursion
   UnaryOp*:pre UpdateExpression:exp UnaryPostfix?:post ->
     // Handle "?" postfix
-    if (post === "?") {
+    if (post?.token === "?") {
       // v1.1 Can remove parens when unnecessary once exp returns a full AST node to determine if they are actually needed
       return ["(", pre, , "(", exp, ") != null)"]
     }
@@ -54,8 +54,8 @@ UnaryExpression
     return [pre, exp, post]
 
 UnaryPostfix
-  "?"
-  __ "as" NonIdContinue Type -> { ts: true, children: $0 }
+  QuestionMark
+  __ As NonIdContinue Type -> { ts: true, children: $0 }
 
 # https://262.ecma-international.org/#prod-UpdateExpression
 UpdateExpression
@@ -122,7 +122,7 @@ FatArrowBody
 
 # https://262.ecma-international.org/#prod-ConditionalExpression
 ConditionalExpression
-  ShortCircuitExpression ( __ "?" AssignmentExpression __ ":" AssignmentExpression)?
+  ShortCircuitExpression ( __ QuestionMark AssignmentExpression __ Colon AssignmentExpression)?
 
 # https://262.ecma-international.org/#prod-ShortCircuitExpression
 ShortCircuitExpression
@@ -142,7 +142,7 @@ PrimaryExpression
   TemplateLiteral
   # https://262.ecma-international.org/#prod-ParenthesizedExpression
   # NOTE: Currently ignoring early error checking in https://262.ecma-international.org/#prod-CoverParenthesizedExpressionAndArrowParameterList
-  "(" __ Expression __ ")"
+  OpenParen __ Expression __ CloseParen
   # https://facebook.github.io/jsx/#sec-jsx-PrimaryExpression
   JSXElement
   JSXFragment
@@ -220,12 +220,12 @@ LeftHandSideExpression
 NewExpression
   # NOTE: Eliminated left recursion
   # NOTE: Changed to CallExpression to handle arguments
-  ("new" __)+ CallExpression
+  (New __)+ CallExpression
 
 # https://262.ecma-international.org/#prod-CallExpression
 CallExpression
   "super" __ Arguments
-  "import" __ "(" AssignmentExpression __ ")"
+  "import" __ OpenParen AssignmentExpression __ CloseParen
   MemberExpression CallExpressionRest*
 
 CallExpressionRest
@@ -236,7 +236,7 @@ CallExpressionRest
   TemplateLiteral
 
 OptionalShorthand
-  ("?" ( "." / InsertDot ))
+  (QuestionMark ( Dot / InsertDot ))
 
 NonNullAssertion
   "!" -> { ts: true, children: $1 }
@@ -251,8 +251,10 @@ SpacedApplication
 
 # Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
 ApplicationStart
-  OptionalShorthand?:opt !EOS $_+:spacing !AdditionalReservedWords ->
-    return [opt, "(", spacing.replace(/^ /, "")]
+  OptionalShorthand?:opt !EOS _:spacing !AdditionalReservedWords ->
+    // NOTE: This assumes spacing is an array of non-newline whitespace and comments
+    spacing[0].token = spacing[0].token.replace(/^ ?/, "(")
+    return [opt, spacing]
 
 # Reserved words that will prevent spaced function application
 # ie: the 'of' in 'for x of ...'
@@ -269,7 +271,7 @@ MemberExpression
 
 MemberExpressionRest
   # NOTE: Added shorthand x?[3] -> x?.[3]
-  ( OptionalShorthand / NonNullAssertion )? "[" __ Expression __ "]"
+  ( OptionalShorthand / NonNullAssertion )? OpenBracket __ Expression __ CloseBracket
   # NOTE: Combined Optional and Property access
   # TODO: this doesn't yet work for arbitrarily deep nesting, only the first level
   (EOS NestedFurther)? PropertyAccess
@@ -282,22 +284,24 @@ MemberExpressionRest
   NonNullAssertion
 
 PropertyAccess
-  ( "?" / NonNullAssertion )? "." (IdentifierName / PrivateIdentifier)
+  ( QuestionMark / NonNullAssertion )? Dot (IdentifierName / PrivateIdentifier)
 
 SuperProperty
-  "super[" __ Expression __ "]"
+  "super[" __ Expression __ CloseBracket
 
 MetaProperty
-  "new.target"
-  "import.meta"
+  New Dot Target
+  "import.meta" ->
+    return { $loc, token: $1 }
 
 # https://262.ecma-international.org/#prod-FormalParameters
 # The parameters in a function definition
 Parameters
   # NOTE: BindingElement -> ParameterElement
   # TODO: Rest parameter
-  TypeParameters? "(" ParameterElement* __ ")"
-  "" -> "()"
+  TypeParameters? OpenParen ParameterElement* __ CloseParen
+  "" ->
+    return { $loc, token: "()" }
 
 # NOTE: Similar to BindingElement but appears in formal parameters list
 ParameterElement
@@ -305,12 +309,14 @@ ParameterElement
   __ (BindingIdentifier / BindingPattern) TypeSuffix? Initializer? ParameterElementDelimiter
 
 ParameterElementDelimiter
-  _* ","
+  _* Comma
    # NOTE: Don't insert comma before inline closing paren
   &( _* ")" )
   # NOTE: Do insert comma before closing paren on following line
-  &( __ ")" ) -> ","
-  &EOS -> ","
+  &( __ ")" ) ->
+    return { $loc, token: "," }
+  &EOS ->
+    return { $loc, token: "," }
 
 # https://262.ecma-international.org/#prod-BindingIdentifier
 BindingIdentifier
@@ -329,11 +335,11 @@ ObjectBindingPattern
 # https://262.ecma-international.org/#prod-ArrayBindingPattern
 # NOTE: Simplified from spec
 ArrayBindingPattern
-  "[" (BindingElement / Elision)* ( __ BindingRestElement )? __ "]"
+  OpenBracket (BindingElement / Elision)* ( __ BindingRestElement )? __ CloseBracket
 
 # https://262.ecma-international.org/#prod-BindingProperty
 BindingProperty
-  __ PropertyName __ ":" __ (BindingIdentifier / BindingPattern) Initializer? ObjectPropertyDelimiter
+  __ PropertyName __ Colon __ (BindingIdentifier / BindingPattern) Initializer? ObjectPropertyDelimiter
   __ BindingIdentifier Initializer? ObjectPropertyDelimiter
 
 # https://262.ecma-international.org/#prod-BindingRestProperty
@@ -427,7 +433,7 @@ BooleanLiteral
     return { $loc, token: $1 }
 
 Comma
-  _* "," _*
+  _* Comma _*
 
 # https://262.ecma-international.org/#prod-Identifier
 Identifier
@@ -447,8 +453,8 @@ IdentifierReference
 
 # https://262.ecma-international.org/#prod-ArrayLiteral
 ArrayLiteral
-  "[" NestedElementList __ "]"
-  "[" ElementList __ "]"
+  OpenBracket NestedElementList __ CloseBracket
+  OpenBracket ElementList __ CloseBracket
 
 NestedElementList
   PushIndent NestedElement*:elements PopIndent ->
@@ -460,21 +466,22 @@ NestedElement
   Nested InlineElementList ArrayElementDelimiter
 
 ArrayElementDelimiter
-  _* ","
+  _* Comma
   # NOTE: Don't insert comma before closing bracket
   # Ideally it would be nice to insert a trailing comma before newline followed by closing bracket, but in practice
   # it is difficult to keep the correct number of commas for elision elements. This is also closer to keeping source
   # verbatim.
   &( __ "]" )
-  &EOS -> ","
+  &EOS ->
+    return { $loc, token: "," }
 
 # https://262.ecma-international.org/#prod-ElementList
 # NOTE: Modified and simplified from the spec
 ElementList
-  ArrayElementExpression ( __ "," __ ArrayElementExpression )*
+  ArrayElementExpression ( __ Comma __ ArrayElementExpression )*
 
 InlineElementList
-  ArrayElementExpression ( _* "," _* ArrayElementExpression )*
+  ArrayElementExpression ( _* Comma _* ArrayElementExpression )*
 
 # NOTE: Modified and simplified from the spec
 ArrayElementExpression
@@ -483,13 +490,13 @@ ArrayElementExpression
 # https://262.ecma-international.org/#prod-Elision
 Elision
   # NOTE: The repetition must be handled from outside rather than using left recursion here
-  __ ","
+  __ Comma
 
 # https://262.ecma-international.org/#prod-ObjectLiteral
 # NOTE: Slightly simplified from spec
 ObjectLiteral
   OpenBrace &EOS NestedPropertyDefinitions __ CloseBrace
-  OpenBrace __ PropertyDefinitionList __ ("," __)? CloseBrace
+  OpenBrace __ PropertyDefinitionList __ (Comma __)? CloseBrace
   OpenBrace __ CloseBrace
   InsertOpenBrace &EOS NestedPropertyDefinitions InsertNewline InsertIndent InsertCloseBrace
 
@@ -503,19 +510,21 @@ NestedPropertyDefinition
   Nested PropertyDefinition ObjectPropertyDelimiter
 
 ObjectPropertyDelimiter
-  _* ","
+  _* Comma
   &( _* CloseBrace ) # NOTE: Don't insert comma before inline closing bracket
   # NOTE: Ensures trailing commas
-  &( __ CloseBrace ) -> ","
-  &EOS -> ","
+  &( __ CloseBrace ) ->
+    return { $loc, token: "," }
+  &EOS ->
+    return { $loc, token: "," }
 
 PropertyDefinitionList
-  PropertyDefinition (__ "," __ PropertyDefinition)*
+  PropertyDefinition (__ Comma __ PropertyDefinition)*
 
 # https://262.ecma-international.org/#prod-PropertyDefinition
 PropertyDefinition
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
-  PropertyName __ ":" AssignmentExpression
+  PropertyName __ Colon AssignmentExpression
   MethodDefinition
   "..." AssignmentExpression
   # NOTE: this needs to be at the bottom to prevent shadowing PropertyName
@@ -527,7 +536,7 @@ PropertyName
   StringLiteral
   IdentifierName
   # https://262.ecma-international.org/#prod-ComputedPropertyName
-  "[" AssignmentExpression __ "]"
+  OpenBracket AssignmentExpression __ "]"
 
 # https://262.ecma-international.org/#prod-MethodDefinition
 MethodDefinition
@@ -709,12 +718,16 @@ BlockStatement
 IfStatement
   # NOTE: Added paren-less condition
   If Condition Block ( __ Else Block )?
-  "unless" Condition:condition Block:block ->
-    return ["if", condition.map((c) => {
-      if (c === "(") return "(!("
-      if (c === ")") return "))"
-      return c
-    }), block]
+  Unless:kind Condition:condition Block:block ->
+    // Rewrite unless to if
+    condition.forEach((c) => {
+      if (!c) return
+      if (c.token === "(") c.token = "(!("
+      if (c.token === ")") c.token = "))"
+    })
+    kind.token = "if"
+
+    return [kind, condition, block]
 
 # https://262.ecma-international.org/#prod-IterationStatement
 IterationStatement
@@ -727,8 +740,7 @@ IterationStatement
 
 # NOTE: Added from CoffeeScript
 LoopStatement
-  "loop" NonIdContinue Block:b ->
-    return ["while(true)", b]
+  Loop Block
 
 # https://262.ecma-international.org/#prod-DoWhileStatement
 DoWhileStatement
@@ -751,17 +763,17 @@ WhileClause
 
 # https://262.ecma-international.org/#prod-ForStatement
 ForStatement
-  For __ "(" __ ( LexicalDeclaration / VariableStatement / Expression? ) __ ";" __ Expression? ";" __ Expression? ")" Block
+  For __ OpenParen __ ( LexicalDeclaration / VariableStatement / Expression? ) __ Semicolon __ Expression? Semicolon __ Expression? CloseParen Block
   # TODO: Optional parens
 
 # https://262.ecma-international.org/#prod-ForInOfStatement
 ForInOfStatement
   # NOTE: Consolidated declarations
-  For __ "(" __          ( ( "var" __ ForBinding ) / ForDeclaration / LeftHandSideExpression ) __ "in" __ Expression __ ")"           Block
+  For __ OpenParen __          ( ( "var" __ ForBinding ) / ForDeclaration / LeftHandSideExpression ) __ "in" __ Expression __ CloseParen           Block
   # NOTE: Added optional parens
   For __ InsertOpenParen ( ( "var" __ ForBinding ) / ForDeclaration / LeftHandSideExpression ) __ "in" __ Expression InsertCloseParen Block
   # NOTE: Consolidated optional 'await' and declarations
-  For ( __ Await )? __ "(" __          ( ( "var" __ ForBinding ) / ForDeclaration / LeftHandSideExpression ) __ "of" AssignmentExpression __ ")"           Block
+  For ( __ Await )? __ OpenParen __          ( ( "var" __ ForBinding ) / ForDeclaration / LeftHandSideExpression ) __ "of" AssignmentExpression __ CloseParen           Block
   # NOTE: Added optional parens
   For ( __ Await )? __ InsertOpenParen ( ( "var" __ ForBinding ) / ForDeclaration / LeftHandSideExpression ) __ "of" AssignmentExpression InsertCloseParen Block
 
@@ -807,16 +819,14 @@ CaseClause
   # NOTE: Merged in default clause
   "default" NonIdContinue ImpliedColon NestedBlockExpressions
 
-When
-  "when" NonIdContinue -> "case"
-
 ImpliedColon
-  __ ":"
-  "" -> ":"
+  __ Colon
+  "" ->
+    return { $loc, token: ":" }
 
 # https://262.ecma-international.org/#prod-TryStatement
 TryStatement
-  "try" BracedBlock Catch?:c Finally?:f ->
+  Try BracedBlock CatchClause?:c Finally?:f ->
     if (!c && !f) {
       return [$1, $2, " catch {}"]
     }
@@ -824,12 +834,12 @@ TryStatement
     return [$1, $2, c, f]
 
 # https://262.ecma-international.org/#prod-Catch
-Catch
-  __ "catch" CatchBind? BracedBlock
+CatchClause
+  __ Catch CatchBind? BracedBlock
 
 # NOTE: Added optional parentheses to catch binding
 CatchBind
-  __ "(" __ CatchParameter __ ")"
+  __ OpenParen __ CatchParameter __ CloseParen
   __ InsertOpenParen CatchParameter InsertCloseParen
 
 # https://262.ecma-international.org/#prod-Finally
@@ -842,7 +852,7 @@ CatchParameter
   BindingPattern
 
 Condition
-  __ "(" __ Expression __ ")"
+  __ OpenParen __ Expression __ CloseParen
   !EOS __ InsertOpenParen Expression InsertCloseParen
 
 # https://262.ecma-international.org/#prod-ExpressionStatement
@@ -873,10 +883,6 @@ MaybeNestedExpression
   !EOS TrailingComment* Expression
   &EOS ObjectLiteral
 
-Return
-  "return" NonIdContinue ->
-    return { $loc, token: $1 }
-
 # https://262.ecma-international.org/#prod-ImportDeclaration
 ImportDeclaration
   "import type" NonIdContinue __ ImportClause __ FromClause -> { ts: true, children: $0 }
@@ -886,37 +892,31 @@ ImportDeclaration
   ImpliedImport ImportClause __ FromClause
 
 ImpliedImport
+  # NOTE: Not adding $loc to source map here yet because it will point to the start of the identifier
+  # the proper place may be to use the From location
   "" -> "import "
-
-Import
-  "import" &/\s/ ->
-    return { $loc, token: $1 }
 
 # https://262.ecma-international.org/#prod-ImportClause
 ImportClause
-  ImportedBinding ( __ "," __ ( NameSpaceImport / NamedImports ) )?
+  ImportedBinding ( __ Comma __ ( NameSpaceImport / NamedImports ) )?
   NameSpaceImport
   NamedImports
 
 # https://262.ecma-international.org/#prod-NameSpaceImport
 NameSpaceImport
-  "*" __ "as" NonIdContinue __ ImportedBinding
+  "*" __ As NonIdContinue __ ImportedBinding
 
 # https://262.ecma-international.org/#prod-NamedImports
 NamedImports
-  OpenBrace ImportSpecifier* ( __ "," )? __ CloseBrace
+  OpenBrace ImportSpecifier* ( __ Comma )? __ CloseBrace
 
 # https://262.ecma-international.org/#prod-FromClause
 FromClause
   From __ ModuleSpecifier
 
-From
-  "from" NonIdContinue ->
-    return { $loc, token: $1 }
-
 # https://262.ecma-international.org/#prod-ImportSpecifier
 ImportSpecifier
-  __ ModuleExportName __ "as" NonIdContinue __ ImportedBinding ObjectPropertyDelimiter
+  __ ModuleExportName __ As NonIdContinue __ ImportedBinding ObjectPropertyDelimiter
   __ ImportedBinding ObjectPropertyDelimiter
 
 # https://262.ecma-international.org/#prod-ModuleExportName
@@ -958,16 +958,16 @@ ExportDeclaration
 
 # https://262.ecma-international.org/#prod-ExportFromClause
 ExportFromClause
-  "*" ( __ "as" NonIdContinue __ ModuleExportName )?
+  "*" ( __ As NonIdContinue __ ModuleExportName )?
   NamedExports
 
 # https://262.ecma-international.org/#prod-NamedExports
 NamedExports
-  OpenBrace ExportSpecifier* (__ "," )? __ CloseBrace
+  OpenBrace ExportSpecifier* (__ Comma )? __ CloseBrace
 
 # https://262.ecma-international.org/#prod-ExportSpecifier
 ExportSpecifier
-  __ ModuleExportName ( __ "as" __ ModuleExportName )? ObjectPropertyDelimiter
+  __ ModuleExportName ( __ As __ ModuleExportName )? ObjectPropertyDelimiter
 
 # https://262.ecma-international.org/#prod-Declaration
 Declaration
@@ -983,7 +983,7 @@ HoistableDeclaration
 # https://262.ecma-international.org/#prod-LexicalDeclaration
 LexicalDeclaration
   # NOTE: Eliminated left recursion
-  LetOrConst __ LexicalBinding ( __ "," __ LexicalBinding )*
+  LetOrConst __ LexicalBinding ( __ Comma __ LexicalBinding )*
   # NOTE: Added const shorthand
   InsertConst ( BindingPattern / BindingIdentifier ) TypeSuffix? __ ConstAssignment AssignmentExpression
 
@@ -1008,7 +1008,7 @@ VariableStatement
 
 # https://262.ecma-international.org/#prod-VariableDeclarationList
 VariableDeclarationList
-  VariableDeclaration ( __ "," __ VariableDeclaration )*
+  VariableDeclaration ( __ Comma __ VariableDeclaration )*
 
 # https://262.ecma-international.org/#prod-VariableDeclaration
 VariableDeclaration
@@ -1140,7 +1140,8 @@ CoffeeMultiLineComment
 
 # InlineComment is a multi-line comment with no line separators
 InlineComment
-  "/*" $(!"*/" [^\r\n] )* "*/"
+  $( "/*" $(!"*/" [^\r\n] )* "*/" ) ->
+    return { $loc, token: $1 }
 
 RestOfLine
   ([ \t]+ / SingleLineComment / MultiLineComment)* EOL
@@ -1151,16 +1152,25 @@ TrailingComment
 # Non-newline "white space" (includes comments)
 # TODO: JS counts line terminators that appear in multi-line comments. For example "return /*\n*/5" is different than "return /**/ 5" because of the newline within the comment
 _
-  ([\t ]+ / Comment)+
+  (NonNewlineWhitespace / Comment)+
+
+NonNewlineWhitespace
+  [ \t]+ ->
+    return { $loc, token: $0 }
 
 # Optional whitespace including newlines and comments
 __
-  ([\s]+ / Comment)*
+  (Whitespace / Comment)*
+
+Whitespace
+  [\s]+ ->
+    return { $loc, token: $0 }
 
 StatementDelimiter
-  TrailingComment* ";" TrailingComment*
+  TrailingComment* Semicolon TrailingComment*
   # Implied semicolon
-  &EOS -> [";", $1]
+  "" &EOS ->
+    return { $loc, token: ";" }
 
 NonIdContinue
   /(?!\p{ID_Continue})/
@@ -1169,7 +1179,7 @@ NonIdContinue
 
 As
   "as" NonIdContinue ->
-    return { $loc, token: "as" }
+    return { $loc, token: $1 }
 
 Async
   "async" ->
@@ -1179,12 +1189,36 @@ Await
   "await" NonIdContinue ->
     return { $loc, token: $1 }
 
+Catch
+  "catch" ->
+    return { $loc, token: $1 }
+
 Class
   "class" ->
     return { $loc, token: $1 }
 
 CloseBrace
   "}" ->
+    return { $loc, token: $1 }
+
+CloseBracket
+  "]" ->
+    return { $loc, token: $1 }
+
+CloseParen
+  ")" ->
+    return { $loc, token: $1 }
+
+Colon
+  ":" ->
+    return { $loc, token: $1 }
+
+Comma
+  "," ->
+    return { $loc, token: $1 }
+
+Dot
+  "." ->
     return { $loc, token: $1 }
 
 Else
@@ -1199,6 +1233,10 @@ For
   "for" NonIdContinue ->
     return { $loc, token: $1 }
 
+From
+  "from" NonIdContinue ->
+    return { $loc, token: $1 }
+
 Function
   "function" ->
     return { $loc, token: $1 }
@@ -1207,8 +1245,42 @@ If
   "if" ->
     return { $loc, token: $1 }
 
+Import
+  # NOTE: this is a hack so import.meta will parse correctly
+  "import" &/\s/ ->
+    return { $loc, token: $1 }
+
+Loop
+  # NOTE: loop becomes while
+  "loop" NonIdContinue ->
+    return { $loc, token: "while(true)" }
+
+New
+  "new" ->
+    return { $loc, token: $1 }
+
 OpenBrace
   "{" ->
+    return { $loc, token: $1 }
+
+OpenBracket
+  "[" ->
+    return { $loc, token: $1 }
+
+OpenParen
+  "(" ->
+    return { $loc, token: $1 }
+
+QuestionMark
+  "?" ->
+    return { $loc, token: $1 }
+
+Return
+  "return" NonIdContinue ->
+    return { $loc, token: $1 }
+
+Semicolon
+  ";" ->
     return { $loc, token: $1 }
 
 Static
@@ -1219,9 +1291,22 @@ Switch
   "switch" ->
     return { $loc, token: $1 }
 
+Target
+  "target" ->
+    return { $loc, token: $1 }
+
+Try
+  "try" ->
+    return { $loc, token: $1 }
+
 Unless
   "unless" ->
     return { $loc, token: $1 }
+
+# NOTE: When maps to 'case'
+When
+  "when" NonIdContinue ->
+    return { $loc, token: "case" }
 
 ## JSX
 
@@ -1255,7 +1340,7 @@ JSXFragment
 JSXElementName
   # Merged in https://facebook.github.io/jsx/#prod-JSXNamespacedName
   # Merged in https://facebook.github.io/jsx/#prod-JSXMemberExpression
-  JSXIdentifierName ( (":" JSXIdentifierName) / ( "." JSXIdentifierName )* )
+  JSXIdentifierName ( (Colon JSXIdentifierName) / ( Dot JSXIdentifierName )* )
 
 # NOTE: Like IdentifierName but includes hyphens after start
 # NOTE: Combined from recursive https://facebook.github.io/jsx/#prod-JSXIdentifier definition
@@ -1277,7 +1362,7 @@ JSXAttribute
 # https://facebook.github.io/jsx/#prod-JSXAttributeName
 JSXAttributeName
   # NOTE: Merged JSXIdentifier and JSXNamespacedName
-  JSXIdentifierName ( ":" JSXIdentifierName )?
+  JSXIdentifierName ( Colon JSXIdentifierName )?
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeInitializer
 JSXAttributeInitializer
@@ -1355,10 +1440,12 @@ InterfaceProperty
   MethodSignature TypeSuffix?
 
 InterfacePropertyDelimiter
-  _* ";"
+  _* Semicolon
   &( _* CloseBrace ) # NOTE: Don't insert semi-colon before inline closing brace
-  &( __ CloseBrace ) -> ";"
-  &EOS -> ";"
+  &( __ CloseBrace ) ->
+    return { $loc, token: ";" }
+  &EOS ->
+    return { $loc, token: ";" }
 
 NamespaceBlock
   __ OpenBrace EOS NestedTypeDeclarations __ CloseBrace
@@ -1375,17 +1462,17 @@ NestedTypeDeclaration
   Nested TypeDeclaration InterfacePropertyDelimiter
 
 TypeIndexSignature
-  ( [+-]? "readonly" __ )? "[" TypeIndex "]" ( __ [+-] "?" )?
+  ( [+-]? "readonly" __ )? OpenBracket TypeIndex CloseBracket ( __ [+-] QuestionMark )?
 
 TypeIndex
   __ Identifier TypeSuffix
-  __ PropertyName __ "in" Type ( __ "as" Type )?
+  __ PropertyName __ "in" Type ( __ As Type )?
 
 TypeSuffix
-  "?"? __ ":" Type -> { ts: true, children: $0 }
+  QuestionMark? __ Colon Type -> { ts: true, children: $0 }
 
 ReturnTypeSuffix
-  __ ":" ( __ "asserts" NonIdContinue )? TypePredicate -> { ts: true, children: $0 }
+  __ Colon ( __ "asserts" NonIdContinue )? TypePredicate -> { ts: true, children: $0 }
 
 TypePredicate
   Type ( __ "is" NonIdContinue Type )?
@@ -1408,17 +1495,17 @@ TypeUnaryOp
   "infer"
 
 TypeIndexedAccess
-  __ "[" Type? __ "]"
+  __ OpenBracket Type? __ CloseBracket
 
 TypePrimary
   InterfaceBlock
-  __ "(" Type __ ")"
+  __ OpenParen Type __ CloseParen
   _* FunctionType
-  _* IdentifierName ("." IdentifierName)* TypeArguments?
+  _* IdentifierName (Dot IdentifierName)* TypeArguments?
   _* TypeLiteral
 
 TypeConditional
-  TypeBinary ( __ "extends" Type ( __ "?" Type __ ":" Type )? )?
+  TypeBinary ( __ "extends" Type ( __ QuestionMark Type __ Colon Type )? )?
 
 TypeLiteral
   Literal
@@ -1433,10 +1520,10 @@ FunctionType
   Parameters __ "=>" Type
 
 TypeArguments
-  __ "<" __ Type (__ "," __ Type)* (__ ",")? __ ">"
+  __ "<" __ Type (__ Comma __ Type)* (__ Comma)? __ ">"
 
 TypeParameters
-  __ "<" __ Type (__ "," __ Type)* (__ ",")? __ ">" ->
+  __ "<" __ Type (__ Comma __ Type)* (__ Comma)? __ ">" ->
     return { ts: true, children: $0 }
 
 TypeParameter
@@ -1446,12 +1533,14 @@ TypeConstraint
   __ "extends" Type
 
 TypeParameterDelimiter
-  _* ","
+  _* Comma
    # NOTE: Don't insert comma before inline closing angle bracket
   &( _* ">" )
   # NOTE: Do insert comma before closing angle bracket on following line
-  &( __ ">" ) -> ","
-  &EOS -> ","
+  &( __ ">" ) ->
+    return { $loc, token: "," }
+  &EOS ->
+    return { $loc, token: "," }
 
 ## Utility
 
@@ -1481,18 +1570,21 @@ Debugger
 # Insertions
 
 InsertOpenParen
-  "" -> "("
+  "" ->
+    return { $loc, token: "(" }
 
 InsertCloseParen
-  "" -> ")"
+  "" ->
+    return { $loc, token: ")" }
 
 InsertOpenBrace
   # NOTE: Includes a preceding space
   "" ->
-    return [" ", { $loc, token: "{" } ]
+    return [{ $loc, token: " " }, { $loc, token: "{" } ]
 
 InsertCloseBrace
-  "" -> "}"
+  "" ->
+    return { $loc, token: "}" }
 
 InsertConst
   # NOTE: Includes a trailing space
@@ -1511,13 +1603,16 @@ InsertIndent
     return "".padStart(global.currentIndent * 2)
 
 InsertSpace
-  "" -> " "
+  "" ->
+    return { $loc, token: " " }
 
 InsertDot
-  "" -> "."
+  "" ->
+    return { $loc, token: "." }
 
 InsertBreak
-  "" -> "break;"
+  "" ->
+    return { $loc, token: "break;" }
 
 # Indentation
 
