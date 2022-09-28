@@ -310,6 +310,24 @@ processRootFile(default library)
 `fs` will not be found when checking file imports but will be found later when semantic checking by using the type references.
 
 
+Debugging Hera Parser State
+---
+
+Adds a bright green cursor to the current position.
+
+```javascript
+console.log(`${state.input.slice(0, state.pos)}%c^%c${state.input.slice(state.pos)}`, 'color: lime', 'color: inherit')
+```
+
+Getting current location in parse stack:
+
+```javascript
+s = Error().stack.split(/\n    at /)
+s.shift()
+s = s.filter((e) => !e.match(/^eval/)).map((e) => e.split(' ')[0])
+s = s.slice(0, s.indexOf('Program'))
+```
+
 Timesheet
 ---
 
@@ -344,7 +362,10 @@ Timesheet
 2022-09-24 | 0.25  | --inline-map compiler option
 2022-09-25 | 4.75  | source map parsing for composition; source map composition testing
 2022-09-26 | 9.00  | compose source maps in esm loader; source maps remapping; source mapping working with c8
-2022-09-26 | 3.00  | sourcemapping implied imports; const/readonly assignment; multiline-comment; postfix conditionals; source map errors in esm loader; readme;
+2022-09-27 | 3.00  | sourcemapping implied imports; const/readonly assignment; multiline-comment; postfix conditionals; source map errors in esm loader; readme;
+2022-09-28 | 3.50  | don't add trailing object commas; nested lexical bindings;
+
+nested function application
 
 TODO:
 
@@ -365,8 +386,8 @@ TODO:
     Cannot find global type 'Promise'.typescript(2318)
   ```
 - [ ] auto-import suggest in .coffee
-- [ ] resolve .civet/.coffee/.hera/.ts/.js imports from .ts
-- [ ] resolve .civet/.coffee/.hera/.ts/.js imports from .js
-- [ ] import .civet/.coffee/.hera/.ts/.js from .coffee
+- [x] resolve .civet/.coffee/.hera/.ts/.js imports from .ts
+- [x] resolve .civet/.coffee/.hera/.ts/.js imports from .js
+- [x] import .civet/.coffee/.hera/.ts/.js from .coffee
 - [ ] update imported file exports, see errors in importing file
 - [ ] vscode commands

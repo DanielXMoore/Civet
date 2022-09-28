@@ -71,6 +71,7 @@ TODO
     - [ ] Handle .civet docs outside of project root
     - [ ] Handle multi-root projects
     - [ ] Use @danielx/civet installed in node_modules if present
+    - [ ] Automate adding import suggestion
     - [ ] Handle file updates
       - [x] Add TextDocuments to service
       - [x] Update docs on changes
@@ -80,6 +81,8 @@ TODO
       - [x] Correctly map runtime errors using source-map-support in esm loader
       - [x] Finish adding source mappings to parser/transpiler
       - [ ] Minor Issues
+        - [ ] Mappings for TypeScript
+        - [ ] Mappings for JSX
         - [x] Postfix conditionals
         - [x] Block String sourcemapping
         - [x] `=`
@@ -96,7 +99,7 @@ TODO
     - [x] Load installed @types/*
     - [ ] Diagnostics (reverse map)
       - [x] Display Diagnostics
-      - [ ] Find out why diagnostic has weird `| undefined` in array types
+      - [x] Find out why diagnostic has weird `| undefined` in array types (it was excess comma in multi-line array bug)
 - [ ] Syntax Experiments
   - [ ] Explore `gen.next(args, ...)` shorthand
 
