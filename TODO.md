@@ -13,6 +13,8 @@ TODO
 - [x] Keep comments and whitespace
 - [ ] `\`\`\`` Triple backtick blocks?
 - [ ] TypeScript
+  - [ ] Parameter Properties
+  https://www.typescriptlang.org/docs/handbook/2/classes.html#parameter-properties
   - [x] TS Compiling Experiment
   - [x] `interface` declaration
   - [x] `type` declaration
