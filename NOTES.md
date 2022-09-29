@@ -364,28 +364,10 @@ Timesheet
 2022-09-26 | 9.00  | compose source maps in esm loader; source maps remapping; source mapping working with c8
 2022-09-27 | 3.00  | sourcemapping implied imports; const/readonly assignment; multiline-comment; postfix conditionals; source map errors in esm loader; readme;
 2022-09-28 | 5.50  | don't add trailing object commas; nested lexical bindings; static `@` shorthand; hacky nested function application for indented objects
+2022-09-29 | 3.00  | better handling of trailing .fnCall after newline after and within arguments
 
 TODO:
 
-- [x] figure out how to correctly use source-map-support to remap exception numbers (source-map-support)
-- [x] Figure out how c8 coverage uses source maps
-- [x] import .civet/.coffee/.hera/.ts/.js from .civet
-- ~~[ ] Package Hera compiler properly so we can transpile hera from within the extension~~
-- [x] or hera plugin
-- [x] Test out loading host project plugin
-- [x] Handle hover in `.coffee` files
-  - [x] convert coffee sourcemaps
-- [x] Rewrite transpiled files names/locations in Go to Definition
-- [x] Handle hover in .ts files
-- [x] Make sure to load lib files listed in tsconfig
-  should fix errors like
-  ```
-    An async function or method must return a 'Promise'. Make sure you have a declaration for 'Promise' or include 'ES2015' in your '--lib' option.typescript(2697)
-    Cannot find global type 'Promise'.typescript(2318)
-  ```
 - [ ] auto-import suggest in .coffee
-- [x] resolve .civet/.coffee/.hera/.ts/.js imports from .ts
-- [x] resolve .civet/.coffee/.hera/.ts/.js imports from .js
-- [x] import .civet/.coffee/.hera/.ts/.js from .coffee
 - [ ] update imported file exports, see errors in importing file
 - [ ] vscode commands

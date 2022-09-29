@@ -11,6 +11,7 @@ TODO
 - [x] Import shorthand
 - [x] `:=` `readonly` field shorthand
 - [x] Keep comments and whitespace
+- [x] `@` Class Static shorthand
 - [ ] `\`\`\`` Triple backtick blocks?
 - [ ] TypeScript
   - [ ] Parameter Properties
@@ -42,7 +43,7 @@ TODO
 - [x] Keep shebang line
 - [ ] JSX 😿
   - [x] Basic Support
-  - [ ] Indentation based JSX
+  - [ ] Indentation based auto-closing JSX
 - [ ] Infrastructure
   - [ ] 100% code coverage
     - [ ] Accurate coverage for .civet files (need to compose ts-node source map with civet source map)

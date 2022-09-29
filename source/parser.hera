@@ -22,7 +22,15 @@ Arguments
   OpenParen ArgumentList? ( __ Comma )? __ CloseParen
   # NOTE: Added spacing based implicit function application
   # Trailing (__ MemberExpressionRest)* is to capture trailing .someMethod and bind them at the right place
-  ImplicitApplication ( &EOS Nested MemberExpressionRest )*
+  ImplicitApplication
+
+ArgumentsWithTrailingCallExpressions
+  # Since this is recursive Arguments must consume input to avoid infinite recursion
+  # NOTE: Do not allow trailing template literals to match
+  TrackIndent (( Arguments ( &EOS Samedent !"`" CallExpressionRest )* RestoreIndent ) / RestoreIndent) ->
+    // No match, only restored indent
+    if (!$2) return $skip
+    return $2
 
 # https://262.ecma-international.org/#prod-ArgumentList
 ArgumentList
@@ -262,14 +270,16 @@ NewExpression
 
 # https://262.ecma-international.org/#prod-CallExpression
 CallExpression
-  "super" Arguments
+  # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
+  "super" ArgumentsWithTrailingCallExpressions
   "import" __ OpenParen AssignmentExpression __ CloseParen
   MemberExpression CallExpressionRest*
 
 CallExpressionRest
-  (OptionalShorthand / NonNullAssertion)? Arguments
   MemberExpressionRest
   TemplateLiteral
+  # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
+  (OptionalShorthand / NonNullAssertion)? ArgumentsWithTrailingCallExpressions
 
 # NOTE: Added shorthand x?(3) -> x?.(3)
 OptionalShorthand
@@ -296,9 +306,9 @@ MemberExpressionRest
   ( OptionalShorthand / NonNullAssertion )? OpenBracket Expression __ CloseBracket
   # NOTE: Combined Optional and Property access
   # TODO: this doesn't yet work for arbitrarily deep nesting, only the first level
-  ( EOS NestedFurther )? PropertyAccess
+  ( &EOS IndentedFurther )? PropertyAccess
   # NOTE: Added CoffeeScript :: prototype shorthand
-  "::" IdentifierName?:id ->
+  ( &EOS IndentedFurther )? "::" IdentifierName?:id ->
     if (id)
       return [".prototype.", id]
     return ".prototype"
@@ -1729,6 +1739,11 @@ InsertBreak
 
 Init
   Shebang? DirectivePrologue:directives "" ->
+    // Storage for TrackIndent/RestoreIndent
+    module.lastIndent = 0
+    module.trackedIndents = [0]
+
+    // Storage for PushIndent/PopIndent
     module.currentIndent = 0
     module.indentLevels = [0]
     module.verbose = false
@@ -1763,10 +1778,50 @@ Init
 
     return $0
 
+# Holds the last indent level in `module.lastIndent`
+# Can get weird with backtracking but should work out as long as
+# EOS/Nested rules are used carefully and if we only compare to the
+# pushed value.
 Indent
   ( "  " / "\t" )* ->
-    return $1.length
+    const level = $1.length
+    module.lastIndent = level
 
+    return {
+      $loc,
+      token: "".padStart(level * 2),
+      level
+    }
+
+# Tracks current indentation without assuming that it should nest deeper
+# It may be possible to consolidate this and PushIndent eventually.
+# Currently they are kind of two parallel attempts at a similar thing.
+# Must be matched with RestoreIndent
+TrackIndent
+  "" ->
+    module.trackedIndents.push(module.lastIndent)
+
+RestoreIndent
+  "" ->
+    module.lastIndent = module.trackedIndents.pop()
+
+Samedent
+  EOS? Indent:indent ->
+    if (indent.level === module.trackedIndents[module.trackedIndents.length - 1]) {
+      return $0
+    }
+    return $skip
+
+IndentedFurther
+  EOS? Indent:indent ->
+    // console.log("indented further", indent.level, module.trackedIndents[module.trackedIndents.length - 1])
+    if (indent.level > module.trackedIndents[module.trackedIndents.length - 1]) {
+      return $0
+    }
+    return $skip
+
+# Indents one level deeper
+# Must be matched with PopIndent
 PushIndent
   "" ->
     module.currentIndent++
@@ -1789,30 +1844,16 @@ PopIndent
 
 Nested
   EOS?:eos Indent:indent ->
+    const { level } = indent
     const currentIndent = module.indentLevels[module.indentLevels.length-1]
     if (module.verbose) {
       console.log("global indent", module.currentIndent)
-      console.log("Indented", indent, currentIndent)
+      console.log("Indented", level, currentIndent)
     }
-    if (indent !== currentIndent) {
+    if (level !== currentIndent) {
       if (module.verbose) {
         console.log("skipped nested")
       }
       return $skip
     }
-    return [eos, "".padStart(indent * 2)]
-
-NestedFurther
-  EOS?:eos Indent:indent ->
-    const currentIndent = module.indentLevels[module.indentLevels.length-1]
-    if (module.verbose) {
-      console.log("global indent", module.currentIndent)
-      console.log("Indented", indent, currentIndent)
-    }
-    if (indent !== currentIndent + 1) {
-      if (module.verbose) {
-        console.log("skipped nested")
-      }
-      return $skip
-    }
-    return [eos, "".padStart(indent * 2)]
+    return $0
