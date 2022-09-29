@@ -364,7 +364,7 @@ Timesheet
 2022-09-26 | 9.00  | compose source maps in esm loader; source maps remapping; source mapping working with c8
 2022-09-27 | 3.00  | sourcemapping implied imports; const/readonly assignment; multiline-comment; postfix conditionals; source map errors in esm loader; readme;
 2022-09-28 | 5.50  | don't add trailing object commas; nested lexical bindings; static `@` shorthand; hacky nested function application for indented objects
-2022-09-29 | 3.00  | better handling of trailing .fnCall after newline after and within arguments
+2022-09-29 | 3.75  | better handling of trailing .fnCall after newline after and within arguments; test cleanup
 
 TODO:
 
