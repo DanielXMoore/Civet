@@ -131,8 +131,6 @@ SourceMap.remap = (codeWithSourceMap, upstreamMap, sourcePath, targetPath) ->
     console.warn "No source map found in code"
     return codeWithSourceMap
 
-  debugger
-
   composedLines = SourceMap.composeLines upstreamMap.data.lines, parsed.lines
   upstreamMap.data.lines = composedLines
 
