@@ -5,7 +5,7 @@ TODO
 - [x] JavaScript Compat (default stance is JS code should "just work")
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
   - [ ] Implicit Returns
-  - [ ] """ Interpolations
+  - [x] """ Interpolations
   - [ ] " Interpolations
   - [x] ###
 - [x] Import shorthand
@@ -54,6 +54,8 @@ TODO
     - [x] Basic ESM Loader
   - [x] esbuild plugin so we can package up projects that contain `.civet` files
   - [ ] CoffeeSense inspired LSP
+    - [ ] Language Icon https://stackoverflow.com/a/70930298/68210
+    - [ ] Experiment with forking/patching `vscode/extensions/typescript-language-features` to add a transpilation resolver and to sourcemap the messages
     - [ ] Syntax Highlighting
       - [x] Basic highlighting
       - [ ] Highlight Type Suffixes
@@ -71,7 +73,7 @@ TODO
         resolveModuleNames [ 'tslib', './main.js' ] /home/daniel/apps/civet/source/esm.civet
         failed to resolve tslib /home/daniel/apps/civet/source/esm.civet
       ```
-    - [ ] Handle .civet docs outside of project root
+    - [ ] Handle .civet files outside of project root
     - [ ] Handle multi-root projects
     - [ ] Use @danielx/civet installed in node_modules if present
     - [ ] Automate adding import suggestion
@@ -79,7 +81,6 @@ TODO
       - [x] Add TextDocuments to service
       - [x] Update docs on changes
       - [x] Update sourcemap/meta on changes
-    - [ ] Language Icon https://stackoverflow.com/a/70930298/68210
     - [x] Sourcemapping
       - [x] Correctly map runtime errors using source-map-support in esm loader
       - [x] Finish adding source mappings to parser/transpiler

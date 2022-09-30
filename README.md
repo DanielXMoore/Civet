@@ -93,9 +93,9 @@ Things Kept from CoffeeScript
 - Class static shorthand `@`
 - Postfix `if/unless`
 - Block Strings `"""` / `'''`
+  - `#{exp}` interpolation in `"""` strings
 - JSX 😿
 - TODO
-  - [ ] `"""` String interpolation (for compatibility with existing .coffee code)
   - [ ] Chained comparisons
 
 Things Removed from CoffeeScript
@@ -143,7 +143,6 @@ Things Added that CoffeeScript didn't
   - Function annotations
   - `namespace`
   - `interface`
-  - Class constructor shorthand `@( ... )`
   - TypeParameters
   - `!` non-null assertions
   - `:=` readonly class field initializer
@@ -169,6 +168,8 @@ Things Added that CoffeeScript didn't
   - `<` as `extends` shorthand
   - `@#id` -> `this.#id` shorthand for private identifiers
   - `import` shorthand `x from ./x` -> `import x from "./x"`
+  - [ ] TODO `\`\`\`` Block Template Strings
+- Class constructor shorthand `@( ... )`
 - ClassStaticBlock
 - `get`/`set` method definitions
 - Private identifiers `#id`

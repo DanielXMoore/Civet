@@ -364,9 +364,11 @@ Timesheet
 2022-09-26 | 9.00  | compose source maps in esm loader; source maps remapping; source mapping working with c8
 2022-09-27 | 3.00  | sourcemapping implied imports; const/readonly assignment; multiline-comment; postfix conditionals; source map errors in esm loader; readme;
 2022-09-28 | 5.50  | don't add trailing object commas; nested lexical bindings; static `@` shorthand; hacky nested function application for indented objects
-2022-09-29 | 4.50  | better handling of trailing .fnCall after newline after and within arguments; test cleanup; consolidate and fixed a bug with indent tracking; class @ constructor shorthand
+2022-09-29 | 5.50  | better handling of trailing .fnCall after newline after and within arguments; test cleanup; consolidate and fixed a bug with indent tracking; class @ constructor shorthand; CoffeeScript block string interpolation
 
 TODO:
+
+triple parsing? Add a console.log in the block string rule, run a single block string test. See it log three times. Should probably log only once?
 
 - [ ] auto-import suggest in .coffee
 - [ ] update imported file exports, see errors in importing file

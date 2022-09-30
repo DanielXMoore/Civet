@@ -1121,8 +1121,45 @@ HexLiteral
 StringLiteral
   # NOTE: actual CoffeeScript """ string behaviors are pretty weird, this is simplifed
   # TODO: CoffeeScript Interpolation
-  TripleDoubleQuote:s TripleDoubleStringCharacters:str TripleDoubleQuote:e ->
-    return [s, module.dedentBlockString(str), e]
+  TripleDoubleQuote:s (TripleDoubleStringCharacters / CoffeeStringSubstitution)*:strWithSubstitutions TripleDoubleQuote:e ->
+    if (strWithSubstitutions.length === 0) {
+      return $0
+    }
+
+    let initialSpacing, i=0, l=strWithSubstitutions.length, results=[s]
+    // Get initial spacing from the first string token if it is not a substitution
+    const {token} = strWithSubstitutions[0]
+
+    if (token) {
+      initialSpacing = token.match(/^(\r?\n|\n)\s+/)
+    } else {
+      initialSpacing = false
+    }
+
+    while (i < l) {
+      let segment = strWithSubstitutions[i]
+
+      if (segment.token) {
+        segment = module.dedentBlockString(segment, initialSpacing, false)
+        if (i === 0) {
+          // Trim leading newline
+          segment.token = segment.token.replace(/^(\r?\n|\n)/, "")
+        }
+        if (i === l - 1) {
+          // Trim trailing newline
+          segment.token = segment.token.replace(/(\r?\n|\n)$/, "")
+        }
+        results.push(segment)
+      } else {
+        results.push(segment)
+      }
+
+      i++
+    }
+
+    results.push(e)
+    return results
+
   TripleSingleQuote:s TripleSingleStringCharacters:str TripleSingleQuote:e ->
     return [s, module.dedentBlockString(str), e]
   # TODO: CoffeeScript interpolation
@@ -1130,6 +1167,7 @@ StringLiteral
   # https://coffeescript.org/#try:x%20%3D%20%22%0A%20%20hi%0A%20%20there%0A%20%20dude%0A%22%0A%0Ay%20%3D%20%22hi%20%20%20%20%20%20%20%20%20%20there%22%0A%0Az%20%3D%20%22%0A%0A%0Aheyy%0Ayo%22%0A
   $("\"" DoubleStringCharacter* "\"") ->
     return { $loc, token: $1 }
+
   $("'" SingleStringCharacter* "'") ->
     return { $loc, token: $1 }
 
@@ -1140,12 +1178,19 @@ SingleStringCharacter
   /(?:\\.|[^'])+/
 
 TripleDoubleStringCharacters
-  /(?:"(?!"")|\\.|[^"])*/ ->
+  /(?:"(?!"")|#(?!\{)|\\.|[^#"])+/ ->
     return { $loc, token: $0 }
 
 TripleSingleStringCharacters
   /(?:'(?!'')|\\.|[^'])*/ ->
     return { $loc, token: $0 }
+
+CoffeeStringSubstitution
+  CoffeeSubstitutionStart Expression __ CloseBrace
+
+CoffeeSubstitutionStart
+  "#{" ->
+    return { $loc, token: "${" }
 
 # https://262.ecma-international.org/#prod-RegularExpressionLiteral
 RegularExpressionLiteral
@@ -1407,6 +1452,10 @@ TripleDoubleQuote
 # NOTE: These become a single backtick
 TripleSingleQuote
   "'''" ->
+    return { $loc, token: "`" }
+
+TripleTick
+  "```" ->
     return { $loc, token: "`" }
 
 Try
@@ -1748,9 +1797,10 @@ Init
       module.coffeeCompat = directives.some(d => d[1].token?.match(compatRe))
     }
 
-    module.dedentBlockString = function({$loc, token: str}) {
+    module.dedentBlockString = function({$loc, token: str}, spacing, trim=true) {
       // If string begins with a newline then indentation assume that it should be removed for all lines
-      const spacing = str.match(/^(\r?\n|\n)\s+/)
+      if (spacing == null) spacing = str.match(/^(\r?\n|\n)[ \t]+/)
+
       if (spacing) {
         str = str.replaceAll(spacing[0], "\n")
         const l = spacing.length
@@ -1758,12 +1808,15 @@ Init
         $loc.length -= l
       }
 
-      // Remove leading newline
-      str = str.replace(/^(\r?\n|\n)/, "")
-      // Remove trailing newline
-      .replace(/(\r?\n|\n)[ \t]*$/, "")
+      if (trim) {
+        // Remove leading newline
+        str = str.replace(/^(\r?\n|\n)/, "")
+        // Remove trailing newline
+        .replace(/(\r?\n|\n)[ \t]*$/, "")
+      }
+
       // escape backtick, $
-      .replace(/(`|\$)/g, "\\$1")
+      str = str.replace(/(`|\$)/g, "\\$1")
 
       return {
         $loc,
