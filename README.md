@@ -90,6 +90,7 @@ Things Kept from CoffeeScript
 - `?=` null-coalescing assignment shorthand
 - `@` `this` shorthand `@` -> `this`, `@id` -> `this.id`
 - Prototype shorthand `X::` -> `X.prototype`, `X::a` -> `X.prototype.a`
+- Class static shorthand `@`
 - Postfix `if/unless`
 - Block Strings `"""` / `'''`
 - JSX 😿
@@ -142,6 +143,7 @@ Things Added that CoffeeScript didn't
   - Function annotations
   - `namespace`
   - `interface`
+  - Class constructor shorthand `@( ... )`
   - TypeParameters
   - `!` non-null assertions
   - `:=` readonly class field initializer
