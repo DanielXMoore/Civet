@@ -168,7 +168,7 @@ Things Added that CoffeeScript didn't
   - `<` as `extends` shorthand
   - `@#id` -> `this.#id` shorthand for private identifiers
   - `import` shorthand `x from ./x` -> `import x from "./x"`
-  - [ ] TODO `\`\`\`` Block Template Strings
+  - `\`\`\`` Block Template Strings
 - Class constructor shorthand `@( ... )`
 - ClassStaticBlock
 - `get`/`set` method definitions
