@@ -6,14 +6,15 @@ TODO
 - [x] Multiple case/when expressions
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
   - [ ] Implicit Returns
-  - [x] """ Interpolations
-  - [ ] " Interpolations
-  - [x] ###
+  - [x] `"""` `#{}` Interpolations
+  - [x] `"` `#{}`Interpolations (with `"use coffee-compat"`)
+  - [x] `###` Block comments
+  - [x] `#` Comments (with `"use coffee-compat"`)
 - [x] Import shorthand
 - [x] `:=` `readonly` field shorthand
 - [x] Keep comments and whitespace
 - [x] `@` Class Static shorthand
-- [ ] `\`\`\`` Triple backtick blocks?
+- [x] `\`\`\`` TemplateLiteral blocks
 - [ ] TypeScript
   - [ ] Parameter Properties
   https://www.typescriptlang.org/docs/handbook/2/classes.html#parameter-properties

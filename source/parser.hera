@@ -5,7 +5,7 @@
 # https://262.ecma-international.org/13.0/
 
 Program
-  Init __ TopLevelStatement* __
+  Reset Init __ TopLevelStatement* __
 
 TopLevelStatement
   EOS? ModuleItem StatementDelimiter
@@ -1124,19 +1124,17 @@ HexLiteral
 # https://262.ecma-international.org/#prod-StringLiteral
 StringLiteral
   # NOTE: actual CoffeeScript """ string behaviors are pretty weird, this is simplifed
-  # TODO: CoffeeScript Interpolation
   TripleDoubleQuote ( TripleDoubleStringCharacters / CoffeeStringSubstitution )* TripleDoubleQuote ->
     return module.dedentBlockSubstitutions($0)
 
   TripleSingleQuote:s TripleSingleStringCharacters:str TripleSingleQuote:e ->
     return [s, module.dedentBlockString(str), e]
 
+  # CoffeeScript Interpolation is enabled when "use coffee-compat" directive is present
+  CoffeeCompatDoubleQuotedString
   BasicStringLiteral
 
 BasicStringLiteral
-  # TODO: CoffeeScript interpolation
-  # TODO: CoffeeScript double string behavior condenses all runs of whitespace that include newlines to single spaces except when a backspace appears before the newline in which case space befor the backspace is kept and space after it on the following lines is not
-  # https://coffeescript.org/#try:x%20%3D%20%22%0A%20%20hi%0A%20%20there%0A%20%20dude%0A%22%0A%0Ay%20%3D%20%22hi%20%20%20%20%20%20%20%20%20%20there%22%0A%0Az%20%3D%20%22%0A%0A%0Aheyy%0Ayo%22%0A
   DoubleQuote DoubleStringCharacters:str DoubleQuote ->
     return {
       token: `"${module.modifyString(str.token)}"`,
@@ -1167,6 +1165,40 @@ TripleSingleStringCharacters
 
 CoffeeStringSubstitution
   CoffeeSubstitutionStart Expression __ CloseBrace
+
+CoffeeCompat
+  "" ->
+    if(module.coffeeCompat) return
+    return $skip
+
+CoffeeCompatDoubleQuotedString
+  CoffeeCompat DoubleQuote:s ( CoffeeCompatDoubleQuotedStringCharacters / CoffeeStringSubstitution )*:parts DoubleQuote:e ->
+    const noInterpolations = parts.length === 1 && parts[0].token != null
+    if (noInterpolations) {
+      return {
+        token: `"${module.modifyString(parts[0].token)}"`,
+        $loc,
+      }
+    }
+
+    parts.forEach((part) => {
+      // Is a string
+      if(part.token) {
+        // Escape '${' and '`'
+        const str = part.token.replace(/(`|\$\{)/g, "\\$1")
+        // Escape non-continuation newlines
+        part.token = module.modifyString(str)
+      }
+    })
+
+    // Convert to backtick enclosed string
+    s.token = e.token = "`"
+
+    return [s, parts, e]
+
+CoffeeCompatDoubleQuotedStringCharacters
+  /(?:\\.|#(?!\{)|[^"#])+/ ->
+    return { $loc, token: $0 }
 
 # https://262.ecma-international.org/#prod-RegularExpressionLiteral
 RegularExpressionLiteral
@@ -1218,7 +1250,7 @@ Comment
 SingleLineComment
   /\/\/[^\r\n]*/ ->
     return { $loc, token: $0 }
-  CoffeeSingleLineComment
+  CoffeeCompat CoffeeSingleLineComment
 
 # https://262.ecma-international.org/#prod-MultiLineComment
 MultiLineComment
@@ -1233,8 +1265,6 @@ JSMultiLineComment
 CoffeeSingleLineComment
   # NOTE: CoffeeScript style single line comments
   /#([^\r\n]*)/ ->
-    // DEFER: # comments when CoffeeScript compat flag is set, may be a little tricky to allow with private ids
-    if (!module.coffeeCompat) return $skip
     return { $loc, token: `//${$1}` }
 
 CoffeeMultiLineComment
@@ -1805,13 +1835,17 @@ InsertBreak
 
 # Indentation
 
-Init
-  Shebang? DirectivePrologue:directives "" ->
+# Reset module level data
+Reset
+  "" ->
     // Storage for PushIndent/PopIndent
     module.currentIndent = 0
     module.indentLevels = [0]
     module.verbose = false
+    module.coffeeCompat = false
 
+Init
+  Shebang? DirectivePrologue:directives "" ->
     if(directives) {
       const compatRe = /use coffee-compat/;
       module.coffeeCompat = directives.some(d => d[1].token?.match(compatRe))
@@ -1910,7 +1944,7 @@ Init
       }
 
       // escape backtick, $
-      str = str.replace(/(`|\$)/g, "\\$1")
+      str = str.replace(/(`|\$\{)/g, "\\$1")
 
       return {
         $loc,

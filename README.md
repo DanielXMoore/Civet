@@ -132,6 +132,7 @@ Things Changed from CoffeeScript
 - Embedded JS `\`\`` has been replaced with JS template literals.
 - No longer allowing multiple postfix `if/unless` on the same line.
 - No `else` block on `unless` (negate condition and use `if`)
+- `#{}` interpolation in `""` strings only when `"use coffee-compat"`
 - Civet tries to keep the transpiled output verbatim as much as possible.
   In Coffee `(x)` -> `x;` but in Civet `(x)` -> `(x);`.
   Also in Coffee `x    +    3` -> `x + 3` but in Civet `x    +    3` remains as is.
@@ -159,6 +160,7 @@ Things Added that CoffeeScript didn't
 - JS Compatability
   - `var`, `let`, `const`
   - JS Comment Syntax `//` and `/* */`
+  - `function` keyword
   - Braced Blocks
   - OptionalChain longhand
   - ConditionalExpression
@@ -169,7 +171,7 @@ Things Added that CoffeeScript didn't
   - `<` as `extends` shorthand
   - `@#id` -> `this.#id` shorthand for private identifiers
   - `import` shorthand `x from ./x` -> `import x from "./x"`
-  - `\`\`\`` Block Template Strings
+  - `\`\`\`` Block Template Strings remove leading indentation for clarity
 - Class constructor shorthand `@( ... )`
 - ClassStaticBlock
 - `get`/`set` method definitions

@@ -367,8 +367,7 @@ Timesheet
 2022-09-29 | 5.50  | better handling of trailing .fnCall after newline after and within arguments; test cleanup; consolidate and fixed a bug with indent tracking; class @ constructor shorthand; CoffeeScript block string interpolation
 2022-09-30 | 3.50  | vscode dev env setup; `\`\`\`` block template strings; test cleanup;
 
-2022-10-01 | 1.50  | parser cleanup; added multiple switch/when cases
-
+2022-10-01 | 2.50  | parser cleanup; added multiple switch/when cases; coffee-compat `"#{}"` interpolation
 
 TODO:
 
