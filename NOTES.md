@@ -328,6 +328,12 @@ s = s.filter((e) => !e.match(/^eval/)).map((e) => e.split(' ')[0])
 s = s.slice(0, s.indexOf('Program'))
 ```
 
+TC39 Radar
+---
+
+https://github.com/tc39/proposal-pattern-matching
+
+
 Timesheet
 ---
 

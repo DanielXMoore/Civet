@@ -162,20 +162,20 @@ Things Added that CoffeeScript didn't
   - JS Comment Syntax `//` and `/* */`
   - `function` keyword
   - Braced Blocks
-  - OptionalChain longhand
-  - ConditionalExpression
+  - `f?.(x)` function application and `a?.[x]` index OptionalChain longhand
+  - `a ? b : c` ConditionalExpression
   - `case` statement
   - `do`, `do { ... } until condition`
-- Const assignment shorthand `a := b` -> `const a = b`; `{a, b} := c` -> `const {a, b} = c`
+  - `get`/`set` method definitions
+  - Private identifiers `#id`
 - Convenience for ES6+ Features
+  - Const assignment shorthand `a := b` -> `const a = b`; `{a, b} := c` -> `const {a, b} = c`
   - `<` as `extends` shorthand
   - `@#id` -> `this.#id` shorthand for private identifiers
   - `import` shorthand `x from ./x` -> `import x from "./x"`
   - `\`\`\`` Block Template Strings remove leading indentation for clarity
-- Class constructor shorthand `@( ... )`
-- ClassStaticBlock
-- `get`/`set` method definitions
-- Private identifiers `#id`
+  - Class constructor shorthand `@( ... )`
+  - ClassStaticBlock `@ { ... }`
 - Shebang line is kept unmodified in output
   ```civet
   #!./node_modules/.bin/ts-node
