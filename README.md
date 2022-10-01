@@ -94,6 +94,7 @@ Things Kept from CoffeeScript
 - Postfix `if/unless`
 - Block Strings `"""` / `'''`
   - `#{exp}` interpolation in `"""` strings
+- Multiple `case`/`when` expressions
 - JSX 😿
 - TODO
   - [ ] Chained comparisons
@@ -104,7 +105,7 @@ Things Removed from CoffeeScript
 - `on/yes/off/no` (use `true/false`)
 - `isnt` (use `!==`)
 - `not` (use `!`)
-- `do` keyword (replaced with JS `do`)
+- `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax)
 - `for from` (use JS `for of`)
 - `and=`, `or=` (don't mix and match words and symbols)
 - Array slices `list[0...2]` (use `list.slice(0, 2)`)
@@ -186,6 +187,8 @@ Things Changed from ES6
   The reasoning is `x -> ...` => `x(function() ...)` in CoffeeScript and having `->` and `=>`
   behave more differently than they already do is bad. Passing an anonymous function to an
   application without parens is also convenient.
+- Disallow comma operator in conditionals.
+- Comma operator in case/when becomes multiple conditions.
 
 Using Civet in your Node.js Environment
 ---

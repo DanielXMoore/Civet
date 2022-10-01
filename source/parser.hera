@@ -57,9 +57,7 @@ ImplicitApplication
 # Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
 ApplicationStart
   !EOS _:spacing !AdditionalReservedWords ->
-    // NOTE: This assumes spacing is an array of non-newline whitespace and comments
-    spacing[0].token = spacing[0].token.replace(/^ ?/, "(")
-    return spacing
+    return module.insertTrimmingSpace(spacing, "(")
   # Nested application for nested objects
   # someMethod => someMethod({
   #   a: b          a: b
@@ -127,7 +125,7 @@ AwaitExpression
   Await TrailingComment* AssignmentExpression
 
 YieldExpression
-  "yield" NonIdContinue ( TrailingComment* "*" )? AssignmentExpression
+  Yield ( TrailingComment* Star )? AssignmentExpression
 
 # https://262.ecma-international.org/#prod-ArrowFunction
 ArrowFunction
@@ -411,7 +409,7 @@ FunctionExpression
   # NOTE: Added CoffeeScript thin arrow function shorthand
   ThinArrowFunction
   # NOTE: Merged in async and generator with optionals
-  ( Async __ )? Function ( "*" __ )? ( BindingIdentifier )? __ Parameters ReturnTypeSuffix? BracedBlock
+  ( Async __ )? Function ( Star __ )? ( BindingIdentifier )? __ Parameters ReturnTypeSuffix? BracedBlock
 
 ThinArrowFunction
   Parameters:params ReturnTypeSuffix?:suffix __ Arrow:arrow BracedOrEmptyBlock:block ->
@@ -596,13 +594,9 @@ MethodModifier
   # NOTE: Merged get/set definitions
   GetOrSet TrailingComment*
   # NOTE: Merged async and generator into MethodModifier
-  ( Async __ ) ( "*" __ )?
-  "*" __
+  ( Async __ ) ( Star __ )?
+  Star __
   Async __
-
-ConstructorShorthand
-  "@" ->
-    return { $loc, token: "constructor" }
 
 # TypeScript method signature
 MethodSignature
@@ -838,7 +832,7 @@ ForBinding
 
 # https://262.ecma-international.org/#prod-SwitchStatement
 SwitchStatement
-  Switch NonIdContinue Condition CaseBlock
+  Switch Condition CaseBlock
 
 # https://262.ecma-international.org/#prod-CaseBlock
 CaseBlock
@@ -856,13 +850,23 @@ NestedCaseClause
 
 # https://262.ecma-international.org/#prod-CaseClause
 CaseClause
-  # TODO: Multiple expressions
-  "case" NonIdContinue _* ExpressionWithIndentedApplicationSuppressed ImpliedColon NestedBlockExpressions
-  # TODO: Multiple expressions
-  # NOTE: Added "when" from CoffeeScript. `when` always breaks.
-  When _* ExpressionWithIndentedApplicationSuppressed ImpliedColon NestedBlockExpressions InsertBreak
+  Case CaseExpressionList NestedBlockExpressions
+  # NOTE: Added "when" from CoffeeScript. `when` always inserts `break;`.
+  When CaseExpressionList NestedBlockExpressions InsertBreak
   # NOTE: Merged in default clause
-  "default" NonIdContinue ImpliedColon NestedBlockExpressions
+  Default ImpliedColon NestedBlockExpressions
+
+CaseExpressionList
+  ( _* ExpressionWithIndentedApplicationSuppressed ImpliedColon ) ( __ Comma ExpressionWithIndentedApplicationSuppressed ImpliedColon )* ->
+    const result = $2.map(([ws, _comma, exp, col]) => {
+      module.insertTrimmingSpace(exp, "")
+
+      if (ws.length) return [module.insertTrimmingSpace("case ", ws), exp, col]
+      return ["case ", exp, col]
+    })
+    result.unshift($1)
+
+    return result
 
 ImpliedColon
   __ Colon
@@ -901,7 +905,7 @@ Condition
   !EOS __ InsertOpenParen ExpressionWithIndentedApplicationSuppressed InsertCloseParen
 
 ExpressionWithIndentedApplicationSuppressed
-  SuppressIndentedApplication Expression?:exp ->
+  SuppressIndentedApplication AssignmentExpression?:exp ->
     module.suppressIndentedApplication = false
 
     if (exp) return exp
@@ -968,7 +972,7 @@ ImportClause
 
 # https://262.ecma-international.org/#prod-NameSpaceImport
 NameSpaceImport
-  "*" __ As NonIdContinue __ ImportedBinding
+  Star __ As NonIdContinue __ ImportedBinding
 
 # https://262.ecma-international.org/#prod-NamedImports
 NamedImports
@@ -1022,7 +1026,7 @@ ExportDeclaration
 
 # https://262.ecma-international.org/#prod-ExportFromClause
 ExportFromClause
-  "*" ( __ As NonIdContinue __ ModuleExportName )?
+  Star ( __ As NonIdContinue __ ModuleExportName )?
   NamedExports
 
 # https://262.ecma-international.org/#prod-NamedExports
@@ -1164,10 +1168,6 @@ TripleSingleStringCharacters
 CoffeeStringSubstitution
   CoffeeSubstitutionStart Expression __ CloseBrace
 
-CoffeeSubstitutionStart
-  "#{" ->
-    return { $loc, token: "${" }
-
 # https://262.ecma-international.org/#prod-RegularExpressionLiteral
 RegularExpressionLiteral
   $("/" RegularExpressionBody "/" RegularExpressionFlags) ->
@@ -1195,7 +1195,7 @@ TemplateLiteral
 
 # NOTE: Simplified grammar
 TemplateSubstitution
-  "${" Expression __ CloseBrace
+  SubstitutionStart Expression __ CloseBrace
 
 # https://262.ecma-international.org/#prod-TemplateCharacter
 TemplateCharacters
@@ -1247,10 +1247,10 @@ InlineComment
     return { $loc, token: $1 }
 
 RestOfLine
-  ([ \t]+ / SingleLineComment / MultiLineComment)* EOL
+  (NonNewlineWhitespace / SingleLineComment / MultiLineComment)* EOL
 
 TrailingComment
-  ([\t ]+ / InlineComment / SingleLineComment)
+  (NonNewlineWhitespace / InlineComment / SingleLineComment)
 
 # Non-newline "white space" (includes comments)
 # TODO: JS counts line terminators that appear in multi-line comments. For example "return /*\n*/5" is different than "return /**/ 5" because of the newline within the comment
@@ -1297,6 +1297,10 @@ Await
   "await" NonIdContinue ->
     return { $loc, token: $1 }
 
+Case
+  "case" NonIdContinue ->
+    return { $loc, token: $1 }
+
 Catch
   "catch" ->
     return { $loc, token: $1 }
@@ -1317,12 +1321,24 @@ CloseParen
   ")" ->
     return { $loc, token: $1 }
 
+CoffeeSubstitutionStart
+  "#{" ->
+    return { $loc, token: "${" }
+
 Colon
   ":" ->
     return { $loc, token: $1 }
 
 Comma
   "," ->
+    return { $loc, token: $1 }
+
+ConstructorShorthand
+  "@" ->
+    return { $loc, token: "constructor" }
+
+Default
+  "default" NonIdContinue ->
     return { $loc, token: $1 }
 
 Dot
@@ -1420,6 +1436,10 @@ SingleQuote
   "'" ->
     return { $loc, token: $1 }
 
+Star
+  "*" ->
+    return { $loc, token: $1 }
+
 Static
   "static" ->
     return { $loc, token: $1 }
@@ -1428,8 +1448,12 @@ Static
   "@" !"(" ->
     return { $loc, token: "static " }
 
+SubstitutionStart
+  "${" ->
+    return { $loc, token: $1 }
+
 Switch
-  "switch" ->
+  "switch" NonIdContinue ->
     return { $loc, token: $1 }
 
 Target
@@ -1466,6 +1490,10 @@ Var
 When
   "when" NonIdContinue ->
     return { $loc, token: "case" }
+
+Yield
+  "yield" NonIdContinue ->
+    return { $loc, token: $1 }
 
 ## JSX
 
@@ -1796,6 +1824,22 @@ Init
       s = s.slice(1, s.indexOf('Program') + 1)
 
       return s
+    }
+
+    // Trims the first single space from the spacing array if present
+    // maintains $loc for source maps
+    module.insertTrimmingSpace = function(spacing, c) {
+      let target = spacing
+
+      while(Array.isArray(target)) {
+        target = target[0]
+      }
+
+      if (target.token) {
+        target.token = target.token.replace(/^ ?/, c)
+      }
+
+      return spacing
     }
 
     // Adjust a parsed string by escaping newlines

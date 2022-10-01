@@ -3,6 +3,7 @@ TODO
 
 - [x] Compiler option to strip TypeScript and emit only JS (use in `./register`)
 - [x] JavaScript Compat (default stance is JS code should "just work")
+- [x] Multiple case/when expressions
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
   - [ ] Implicit Returns
   - [x] """ Interpolations
