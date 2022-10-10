@@ -339,6 +339,7 @@ ECMAScript AST
 Probably a good idea to align with existing AST conventions where possible
 
 - https://esprima.org/demo/parse.html
+- https://github.com/estree/estree
 
 Timesheet
 ---
@@ -381,26 +382,26 @@ Timesheet
 
 2022-10-01 | 2.50  | parser cleanup; added multiple switch/when cases; coffee-compat `"#{}"` interpolation
 2022-10-09 | 2.25  | starting implicit returns
-2022-10-10 | 2.00  | AST nodes; more implicit returns
+2022-10-10 | 3.50  | AST nodes; more implicit returns
 
 TODO:
 
 - CoffeeCompat
   - [ ] implicit returns
-    - [ ] SwitchStatement
-    - [ ] EmptyStatement
-    - [ ] IfStatement
+    - [x] FunctionExpression
+    - [x] SwitchStatement
+    - [x] EmptyStatement
+    - [x] IfStatement
     - [ ] ForStatement
     - [ ] ForInStatement
     - [ ] ForOfStatement
     - [ ] WhileStatement
-    - [ ] VariableDeclaration
+    - [x] VariableDeclaration
   - [ ] auto var
-    - [ ] VariableDeclaration
-    - [x] AssignmentExpression
-  - [ ] Comprehensions
-    - [ ] VariableDeclaration
+  - [ ] Chained Comparisons
     - [ ] Floating ref node pointing to a VariableDeclaration
+  - [ ] Comprehensions
+  - [ ] `"civet +coffee-compat -extra-bools"` style config
 - LSP
   - [ ] auto-import suggest in .coffee
   - [ ] update imported file exports, see errors in importing file

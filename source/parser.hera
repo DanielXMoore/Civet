@@ -423,7 +423,10 @@ FunctionExpression
   # NOTE: Added CoffeeScript thin arrow function shorthand
   ThinArrowFunction
   # NOTE: Merged in async and generator with optionals
-  ( Async __ )? Function ( Star __ )? ( BindingIdentifier )? __ Parameters ReturnTypeSuffix? BracedBlock
+  ( Async __ )? Function ( Star __ )? ( BindingIdentifier )? __ Parameters ReturnTypeSuffix? BracedBlock -> {
+    type: "FunctionExpression",
+    children: $0,
+  }
 
 ThinArrowFunction
   Parameters:params ReturnTypeSuffix?:suffix _* Arrow:arrow BracedOrEmptyBlock:block ->
@@ -431,12 +434,15 @@ ThinArrowFunction
       block = module.addImplicitReturns(block)
     }
 
-    return [
-      { $loc: arrow.$loc, token: "function" },
-      params,
-      suffix,
-      block
-    ]
+    return {
+      type: "FunctionExpression",
+      children: [
+        { $loc: arrow.$loc, token: "function" },
+        params,
+        suffix,
+        block
+      ]
+    }
 
 Arrow
   "->" ->
@@ -880,13 +886,31 @@ ForBinding
 
 # https://262.ecma-international.org/#prod-SwitchStatement
 SwitchStatement
-  Switch Condition CaseBlock
+  Switch Condition CaseBlock -> {
+    type: "SwitchStatement",
+    children: $0
+  }
 
 # https://262.ecma-international.org/#prod-CaseBlock
 CaseBlock
-  __ OpenBrace &EOS NestedCaseClauses __ CloseBrace
+  __ OpenBrace &EOS NestedCaseClauses:clauses __ CloseBrace ->
+    $0.splice(2, 1)
+
+    return {
+      type: "CaseBlock",
+      clauses: clauses,
+      children: $0,
+    }
+
   # NOTE: Added optional braces with nesting
-  &EOS InsertOpenBrace NestedCaseClauses InsertNewline InsertCloseBrace
+  &EOS InsertOpenBrace NestedCaseClauses:clauses InsertNewline InsertIndent InsertCloseBrace ->
+    $0.shift()
+
+    return {
+      type: "CaseBlock",
+      clauses: clauses,
+      children: $0,
+    }
 
 NestedCaseClauses
   PushIndent NestedCaseClause*:clauses PopIndent ->
@@ -894,18 +918,43 @@ NestedCaseClauses
     return $skip
 
 NestedCaseClause
-  Nested CaseClause
+  Nested CaseClause ->
+    // Bring the indent into the clause
+    $2.children.unshift($1)
+    return $2
 
 # https://262.ecma-international.org/#prod-CaseClause
 CaseClause
-  Case CaseExpressionList NestedBlockExpressions
+  # NOTE: This differs from ESTree significantly to be easier to work with for implicit returns
+  Case CaseExpressionList ( NestedBlockExpressions / NoExpressions ):exps -> {
+    type: "CaseClause",
+    expressions: exps,
+    children: $0
+  }
   # NOTE: Added "when" from CoffeeScript. `when` always inserts `break;`.
-  When CaseExpressionList NestedBlockExpressions InsertBreak
+  When CaseExpressionList NestedBlockExpressions:exps InsertBreak -> {
+    type: "WhenClause",
+    expressions: exps,
+    children: $0
+  }
   # NOTE: Merged in default clause
-  Default ImpliedColon NestedBlockExpressions
+  Default ImpliedColon ( NestedBlockExpressions / NoExpressions ):exps -> {
+    type: "DefaultClause",
+    expressions: exps,
+    children: $0
+  }
+  # NOTE: Added else from CoffeesScript
+  Else ImpliedColon NestedBlockExpressions:exps ->
+    $1.token = "default"
+    return {
+      type: "DefaultClause",
+      expressions: exps,
+      children: $0
+    }
 
 CaseExpressionList
   ( _* ExpressionWithIndentedApplicationSuppressed ImpliedColon ) ( __ Comma ExpressionWithIndentedApplicationSuppressed ImpliedColon )* ->
+    // Convert comma separated expression list to `case <exp>:`
     const result = $2.map(([ws, _comma, exp, col]) => {
       module.insertTrimmingSpace(exp, "")
 
@@ -915,6 +964,9 @@ CaseExpressionList
     result.unshift($1)
 
     return result
+
+NoExpressions
+  "" -> []
 
 ImpliedColon
   __ Colon
@@ -1939,6 +1991,8 @@ Init
       if (!node) return false
       if (Array.isArray(node)) return node.some(hasReturnStatement)
       if (node.type === "ReturnStatement") return true
+      // Don't recurse into nested functions
+      if (node.type === "FunctionExpression") return false
       if (node.children) return hasReturnStatement(node.children)
 
       return false
@@ -1953,6 +2007,22 @@ Init
           node.children.unshift("return ")
           return
         case "BlockStatement":
+          insertReturn(node.expressions[node.expressions.length - 1])
+          return
+        case "CaseBlock":
+          node.clauses.forEach((clause) => {
+            insertReturn(clause)
+          })
+          return
+        case "CaseClause":
+          // Don't adjust case clauses
+          return
+        case "WhenClause":
+          // Remove inserted `break;`
+          node.children.pop()
+          insertReturn(node.expressions[node.expressions.length - 1])
+          return
+        case "DefaultClause":
           insertReturn(node.expressions[node.expressions.length - 1])
           return
       }
@@ -1979,6 +2049,10 @@ Init
           // else block
           if (exp.children[3]) insertReturn(exp.children[3][2])
           return
+        case "SwitchStatement":
+          // insert a return in each case block
+          insertReturn(exp.children[2])
+          return
         case "TryStatement":
           // try block
           insertReturn(exp.children[1])
@@ -1987,8 +2061,6 @@ Init
           // NOTE: do not insert a return in the finally block
           return
       }
-      // switch
-      // TODO: insert a return in each case block
 
       // for/while
       // TODO: don't insert a return unless coffee compat
@@ -1997,7 +2069,7 @@ Init
       // TODO: don't insert a return
 
       // Insert return before expression
-      node.splice(1, 0, { $loc, token: "return " })
+      node.splice(1, 0, "return ")
     }
 
     module.addImplicitReturns = function(block) {
