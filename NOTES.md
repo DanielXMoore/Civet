@@ -381,7 +381,7 @@ Timesheet
 
 2022-10-01 | 2.50  | parser cleanup; added multiple switch/when cases; coffee-compat `"#{}"` interpolation
 2022-10-09 | 2.25  | starting implicit returns
-2022-10-10 | 1.75  | AST nodes; more implicit returns
+2022-10-10 | 2.00  | AST nodes; more implicit returns
 
 TODO:
 
