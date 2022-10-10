@@ -382,20 +382,17 @@ Timesheet
 
 2022-10-01 | 2.50  | parser cleanup; added multiple switch/when cases; coffee-compat `"#{}"` interpolation
 2022-10-09 | 2.25  | starting implicit returns
-2022-10-10 | 3.50  | AST nodes; more implicit returns
+2022-10-10 | 3.75  | AST nodes; more implicit returns
 
 TODO:
 
 - CoffeeCompat
-  - [ ] implicit returns
+  - [x] implicit returns
     - [x] FunctionExpression
     - [x] SwitchStatement
     - [x] EmptyStatement
     - [x] IfStatement
-    - [ ] ForStatement
-    - [ ] ForInStatement
-    - [ ] ForOfStatement
-    - [ ] WhileStatement
+    - [x] IterationStatement
     - [x] VariableDeclaration
   - [ ] auto var
   - [ ] Chained Comparisons
