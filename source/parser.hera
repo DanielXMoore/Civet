@@ -15,7 +15,9 @@ Expression
   # CommaOperator
   # https://262.ecma-international.org/#sec-comma-operator
   # NOTE: Eliminated left recursion
-  AssignmentExpression (__ Comma AssignmentExpression)*
+  AssignmentExpression (__ Comma AssignmentExpression)* ->
+    if($2.length == 0) return $1
+    return $0
 
 # https://262.ecma-international.org/#prod-Arguments
 Arguments
@@ -65,7 +67,7 @@ ApplicationStart
   #
   # IndentedApplicationAllowed gets turned of inside if conditions and switch conditions to prevent
   # indentation based function application from being used inside them. It is a bit of a hack.
-  IndentedApplicationAllowed &NestedObjectLiteral InsertOpenParen
+  IndentedApplicationAllowed &NestedObjectLiteral InsertOpenParen -> $3
 
 IndentedApplicationAllowed
   "" ->
@@ -76,7 +78,9 @@ CommaExpression
   __ Comma Expression
 
 BinaryOpExpression
-  UnaryExpression (__ BinaryOp __ UnaryExpression)*
+  UnaryExpression (__ BinaryOp __ UnaryExpression)* ->
+    if ($2.length) return $0
+    return $1
 
 # https://262.ecma-international.org/#prod-UnaryExpression
 UnaryExpression
@@ -98,7 +102,9 @@ UnaryPostfix
 UpdateExpression
   # NOTE: Not allowing whitespace betwen prefix and postfix increment operators and operand
   UpdateExpressionSymbol UnaryExpression
-  LeftHandSideExpression UpdateExpressionSymbol?
+  LeftHandSideExpression UpdateExpressionSymbol? ->
+    if ($2) return $0
+    return $1
 
 UpdateExpressionSymbol
   ("++" / "--") ->
@@ -107,7 +113,9 @@ UpdateExpressionSymbol
 # https://262.ecma-international.org/#prod-AssignmentExpression
 AssignmentExpression
   # NOTE: Try to match a single line assignment expression before matching newline then assignment expression
-  TrailingComment* AssignmentExpressionRest
+  TrailingComment* AssignmentExpressionRest ->
+    if ($1.length) return $0
+    return $2
   __ AssignmentExpressionRest
 
 AssignmentExpressionRest
@@ -118,7 +126,7 @@ AssignmentExpressionRest
   # NOTE: Eliminated left recursion
   # NOTE: Consolidated assignment ops
 
-  (__ LeftHandSideExpression __ AssignmentOp)+ Expression
+  (__ LeftHandSideExpression __ AssignmentOp)+ Expression -> { type: "AssignmentExpression", children: $0 }
   ConditionalExpression
 
 AwaitExpression
@@ -152,7 +160,9 @@ FatArrowBody
 
 # https://262.ecma-international.org/#prod-ConditionalExpression
 ConditionalExpression
-  ShortCircuitExpression ( __ QuestionMark AssignmentExpression __ Colon AssignmentExpression)?
+  ShortCircuitExpression ( __ QuestionMark AssignmentExpression __ Colon AssignmentExpression)? ->
+    if ($2) return $0
+    return $1
 
 # https://262.ecma-international.org/#prod-ShortCircuitExpression
 ShortCircuitExpression
@@ -264,7 +274,9 @@ CallExpression
   # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
   "super" ArgumentsWithTrailingCallExpressions
   "import" __ OpenParen AssignmentExpression __ CloseParen
-  MemberExpression CallExpressionRest*
+  MemberExpression CallExpressionRest* ->
+    if ($2.length) return $0
+    return $1
 
 CallExpressionRest
   MemberExpressionRest
@@ -288,7 +300,9 @@ AdditionalReservedWords
 MemberExpression
   # NOTE: "new" MemberExpression Arguments seems to be handled fine by other rules already
   # NOTE: Eliminated left recursion
-  PrimaryExpression MemberExpressionRest*
+  PrimaryExpression MemberExpressionRest* ->
+    if ($2.length) return $0
+    return $1
   TrailingComment* SuperProperty
   TrailingComment* MetaProperty
 
@@ -413,6 +427,10 @@ FunctionExpression
 
 ThinArrowFunction
   Parameters:params ReturnTypeSuffix?:suffix _* Arrow:arrow BracedOrEmptyBlock:block ->
+    if (module.implicitReturns && suffix?.children[3] !== "void") {
+      block = module.addImplicitReturns(block)
+    }
+
     return [
       { $loc: arrow.$loc, token: "function" },
       params,
@@ -435,15 +453,32 @@ Block
 BracedOrEmptyBlock
   BracedBlock
   # Implied empty block
-  InsertOpenBrace InsertCloseBrace
+  InsertOpenBrace InsertCloseBrace -> {
+    type: "BlockStatement",
+    expressions: [],
+    children: $0,
+  }
 
 # This is a block that must include braces (function body, try/catch/finally)
 BracedBlock
-  __ OpenBrace EOS NestedBlockExpressions __ CloseBrace
+  __ OpenBrace EOS NestedBlockExpressions:exps __ CloseBrace -> {
+    type: "BlockStatement",
+    expressions: exps,
+    children: $0,
+  }
   # NOTE: Added indentation based implied braces
-  InsertOpenBrace EOS NestedBlockExpressions InsertNewline InsertIndent InsertCloseBrace
+  InsertOpenBrace EOS NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseBrace -> {
+    type: "BlockStatement",
+    expressions: exps,
+    children: $0,
+  }
   # One liner
-  InsertOpenBrace !EOS __ Statement InsertSpace InsertCloseBrace
+  InsertOpenBrace !EOS __ Statement:s InsertSpace InsertCloseBrace ->
+    return {
+      type: "BlockStatement",
+      expressions: [s],
+      children: $0,
+    }
 
 SingleNestedExpression
   # NOTE: Don't insert a statement delimiter for single nested expression
@@ -482,7 +517,7 @@ Comma
 
 # https://262.ecma-international.org/#prod-Identifier
 Identifier
-  !ReservedWord IdentifierName
+  !ReservedWord IdentifierName -> $2
 
 # https://262.ecma-international.org/#prod-IdentifierName
 IdentifierName
@@ -714,9 +749,9 @@ StatementListItem
   # NOTE: Added postfix conditionals
   (Declaration / Statement):statement PostfixConditional?:cond Loc:l ->
     if (cond)
+      // TODO: Actually wrap the statement in a conditional AST node so implicit returns can use the same logic
       return [cond, statement, { $loc: l.$loc, token: "}" }]
-    $0.pop() // Remove location metadata token
-    return $0
+    return statement
 
 PostfixConditional
   TrailingComment*:ws (If / Unless):cond NonIdContinue Loc:l1 ExpressionWithIndentedApplicationSuppressed:exp Loc:l2 ->
@@ -753,14 +788,16 @@ Statement
 
 # NOTE: EmptyStatement handled differently than spec, consuming inline whitespace and comments then asserting following semi-colon
 EmptyStatement
-  TrailingComment* &";"
+  TrailingComment* &";" -> { type: "EmptyStatement", children: $1 }
 
 # https://262.ecma-international.org/#prod-BlockStatement
 BlockStatement
   __ OpenBrace EOS NestedBlockExpressions __ CloseBrace
 
+# https://262.ecma-international.org/#prod-IfStatement
 IfStatement
   # NOTE: Added paren-less condition
+  # NOTE: Block isn't Statement so we can handle implied braces by nesting
   If Condition Block ( __ Else Block )?
   Unless:kind Condition:condition Block:block ->
     // Rewrite unless to if
@@ -875,12 +912,18 @@ ImpliedColon
 
 # https://262.ecma-international.org/#prod-TryStatement
 TryStatement
-  Try BracedBlock CatchClause?:c Finally?:f ->
+  Try:t BracedBlock:b CatchClause?:c Finally?:f ->
     if (!c && !f) {
-      return [$1, $2, " catch {}"]
+      return {
+        type: "TryStatement",
+        children: [t, b, " catch(e) {}"]
+      }
     }
 
-    return [$1, $2, c, f]
+    return {
+      type: "TryStatement",
+      children: [t, b, c, f]
+    }
 
 # https://262.ecma-international.org/#prod-Catch
 CatchClause
@@ -889,7 +932,7 @@ CatchClause
 # NOTE: Added optional parentheses to catch binding
 CatchBind
   __ OpenParen __ CatchParameter __ CloseParen
-  __ InsertOpenParen CatchParameter InsertCloseParen
+  !EOS TrailingComment* InsertOpenParen CatchParameter InsertCloseParen
 
 # https://262.ecma-international.org/#prod-Finally
 Finally
@@ -900,6 +943,7 @@ CatchParameter
   BindingIdentifier
   BindingPattern
 
+# An expression with explicit or implied parentheses, for use in if/while
 Condition
   __ OpenParen Expression __ CloseParen
   !EOS __ InsertOpenParen ExpressionWithIndentedApplicationSuppressed InsertCloseParen
@@ -934,10 +978,16 @@ KeywordStatement
   "debugger" NonIdContinue
 
   # https://262.ecma-international.org/#prod-ReturnStatement
-  Return MaybeNestedExpression?
+  Return MaybeNestedExpression? -> {
+    type: "ReturnStatement",
+    children: $0,
+  }
 
   # https://262.ecma-international.org/#prod-ThrowStatement
-  "throw" NonIdContinue Expression
+  Throw Expression -> {
+    type: "ThrowStatement",
+    children: $0,
+  }
 
 MaybeNestedExpression
   !EOS TrailingComment* Expression
@@ -1490,6 +1540,10 @@ Target
   "target" ->
     return { $loc, token: $1 }
 
+Throw
+  "throw" NonIdContinue ->
+    return { $loc, token: $1 }
+
 # NOTE: These become a single backtick
 TripleDoubleQuote
   "\"\"\"" ->
@@ -1843,14 +1897,91 @@ Reset
     module.indentLevels = [0]
     module.verbose = false
     module.coffeeCompat = false
+    module.implicitReturns = true
 
 Init
   Shebang? DirectivePrologue:directives "" ->
     if(directives) {
-      const compatRe = /use coffee-compat/;
+      const compatRe = /use coffee-compat/
       module.coffeeCompat = directives.some(d => d[1].token?.match(compatRe))
     }
 
+    function hasReturnStatement(node) {
+      if (!node) return false
+      if (Array.isArray(node)) return node.some(hasReturnStatement)
+      if (node.type === "ReturnStatement") return true
+      if (node.children) return hasReturnStatement(node.children)
+
+      return false
+    }
+
+    // [indent, statement, semicolon]
+    function insertReturn(node) {
+      if (!node) return
+      // TODO: unify this with the `exp` switch
+      switch (node.type) {
+        case "AssignmentExpression":
+          node.children.unshift("return ")
+          return
+        case "BlockStatement":
+          insertReturn(node.expressions[node.expressions.length - 1])
+          return
+      }
+      if (!Array.isArray(node)) return
+
+      const [, exp] = node
+
+      debugger
+
+      if (!exp) return
+
+      switch (exp.type) {
+        case "EmptyStatement":
+          return
+        case "TryStatement":
+          // try block
+          insertReturn(exp.children[1])
+          // catch block
+          insertReturn(exp.children[2][3])
+          // NOTE: do not insert a return in the finally block
+          return
+      }
+      // switch
+      // TODO: insert a return in each case block
+      // if/else
+      if (exp?.[0]?.[0]?.token === "if") {
+        // if block
+        insertReturn(exp[0][2])
+        // else block
+        if (exp[0][3]) insertReturn(exp[0][3][2][2])
+        return
+      }
+      // for/while
+      // TODO: don't insert a return unless coffee compat
+
+      // do while
+      // TODO: don't insert a return
+
+      // Keyword Statement throw/debugger/continue/break
+      // TODO: don't insert a return
+
+      // Declaration
+      // TODO insert a return after the declaration?
+
+      // Insert return before expression
+      node.splice(1, 0, { $loc, token: "return " })
+    }
+
+    module.addImplicitReturns = function(block) {
+      // don't add implicit returns if the block has any explicit returns
+      if (hasReturnStatement(block)) return block
+
+      insertReturn(block)
+
+      return block
+    }
+
+    // Return an array of Rule names that correspond to the current call stack
     module.parsePosition = function() {
       let s = Error().stack.split(/\n    at /)
       s.shift()
@@ -1858,6 +1989,28 @@ Init
       s = s.slice(1, s.indexOf('Program') + 1)
 
       return s
+    }
+
+    module.prune = function(node) {
+      if(node === null || node === undefined) return
+      if(node.length === 0) return
+
+      if (Array.isArray(node)) {
+        const a = node
+        .map((n) => module.prune(n))
+        .filter((n) => !!n)
+
+        if(a.length > 1)  return a
+        if(a.length === 1) return a[0]
+        return
+      }
+
+      if(node.children != null) {
+        node.children = module.prune(node.children)
+        return node
+      }
+
+      return node
     }
 
     // Trims the first single space from the spacing array if present
