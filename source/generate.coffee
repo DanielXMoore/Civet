@@ -58,7 +58,7 @@ prune = (node) ->
     return
 
   if node.children?
-    node.children = prune node.children
+    node.children = prune(node.children) or []
     return node
 
   return node

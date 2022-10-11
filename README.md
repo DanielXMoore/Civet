@@ -26,7 +26,7 @@ Code Sample
 ---
 
 ```typescript
-import ts, {CompilerOptions} from "typescript"
+ts, {CompilerOptions} from typescript
 
 DefaultCompilerOptions : CompilerOptions :=
   allowNonTsExtensions: true
@@ -94,7 +94,9 @@ Things Kept from CoffeeScript
 - Postfix `if/unless`
 - Block Strings `"""` / `'''`
   - `#{exp}` interpolation in `"""` strings
-- Multiple `case`/`when` expressions
+- Multiple `,` separated `case`/`when` expressions
+- `else` -> `default` in `switch`
+- Implicit returns
 - JSX 😿
 - TODO
   - [ ] Chained comparisons
@@ -108,17 +110,17 @@ Things Removed from CoffeeScript
 - `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax)
 - `for from` (use JS `for of`)
 - `and=`, `or=` (don't mix and match words and symbols)
-- Array slices `list[0...2]` (use `list.slice(0, 2)`)
-- Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` (use `numbers.splice(3, 4, -3, -4, -5, -6)`)
-- Ranges `[0...10]`
-- Comprensions (a case could be made for keeping them)
 - Iteration expression results
 - Implicit declarations
-- Implicit returns (will probably add later at least for single line functions)
-- Rest parameter in any assignment position (might add later)
 - Postfix `while/until`
 - `///` Heregexp
-- Embedded JS
+- Backtick Embedded JS (replaced by template literals)
+- Might add later
+  - Comprensions (a case could be made for keeping them)
+  - Array slices `list[0...2]` (use `list.slice(0, 2)`)
+  - Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` (use `numbers.splice(3, 4, -3, -4, -5, -6)`)
+  - Ranges `[0...10]`
+  - Rest parameter in any assignment position
 
 Things Changed from CoffeeScript
 ---
@@ -135,7 +137,16 @@ Things Changed from CoffeeScript
 - `#{}` interpolation in `""` strings only when `"use coffee-compat"`
 - Civet tries to keep the transpiled output verbatim as much as possible.
   In Coffee `(x)` -> `x;` but in Civet `(x)` -> `(x);`.
-  Also in Coffee `x    +    3` -> `x + 3` but in Civet `x    +    3` remains as is.
+  Also in Coffee
+  ```coffee
+    x    +    3
+  ```
+  -> `x + 3` without the spacing
+  In Civet
+  ```typescript
+    x    +    3
+  ```
+  remains as is.
 
 Things Added that CoffeeScript didn't
 ---

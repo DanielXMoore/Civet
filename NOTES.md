@@ -333,6 +333,13 @@ TC39 Radar
 
 https://github.com/tc39/proposal-pattern-matching
 
+ECMAScript AST
+---
+
+Probably a good idea to align with existing AST conventions where possible
+
+- https://esprima.org/demo/parse.html
+- https://github.com/estree/estree
 
 Timesheet
 ---
@@ -374,13 +381,25 @@ Timesheet
 2022-09-30 | 3.50  | vscode dev env setup; `\`\`\`` block template strings; test cleanup;
 
 2022-10-01 | 2.50  | parser cleanup; added multiple switch/when cases; coffee-compat `"#{}"` interpolation
+2022-10-09 | 2.25  | starting implicit returns
+2022-10-10 | 3.75  | AST nodes; more implicit returns
 
 TODO:
 
-triple parsing? Add a console.log in the block string rule, run a single block string test. See it log three times. Should probably log only once?
-
-vscode extension
-
-- [ ] auto-import suggest in .coffee
-- [ ] update imported file exports, see errors in importing file
-- [ ] vscode commands
+- CoffeeCompat
+  - [x] implicit returns
+    - [x] FunctionExpression
+    - [x] SwitchStatement
+    - [x] EmptyStatement
+    - [x] IfStatement
+    - [x] IterationStatement
+    - [x] VariableDeclaration
+  - [ ] auto var
+  - [ ] Chained Comparisons
+    - [ ] Floating ref node pointing to a VariableDeclaration
+  - [ ] Comprehensions
+  - [ ] `"civet +coffee-compat -extra-bools"` style config
+- LSP
+  - [ ] auto-import suggest in .coffee
+  - [ ] update imported file exports, see errors in importing file
+  - [ ] vscode commands

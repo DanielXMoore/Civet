@@ -6,6 +6,10 @@ TODO
 - [x] Multiple case/when expressions
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
   - [ ] Implicit Returns
+  - [ ] Chained Comparisons
+  - [ ] Comprehensions
+  - [ ] Auto Var
+  - [ ] on/off/yes/no
   - [x] `"""` `#{}` Interpolations
   - [x] `"` `#{}`Interpolations (with `"use coffee-compat"`)
   - [x] `###` Block comments
