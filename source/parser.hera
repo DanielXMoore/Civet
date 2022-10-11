@@ -138,7 +138,17 @@ YieldExpression
 # https://262.ecma-international.org/#prod-ArrowFunction
 ArrowFunction
   ThinArrowFunction
-  Parameters ReturnTypeSuffix? FatArrow FatArrowBody
+  Parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
+    const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
+    const isBlock = expOrBlock.type === "BlockStatement"
+    if (module.implicitReturns && !isVoid && isBlock) {
+      module.addImplicitReturns(expOrBlock)
+    }
+
+    return {
+      type: "FunctionExpression",
+      children: $0,
+    }
 
 FatArrow
   # Ensures at least one space before arrow
@@ -150,13 +160,20 @@ FatArrow
 # NOTE Different from
 # https://262.ecma-international.org/#prod-ConciseBody
 FatArrowBody
-  __ OpenBrace EOS NestedBlockExpressions __ CloseBrace
+  __ OpenBrace EOS NestedBlockExpressions:exps __ CloseBrace -> {
+    type: "BlockStatement",
+    expressions: exps,
+    children: $0,
+  }
   # NOTE: Added indentation based implied braces
-  InsertOpenBrace EOS:eos NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseBrace
+  InsertOpenBrace EOS NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseBrace -> {
+    type: "BlockStatement",
+    expressions: exps,
+    children: $0,
+  }
   AssignmentExpression
   __ AssignmentExpression
-  # Implied empty block
-  InsertOpenBrace InsertCloseBrace
+  EmptyBlock
 
 # https://262.ecma-international.org/#prod-ConditionalExpression
 ConditionalExpression
@@ -334,11 +351,14 @@ MetaProperty
 # https://262.ecma-international.org/#prod-FormalParameters
 # The parameters in a function definition
 Parameters
+  NonEmptyParameters
+  "" ->
+    return { $loc, token: "()" }
+
+NonEmptyParameters
   # NOTE: BindingElement -> ParameterElement
   # TODO: Rest parameter
   TypeParameters? OpenParen ParameterElement* __ CloseParen
-  "" ->
-    return { $loc, token: "()" }
 
 # NOTE: Similar to BindingElement but appears in formal parameters list
 ParameterElement
@@ -423,14 +443,21 @@ FunctionExpression
   # NOTE: Added CoffeeScript thin arrow function shorthand
   ThinArrowFunction
   # NOTE: Merged in async and generator with optionals
-  ( Async __ )? Function ( Star __ )? ( BindingIdentifier )? __ Parameters ReturnTypeSuffix? BracedBlock -> {
-    type: "FunctionExpression",
-    children: $0,
-  }
+  ( Async __ )? Function ( Star __ )? ( BindingIdentifier )? __ Parameters ReturnTypeSuffix?:suffix BracedBlock:block ->
+    const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
+    if (module.implicitReturns && !isVoid) {
+      module.addImplicitReturns(block)
+    }
+
+    return {
+      type: "FunctionExpression",
+      children: $0,
+    }
 
 ThinArrowFunction
   Parameters:params ReturnTypeSuffix?:suffix _* Arrow:arrow BracedOrEmptyBlock:block ->
-    if (module.implicitReturns && suffix?.children[3] !== "void") {
+    const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
+    if (module.implicitReturns && !isVoid) {
       block = module.addImplicitReturns(block)
     }
 
@@ -466,6 +493,9 @@ Block
 
 BracedOrEmptyBlock
   BracedBlock
+  EmptyBlock
+
+EmptyBlock
   # Implied empty block
   InsertOpenBrace InsertCloseBrace -> {
     type: "BlockStatement",
@@ -635,9 +665,17 @@ PropertyName
 
 # https://262.ecma-international.org/#prod-MethodDefinition
 MethodDefinition
-  # TODO: Make compatible with CoffeeScript style comments by being more precise with __ whitespace here
   # NOTE: Not adding extra validation using PropertySetParameterList
-  MethodSignature BracedBlock
+  MethodSignature:sig BracedBlock:block ->
+    const isConstructor = sig.name       === "constructor"
+    const isVoid        = sig.returnType === "void"
+    const isSet         = sig.modifier   === "set"
+
+    if (module.implicitReturns && !isConstructor && !isSet && !isVoid) {
+      block = module.addImplicitReturns(block)
+    }
+
+    return $0
 
 MethodModifier
   # NOTE: Merged get/set definitions
@@ -649,15 +687,37 @@ MethodModifier
 
 # TypeScript method signature
 MethodSignature
-  ConstructorShorthand Parameters
-  MethodModifier? ClassElementName _* Parameters
+  ConstructorShorthand Parameters ->
+    return {
+      type: "MethodSignature",
+      children: $0,
+      name: $1.token,
+      returnType: undefined,
+    }
+
+  MethodModifier? ClassElementName:name _* NonEmptyParameters ReturnTypeSuffix?:suffix ->
+    // Normalize name so we can check if it is `constructor`
+    name = name.token.match(/^(?:"|')/) ? name.token.slice(1, -1) : name.token
+
+    return {
+      type: "MethodSignature",
+      children: $0,
+      name: name,
+      modifier: $1?.[0]?.token, // get/set
+      // TODO: get return type from type annotation
+      returnType: undefined,
+    }
 
 ClassElementName
   PropertyName
   PrivateIdentifier
 
 PrivateIdentifier
-  "#" IdentifierName
+  $("#" IdentifierName) ->
+    return {
+      $loc: $loc,
+      token: $1,
+    }
 
 # https://262.ecma-international.org/#prod-GeneratorDeclaration
 # https://262.ecma-international.org/#prod-GeneratorExpression
@@ -1798,7 +1858,7 @@ NestedInterfaceProperty
 
 InterfaceProperty
   ( TypeIndexSignature / PropertyName ) TypeSuffix InterfacePropertyDelimiter
-  MethodSignature TypeSuffix?
+  MethodSignature
 
 InterfacePropertyDelimiter
   _* Semicolon
@@ -1830,22 +1890,41 @@ TypeIndex
   __ PropertyName __ In Type ( __ As Type )?
 
 TypeSuffix
-  QuestionMark? __ Colon Type -> { ts: true, children: $0 }
+  QuestionMark? __ Colon Type -> {
+    type: "TypeSuffix",
+    ts: true,
+    children: $0
+  }
 
 ReturnTypeSuffix
-  __ Colon ( __ "asserts" NonIdContinue )? TypePredicate -> { ts: true, children: $0 }
+  __ Colon ( __ "asserts" NonIdContinue )? TypePredicate ->
+    if (!$3) $0.splice(2, 1)
+    if ($1.length === 0) $0.shift()
+
+    return {
+      type: "ReturnTypeAnnotation",
+      children: $0,
+      ts: true,
+    }
 
 TypePredicate
-  Type ( __ "is" NonIdContinue Type )?
+  Type ( __ "is" NonIdContinue Type )? ->
+    if (!$2) return $1
+    return $0
 
 Type
   TypeConditional
 
 TypeBinary
-  TypeUnary (__ TypeBinaryOp __ TypeUnary)*
+  TypeUnary (__ TypeBinaryOp __ TypeUnary)* ->
+    if ($2.length) return $0
+    return $1
 
 TypeUnary
-  ( __ TypeUnaryOp NonIdContinue )* TypePrimary TypeUnarySuffix*
+  ( __ TypeUnaryOp NonIdContinue )* TypePrimary TypeUnarySuffix* ->
+    if (!$3.length) $0.pop()
+    if (!$1.length) $0.shift()
+    return $0
 
 TypeUnarySuffix
   TypeIndexedAccess
@@ -1862,20 +1941,26 @@ TypePrimary
   InterfaceBlock
   __ OpenParen Type __ CloseParen
   _* FunctionType
-  _* IdentifierName (Dot IdentifierName)* TypeArguments?
   _* TypeLiteral
+  _* IdentifierName (Dot IdentifierName)* TypeArguments?
 
 TypeConditional
-  TypeBinary ( __ "extends" Type ( __ QuestionMark Type __ Colon Type )? )?
+  TypeBinary ( __ "extends" Type ( __ QuestionMark Type __ Colon Type )? )? ->
+    if ($2) return $0
+    return $1
 
 TypeLiteral
   Literal
-  "void"
-  "[]"
+  "void" ->
+    return { $loc, token: "void" }
+  "[]" ->
+    return { $loc, token: "[]" }
 
 TypeBinaryOp
-  "|"
-  "&"
+  "|" ->
+    return { $loc, token: "|" }
+  "&" ->
+    return { $loc, token: "&" }
 
 FunctionType
   Parameters __ "=>" Type
@@ -2038,9 +2123,6 @@ Init
       if (!Array.isArray(node)) return
 
       const [, exp] = node
-
-      debugger
-
       if (!exp) return
 
       switch (exp.type) {
@@ -2053,7 +2135,6 @@ Init
         case "VariableDeclaration":
           return
         case "IfStatement":
-          debugger
           // if block
           insertReturn(exp.children[2])
           // else block

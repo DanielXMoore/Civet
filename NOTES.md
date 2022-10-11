@@ -383,8 +383,11 @@ Timesheet
 2022-10-01 | 2.50  | parser cleanup; added multiple switch/when cases; coffee-compat `"#{}"` interpolation
 2022-10-09 | 2.25  | starting implicit returns
 2022-10-10 | 3.75  | AST nodes; more implicit returns
+2022-10-11 | 2.25  | implicit returns (method definition; fat arrow; longhand; void; set)
 
 TODO:
+
+auto var
 
 - CoffeeCompat
   - [x] implicit returns
