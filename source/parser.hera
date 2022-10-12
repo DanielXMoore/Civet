@@ -141,7 +141,7 @@ ArrowFunction
   Parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
     const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
     const isBlock = expOrBlock.type === "BlockStatement"
-    if (module.implicitReturns && !isVoid && isBlock) {
+    if (module.config.implicitReturns && !isVoid && isBlock) {
       module.addImplicitReturns(expOrBlock)
     }
 
@@ -445,7 +445,7 @@ FunctionExpression
   # NOTE: Merged in async and generator with optionals
   ( Async __ )? Function ( Star __ )? ( BindingIdentifier )? __ Parameters ReturnTypeSuffix?:suffix BracedBlock:block ->
     const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
-    if (module.implicitReturns && !isVoid) {
+    if (module.config.implicitReturns && !isVoid) {
       module.addImplicitReturns(block)
     }
 
@@ -457,7 +457,7 @@ FunctionExpression
 ThinArrowFunction
   Parameters:params ReturnTypeSuffix?:suffix _* Arrow:arrow BracedOrEmptyBlock:block ->
     const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
-    if (module.implicitReturns && !isVoid) {
+    if (module.config.implicitReturns && !isVoid) {
       block = module.addImplicitReturns(block)
     }
 
@@ -671,7 +671,7 @@ MethodDefinition
     const isVoid        = sig.returnType === "void"
     const isSet         = sig.modifier   === "set"
 
-    if (module.implicitReturns && !isConstructor && !isSet && !isVoid) {
+    if (module.config.implicitReturns && !isConstructor && !isSet && !isVoid) {
       block = module.addImplicitReturns(block)
     }
 
@@ -786,14 +786,14 @@ BinaryOpSymbol
   # NOTE: CoffeeScript converts "!=" -> "!=="
   # Convert if CoffeeScript compat flag is set
   "!=" ->
-    if(module.coffeeCompat) return "!=="
+    if(module.config.coffeeEq) return "!=="
     return $1
   "is" NonIdContinue -> "==="
   "==="
   # NOTE: CoffeeScript converts "==" -> "==="
   # Convert if CoffeeScript compat flag is set
   "==" ->
-    if(module.coffeeCompat) return "==="
+    if(module.config.coffeeEq) return "==="
     return $1
   "and" NonIdContinue -> "&&"
   "&&"
@@ -1330,8 +1330,8 @@ StringLiteral
   TripleSingleQuote:s TripleSingleStringCharacters:str TripleSingleQuote:e ->
     return [s, module.dedentBlockString(str), e]
 
-  # CoffeeScript Interpolation is enabled when "use coffee-compat" directive is present
-  CoffeeCompatDoubleQuotedString
+  # CoffeeScript Interpolation is enabled when "civet coffee-compat" or "civet coffee-interpolation" directive is present
+  CoffeeInterpolatedDoubleQuotedString
   BasicStringLiteral
 
 BasicStringLiteral
@@ -1366,13 +1366,8 @@ TripleSingleStringCharacters
 CoffeeStringSubstitution
   CoffeeSubstitutionStart Expression __ CloseBrace
 
-CoffeeCompat
-  "" ->
-    if(module.coffeeCompat) return
-    return $skip
-
-CoffeeCompatDoubleQuotedString
-  CoffeeCompat DoubleQuote:s ( CoffeeCompatDoubleQuotedStringCharacters / CoffeeStringSubstitution )*:parts DoubleQuote:e ->
+CoffeeInterpolatedDoubleQuotedString
+  CoffeeInterpolationEnabled DoubleQuote:s ( CoffeeDoubleQuotedStringCharacters / CoffeeStringSubstitution )*:parts DoubleQuote:e ->
     const noInterpolations = parts.length === 1 && parts[0].token != null
     if (noInterpolations) {
       return {
@@ -1396,7 +1391,7 @@ CoffeeCompatDoubleQuotedString
 
     return [s, parts, e]
 
-CoffeeCompatDoubleQuotedStringCharacters
+CoffeeDoubleQuotedStringCharacters
   /(?:\\.|#(?!\{)|[^"#])+/ ->
     return { $loc, token: $0 }
 
@@ -1450,7 +1445,7 @@ Comment
 SingleLineComment
   /\/\/[^\r\n]*/ ->
     return { $loc, token: $0 }
-  CoffeeCompat CoffeeSingleLineComment
+  CoffeeCommentEnabled CoffeeSingleLineComment
 
 # https://262.ecma-international.org/#prod-MultiLineComment
 MultiLineComment
@@ -1993,10 +1988,38 @@ TypeParameterDelimiter
 Shebang
   /#![^\r\n]*/ EOL
 
-DirectivePrologue
+CivetPrologue
+  [\t ]* DoubleQuote CivetPrologueContent:content DoubleQuote $StatementDelimiter EOS -> content
+  [\t ]* SingleQuote CivetPrologueContent:content SingleQuote $StatementDelimiter EOS -> content
+
+CivetPrologueContent
+  "civet" CivetOption*:options [\s]* ->
+    return {
+      type: "CivetPrologue",
+      children: [],
+      config: Object.fromEntries(options),
+    }
+
+CivetOption
+  /\s+([+-]?)([a-zA-Z0-9-]+)/ ->
+    // Normalize option names to camelCase
+    const optionName = $2.toLowerCase().replace(/-+([a-z]?)/g, (_, l) => {
+      if (l) return l.toUpperCase()
+      return ""
+    })
+    // - is disabled, + is enabled, no prefix is enabled
+    const value = ($1 === "-") ? false : true
+
+    return [optionName, value]
+
+UnknownPrologue
   # NOTE: $ is to keep source verbatim and not insert a semicolon if one was omitted
   # Can't use $EOS because it will prevent re-writing of coffee style comments
-  ([\t ]* StringLiteral $StatementDelimiter EOS)*
+  [\t ]* BasicStringLiteral:s $StatementDelimiter EOS
+
+DirectivePrologue
+  CivetPrologue
+  UnknownPrologue
 
 EOS
   RestOfLine+
@@ -2062,7 +2085,15 @@ InsertBreak
   "" ->
     return { $loc, token: "break;" }
 
-# Indentation
+CoffeeCommentEnabled
+  "" ->
+    if(module.config.coffeeComment) return
+    return $skip
+
+CoffeeInterpolationEnabled
+  "" ->
+    if(module.config.coffeeInterpolation) return
+    return $skip
 
 # Reset module level data
 Reset
@@ -2071,9 +2102,32 @@ Reset
     module.currentIndent = 0
     module.indentLevels = [0]
     module.verbose = false
-    module.coffeeCompat = false
-    module.implicitReturns = true
-    module.autoVar = false
+    module.config = {
+      autoVar: false,
+      coffeeComment: false,
+      coffeeEq: false,
+      coffeeInterpolation: false,
+      implicitReturns: true,
+    }
+
+    // Expand setting coffeeCompat to the individual options
+    Object.defineProperty(module.config, "coffeeCompat", {
+      set(b) {
+        if (b) {
+          this.autoVar = true
+          this.coffeeComment = true
+          this.coffeeEq = true
+          this.coffeeInterpolation = true
+          this.implicitReturns = true
+        } else {
+          this.autoVar = false
+          this.coffeeComment = false
+          this.coffeeEq = false
+          this.coffeeInterpolation = false
+          this.implicitReturns = false
+        }
+      }
+    })
 
     // TODO: this is only here because directive prologues depend on it
     // eventually all these `module.*` variables should be handled better in Hera
@@ -2085,13 +2139,12 @@ Reset
     }
 
 Init
-  Shebang? DirectivePrologue:directives "" ->
-    if(directives) {
-      const compatRe = /use coffee-compat/
-      const hasCompat = directives.some(d => d[1].token?.match(compatRe))
-      // TODO: Split out all the compat flags separately
-      module.autoVar = module.coffeeCompat = hasCompat
-    }
+  Shebang? DirectivePrologue*:directives "" ->
+    directives.forEach((directive) => {
+      if (directive.type === "CivetPrologue") {
+        Object.assign(module.config, directive.config)
+      }
+    })
 
     function hasReturnStatement(node) {
       if (!node) return false
@@ -2302,6 +2355,8 @@ Init
     }
 
     return $0
+
+# Indentation
 
 # Holds the last indent level in `module.lastIndent`
 # Can get weird with backtracking but should work out as long as
