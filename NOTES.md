@@ -383,11 +383,10 @@ Timesheet
 2022-10-01 | 2.50  | parser cleanup; added multiple switch/when cases; coffee-compat `"#{}"` interpolation
 2022-10-09 | 2.25  | starting implicit returns
 2022-10-10 | 3.75  | AST nodes; more implicit returns
-2022-10-11 | 2.25  | implicit returns (method definition; fat arrow; longhand; void; set)
+2022-10-11 | 3.25  | implicit returns (method definition; fat arrow; longhand; void; set); starting auto-var
+2022-10-12 | 1.75  | civet prologues
 
 TODO:
-
-auto var
 
 - CoffeeCompat
   - [x] implicit returns
@@ -397,11 +396,11 @@ auto var
     - [x] IfStatement
     - [x] IterationStatement
     - [x] VariableDeclaration
-  - [ ] auto var
+  - [x] `"civet +coffee-compat -extra-bools"` style config
   - [ ] Chained Comparisons
     - [ ] Floating ref node pointing to a VariableDeclaration
   - [ ] Comprehensions
-  - [ ] `"civet +coffee-compat -extra-bools"` style config
+  - [ ] auto var
 - LSP
   - [ ] auto-import suggest in .coffee
   - [ ] update imported file exports, see errors in importing file
