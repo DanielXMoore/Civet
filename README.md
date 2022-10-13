@@ -94,6 +94,7 @@ Things Kept from CoffeeScript
 - Postfix `if/unless`
 - Block Strings `"""` / `'''`
   - `#{exp}` interpolation in `"""` strings
+- `when` inside `switch` automatically breaks
 - Multiple `,` separated `case`/`when` expressions
 - `else` -> `default` in `switch`
 - Implicit returns

@@ -341,6 +341,14 @@ Probably a good idea to align with existing AST conventions where possible
 - https://esprima.org/demo/parse.html
 - https://github.com/estree/estree
 
+Block Regular Expressions
+---
+Heregexp, Block Regexp, `re.X`, `///`
+
+CoffeeScript's block regexp is a neat idea but is specified poorly and has bugs. Rebuilding it to match Python's `re.X` could be a valid approach.
+
+- https://docs.python.org/3/library/re.html#re.X
+
 Timesheet
 ---
 
@@ -385,6 +393,7 @@ Timesheet
 2022-10-10 | 3.75  | AST nodes; more implicit returns
 2022-10-11 | 3.25  | implicit returns (method definition; fat arrow; longhand; void; set); starting auto-var
 2022-10-12 | 3.00  | civet prologues; number improvements
+2022-10-13 | 0.75  | coffeeBooleans
 
 TODO:
 
