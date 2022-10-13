@@ -393,19 +393,11 @@ Timesheet
 2022-10-10 | 3.75  | AST nodes; more implicit returns
 2022-10-11 | 3.25  | implicit returns (method definition; fat arrow; longhand; void; set); starting auto-var
 2022-10-12 | 3.00  | civet prologues; number improvements
-2022-10-13 | 1.00  | coffeeBooleans; compat docs
+2022-10-13 | 1.75  | coffeeBooleans; compat docs; implicit return hera compiler example test
 
 TODO:
 
 - CoffeeCompat
-  - [x] implicit returns
-    - [x] FunctionExpression
-    - [x] SwitchStatement
-    - [x] EmptyStatement
-    - [x] IfStatement
-    - [x] IterationStatement
-    - [x] VariableDeclaration
-  - [x] `"civet +coffee-compat -extra-bools"` style config
   - [ ] Chained Comparisons
     - [ ] Floating ref node pointing to a VariableDeclaration
   - [ ] Comprehensions

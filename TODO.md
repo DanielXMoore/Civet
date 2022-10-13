@@ -4,14 +4,21 @@ TODO
 - [x] Compiler option to strip TypeScript and emit only JS (use in `./register`)
 - [x] JavaScript Compat (default stance is JS code should "just work")
 - [x] Multiple case/when expressions
-- [ ] Implicit Returns
-  - [ ] if without else not all code paths return a value
+- [x] Implicit Returns
+  - [x] if without else: not all code paths return a value
+  - [x] Should implicit returns apply to `case` inside `switch`? No because fallthrough could be intentional.
+- [ ] const assignment for function shorthand should use function declaration since TypeScript function declarations are const by default
+  ```
+  fn := (x) -> x
+  ---
+  function fn(x) { return x }
+  ```
 - [ ] Chained Comparisons
 - [x] `1.toString()` -> `1..toString()`
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
   - [ ] Comprehensions
   - [ ] If/Switch Expressions
-    - [ ] Don't wrap switch in function, assign to ref, then assign to lhs
+    - [ ] Don't wrap switch in function instead assign to a ref, then assign ref to lhs (might not actually be possible when switch is nested deeper in an expression...)
   - [ ] Auto Var
   - [x] on/off/yes/no
   - [x] `"""` `#{}` Interpolations
