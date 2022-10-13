@@ -4,10 +4,14 @@ TODO
 - [x] Compiler option to strip TypeScript and emit only JS (use in `./register`)
 - [x] JavaScript Compat (default stance is JS code should "just work")
 - [x] Multiple case/when expressions
+- [ ] Implicit Returns
+  - [ ] if without else not all code paths return a value
+- [ ] Chained Comparisons
+- [x] `1.toString()` -> `1..toString()`
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
-  - [ ] Implicit Returns
-  - [ ] Chained Comparisons
   - [ ] Comprehensions
+  - [ ] If/Switch Expressions
+    - [ ] Don't wrap switch in function, assign to ref, then assign to lhs
   - [ ] Auto Var
   - [ ] on/off/yes/no
   - [x] `"""` `#{}` Interpolations

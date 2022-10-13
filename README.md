@@ -97,6 +97,7 @@ Things Kept from CoffeeScript
 - Multiple `,` separated `case`/`when` expressions
 - `else` -> `default` in `switch`
 - Implicit returns
+- Simplified number method calls `1.toFixed()` -> `1..toFixed()`
 - JSX 😿
 - TODO
   - [ ] Chained comparisons
@@ -202,6 +203,8 @@ Things Changed from ES6
   application without parens is also convenient.
 - Disallow comma operator in conditionals.
 - Comma operator in case/when becomes multiple conditions.
+- When exponent follows a dot it is treated as a property access since we simplified `1.toString()` -> `1..toString()` and an exponent
+could be a valid property `1.e10` -> `1..e10`. The workaround is to add a trailing zero `1.0e10` or remove the dot before the exponent `1e10`.
 
 Using Civet in your Node.js Environment
 ---
