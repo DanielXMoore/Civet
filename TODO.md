@@ -13,7 +13,7 @@ TODO
   - [ ] If/Switch Expressions
     - [ ] Don't wrap switch in function, assign to ref, then assign to lhs
   - [ ] Auto Var
-  - [ ] on/off/yes/no
+  - [x] on/off/yes/no
   - [x] `"""` `#{}` Interpolations
   - [x] `"` `#{}`Interpolations (with `"use coffee-compat"`)
   - [x] `###` Block comments

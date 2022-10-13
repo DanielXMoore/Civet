@@ -106,7 +106,7 @@ Things Kept from CoffeeScript
 Things Removed from CoffeeScript
 ---
 
-- `on/yes/off/no` (use `true/false`)
+- `on/yes/off/no` (use `true/false`, `"civet coffeeCompat"`)
 - `isnt` (use `!==`)
 - `not` (use `!`)
 - `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax)
@@ -127,8 +127,8 @@ Things Removed from CoffeeScript
 Things Changed from CoffeeScript
 ---
 
-- `==` -> `==` rather than `===` (can be kept with `"use coffee-compat"`)
-- `!=` -> `!=` rather than `!==` (can be kept with `"use coffee-compat"`)
+- `==` -> `==` rather than `===` (can be kept with `"civet coffeeCompat"`)
+- `!=` -> `!=` rather than `!==` (can be kept with `"civet coffeeCompat"`)
 - `for in` and `for of` are no longer swapped and become their JS equivalents.
 - `a...` is now `...a` just like JS
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
@@ -136,7 +136,7 @@ Things Changed from CoffeeScript
 - Embedded JS `\`\`` has been replaced with JS template literals.
 - No longer allowing multiple postfix `if/unless` on the same line.
 - No `else` block on `unless` (negate condition and use `if`)
-- `#{}` interpolation in `""` strings only when `"use coffee-compat"`
+- `#{}` interpolation in `""` strings only when `"civet coffeeCompat"`
 - Civet tries to keep the transpiled output verbatim as much as possible.
   In Coffee `(x)` -> `x;` but in Civet `(x)` -> `(x);`.
   Also in Coffee
@@ -206,6 +206,22 @@ Things Changed from ES6
 - Comma operator in case/when becomes multiple conditions.
 - When exponent follows a dot it is treated as a property access since we simplified `1.toString()` -> `1..toString()` and an exponent
 could be a valid property `1.e10` -> `1..e10`. The workaround is to add a trailing zero `1.0e10` or remove the dot before the exponent `1e10`.
+
+CoffeeScript Compatibility
+---
+
+Civet provides a compatability prologue directive that aims to be 97+% compatible with existing CoffeeScript2 code (still a work in progress).
+
+```
+coffeeBooleans (yes/no/on/off)
+coffeeComment  (# single line comments)
+coffeeEq       (`==` -> `===`, `!=` -> `!==`)
+coffeeInterpolation (`"a string with {myVar}"`)
+```
+
+You can use these with `"civet coffeeCompat"` to opt in to all or use them bit by bit with `"civet coffeeComment coffeeEq coffeeInterpolation"`.
+Another posibility is to slowly remove them to provide a way to migrate files a little at a time `"civet coffeeCompat -coffeeBooleans -coffeeComment -coffeeEq"`.
+Both camel case and hyphens work when specifying options `"civet coffee-compat"`. More options will be added over time until 97+% compatibility is achieved.
 
 Using Civet in your Node.js Environment
 ---
