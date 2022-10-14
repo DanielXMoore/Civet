@@ -91,6 +91,7 @@ Things Kept from CoffeeScript
 - `@` `this` shorthand `@` -> `this`, `@id` -> `this.id`
 - Prototype shorthand `X::` -> `X.prototype`, `X::a` -> `X.prototype.a`
 - Class static shorthand `@`
+- Chained comparisons `a < b < c` -> `a < b && b < c`
 - Postfix `if/unless`
 - Block Strings `"""` / `'''`
   - `#{exp}` interpolation in `"""` strings
@@ -101,7 +102,6 @@ Things Kept from CoffeeScript
 - Simplified number method calls `1.toFixed()` -> `1..toFixed()`
 - JSX 😿
 - TODO
-  - [ ] Chained comparisons
 
 Things Removed from CoffeeScript
 ---
@@ -137,6 +137,7 @@ Things Changed from CoffeeScript
 - No longer allowing multiple postfix `if/unless` on the same line.
 - No `else` block on `unless` (negate condition and use `if`)
 - `#{}` interpolation in `""` strings only when `"civet coffeeCompat"`
+- Expanded chained comparisons to work on more operators `a in b instanceof C` -> `a in b && b instanceof C`
 - Civet tries to keep the transpiled output verbatim as much as possible.
   In Coffee `(x)` -> `x;` but in Civet `(x)` -> `(x);`.
   Also in Coffee

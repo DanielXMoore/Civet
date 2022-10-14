@@ -14,6 +14,8 @@ TODO
   function fn(x) { return x }
   ```
 - [ ] Chained Comparisons (should work for all relational and equality operators)
+  - [x] Basics working
+  - [ ] use refs to avoid excess evaluations of middle results
 - [x] `1.toString()` -> `1..toString()`
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
   - [ ] Comprehensions
