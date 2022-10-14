@@ -79,7 +79,10 @@ CommaExpression
 
 BinaryOpExpression
   UnaryExpression (__ BinaryOp __ UnaryExpression)* ->
-    if ($2.length) return $0
+    if ($2.length) {
+      return module.expandChainedComparisons($0)
+    }
+
     return $1
 
 # https://262.ecma-international.org/#prod-UnaryExpression
@@ -89,10 +92,15 @@ UnaryExpression
     // Handle "?" postfix
     if (post?.token === "?") {
       // v1.1 Can remove parens when unnecessary once exp returns a full AST node to determine if they are actually needed
-      return ["(", pre, , "(", exp, ") != null)"]
+      return ["(", pre, "(", exp, ") != null)"]
     }
 
-    return [pre, exp, post]
+    const result = [pre, exp, post]
+    if (!post) result.pop()
+    if (!pre.length) result.shift()
+    if (result.length === 1) return result[0]
+
+    return result
 
 UnaryPostfix
   QuestionMark
@@ -574,6 +582,7 @@ Identifier
 IdentifierName
   /(?:\p{ID_Start}|[_$])(?:\p{ID_Continue}|[\u200C\u200D$])*/ ->
     return {
+      type: "Identifier",
       $loc: $loc,
       token: $0,
     }
@@ -2194,6 +2203,10 @@ Init
         case "AssignmentExpression":
           node.children.unshift("return ")
           return
+        case "Identifier":
+          // TODO: It would be better to wrap/insert a node rather than modify the token
+          node.token = "return " + node.token
+          return
         case "BlockStatement":
           insertReturn(node.expressions[node.expressions.length - 1])
           return
@@ -2269,6 +2282,78 @@ Init
       insertReturn(block)
 
       return block
+    }
+
+    /**
+    * binops is an array of [__, op, __, exp] tuples
+    * first is an expression
+    */
+    module.expandChainedComparisons = function([first, binops]) {
+      // TODO: add refs to ensure middle expressions are evaluated only once
+
+      // all relational operators could be chained in theory, including in and instanceof
+      const relationalOps = ["==", "===", "!=", "!==", "<", "<=", ">", ">=", "in", "instanceof"]
+
+      // short circuit/bitwise ops have lower precedence than comparison ops
+      // so we only need to look for chains in the sections between them
+      const lowerPrecedenceOps = ["??", "&&", "||", "&", "|", "^"]
+
+      // shift/arithmetic ops have higher precedence, they will bind to expressions inside the chains
+      // const higherPrecedenceOps = ["<<", ">>", ">>>", "+", "-", "*", "**", "/", "%"]
+
+      let results = []
+
+      let i = 0
+      let l = binops.length
+
+      let start = 0
+      // indexes of chainable ops
+      let chains = []
+      while (i < l) {
+        const [, op] = binops[i]
+
+        if (relationalOps.includes(op.token)) {
+          chains.push(i)
+        } else if (lowerPrecedenceOps.includes(op.token)) {
+          // end of the chain
+          processChains()
+          first = []
+        }
+
+        i++
+      }
+
+      processChains()
+
+      return results
+
+      function processChains() {
+        if (chains.length > 1) {
+          chains.forEach((index, k) => {
+            if (k > 0) {
+              results.push(" && ")
+            }
+            const [pre, op, post, exp] = binops[index]
+
+            let endIndex
+            if (k < chains.length - 1) {
+              endIndex = chains[k + 1]
+            } else {
+              endIndex = i + 1
+            }
+
+            results = results.concat(first, ...binops.slice(start, endIndex))
+            first = [exp].concat(binops.slice(index + 1, endIndex))
+            start = endIndex
+          })
+        } else {
+          // Advance start if there was no chain
+          results = results.concat(first, ...binops.slice(start, i + 1))
+          start = i + 1
+        }
+
+        chains.length = 0
+      }
     }
 
     // Return an array of Rule names that correspond to the current call stack

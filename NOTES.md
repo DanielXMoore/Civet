@@ -393,12 +393,14 @@ Timesheet
 2022-10-10 | 3.75  | AST nodes; more implicit returns
 2022-10-11 | 3.25  | implicit returns (method definition; fat arrow; longhand; void; set); starting auto-var
 2022-10-12 | 3.00  | civet prologues; number improvements
-2022-10-13 | 1.75  | coffeeBooleans; compat docs; implicit return hera compiler example test
+2022-10-13 | 2.50  | coffeeBooleans; compat docs; implicit return hera compiler example test; big int hex/octal/binary
+2022-10-14 | 1.75  | chained comparisons
 
 TODO:
 
 - CoffeeCompat
   - [ ] Chained Comparisons
+    - [x] working without refs
     - [ ] Floating ref node pointing to a VariableDeclaration
   - [ ] Comprehensions
   - [ ] auto var
