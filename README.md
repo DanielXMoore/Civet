@@ -101,7 +101,6 @@ Things Kept from CoffeeScript
 - Implicit returns
 - Simplified number method calls `1.toFixed()` -> `1..toFixed()`
 - JSX 😿
-- TODO
 
 Things Removed from CoffeeScript
 ---

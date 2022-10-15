@@ -395,6 +395,7 @@ Timesheet
 2022-10-12 | 3.00  | civet prologues; number improvements
 2022-10-13 | 2.50  | coffeeBooleans; compat docs; implicit return hera compiler example test; big int hex/octal/binary
 2022-10-14 | 1.75  | chained comparisons
+2022-10-15 | 2.00  | TS interface type parameters; TS comma delimiters in interface; TS `?` suffix; TS callable interface; TS function overloads; TS declare function signature; TS multiple as; rest parameters; argument splats
 
 TODO:
 
