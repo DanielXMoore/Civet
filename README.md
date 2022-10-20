@@ -198,10 +198,12 @@ Things Added that CoffeeScript didn't
 Things Changed from ES6
 ---
 
+- Implicit returns
 - Disallow no parens on single argument arrow function. `x => ...` must become `(x) => ...`
   The reasoning is `x -> ...` => `x(function() ...)` in CoffeeScript and having `->` and `=>`
   behave more differently than they already do is bad. Passing an anonymous function to an
   application without parens is also convenient.
+- `for(i of x) ...` defaults to const declaration -> `for(const i of x) ...`
 - Disallow comma operator in conditionals.
 - Comma operator in case/when becomes multiple conditions.
 - When exponent follows a dot it is treated as a property access since we simplified `1.toString()` -> `1..toString()` and an exponent

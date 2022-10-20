@@ -398,6 +398,7 @@ Timesheet
 2022-10-15 | 2.00  | TS interface type parameters; TS comma delimiters in interface; TS `?` suffix; TS callable interface; TS function overloads; TS declare function signature; TS multiple as; rest parameters; argument splats
 2022-10-17 | 0.50  | Don't insert semi-colons at every statement end
 2022-10-18 | 0.50  | type annotation for var decs
+2022-10-20 | 2.00  | Paren-less `for`; implicit const `for` dec
 
 TODO:
 
