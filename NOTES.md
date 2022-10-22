@@ -399,6 +399,7 @@ Timesheet
 2022-10-17 | 0.50  | Don't insert semi-colons at every statement end
 2022-10-18 | 0.50  | type annotation for var decs
 2022-10-20 | 2.00  | Paren-less `for`; implicit const `for` dec
+2022-10-21 | 1.00  | unary op + eol source maps;
 
 TODO:
 
