@@ -7,6 +7,7 @@ TODO
 - [x] Implicit Returns
   - [x] if without else: not all code paths return a value
   - [x] Should implicit returns apply to `case` inside `switch`? No because fallthrough could be intentional.
+  - [x] Don't actually need to check for returns anywhere in a function, always implicit return the last statement
 - [x] default const decs in `for in/of`
 - [ ] CoffeeScript compat `for in`
 - [ ] const assignment for function shorthand should use function declaration since TypeScript function declarations are const by default
