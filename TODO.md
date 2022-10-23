@@ -76,7 +76,10 @@ TODO
     - [x] Basic ESM Loader
   - [x] esbuild plugin so we can package up projects that contain `.civet` files
   - [ ] CoffeeSense inspired LSP
-    - [ ] Language Icon https://stackoverflow.com/a/70930298/68210
+    - [x] Language Icon https://stackoverflow.com/a/70930298/68210
+      - [x] Basic SVG Icon
+      - [x] Get VSCode to use the fill color (VSCode editor was caching older version)
+      - [x] Get VSCode to use the viewbox padding (VSCode editor was caching older version)
     - [ ] Experiment with forking/patching `vscode/extensions/typescript-language-features` to add a transpilation resolver and to sourcemap the messages
     - [ ] Syntax Highlighting
       - [x] Basic highlighting
