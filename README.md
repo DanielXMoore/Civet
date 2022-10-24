@@ -92,7 +92,7 @@ Things Kept from CoffeeScript
 - Prototype shorthand `X::` -> `X.prototype`, `X::a` -> `X.prototype.a`
 - Class static shorthand `@`
 - Chained comparisons `a < b < c` -> `a < b && b < c`
-- Postfix `if/unless`
+- Postfix `if/unless/while/until/for`
 - Block Strings `"""` / `'''`
   - `#{exp}` interpolation in `"""` strings
 - `when` inside `switch` automatically breaks
@@ -111,14 +111,17 @@ Things Removed from CoffeeScript
 - `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax)
 - `for from` (use JS `for of`)
 - `and=`, `or=` (don't mix and match words and symbols)
+- `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables)
 - Iteration expression results
-- Implicit declarations
-- Postfix `while/until`
-- `///` Heregexp
-- Backtick Embedded JS (replaced by template literals)
+- Backtick embedded JS (replaced by template literals)
+- Will likely add later
+  - `switch` expressions
+  - `if` expressions
+  - Implicit declarations (in compat mode only)
 - Might add later
-  - Comprensions (a case could be made for keeping them)
+  - Comprensions
   - Array slices `list[0...2]` (use `list.slice(0, 2)`)
+  - `///` Heregexp
   - Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` (use `numbers.splice(3, 4, -3, -4, -5, -6)`)
   - Ranges `[0...10]`
   - Rest parameter in any assignment position
@@ -132,10 +135,11 @@ Things Changed from CoffeeScript
 - `a...` is now `...a` just like JS
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
 - Existential `x?` -> `(x != null)` no longer checks for undeclared variables.
-- Embedded JS `\`\`` has been replaced with JS template literals.
-- No longer allowing multiple postfix `if/unless` on the same line.
+- `x?()` -> `x?.()` instead of `if (typeof x === 'function') { x() }`
+- Backtick embedded JS has been replaced with JS template literals.
+- No longer allowing multiple postfix `if/unless` on the same line (use `&&` or `and` to combine conditions).
 - No `else` block on `unless` (negate condition and use `if`)
-- `#{}` interpolation in `""` strings only when `"civet coffeeCompat"`
+- `#{}` interpolation in `""` strings only when `"civet coffeeCompat"` or `"civet coffeeInterpolation"`
 - Expanded chained comparisons to work on more operators `a in b instanceof C` -> `a in b && b instanceof C`
 - Civet tries to keep the transpiled output verbatim as much as possible.
   In Coffee `(x)` -> `x;` but in Civet `(x)` -> `(x);`.
@@ -189,6 +193,7 @@ Things Added that CoffeeScript didn't
   - `\`\`\`` Block Template Strings remove leading indentation for clarity
   - Class constructor shorthand `@( ... )`
   - ClassStaticBlock `@ { ... }`
+- Postfix loop `run() loop` -> `while(true) run()`
 - Shebang line is kept unmodified in output
   ```civet
   #!./node_modules/.bin/ts-node
@@ -204,10 +209,11 @@ Things Changed from ES6
   behave more differently than they already do is bad. Passing an anonymous function to an
   application without parens is also convenient.
 - `for(i of x) ...` defaults to const declaration -> `for(const i of x) ...`
-- Disallow comma operator in conditionals.
+- Disallow comma operator in conditionals. `if x, y`
 - Comma operator in case/when becomes multiple conditions.
 - When exponent follows a dot it is treated as a property access since we simplified `1.toString()` -> `1..toString()` and an exponent
 could be a valid property `1.e10` -> `1..e10`. The workaround is to add a trailing zero `1.0e10` or remove the dot before the exponent `1e10`.
+- Additional reserved words `and`, `or`, `loop`, `until`, `unless`
 
 CoffeeScript Compatibility
 ---

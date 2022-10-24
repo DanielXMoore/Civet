@@ -854,29 +854,23 @@ ModuleItem
 
 # https://262.ecma-international.org/#prod-StatementListItem
 StatementListItem
+  Declaration
   # NOTE: Added postfix conditionals
-  (Declaration / Statement):statement PostfixConditional?:cond Loc:l ->
-    if (cond)
-      // TODO: Actually wrap the statement in a conditional AST node so implicit returns can use the same logic
-      return [cond, statement, { $loc: l.$loc, token: "}" }]
+  Statement:statement TrailingComment*:ws PostfixStatement?:post ->
+    if (post) {
+      post.children.push(statement)
+      // This removes trailing whitespace for easier testing
+      if (!module.isWhitespaceOrEmpty(ws)) post.children.push(ws)
+      return post
+    }
     return statement
 
-PostfixConditional
-  TrailingComment*:ws (If / Unless):cond NonIdContinue Loc:l1 ExpressionWithIndentedApplicationSuppressed:exp Loc:l2 ->
-    let openParens = { $loc: l1.$loc, token: "(!(" }
-    let closingParens = { $loc: l2.$loc, token: "))" }
-    let space = { $loc: l2.$loc, token: " " }
-    let openingBrace = { $loc: l2.$loc, token: "{" }
-
-    if (cond.token === "if") {
-      cond.token = "if"
-      closingParens.token = ")"
-      openParens.token = "("
-    } else {
-      cond.token = "if"
-    }
-
-    return [ws, cond, openParens, exp, closingParens, space, openingBrace]
+PostfixStatement
+  ForClause
+  IfClause
+  LoopClause
+  UnlessClause
+  WhileClause
 
 # https://262.ecma-international.org/#prod-Statement
 Statement
@@ -910,8 +904,19 @@ BlockStatement
 IfStatement
   # NOTE: Added paren-less condition
   # NOTE: Block isn't Statement so we can handle implied braces by nesting
-  If Condition Block ( __ Else Block )? -> { type: "IfStatement", children: $0 }
-  Unless:kind Condition:condition Block:block ->
+  IfClause:clause Block:block ( __ Else Block )?:e ->
+    clause.children.push(block)
+    if (e) clause.children.push(e)
+    return clause
+  UnlessClause:clause Block:block ->
+    clause.children.push(block)
+    return clause
+
+IfClause
+  If Condition -> { type: "IfStatement", children: $0 }
+
+UnlessClause
+  Unless:kind Condition:condition ->
     // Rewrite unless to if
     condition.forEach((c) => {
       if (!c) return
@@ -922,7 +927,7 @@ IfStatement
 
     return {
       type: "IfStatement",
-      children: [kind, condition, block],
+      children: [kind, condition],
     }
 
 # https://262.ecma-international.org/#prod-IterationStatement
@@ -931,42 +936,56 @@ IterationStatement
   LoopStatement
   DoWhileStatement
   WhileStatement
-  ForStatement -> {
-    type: "IterationStatement",
-    children: $0,
-  }
+  ForStatement
 
 # NOTE: Added from CoffeeScript
 LoopStatement
-  Loop Block -> { type: "IterationStatement", children: $0 }
+  LoopClause:clause Block:block ->
+    clause.children.push(block)
+    return clause
+
+LoopClause
+  Loop -> { type: "IterationStatement", children: $0 }
 
 # https://262.ecma-international.org/#prod-DoWhileStatement
 DoWhileStatement
   # NOTE: Condition provides optional parens
-  "do" NonIdContinue Block __ WhileClause -> { type: "IterationStatement", children: $0 }
+  Do BracedBlock __ WhileClause -> { type: "IterationStatement", children: $0 }
 
 # https://262.ecma-international.org/#prod-WhileStatement
 WhileStatement
   # NOTE: Condition provides optional parens
-  WhileClause Block -> {
-    type: "IterationStatement",
-    children: $0
-  }
+  WhileClause:clause Block:block ->
+    clause.children.push(block)
+    return clause
 
 WhileClause
-  ( "while" / "until" ):kind NonIdContinue Condition:cond ->
-    if (kind === "until") {
+  ( While / Until ):kind Condition:cond ->
+    if (kind.token === "until") {
       cond[1] = "(!("
-      cond[4] = "))"
-      return ["while", cond]
+      cond[cond.length-1] = "))"
+      kind.token = "while"
+      $0 = [kind, cond]
     }
-    return $0
+
+    return {
+      type: "IterationStatement",
+      children: $0
+    }
 
 # https://262.ecma-international.org/#prod-ForStatement
 # https://262.ecma-international.org/#prod-ForInOfStatement
 # NOTE: Merged into single rule
 ForStatement
-  For __ ForStatementControl Block
+  ForClause:clause Block:block ->
+    clause.children.push(block)
+    return clause
+
+ForClause
+  For __ ForStatementControl  -> {
+    type: "IterationStatement",
+    children: $0,
+  }
 
 ForStatementControl
   # https://262.ecma-international.org/#prod-ForStatement
@@ -1128,7 +1147,9 @@ CatchParameter
 # An expression with explicit or implied parentheses, for use in if/while
 Condition
   __ OpenParen Expression __ CloseParen
-  !EOS __ InsertOpenParen ExpressionWithIndentedApplicationSuppressed InsertCloseParen
+  !EOS __ InsertOpenParen ExpressionWithIndentedApplicationSuppressed InsertCloseParen ->
+    $0.shift()
+    return $0
 
 ExpressionWithIndentedApplicationSuppressed
   SuppressIndentedApplication AssignmentExpression?:exp ->
@@ -1495,7 +1516,7 @@ TemplateBlockCharacters
 # https://262.ecma-international.org/#sec-comments
 ReservedWord
   CoffeeBooleansEnabled /(?:on|off|yes|no)(?!\p{ID_Continue})/
-  /(?:and|as|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|interface|is|new|null|or|return|static|super|switch|this|throw|true|try|typeof|unless|var|void|while|with|yield)(?!\p{ID_Continue})/
+  /(?:and|as|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|interface|is|loop|new|null|or|return|static|super|switch|this|throw|true|try|typeof|unless|until|var|void|while|with|yield)(?!\p{ID_Continue})/
 
 # https://262.ecma-international.org/#sec-comments
 Comment
@@ -1630,6 +1651,10 @@ Default
 
 Delete
   "delete" NonIdContinue ->
+    return { $loc, token: $1 }
+
+Do
+  "do" NonIdContinue ->
     return { $loc, token: $1 }
 
 Dot
@@ -1785,6 +1810,10 @@ Unless
   "unless" ->
     return { $loc, token: $1 }
 
+Until
+  "until" NonIdContinue ->
+    return { $loc, token: $1 }
+
 Var
   "var" ->
     return { $loc, token: $1 }
@@ -1797,6 +1826,10 @@ Void
 When
   "when" NonIdContinue ->
     return { $loc, token: "case" }
+
+While
+  "while" NonIdContinue ->
+    return { $loc, token: $1 }
 
 Yield
   "yield" NonIdContinue ->
@@ -2328,6 +2361,13 @@ Init
       insertReturn(block)
 
       return block
+    }
+
+    module.isWhitespaceOrEmpty = function(node) {
+      if (!node) return true
+      if (!node.length) return true
+      if (typeof node === "string") return node.match(/^\s*$/)
+      if (Array.isArray(node)) return node.every(module.isWhitespaceOrEmpty)
     }
 
     /**
