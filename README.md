@@ -98,6 +98,7 @@ Things Kept from CoffeeScript
 - `when` inside `switch` automatically breaks
 - Multiple `,` separated `case`/`when` expressions
 - `else` -> `default` in `switch`
+- Array slices `list[0...2]` -> `list.slice(0, 2)`
 - Implicit returns
 - Simplified number method calls `1.toFixed()` -> `1..toFixed()`
 - JSX 😿
@@ -121,7 +122,6 @@ Things Removed from CoffeeScript
 - Might add later
   - Braceless inline objects `x = coolStory: true`
   - Comprensions
-  - Array slices `list[0...2]` (use `list.slice(0, 2)`)
   - `///` Heregexp
   - Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` (use `numbers.splice(3, 4, -3, -4, -5, -6)`)
   - Ranges `[0...10]`
@@ -214,7 +214,8 @@ Things Changed from ES6
 - `for(i of x) ...` defaults to const declaration -> `for(const i of x) ...`
 - Disallow comma operator in conditionals. `if x, y`
 - Comma operator in case/when becomes multiple conditions.
-- When exponent follows a dot it is treated as a property access since we simplified `1.toString()` -> `1..toString()` and an exponent
+- Numbers can't end with a dot (otherwise would be ambiguous with CoffeeScript slices `y[0..x]`). This also implies that you can't access properties
+of numbers with `1..toString()` use `1.toString()` instead. When exponent follows a dot it is treated as a property access since an exponent
 could be a valid property `1.e10` -> `1..e10`. The workaround is to add a trailing zero `1.0e10` or remove the dot before the exponent `1e10`.
 - Additional reserved words `and`, `or`, `loop`, `until`, `unless`
 

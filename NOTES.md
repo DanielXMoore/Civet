@@ -402,7 +402,7 @@ Timesheet
 2022-10-21 | 1.00  | unary op + eol source maps;
 2022-10-22 | 0.50  | making implicit returns match CS better
 2022-10-23 | 1.50  | .civet svg icon
-2022-10-24 | 2.00  | postfix iteration statements; keep leading newlines in block strings
+2022-10-24 | 3.50  | postfix iteration statements; keep leading newlines in block strings; feedback; index slicing
 
 TODO:
 
