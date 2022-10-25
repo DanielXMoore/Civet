@@ -99,6 +99,7 @@ Things Kept from CoffeeScript
 - Multiple `,` separated `case`/`when` expressions
 - `else` -> `default` in `switch`
 - Array slices `list[0...2]` -> `list.slice(0, 2)`
+- Slice assignment `numbers[3..6] = [-3, -4, -5, -6]`
 - Implicit returns
 - Simplified number method calls `1.toFixed()` -> `1..toFixed()`
 - JSX 😿
@@ -116,6 +117,7 @@ Things Removed from CoffeeScript
 - Iteration expression results
 - Backtick embedded JS (replaced by template literals)
 - Will likely add later
+  - Optional assignment `x?.y = 3` -> `x != null ? x.y = 3 : undefined`
   - `switch` expressions
   - `if` expressions
   - Implicit `var` declarations (in compat mode only)
@@ -123,9 +125,9 @@ Things Removed from CoffeeScript
   - Braceless inline objects `x = coolStory: true`
   - Comprensions
   - `///` Heregexp
-  - Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` (use `numbers.splice(3, 4, -3, -4, -5, -6)`)
   - Ranges `[0...10]`
   - Rest parameter in any assignment position
+  - Multiple slice assignment `otherNumbers[0...] = numbers[3..6] = [-3, -4, -5, -6]`
 
 Things Changed from CoffeeScript
 ---

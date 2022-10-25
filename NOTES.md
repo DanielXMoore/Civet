@@ -403,6 +403,7 @@ Timesheet
 2022-10-22 | 0.50  | making implicit returns match CS better
 2022-10-23 | 1.50  | .civet svg icon
 2022-10-24 | 3.50  | postfix iteration statements; keep leading newlines in block strings; feedback; index slicing
+2022-10-25 | 1.50  | basic splice assignment
 
 TODO:
 
