@@ -69,7 +69,7 @@ TODO
   - [ ] Indentation based auto-closing JSX
 - [ ] Infrastructure
   - [ ] 100% code coverage
-    - [ ] Accurate coverage for .civet files (need to compose ts-node source map with civet source map)
+    - [x] Accurate coverage for .civet files (need to compose ts-node source map with civet source map)
     - [ ] Hera sourcemaps
     - [ ] Test cli
   - [x] TS-node compatibility (may need to create a custom loader wrapping ts.LanguageServiceHost). The purpose of this feature is so we can run tests written in .civet.

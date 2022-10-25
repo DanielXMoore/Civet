@@ -41,10 +41,10 @@ fileCache : Record<string, any> := {}
 
 createCompilerHost := (options: CompilerOptions, moduleSearchLocations : string[]) ->
   fileExists := (fileName: string) : boolean ->
-    return fileCache[fileName]?
+    fileCache[fileName]?
 
   readFile := (fileName: string) ->
-    return fileCache[fileName]
+    fileCache[fileName]
 ```
 
 ESBuild Plugin
@@ -105,7 +105,7 @@ Things Kept from CoffeeScript
 Things Removed from CoffeeScript
 ---
 
-- `on/yes/off/no` (use `true/false`, `"civet coffeeCompat"`)
+- `on/yes/off/no` (use `true/false`, or `"civet coffeeCompat"` to add them back)
 - `isnt` (use `!==`)
 - `not` (use `!`)
 - `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax)
@@ -117,8 +117,9 @@ Things Removed from CoffeeScript
 - Will likely add later
   - `switch` expressions
   - `if` expressions
-  - Implicit declarations (in compat mode only)
+  - Implicit `var` declarations (in compat mode only)
 - Might add later
+  - Braceless inline objects `x = coolStory: true`
   - Comprensions
   - Array slices `list[0...2]` (use `list.slice(0, 2)`)
   - `///` Heregexp
@@ -141,6 +142,8 @@ Things Changed from CoffeeScript
 - No `else` block on `unless` (negate condition and use `if`)
 - `#{}` interpolation in `""` strings only when `"civet coffeeCompat"` or `"civet coffeeInterpolation"`
 - Expanded chained comparisons to work on more operators `a in b instanceof C` -> `a in b && b instanceof C`
+- Postfix iteration/conditionals always wrap the statement [#5431](https://github.com/jashkenas/coffeescript/issues/5431)
+`try x() if y` -> `if (y) try x()`
 - Civet tries to keep the transpiled output verbatim as much as possible.
   In Coffee `(x)` -> `x;` but in Civet `(x)` -> `(x);`.
   Also in Coffee
