@@ -349,6 +349,16 @@ CoffeeScript's block regexp is a neat idea but is specified poorly and has bugs.
 
 - https://docs.python.org/3/library/re.html#re.X
 
+IfExpressions
+---
+
+CoffeeScript allows for inline IfExpressions, we should too for compatibility and ease of porting.
+
+Inline expressions have a psuedo-block of comma separated expressions. Pure statements like `break`, `continue`, `return` are disallowed. We'd also disallow
+declarations.
+
+Currently this is colliding with the PostfixStatement. There's probably a clean way to get these into the grammar just need to figure it out.
+
 Timesheet
 ---
 
@@ -404,6 +414,7 @@ Timesheet
 2022-10-23 | 1.50  | .civet svg icon
 2022-10-24 | 3.50  | postfix iteration statements; keep leading newlines in block strings; feedback; index slicing
 2022-10-25 | 1.50  | basic splice assignment
+2022-10-26 | 0.50  | IfExpressions
 
 TODO:
 
