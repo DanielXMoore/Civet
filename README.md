@@ -107,8 +107,8 @@ Things Kept from CoffeeScript
 Things Removed from CoffeeScript
 ---
 
-- `on/yes/off/no` (use `true/false`, or `"civet coffeeCompat"` to add them back)
-- `isnt` (use `!==`)
+- `on/yes/off/no` (use `true/false`, `"civet coffeeCompat"`, or `"civet coffeeBooleans"` to add them back)
+- `isnt` (use `!==`, `"civet coffeeCompat"`, or `"civet coffeeIsnt"`)
 - `not` (use `!`)
 - `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax)
 - `for from` (use JS `for of`)
@@ -231,6 +231,7 @@ coffeeBooleans (yes/no/on/off)
 coffeeComment  (# single line comments)
 coffeeEq       (`==` -> `===`, `!=` -> `!==`)
 coffeeInterpolation (`"a string with {myVar}"`)
+coffeeIsnt     (`isnt` -> `!==`)
 ```
 
 You can use these with `"civet coffeeCompat"` to opt in to all or use them bit by bit with `"civet coffeeComment coffeeEq coffeeInterpolation"`.
