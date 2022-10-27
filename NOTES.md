@@ -419,7 +419,7 @@ Timesheet
 2022-10-24 | 3.50  | postfix iteration statements; keep leading newlines in block strings; feedback; index slicing
 2022-10-25 | 1.50  | basic splice assignment
 2022-10-26 | 1.00  | IfExpressions
-2022-10-27 | 3.50  | IfExpressions; if then; more expressionized statements; enabling extended expressions in more places
+2022-10-27 | 4.00  | IfExpressions; if then; more expressionized statements; enabling extended expressions in more places; switch expression
 
 TODO:
 
