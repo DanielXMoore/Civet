@@ -102,7 +102,7 @@ Things Kept from CoffeeScript
 - Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` -> `numbers.splice(3, 4, ...[-3, -4, -5, -6])`
 - Implicit returns
 - Simplified number method calls `1.toFixed()` -> `1..toFixed()`
-- `if` expressions
+- `if`/`switch` expressions
 - JSX 😿
 
 Things Removed from CoffeeScript
@@ -119,8 +119,6 @@ Things Removed from CoffeeScript
 - Backtick embedded JS (replaced by template literals)
 - Will likely add later
   - Optional assignment `x?.y = 3` -> `x != null ? x.y = 3 : undefined`
-  - `switch` expressions
-  - `throw` from inside `if` expressions
   - Implicit `var` declarations (in compat mode only)
 - Might add later
   - Braceless inline objects `x = coolStory: true`
