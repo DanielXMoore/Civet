@@ -99,9 +99,10 @@ Things Kept from CoffeeScript
 - Multiple `,` separated `case`/`when` expressions
 - `else` -> `default` in `switch`
 - Array slices `list[0...2]` -> `list.slice(0, 2)`
-- Slice assignment `numbers[3..6] = [-3, -4, -5, -6]`
+- Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` -> `numbers.splice(3, 4, ...[-3, -4, -5, -6])`
 - Implicit returns
 - Simplified number method calls `1.toFixed()` -> `1..toFixed()`
+- `if` expressions
 - JSX 😿
 
 Things Removed from CoffeeScript
@@ -119,7 +120,7 @@ Things Removed from CoffeeScript
 - Will likely add later
   - Optional assignment `x?.y = 3` -> `x != null ? x.y = 3 : undefined`
   - `switch` expressions
-  - `if` expressions
+  - `throw` from inside `if` expressions
   - Implicit `var` declarations (in compat mode only)
 - Might add later
   - Braceless inline objects `x = coolStory: true`
@@ -141,7 +142,6 @@ Things Changed from CoffeeScript
 - `x?()` -> `x?.()` instead of `if (typeof x === 'function') { x() }`
 - Backtick embedded JS has been replaced with JS template literals.
 - No longer allowing multiple postfix `if/unless` on the same line (use `&&` or `and` to combine conditions).
-- No `else` block on `unless` (negate condition and use `if`)
 - `#{}` interpolation in `""` strings only when `"civet coffeeCompat"` or `"civet coffeeInterpolation"`
 - Expanded chained comparisons to work on more operators `a in b instanceof C` -> `a in b && b instanceof C`
 - Postfix iteration/conditionals always wrap the statement [#5431](https://github.com/jashkenas/coffeescript/issues/5431)
@@ -192,12 +192,12 @@ Things Added that CoffeeScript didn't
   - Private identifiers `#id`
 - Convenience for ES6+ Features
   - Const assignment shorthand `a := b` -> `const a = b`; `{a, b} := c` -> `const {a, b} = c`
-  - `<` as `extends` shorthand
   - `@#id` -> `this.#id` shorthand for private identifiers
   - `import` shorthand `x from ./x` -> `import x from "./x"`
-  - `\`\`\`` Block Template Strings remove leading indentation for clarity
+  - Triple backtick Template Strings remove leading indentation for clarity
   - Class constructor shorthand `@( ... )`
   - ClassStaticBlock `@ { ... }`
+  - `<` as `extends` shorthand
 - Postfix loop `run() loop` -> `while(true) run()`
 - Shebang line is kept unmodified in output
   ```civet
