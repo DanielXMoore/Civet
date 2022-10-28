@@ -111,6 +111,9 @@ Things Removed from CoffeeScript
 - `on/yes/off/no` (use `true/false`, `"civet coffeeCompat"`, or `"civet coffeeBooleans"` to add them back)
 - `isnt` (use `!==`, `"civet coffeeCompat"`, or `"civet coffeeIsnt"`)
 - `not` (use `!`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
+  - `not instanceof` (use `!(a instanceof b)`)
+  - `not in`
+  - `not of`
 - `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax)
 - `for from` (use JS `for of`)
 - `for own of` (use JS `for in` and check manually, switch to `Map#keys/values/entries`, or use `Object.create(null)`)
