@@ -62,6 +62,18 @@ Program
 TopLevelStatement
   EOS? ModuleItem StatementDelimiter
 
+# Expressions with If and Switch
+ExtendedExpression
+  # NOTE: Added IfExpression
+  __ ExpressionizedStatement
+  AssignmentExpression
+
+ExpressionizedStatement
+  DebuggerExpression
+  IfExpression
+  SwitchExpression
+  ThrowExpression
+
 # https://262.ecma-international.org/#prod-Expression
 Expression
   # CommaOperator
@@ -81,7 +93,7 @@ Arguments
 ArgumentsWithTrailingCallExpressions
   # Since this is recursive Arguments must consume input to avoid infinite recursion
   # NOTE: Do not allow trailing template literals to match
-  TrackIndent (( Arguments ( &EOS Samedent !"`" CallExpressionRest )* PopIndent ) / PopIndent) ->
+  TrackIndent (( Arguments ( &EOS Samedent !Backtick CallExpressionRest )* PopIndent ) / PopIndent) ->
     // No match, only restored indent
     if (!$2) return $skip
     return $2
@@ -90,7 +102,7 @@ ArgumentsWithTrailingCallExpressions
 ArgumentList
   # NOTE: Added nested arguments on separate new lines
   &EOS NestedArgumentList
-  Expression CommaExpression*
+  InlineArgumentExpressions
 
 NestedArgumentList
   PushIndent NestedArgument*:args PopIndent ->
@@ -98,7 +110,14 @@ NestedArgumentList
     return $skip
 
 NestedArgument
-  Nested Expression ParameterElementDelimiter
+  Nested InlineArgumentExpressions ParameterElementDelimiter
+
+InlineArgumentExpressions
+  # NOTE: Eliminated left recursion
+  # NOTE: Using ExtendedExpression to allow for If/Switch expressions
+  ( DotDotDot? ExtendedExpression ) ( __ Comma TrailingComment* DotDotDot? ExtendedExpression )* ->
+    if($2.length == 0) return $1
+    return $0
 
 ImplicitApplication
   # Space / indentation based function application
@@ -126,29 +145,36 @@ IndentedApplicationAllowed
     if (module.suppressIndentedApplication) return $skip
     return
 
-CommaExpression
-  __ Comma Expression
-
 BinaryOpExpression
   UnaryExpression (__ BinaryOp __ UnaryExpression)* ->
-    if ($2.length) return $0
+    if ($2.length) {
+      return module.expandChainedComparisons($0)
+    }
+
     return $1
 
 # https://262.ecma-international.org/#prod-UnaryExpression
 UnaryExpression
+  # NOTE: Merged AwaitExpression with UnaryOp
+  # https://262.ecma-international.org/#prod-AwaitExpression
   # NOTE: Eliminated left recursion
   UnaryOp*:pre UpdateExpression:exp UnaryPostfix?:post ->
     // Handle "?" postfix
     if (post?.token === "?") {
       // v1.1 Can remove parens when unnecessary once exp returns a full AST node to determine if they are actually needed
-      return ["(", pre, , "(", exp, ") != null)"]
+      return ["(", pre, "(", exp, ") != null)"]
     }
 
-    return [pre, exp, post]
+    const result = [pre, exp, post]
+    if (!post) result.pop()
+    if (!pre.length) result.shift()
+    if (result.length === 1) return result[0]
+
+    return result
 
 UnaryPostfix
   QuestionMark
-  __ As NonIdContinue Type -> { ts: true, children: $0 }
+  ( __ As Type )+ -> { ts: true, children: $0 }
 
 # https://262.ecma-international.org/#prod-UpdateExpression
 UpdateExpression
@@ -165,30 +191,75 @@ UpdateExpressionSymbol
 # https://262.ecma-international.org/#prod-AssignmentExpression
 AssignmentExpression
   # NOTE: Try to match a single line assignment expression before matching newline then assignment expression
-  TrailingComment* AssignmentExpressionRest ->
+  TrailingComment* AssignmentExpressionTail ->
     if ($1.length) return $0
     return $2
-  __ AssignmentExpressionRest
+  __ AssignmentExpressionTail
 
-AssignmentExpressionRest
-  AwaitExpression
+AssignmentExpressionTail
   YieldExpression
-  (Async __)? ArrowFunction
+  ArrowFunction
 
   # NOTE: Eliminated left recursion
   # NOTE: Consolidated assignment ops
+  (__ LeftHandSideExpression __ AssignmentOp)+ ExtendedExpression ->
+    // Splice assignment
+    // TODO: this is kind of bonkers
+    // TODO: Handle multiple assignments
+    const lastAssignment = $1[$1.length-1]
+    // TODO: Handle optional assignment
+    if (lastAssignment[3].token === "=") {
+      const lhs = lastAssignment[1]
+      if (Array.isArray(lhs) && lhs.length > 1) {
+        const props = lhs[lhs.length-1]
 
-  (__ LeftHandSideExpression __ AssignmentOp)+ Expression -> { type: "AssignmentExpression", children: $0 }
+        if (Array.isArray(props)) {
+          const lastProp = props[props.length-1]
+
+          if(lastProp.type === "SliceExpression") {
+            const {start, end, children: c} = lastProp
+            // TODO: don't lose as many source mappings
+            c[0].token = ".splice("
+            c[1] = start
+            c[2] = ", "
+            if (end)
+              c[3] = [end, " - ", start]
+            else
+              c[3] = ["1/0"]
+            c[4] = [", ...", $2]
+            c[5] = ")"
+
+            // Remove assignment token
+            lastAssignment.pop()
+            if (module.isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment.pop()
+            return $1
+          }
+        }
+      }
+    }
+
+    return {
+      type: "AssignmentExpression", children: $0
+    }
+
   ConditionalExpression
 
-AwaitExpression
-  Await TrailingComment* AssignmentExpression
-
+# https://262.ecma-international.org/#prod-YieldExpression
 YieldExpression
-  Yield ( TrailingComment* Star )? AssignmentExpression
+  Yield YieldTail
+
+YieldTail
+  &EOS
+  # NOTE: Merged optional star
+  ( TrailingComment* Star )? AssignmentExpression
 
 # https://262.ecma-international.org/#prod-ArrowFunction
 ArrowFunction
+  ( Async __ )? ArrowFunctionTail ->
+    if ($1) $2.children.unshift($1)
+    return $2
+
+ArrowFunctionTail
   ThinArrowFunction
   Parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
     const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
@@ -198,7 +269,7 @@ ArrowFunction
     }
 
     return {
-      type: "FunctionExpression",
+      type: "ArrowFunction",
       children: $0,
     }
 
@@ -212,24 +283,24 @@ FatArrow
 # NOTE Different from
 # https://262.ecma-international.org/#prod-ConciseBody
 FatArrowBody
-  __ OpenBrace EOS NestedBlockExpressions:exps __ CloseBrace -> {
+  __ OpenBrace EOS NestedBlockStatements:exps __ CloseBrace -> {
     type: "BlockStatement",
     expressions: exps,
     children: $0,
   }
   # NOTE: Added indentation based implied braces
-  InsertOpenBrace EOS NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseBrace -> {
+  InsertOpenBrace EOS NestedBlockStatements:exps InsertNewline InsertIndent InsertCloseBrace -> {
     type: "BlockStatement",
     expressions: exps,
     children: $0,
   }
   AssignmentExpression
-  __ AssignmentExpression
   EmptyBlock
 
 # https://262.ecma-international.org/#prod-ConditionalExpression
 ConditionalExpression
-  ShortCircuitExpression ( __ QuestionMark AssignmentExpression __ Colon AssignmentExpression)? ->
+  # NOTE: Using ExtendedExpression to allow for If/Switch expressions
+  ShortCircuitExpression ( __ QuestionMark ExtendedExpression __ Colon ExtendedExpression)? ->
     if ($2) return $0
     return $1
 
@@ -251,7 +322,7 @@ PrimaryExpression
   TemplateLiteral
   # https://262.ecma-international.org/#prod-ParenthesizedExpression
   # NOTE: Currently ignoring early error checking in https://262.ecma-international.org/#prod-CoverParenthesizedExpressionAndArrowParameterList
-  OpenParen Expression __ CloseParen
+  OpenParen ExtendedExpression __ CloseParen
   # https://facebook.github.io/jsx/#sec-jsx-PrimaryExpression
   JSXElement
   JSXFragment
@@ -303,7 +374,8 @@ ClassElement
 # https://262.ecma-international.org/#prod-FieldDefinition
 FieldDefinition
   # NOTE: Added readonly semantic equivalent of const field assignment
-  InsertReadonly:r ClassElementName TypeSuffix? __ ConstAssignment:ca AssignmentExpression ->
+  # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
+  InsertReadonly:r ClassElementName TypeSuffix? __ ConstAssignment:ca ExtendedExpression ->
     // Adjust position to space before assignment to make TypeScript remapping happier
     r.children[0].$loc = {
       pos: ca.$loc.pos - 1,
@@ -342,7 +414,8 @@ NewExpression
 CallExpression
   # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
   "super" ArgumentsWithTrailingCallExpressions
-  "import" __ OpenParen AssignmentExpression __ CloseParen
+  # NOTE: Using ExtendedExpression to allow for If/Switch expressions
+  "import" __ OpenParen ExtendedExpression __ CloseParen
   MemberExpression CallExpressionRest* ->
     if ($2.length) return $0
     return $1
@@ -363,7 +436,7 @@ NonNullAssertion
 # Reserved words that will prevent spaced function application
 # ie: the 'of' in 'for x of ...'
 AdditionalReservedWords
-  /(of)(?!\p{ID_Continue})/
+  /(of|then)(?!\p{ID_Continue}|[\u200C\u200D$])/
 
 # https://262.ecma-international.org/#prod-MemberExpression
 MemberExpression
@@ -377,7 +450,9 @@ MemberExpression
 
 MemberExpressionRest
   # NOTE: Added shorthand x?[3] -> x?.[3]
-  ( OptionalShorthand / NonNullAssertion )? OpenBracket Expression __ CloseBracket
+  ( OptionalShorthand / NonNullAssertion )? MemberBracketContent ->
+    if ($1) return $0
+    return $2
   # NOTE: Combined Optional and Property access
   # TODO: this doesn't yet work for arbitrarily deep nesting, only the first level
   ( &EOS IndentedFurther )? PropertyAccess
@@ -389,11 +464,53 @@ MemberExpressionRest
   # NOTE: Added TypeScript '!' non-null assertion
   NonNullAssertion
 
+# Handles indexing and slicing
+MemberBracketContent
+  OpenBracket ExtendedExpression ( ( DotDotDot / DotDot ) ExtendedExpression? )? __ CloseBracket ->
+    // Some kind of slice
+    if ($3) {
+      const sep = $3[0]
+      const end = $3[1]
+      const inclusive = sep.token === ".."
+
+      sep.token = ", "
+      $1.token = ".slice("
+      $5.token = ")"
+
+      if (!end) {
+        return {
+          type: "SliceExpression",
+          start: $2,
+          end: undefined,
+          children: [$1, $2, $4, $5]
+        }
+      }
+
+      if (inclusive) {
+        return {
+          type: "SliceExpression",
+          start: $2,
+          end: ["1 + ", end],
+          children: [$1, $2, sep, ["1 + ", end, " || 1/0"], $4, $5]
+        }
+      }
+
+      return {
+        type: "SliceExpression",
+        start: $2,
+        end: end,
+        children: [$1, $2, sep, end, $4, $5]
+      }
+    }
+
+    // Regular index `[exp]`
+    return $0
+
 PropertyAccess
-  ( QuestionMark / NonNullAssertion )? Dot (IdentifierName / PrivateIdentifier)
+  ( QuestionMark / NonNullAssertion )? Dot ( IdentifierName / PrivateIdentifier )
 
 SuperProperty
-  "super[" Expression __ CloseBracket
+  "super[" ExtendedExpression __ CloseBracket
 
 MetaProperty
   New Dot Target
@@ -409,8 +526,11 @@ Parameters
 
 NonEmptyParameters
   # NOTE: BindingElement -> ParameterElement
-  # TODO: Rest parameter
-  TypeParameters? OpenParen ParameterElement* __ CloseParen
+  TypeParameters? OpenParen ParameterElement* FunctionRestParameter? __ CloseParen
+
+# https://262.ecma-international.org/#prod-FunctionRestParameter
+FunctionRestParameter
+  __ BindingRestElement TypeSuffix?
 
 # NOTE: Similar to BindingElement but appears in formal parameters list
 ParameterElement
@@ -419,11 +539,7 @@ ParameterElement
 
 ParameterElementDelimiter
   _* Comma
-   # NOTE: Don't insert comma before inline closing paren
-  &( _* ")" )
-  # NOTE: Do insert comma before closing paren on following line
-  &( __ ")" ) ->
-    return { $loc, token: "," }
+  &( __ ")" )
   &EOS ->
     return { $loc, token: "," }
 
@@ -466,7 +582,7 @@ BindingProperty
 
 # https://262.ecma-international.org/#prod-BindingRestProperty
 BindingRestProperty
-  "..." BindingIdentifier
+  DotDotDot BindingIdentifier
 
 NestedBindingElements
   PushIndent NestedBindingElement*:props ( Nested BindingRestElement )?:rest PopIndent ->
@@ -484,26 +600,45 @@ BindingElement
 
 # https://262.ecma-international.org/#prod-BindingRestElement
 BindingRestElement
-  "..." __ ( BindingIdentifier / BindingPattern )
+  DotDotDot __ ( BindingIdentifier / BindingPattern )
 
 # https://262.ecma-international.org/#prod-FunctionDeclaration
 FunctionDeclaration
   FunctionExpression
 
+FunctionSignature
+  # NOTE: Merged in async and generator with optionals
+  ( Async __ )? Function ( Star __ )? ( BindingIdentifier )? __ Parameters ReturnTypeSuffix?
+
 # https://262.ecma-international.org/#prod-FunctionExpression
 FunctionExpression
-  # NOTE: Added CoffeeScript thin arrow function shorthand
-  ThinArrowFunction
-  # NOTE: Merged in async and generator with optionals
-  ( Async __ )? Function ( Star __ )? ( BindingIdentifier )? __ Parameters ReturnTypeSuffix?:suffix BracedBlock:block ->
+  # TODO: block isn't actually optional in FunctionExpression only in declarations/TS overloads
+  FunctionSignature BracedBlock?:block ->
+    // TS Function overloads
+    if (!block) {
+      return {
+        type: "FunctionDeclaration",
+        ts: true,
+        children: $1
+      }
+    }
+
+    const suffix = $1[$1.length - 1]
     const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
     if (module.config.implicitReturns && !isVoid) {
       module.addImplicitReturns(block)
     }
 
+    // id is an empty array if not present so it can be filled later without having to adjust the children array
+    // like in the const assignment function declaration transformation
+    const id = $1[3] || []
+    $1[3] = id
+
+    $1.push(block)
     return {
       type: "FunctionExpression",
-      children: $0,
+      children: $1,
+      id,
     }
 
 ThinArrowFunction
@@ -513,14 +648,18 @@ ThinArrowFunction
       block = module.addImplicitReturns(block)
     }
 
+    const id = []
+
     return {
       type: "FunctionExpression",
       children: [
         { $loc: arrow.$loc, token: "function" },
+        id,
         params,
         suffix,
         block
-      ]
+      ],
+      id,
     }
 
 Arrow
@@ -529,19 +668,19 @@ Arrow
 
 # NOTE: This is the body of if/else/for etc.
 Block
-  __ OpenBrace EOS NestedBlockExpressions:exps __ CloseBrace -> {
+  __ OpenBrace EOS NestedBlockStatements:exps __ CloseBrace -> {
     type: "BlockStatement",
     expressions: exps,
     children: $0,
   }
   # NOTE: Added indentation based implied braces
-  InsertOpenBrace EOS NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseBrace -> {
+  InsertOpenBrace EOS NestedBlockStatements:exps InsertNewline InsertIndent InsertCloseBrace -> {
     type: "BlockStatement",
     expressions: exps,
     children: $0,
   }
-  Statement
-  __ Statement
+  Then? Statement -> $2
+  Then? __ Statement -> [$2, $3]
 
 BracedOrEmptyBlock
   BracedBlock
@@ -557,13 +696,13 @@ EmptyBlock
 
 # This is a block that must include braces (function body, try/catch/finally)
 BracedBlock
-  __ OpenBrace EOS NestedBlockExpressions:exps __ CloseBrace -> {
+  TrailingComment* OpenBrace BracedContent:exps __ CloseBrace -> {
     type: "BlockStatement",
     expressions: exps,
     children: $0,
   }
   # NOTE: Added indentation based implied braces
-  InsertOpenBrace EOS NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseBrace -> {
+  InsertOpenBrace EOS NestedBlockStatements:exps InsertNewline InsertIndent InsertCloseBrace -> {
     type: "BlockStatement",
     expressions: exps,
     children: $0,
@@ -576,19 +715,16 @@ BracedBlock
       children: $0,
     }
 
-SingleNestedExpression
-  # NOTE: Don't insert a statement delimiter for single nested expression
-  # NOTE: this whole back half is mainly to guarantee we call PopIndent exactly once whether we've matched or not
-  PushIndent (Nested Expression StatementDelimiter)?:exp ( (!(Nested Expression) PopIndent) / PopIndent ) ->
-    if (exp) return exp
-    return $skip
+BracedContent
+  &EOS NestedBlockStatements -> $2
+  TrailingComment* Statement
 
-NestedBlockExpressions
-  PushIndent BlockExpression*:exps PopIndent ->
-    if (!exps.length) return $skip
-    return exps
+NestedBlockStatements
+  PushIndent NestedBlockStatement*:statements PopIndent ->
+    if (!statements.length) return $skip
+    return statements
 
-BlockExpression
+NestedBlockStatement
   Nested StatementListItem StatementDelimiter
 
 # https://262.ecma-international.org/#prod-Literal
@@ -605,8 +741,15 @@ NullLiteral
 
 # https://262.ecma-international.org/#prod-BooleanLiteral
 BooleanLiteral
+  CoffeeScriptBooleanLiteral
   "true" / "false" ->
     return { $loc, token: $1 }
+
+CoffeeScriptBooleanLiteral
+  "yes" / "on" ->
+    return { $loc, token: "true" }
+  "no" / "off" ->
+    return { $loc, token: "false" }
 
 Comma
   _* Comma _*
@@ -619,6 +762,7 @@ Identifier
 IdentifierName
   /(?:\p{ID_Start}|[_$])(?:\p{ID_Continue}|[\u200C\u200D$])*/ ->
     return {
+      type: "Identifier",
       $loc: $loc,
       token: $0,
     }
@@ -661,7 +805,8 @@ InlineElementList
 
 # NOTE: Modified and simplified from the spec
 ArrayElementExpression
-  (("..." __ )? AssignmentExpression)?
+  # NOTE: Using ExtendedExpression to allow If/Switch expressions
+  ((DotDotDot __ )? ExtendedExpression)?
 
 # https://262.ecma-international.org/#prod-Elision
 Elision
@@ -701,9 +846,10 @@ PropertyDefinitionList
 # https://262.ecma-international.org/#prod-PropertyDefinition
 PropertyDefinition
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
-  PropertyName __ Colon AssignmentExpression
+  # NOTE: Using ExtendedExpression to allow If/Switch expressions
+  PropertyName __ Colon ExtendedExpression
   MethodDefinition
-  "..." AssignmentExpression
+  DotDotDot ExtendedExpression
   # NOTE: this needs to be at the bottom to prevent shadowing PropertyName
   IdentifierReference
 
@@ -713,7 +859,8 @@ PropertyName
   StringLiteral
   IdentifierName
   # https://262.ecma-international.org/#prod-ComputedPropertyName
-  OpenBracket AssignmentExpression __ "]"
+  # NOTE: Using ExtendedExpression to allow If/Switch expressions
+  OpenBracket ExtendedExpression __ CloseBracket
 
 # https://262.ecma-international.org/#prod-MethodDefinition
 MethodDefinition
@@ -840,6 +987,9 @@ BinaryOpSymbol
   "!=" ->
     if(module.config.coffeeEq) return "!=="
     return $1
+  "isnt" NonIdContinue ->
+    if(module.config.coffeeIsnt) return "!=="
+    return $skip
   "is" NonIdContinue -> "==="
   "==="
   # NOTE: CoffeeScript converts "==" -> "==="
@@ -861,8 +1011,10 @@ BinaryOpSymbol
   "|"
 
 UnaryOp
-  [!~+-]
-  ( "delete" / "void" / "typeof" ) NonIdContinue __
+  [!~+-] ->
+    return { $loc, token: $0 }
+  ( Await / Delete / Void / Typeof ) __
+  Not # only when CoffeeNotEnabled (see definition of `Not`)
 
 # https://262.ecma-international.org/#prod-ModuleItem
 ModuleItem
@@ -872,29 +1024,23 @@ ModuleItem
 
 # https://262.ecma-international.org/#prod-StatementListItem
 StatementListItem
+  Declaration
   # NOTE: Added postfix conditionals
-  (Declaration / Statement):statement PostfixConditional?:cond Loc:l ->
-    if (cond)
-      // TODO: Actually wrap the statement in a conditional AST node so implicit returns can use the same logic
-      return [cond, statement, { $loc: l.$loc, token: "}" }]
+  Statement:statement TrailingComment*:ws PostfixStatement?:post ->
+    if (post) {
+      post.children.push(statement)
+      // This removes trailing whitespace for easier testing
+      if (!module.isWhitespaceOrEmpty(ws)) post.children.push(ws)
+      return post
+    }
     return statement
 
-PostfixConditional
-  TrailingComment*:ws (If / Unless):cond NonIdContinue Loc:l1 ExpressionWithIndentedApplicationSuppressed:exp Loc:l2 ->
-    let openParens = { $loc: l1.$loc, token: "(!(" }
-    let closingParens = { $loc: l2.$loc, token: "))" }
-    let space = { $loc: l2.$loc, token: " " }
-    let openingBrace = { $loc: l2.$loc, token: "{" }
-
-    if (cond.token === "if") {
-      cond.token = "if"
-      closingParens.token = ")"
-      openParens.token = "("
-    } else {
-      cond.token = "if"
-    }
-
-    return [ws, cond, openParens, exp, closingParens, space, openingBrace]
+PostfixStatement
+  ForClause
+  IfClause
+  LoopClause
+  UnlessClause
+  WhileClause
 
 # https://262.ecma-international.org/#prod-Statement
 Statement
@@ -918,14 +1064,26 @@ EmptyStatement
 
 # https://262.ecma-international.org/#prod-BlockStatement
 BlockStatement
-  __ OpenBrace EOS NestedBlockExpressions __ CloseBrace
+  __ OpenBrace EOS NestedBlockStatements:exps __ CloseBrace -> {
+    type: "BlockStatement",
+    children: $0,
+    expressions: exps,
+  }
 
 # https://262.ecma-international.org/#prod-IfStatement
 IfStatement
   # NOTE: Added paren-less condition
   # NOTE: Block isn't Statement so we can handle implied braces by nesting
-  If Condition Block ( __ Else Block )? -> { type: "IfStatement", children: $0 }
-  Unless:kind Condition:condition Block:block ->
+  (IfClause / UnlessClause):clause Block:block ( __ Else Block )?:e ->
+    clause.children.push(block)
+    if (e) clause.children.push(e)
+    return clause
+
+IfClause
+  If Condition -> { type: "IfStatement", children: $0 }
+
+UnlessClause
+  Unless:kind Condition:condition ->
     // Rewrite unless to if
     condition.forEach((c) => {
       if (!c) return
@@ -936,8 +1094,43 @@ IfStatement
 
     return {
       type: "IfStatement",
-      children: [kind, condition, block],
+      children: [kind, condition],
     }
+
+# NOTE: Added IfExpression from CoffeeScript
+IfExpression
+  IfClause:clause ExpressionBlock:b ( __ Else ExpressionBlock )?:e ->
+    clause.children.shift() // Remove 'if'
+    clause.children.push("?", b, ":") // Add ternary
+    if (e) {
+      e.splice(1, 1) // Remove 'else'
+      clause.children.push(e)
+    }
+    else {
+      clause.children.push("void 0")
+    }
+    clause.type = "IfExpression"
+    return clause
+
+# Block of expressions that can't include pure statements
+ExpressionBlock
+  # NOTE: Added indentation based implied braces
+  InsertOpenParen EOS NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseParen ->
+    exps[exps.length-1].pop()
+    return {
+      type: "BlockExpressions",
+      expressions: exps,
+      children: $0,
+    }
+  Then? ExtendedExpression
+
+NestedBlockExpressions
+  PushIndent NestedBlockExpression*:exps PopIndent ->
+    if (!exps.length) return $skip
+    return exps
+
+NestedBlockExpression
+  Nested ExtendedExpression ExpressionDelimiter
 
 # https://262.ecma-international.org/#prod-IterationStatement
 IterationStatement
@@ -945,60 +1138,86 @@ IterationStatement
   LoopStatement
   DoWhileStatement
   WhileStatement
-  ForStatement -> {
-    type: "IterationStatement",
-    children: $0,
-  }
-  ForInOfStatement -> {
-    type: "IterationStatement",
-    children: $0,
-  }
+  ForStatement
 
 # NOTE: Added from CoffeeScript
 LoopStatement
-  Loop Block -> { type: "IterationStatement", children: $0 }
+  LoopClause:clause Block:block ->
+    clause.children.push(block)
+    return clause
+
+LoopClause
+  Loop -> { type: "IterationStatement", children: $0 }
 
 # https://262.ecma-international.org/#prod-DoWhileStatement
 DoWhileStatement
   # NOTE: Condition provides optional parens
-  "do" NonIdContinue Block __ WhileClause -> { type: "IterationStatement", children: $0 }
+  Do BracedBlock __ WhileClause -> { type: "IterationStatement", children: $0 }
 
 # https://262.ecma-international.org/#prod-WhileStatement
 WhileStatement
   # NOTE: Condition provides optional parens
-  WhileClause Block -> {
-    type: "IterationStatement",
-    children: $0
-  }
+  WhileClause:clause Block:block ->
+    clause.children.push(block)
+    return clause
 
 WhileClause
-  ( "while" / "until" ):kind NonIdContinue Condition:cond ->
-    if (kind === "until") {
+  ( While / Until ):kind Condition:cond ->
+    if (kind.token === "until") {
       cond[1] = "(!("
-      cond[4] = "))"
-      return ["while", cond]
+      cond[cond.length-1] = "))"
+      kind.token = "while"
+      $0 = [kind, cond]
     }
-    return $0
+
+    return {
+      type: "IterationStatement",
+      children: $0
+    }
 
 # https://262.ecma-international.org/#prod-ForStatement
-ForStatement
-  For __ OpenParen __ ( LexicalDeclaration / VariableStatement / Expression? ) __ Semicolon Expression? Semicolon Expression? CloseParen Block
-  # TODO: Optional parens
-
 # https://262.ecma-international.org/#prod-ForInOfStatement
-ForInOfStatement
+# NOTE: Merged into single rule
+ForStatement
+  ForClause:clause Block:block ->
+    clause.children.push(block)
+    return clause
+
+ForClause
+  For __ ForStatementControl  -> {
+    type: "IterationStatement",
+    children: $0,
+  }
+
+ForStatementControl
+  # https://262.ecma-international.org/#prod-ForStatement
+  OpenParen __       ( LexicalDeclaration / VariableStatement / Expression? ) __ Semicolon Expression? Semicolon Expression? __ CloseParen
+  # NOTE: Added optional parens
+  InsertOpenParen __ ( LexicalDeclaration / VariableStatement / Expression? ) __ Semicolon Expression? Semicolon (!EOS Expression)? InsertCloseParen
+
+  # https://262.ecma-international.org/#prod-ForInOfStatement
   # NOTE: Consolidated declarations
-  For __ OpenParen __          ( ( Var __ ForBinding ) / ForDeclaration / LeftHandSideExpression ) __ In Expression __ CloseParen           Block
+  OpenParen __    ForInOfDeclaration __ In ExtendedExpression __ CloseParen
   # NOTE: Added optional parens
-  For __ InsertOpenParen ( ( Var __ ForBinding ) / ForDeclaration / LeftHandSideExpression ) __ In Expression InsertCloseParen Block
+  InsertOpenParen ForInOfDeclaration __ In ExtendedExpression InsertCloseParen
   # NOTE: Consolidated optional 'await' and declarations
-  For ( __ Await )? __ OpenParen __          ( ( Var __ ForBinding ) / ForDeclaration / LeftHandSideExpression ) __ Of AssignmentExpression __ CloseParen           Block
+  ( Await __ )? OpenParen __    ForInOfDeclaration __ Of ExtendedExpression __ CloseParen
   # NOTE: Added optional parens
-  For ( __ Await )? __ InsertOpenParen ( ( Var __ ForBinding ) / ForDeclaration / LeftHandSideExpression ) __ Of AssignmentExpression InsertCloseParen Block
+  ( Await __ )? InsertOpenParen ForInOfDeclaration __ Of ExtendedExpression InsertCloseParen
+
+# NOTE: Consolidated declarations
+ForInOfDeclaration
+  Var ForBinding
+  ForDeclaration
+  LeftHandSideExpression
 
 # https://262.ecma-international.org/#prod-ForDeclaration
 ForDeclaration
-  LetOrConst NonIdContinue __ ForBinding
+  LetOrConst NonIdContinue ForBinding
+  # NOTE: Added default implicit const to for bindings
+  # NOTE: the assertion is a bit of a hack to prevent valid LHS expressions from only parsing the identifier and matching this rule
+  # i.e. a.x would match as identifier `a` without this lookahead
+  InsertConst ForBinding /(?=[\s\)])/
 
 # https://262.ecma-international.org/#prod-ForBinding
 ForBinding
@@ -1011,6 +1230,16 @@ SwitchStatement
     type: "SwitchStatement",
     children: $0
   }
+
+# NOTE: Added from CoffeeScript
+SwitchExpression
+  SwitchStatement:e ->
+    // Add returns to when blocks
+    module.addImplicitReturns(e.children[2])
+    e.type = "SwitchExpression"
+    // wrap with IIFE
+    e.children = ["($=>{", e.children, "})()"]
+    return e
 
 # https://262.ecma-international.org/#prod-CaseBlock
 CaseBlock
@@ -1047,25 +1276,25 @@ NestedCaseClause
 # https://262.ecma-international.org/#prod-CaseClause
 CaseClause
   # NOTE: This differs from ESTree significantly to be easier to work with for implicit returns
-  Case CaseExpressionList ( NestedBlockExpressions / NoExpressions ):exps -> {
+  Case CaseExpressionList ( NestedBlockStatements / NoExpressions ):exps -> {
     type: "CaseClause",
     expressions: exps,
     children: $0
   }
   # NOTE: Added "when" from CoffeeScript. `when` always inserts `break;`.
-  When CaseExpressionList NestedBlockExpressions:exps InsertBreak -> {
+  When CaseExpressionList NestedBlockStatements:exps InsertBreak -> {
     type: "WhenClause",
     expressions: exps,
     children: $0
   }
   # NOTE: Merged in default clause
-  Default ImpliedColon ( NestedBlockExpressions / NoExpressions ):exps -> {
+  Default ImpliedColon ( NestedBlockStatements / NoExpressions ):exps -> {
     type: "DefaultClause",
     expressions: exps,
     children: $0
   }
   # NOTE: Added else from CoffeesScript
-  Else ImpliedColon NestedBlockExpressions:exps ->
+  Else ImpliedColon NestedBlockStatements:exps ->
     $1.token = "default"
     return {
       type: "DefaultClause",
@@ -1129,11 +1358,13 @@ CatchParameter
 
 # An expression with explicit or implied parentheses, for use in if/while
 Condition
-  __ OpenParen Expression __ CloseParen
-  !EOS __ InsertOpenParen ExpressionWithIndentedApplicationSuppressed InsertCloseParen
+  __ OpenParen ExtendedExpression __ CloseParen
+  !EOS __ InsertOpenParen ExpressionWithIndentedApplicationSuppressed InsertCloseParen ->
+    $0.shift()
+    return $0
 
 ExpressionWithIndentedApplicationSuppressed
-  SuppressIndentedApplication AssignmentExpression?:exp ->
+  SuppressIndentedApplication ExtendedExpression?:exp ->
     module.suppressIndentedApplication = false
 
     if (exp) return exp
@@ -1177,13 +1408,27 @@ KeywordStatement
   }
 
   # https://262.ecma-international.org/#prod-ThrowStatement
-  Throw Expression -> {
+  Throw ExtendedExpression -> {
     type: "ThrowStatement",
     children: $0,
   }
 
+DebuggerExpression
+  "debugger" NonIdContinue ->
+    return {
+      type: "DebuggerExpression",
+      children: ["($=>{", $1, "})()"],
+    }
+
+ThrowExpression
+  Throw ExtendedExpression ->
+    return {
+      type: "ThrowExpression",
+      children: ["($=>{", ...$0, "})()"],
+    }
+
 MaybeNestedExpression
-  !EOS TrailingComment* Expression
+  !EOS TrailingComment* AssignmentExpression
   &EOS ObjectLiteral
 
 # https://262.ecma-international.org/#prod-ImportDeclaration
@@ -1263,7 +1508,8 @@ ImportedBinding
 
 # https://262.ecma-international.org/#prod-ExportDeclaration
 ExportDeclaration
-  Export __ "default" NonIdContinue __ ( HoistableDeclaration / ClassDeclaration / AssignmentExpression )
+  # NOTE: Using ExtendedExportDeclaration to allow If/Switch expressions
+  Export __ "default" NonIdContinue __ ( HoistableDeclaration / ClassDeclaration / ExtendedExpression )
   Export __ ExportFromClause __ FromClause
   Export __ ( NamedExports / VariableStatement / Declaration )
 
@@ -1299,12 +1545,30 @@ LexicalDeclaration
     children: $0,
   }
   # NOTE: Added const shorthand
-  InsertConst:c ( BindingPattern / BindingIdentifier ) TypeSuffix? __ ConstAssignment:ca AssignmentExpression ->
+  # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
+  InsertConst:c ( BindingPattern / BindingIdentifier ):id TypeSuffix? __ ConstAssignment:ca ExtendedExpression:e ->
     // Adjust position to space before assignment to make TypeScript remapping happier
     c.$loc = {
       pos: ca.$loc.pos - 1,
       length: ca.$loc.length + 1,
     }
+
+    // TODO: Better AST nodes so we don't have to adjust for whitespace nodes here
+    let exp
+    if (e.type === "FunctionExpression") {
+      exp = e
+    } else {
+      exp = e[1]
+    }
+
+    if (id[1]?.type === "Identifier" && exp?.type === "FunctionExpression") {
+      if (exp.id.length === 0) {
+        exp.id.push(" ", id, $3, $4)
+      }
+      exp.type = "FunctionDeclaration"
+      return exp
+    }
+
     return {
       type: "VariableDeclaration",
       children: $0
@@ -1321,9 +1585,8 @@ LexicalBinding
 
 # https://262.ecma-international.org/#prod-Initializer
 Initializer
-  # TODO: Simplify whitespace prefixing (may need to push it down into the literals)
-  # Nested blocks will get shadowed if __ is consumed before them because it consumes the indent
-  __ Equals AssignmentExpression
+  # NOTE: Using ExtendedExpression to allow If/Switch expressions
+  __ Equals ExtendedExpression
 
 # https://262.ecma-international.org/#prod-VariableStatement
 VariableStatement
@@ -1338,8 +1601,8 @@ VariableDeclarationList
 
 # https://262.ecma-international.org/#prod-VariableDeclaration
 VariableDeclaration
-  BindingPattern Initializer
-  BindingIdentifier Initializer?
+  BindingPattern TypeSuffix? Initializer
+  BindingIdentifier TypeSuffix? Initializer?
 
 # https://262.ecma-international.org/#prod-NumericLiteral
 NumericLiteral
@@ -1358,20 +1621,29 @@ DecimalBigIntegerLiteral
   /(?:0|[1-9](?:_[0-9]|[0-9])*)n/
   # /[_0-9]*n/
 
+# https://262.ecma-international.org/#prod-DecimalLiteral
 DecimalLiteral
-  /\d+(?:\.\d*)?/
+  # NOTE: Not matching the dot as part of a number if it is followed by a valid JS identifier so that it will match as a property access
+  $( /(?:0|[1-9](?:_[0-9]|[0-9])*)(?=\.(?:\p{ID_Start}|[_$]))/ ) ->
+    // Insert an extra dot to make property access work
+    return $1 + "."
+  $( /(?:0|[1-9](?:_[0-9]|[0-9])*)(?:\.(?:[0-9](?:_[0-9]|[0-9])*))?/ ExponentPart? )
+  $( /(?:\.[0-9](?:_[0-9]|[0-9])*)/ ExponentPart? )
+
+ExponentPart
+  /(?:[eE][+-]?[0-9]+(?:_[0-9]|[0-9])*)/
 
 # https://262.ecma-international.org/#prod-BinaryIntegerLiteral
 BinaryIntegerLiteral
-  /0[bB][01](?:[01]|_[01])*/
+  /0[bB][01](?:[01]|_[01])*n?/
 
 # https://262.ecma-international.org/#prod-OctalIntegerLiteral
 OctalIntegerLiteral
-  /0[oO][0-7](?:[0-7]|_[0-7])*/
+  /0[oO][0-7](?:[0-7]|_[0-7])*n?/
 
 # https://262.ecma-international.org/#prod-HexIntegerLiteral
 HexLiteral
-  /0[xX][0-9a-fA-F](?:[0-9a-fA-F]|_[0-9a-fA-F])*/
+  /0[xX][0-9a-fA-F](?:[0-9a-fA-F]|_[0-9a-fA-F])*n?/
 
 # https://262.ecma-international.org/#prod-StringLiteral
 StringLiteral
@@ -1416,7 +1688,7 @@ TripleSingleStringCharacters
     return { $loc, token: $0 }
 
 CoffeeStringSubstitution
-  CoffeeSubstitutionStart Expression __ CloseBrace
+  CoffeeSubstitutionStart ExtendedExpression __ CloseBrace
 
 CoffeeInterpolatedDoubleQuotedString
   CoffeeInterpolationEnabled DoubleQuote:s ( CoffeeDoubleQuotedStringCharacters / CoffeeStringSubstitution )*:parts DoubleQuote:e ->
@@ -1470,11 +1742,11 @@ TemplateLiteral
   TripleTick ( TemplateBlockCharacters / TemplateSubstitution )* TripleTick ->
     return module.dedentBlockSubstitutions($0)
 
-  "`" ( TemplateCharacters / TemplateSubstitution )* "`"
+  Backtick ( TemplateCharacters / TemplateSubstitution )* Backtick
 
 # NOTE: Simplified grammar
 TemplateSubstitution
-  SubstitutionStart Expression __ CloseBrace
+  SubstitutionStart ExtendedExpression __ CloseBrace
 
 # https://262.ecma-international.org/#prod-TemplateCharacter
 TemplateCharacters
@@ -1487,7 +1759,9 @@ TemplateBlockCharacters
 
 # https://262.ecma-international.org/#sec-comments
 ReservedWord
-  /(?:and|as|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|interface|is|new|null|or|return|static|super|switch|this|throw|true|try|typeof|unless|var|void|while|with|yield)(?!\p{ID_Continue})/
+  CoffeeBooleansEnabled /(?:on|off|yes|no)(?!\p{ID_Continue})/
+  CoffeeIsntEnabled /(?:isnt)(?!\p{ID_Continue})/
+  /(?:and|as|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|interface|is|loop|new|null|or|return|static|super|switch|this|throw|true|try|typeof|unless|until|var|void|while|with|yield)(?!\p{ID_Continue})/
 
 # https://262.ecma-international.org/#sec-comments
 Comment
@@ -1547,11 +1821,17 @@ Whitespace
   [\s]+ ->
     return { $loc, token: $0 }
 
+# Fake a blocklike form for single expressions
+ExpressionDelimiter
+  TrailingComment* Semicolon TrailingComment* ->
+    $2.token = ","
+    return $0
+  &EOS ->
+    return { $loc, token: "," }
+
 StatementDelimiter
   TrailingComment* Semicolon TrailingComment*
-  # Implied semicolon
-  "" &EOS ->
-    return { $loc, token: ";" }
+  &EOS
 
 NonIdContinue
   /(?!\p{ID_Continue})/
@@ -1572,6 +1852,10 @@ Async
 
 Await
   "await" NonIdContinue ->
+    return { $loc, token: $1 }
+
+Backtick
+  "`" ->
     return { $loc, token: $1 }
 
 Case
@@ -1618,8 +1902,24 @@ Default
   "default" NonIdContinue ->
     return { $loc, token: $1 }
 
+Delete
+  "delete" NonIdContinue ->
+    return { $loc, token: $1 }
+
+Do
+  "do" NonIdContinue ->
+    return { $loc, token: $1 }
+
 Dot
   "." ->
+    return { $loc, token: $1 }
+
+DotDot
+  ".." ->
+    return { $loc, token: $1 }
+
+DotDotDot
+  "..." ->
     return { $loc, token: $1 }
 
 DoubleQuote
@@ -1655,7 +1955,9 @@ GetOrSet
     return { $loc, token: $1 }
 
 If
-  "if" ->
+  # NOTE: Pull a single space into the 'if ' token so if it is replaced
+  # with a ternary in expressions it doesn't add an extra space
+  $("if" " "?) ->
     return { $loc, token: $1 }
 
 Import
@@ -1680,6 +1982,11 @@ Loop
 New
   "new" ->
     return { $loc, token: $1 }
+
+Not
+  # Not keyword only active in compat mode
+  CoffeeNotEnabled "not" NonIdContinue " "? ->
+    return { $loc, token: "!" }
 
 Of
   "of" ->
@@ -1737,6 +2044,11 @@ Target
   "target" ->
     return { $loc, token: $1 }
 
+Then
+  # TODO: comments/whitespace get lost here
+  __ "then" NonIdContinue ->
+    return { $loc, token: "" }
+
 Throw
   "throw" NonIdContinue ->
     return { $loc, token: $1 }
@@ -1759,18 +2071,34 @@ Try
   "try" ->
     return { $loc, token: $1 }
 
+Typeof
+  "typeof" NonIdContinue ->
+    return { $loc, token: $1 }
+
 Unless
   "unless" ->
+    return { $loc, token: $1 }
+
+Until
+  "until" NonIdContinue ->
     return { $loc, token: $1 }
 
 Var
   "var" ->
     return { $loc, token: $1 }
 
+Void
+  "void" NonIdContinue ->
+    return { $loc, token: $1 }
+
 # NOTE: When maps to 'case'
 When
   "when" NonIdContinue ->
     return { $loc, token: "case" }
+
+While
+  "while" NonIdContinue ->
+    return { $loc, token: $1 }
 
 Yield
   "yield" NonIdContinue ->
@@ -1822,7 +2150,8 @@ JSXAttributes
 # NOTE: Merged SpreadAttribute and Attribute
 JSXAttribute
   # https://facebook.github.io/jsx/#prod-JSXSpreadAttribute
-  OpenBrace __ "..." __ AssignmentExpression __ CloseBrace
+  # NOTE: Using ExtendedExpression to allow If/Switch expressions
+  OpenBrace __ DotDotDot ExtendedExpression __ CloseBrace
 
   # https://facebook.github.io/jsx/#prod-JSXAttribute
   JSXAttributeName JSXAttributeInitializer?
@@ -1842,7 +2171,8 @@ JSXAttributeValue
   /"[^"]*"/
   # https://facebook.github.io/jsx/#prod-JSXSingleStringCharacters
   /'[^']*'/
-  OpenBrace __ AssignmentExpression __ CloseBrace
+  # NOTE: Using ExtendedExpression to allow If/Switch expressions
+  OpenBrace ExtendedExpression __ CloseBrace
   JSXElement
   JSXFragment
 
@@ -1864,7 +2194,8 @@ JSXText
 
 # https://facebook.github.io/jsx/#prod-JSXChildExpression
 JSXChildExpression
-  __ ( "..." __ )? AssignmentExpression
+  # NOTE: Using ExtendedExpression to allow If/Switch expressions
+  __ ( DotDotDot __ )? ExtendedExpression
 
 ## Type Stuff
 
@@ -1877,8 +2208,9 @@ TypeDeclarationModifier
 
 TypeDeclarationRest
   TypeKeyword TrailingComment* IdentifierName TypeParameters? __ Equals __ Type
-  Interface   TrailingComment* IdentifierName InterfaceBlock
+  Interface   TrailingComment* IdentifierName TypeParameters? InterfaceBlock
   Namespace   TrailingComment* IdentifierName NamespaceBlock
+  FunctionSignature
 
 TypeKeyword
   "type" NonIdContinue
@@ -1905,15 +2237,13 @@ NestedInterfaceProperty
 
 InterfaceProperty
   ( TypeIndexSignature / PropertyName ) TypeSuffix InterfacePropertyDelimiter
-  MethodSignature
+  NonEmptyParameters TypeSuffix InterfacePropertyDelimiter
+  MethodSignature InterfacePropertyDelimiter
 
 InterfacePropertyDelimiter
-  _* Semicolon
-  &( _* CloseBrace ) # NOTE: Don't insert semi-colon before inline closing brace
-  &( __ CloseBrace ) ->
-    return { $loc, token: ";" }
-  &EOS ->
-    return { $loc, token: ";" }
+  _* ( Semicolon / Comma )
+  &( __ CloseBrace )
+  &EOS
 
 NamespaceBlock
   __ OpenBrace EOS NestedTypeDeclarations __ CloseBrace
@@ -1975,6 +2305,7 @@ TypeUnary
 
 TypeUnarySuffix
   TypeIndexedAccess
+  QuestionMark
 
 TypeUnaryOp
   "keyof"
@@ -1987,9 +2318,26 @@ TypeIndexedAccess
 TypePrimary
   InterfaceBlock
   __ OpenParen Type __ CloseParen
+  __ TypeTuple
   _* FunctionType
   _* TypeLiteral
   _* IdentifierName (Dot IdentifierName)* TypeArguments?
+
+TypeTuple
+  OpenBracket NestedTypeList __ CloseBracket
+  OpenBracket TypeList? __ CloseBracket
+
+TypeList
+  Type (__ Comma Type)*
+
+NestedTypeList
+  PushIndent NestedType*:types PopIndent ->
+    if (types.length)
+      return types
+    return $skip
+
+NestedType
+  Nested Type ArrayElementDelimiter
 
 TypeConditional
   TypeBinary ( __ "extends" Type ( __ QuestionMark Type __ Colon Type )? )? ->
@@ -2055,7 +2403,7 @@ CivetPrologueContent
 CivetOption
   /\s+([+-]?)([a-zA-Z0-9-]+)/ ->
     // Normalize option names to camelCase
-    const optionName = $2.toLowerCase().replace(/-+([a-z]?)/g, (_, l) => {
+    const optionName = $2.replace(/-+([a-z]?)/g, (_, l) => {
       if (l) return l.toUpperCase()
       return ""
     })
@@ -2076,13 +2424,10 @@ DirectivePrologue
 EOS
   RestOfLine+
 
-# End of line
+# End of line, including EOF
 EOL
-  /\r\n|\n|\r|$/
-
-# End of file
-EOF
-  /$/
+  /\r\n|\n|\r|$/ ->
+    return { $loc, token: $0 }
 
 Debugger
   "" ->
@@ -2135,16 +2480,31 @@ InsertDot
 
 InsertBreak
   "" ->
-    return { $loc, token: "break;" }
+    return { $loc, token: ";break;" }
 
 CoffeeCommentEnabled
   "" ->
     if(module.config.coffeeComment) return
     return $skip
 
+CoffeeBooleansEnabled
+  "" ->
+    if(module.config.coffeeBooleans) return
+    return $skip
+
 CoffeeInterpolationEnabled
   "" ->
     if(module.config.coffeeInterpolation) return
+    return $skip
+
+CoffeeIsntEnabled
+  "" ->
+    if(module.config.coffeeIsnt) return
+    return $skip
+
+CoffeeNotEnabled
+  "" ->
+    if(module.config.coffeeNot) return
     return $skip
 
 # Reset module level data
@@ -2156,9 +2516,12 @@ Reset
     module.verbose = false
     module.config = {
       autoVar: false,
+      coffeeBooleans: false,
       coffeeComment: false,
       coffeeEq: false,
       coffeeInterpolation: false,
+      coffeeIsnt: false,
+      coffeeNot: false,
       implicitReturns: true,
     }
 
@@ -2167,16 +2530,20 @@ Reset
       set(b) {
         if (b) {
           this.autoVar = true
+          this.coffeeBooleans = true
           this.coffeeComment = true
           this.coffeeEq = true
           this.coffeeInterpolation = true
-          this.implicitReturns = true
+          this.coffeeIsnt = true
+          this.coffeeNot = true
         } else {
           this.autoVar = false
+          this.coffeeBooleans = false
           this.coffeeComment = false
           this.coffeeEq = false
           this.coffeeInterpolation = false
-          this.implicitReturns = false
+          this.coffeeIsnt = false
+          this.coffeeNot = false
         }
       }
     })
@@ -2198,17 +2565,6 @@ Init
       }
     })
 
-    function hasReturnStatement(node) {
-      if (!node) return false
-      if (Array.isArray(node)) return node.some(hasReturnStatement)
-      if (node.type === "ReturnStatement") return true
-      // Don't recurse into nested functions
-      if (node.type === "FunctionExpression") return false
-      if (node.children) return hasReturnStatement(node.children)
-
-      return false
-    }
-
     // [indent, statement, semicolon]
     function insertReturn(node) {
       if (!node) return
@@ -2216,6 +2572,10 @@ Init
       switch (node.type) {
         case "AssignmentExpression":
           node.children.unshift("return ")
+          return
+        case "Identifier":
+          // TODO: It would be better to wrap/insert a node rather than modify the token
+          node.token = "return " + node.token
           return
         case "BlockStatement":
           insertReturn(node.expressions[node.expressions.length - 1])
@@ -2240,6 +2600,9 @@ Init
       if (!Array.isArray(node)) return
 
       const [, exp] = node
+      let indent = node[0]
+      // Hacky way to get the indent of the last expression
+      if (Array.isArray(indent)) indent = indent[indent.length - 1]
       if (!exp) return
 
       switch (exp.type) {
@@ -2248,14 +2611,20 @@ Init
         case "DebuggerStatement":
         case "EmptyStatement":
         case "IterationStatement":
+        case "ReturnStatement":
         case "ThrowStatement":
         case "VariableDeclaration":
+          return
+        case "BlockStatement":
+          insertReturn(exp.expressions[exp.expressions.length - 1])
           return
         case "IfStatement":
           // if block
           insertReturn(exp.children[2])
           // else block
           if (exp.children[3]) insertReturn(exp.children[3][2])
+          // Add explicit return after if block if no else block
+          else exp.children.push(["\n", indent, "return"])
           return
         case "SwitchStatement":
           // insert a return in each case block
@@ -2270,23 +2639,93 @@ Init
           return
       }
 
-      // for/while
-      // TODO: don't insert a return unless coffee compat
-
-      // do while
-      // TODO: don't insert a return
-
       // Insert return before expression
       node.splice(1, 0, "return ")
     }
 
     module.addImplicitReturns = function(block) {
-      // don't add implicit returns if the block has any explicit returns
-      if (hasReturnStatement(block)) return block
-
       insertReturn(block)
 
       return block
+    }
+
+    module.isWhitespaceOrEmpty = function(node) {
+      if (!node) return true
+      if (!node.length) return true
+      if (typeof node === "string") return node.match(/^\s*$/)
+      if (Array.isArray(node)) return node.every(module.isWhitespaceOrEmpty)
+    }
+
+    /**
+    * binops is an array of [__, op, __, exp] tuples
+    * first is an expression
+    */
+    module.expandChainedComparisons = function([first, binops]) {
+      // TODO: add refs to ensure middle expressions are evaluated only once
+
+      // all relational operators could be chained in theory, including in and instanceof
+      const relationalOps = ["==", "===", "!=", "!==", "<", "<=", ">", ">=", "in", "instanceof"]
+
+      // short circuit/bitwise ops have lower precedence than comparison ops
+      // so we only need to look for chains in the sections between them
+      const lowerPrecedenceOps = ["??", "&&", "||", "&", "|", "^"]
+
+      // shift/arithmetic ops have higher precedence, they will bind to expressions inside the chains
+      // const higherPrecedenceOps = ["<<", ">>", ">>>", "+", "-", "*", "**", "/", "%"]
+
+      let results = []
+
+      let i = 0
+      let l = binops.length
+
+      let start = 0
+      // indexes of chainable ops
+      let chains = []
+      while (i < l) {
+        const [, op] = binops[i]
+
+        if (relationalOps.includes(op.token)) {
+          chains.push(i)
+        } else if (lowerPrecedenceOps.includes(op.token)) {
+          // end of the chain
+          processChains()
+          first = []
+        }
+
+        i++
+      }
+
+      processChains()
+
+      return results
+
+      function processChains() {
+        if (chains.length > 1) {
+          chains.forEach((index, k) => {
+            if (k > 0) {
+              results.push(" && ")
+            }
+            const [pre, op, post, exp] = binops[index]
+
+            let endIndex
+            if (k < chains.length - 1) {
+              endIndex = chains[k + 1]
+            } else {
+              endIndex = i + 1
+            }
+
+            results = results.concat(first, ...binops.slice(start, endIndex))
+            first = [exp].concat(binops.slice(index + 1, endIndex))
+            start = endIndex
+          })
+        } else {
+          // Advance start if there was no chain
+          results = results.concat(first, ...binops.slice(start, i + 1))
+          start = i + 1
+        }
+
+        chains.length = 0
+      }
     }
 
     // Return an array of Rule names that correspond to the current call stack
@@ -2337,6 +2776,9 @@ Init
       return spacing
     }
 
+    // Split out leading newlines from the first indented line
+    const initialSpacingRe = /^(?:\r?\n|\n)*((?:\r?\n|\n)\s+)/
+
     module.dedentBlockSubstitutions = function($0) {
       const [s, strWithSubstitutions, e] = $0
 
@@ -2349,7 +2791,7 @@ Init
       const {token} = strWithSubstitutions[0]
 
       if (token) {
-        initialSpacing = token.match(/^(\r?\n|\n)\s+/)
+        initialSpacing = token.match(initialSpacingRe)
       } else {
         initialSpacing = false
       }
@@ -2381,10 +2823,10 @@ Init
 
     module.dedentBlockString = function({$loc, token: str}, spacing, trim=true) {
       // If string begins with a newline then indentation assume that it should be removed for all lines
-      if (spacing == null) spacing = str.match(/^(\r?\n|\n)[ \t]+/)
+      if (spacing == null) spacing = str.match(initialSpacingRe)
 
       if (spacing) {
-        str = str.replaceAll(spacing[0], "\n")
+        str = str.replaceAll(spacing[1], "\n")
         const l = spacing.length
         $loc.pos += l
         $loc.length -= l

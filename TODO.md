@@ -4,12 +4,29 @@ TODO
 - [x] Compiler option to strip TypeScript and emit only JS (use in `./register`)
 - [x] JavaScript Compat (default stance is JS code should "just work")
 - [x] Multiple case/when expressions
+- [x] Implicit Returns
+  - [x] if without else: not all code paths return a value
+  - [x] Should implicit returns apply to `case` inside `switch`? No because fallthrough could be intentional.
+  - [x] Don't actually need to check for returns anywhere in a function, always implicit return the last statement
+- [x] default const decs in `for in/of`
+- [x] Postfix iteration (`while/until/for/loop`)
+- [x] const assignment for function shorthand should use function declaration since TypeScript function declarations are const by default
+  ```
+  fn := (x) -> x
+  ---
+  function fn(x) { return x }
+  ```
+- [ ] Comprehensions
+  - [ ] CoffeeScript compat `for in`
+  - [ ] Civet replacement `for from`
+- [ ] Chained Comparisons (should work for all relational and equality operators)
+  - [x] Basics working
+  - [ ] use refs to avoid excess evaluations of middle results
+- [x] `1.toString()` -> `1..toString()`
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
-  - [ ] Implicit Returns
-  - [ ] Chained Comparisons
-  - [ ] Comprehensions
+  - [x] If/Switch Expressions
   - [ ] Auto Var
-  - [ ] on/off/yes/no
+  - [x] on/off/yes/no
   - [x] `"""` `#{}` Interpolations
   - [x] `"` `#{}`Interpolations (with `"use coffee-compat"`)
   - [x] `###` Block comments
@@ -52,7 +69,7 @@ TODO
   - [ ] Indentation based auto-closing JSX
 - [ ] Infrastructure
   - [ ] 100% code coverage
-    - [ ] Accurate coverage for .civet files (need to compose ts-node source map with civet source map)
+    - [x] Accurate coverage for .civet files (need to compose ts-node source map with civet source map)
     - [ ] Hera sourcemaps
     - [ ] Test cli
   - [x] TS-node compatibility (may need to create a custom loader wrapping ts.LanguageServiceHost). The purpose of this feature is so we can run tests written in .civet.
@@ -60,7 +77,10 @@ TODO
     - [x] Basic ESM Loader
   - [x] esbuild plugin so we can package up projects that contain `.civet` files
   - [ ] CoffeeSense inspired LSP
-    - [ ] Language Icon https://stackoverflow.com/a/70930298/68210
+    - [x] Language Icon https://stackoverflow.com/a/70930298/68210
+      - [x] Basic SVG Icon
+      - [x] Get VSCode to use the fill color (VSCode editor was caching older version)
+      - [x] Get VSCode to use the viewbox padding (VSCode editor was caching older version)
     - [ ] Experiment with forking/patching `vscode/extensions/typescript-language-features` to add a transpilation resolver and to sourcemap the messages
     - [ ] Syntax Highlighting
       - [x] Basic highlighting

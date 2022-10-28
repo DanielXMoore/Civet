@@ -41,10 +41,10 @@ fileCache : Record<string, any> := {}
 
 createCompilerHost := (options: CompilerOptions, moduleSearchLocations : string[]) ->
   fileExists := (fileName: string) : boolean ->
-    return fileCache[fileName]?
+    fileCache[fileName]?
 
   readFile := (fileName: string) ->
-    return fileCache[fileName]
+    fileCache[fileName]
 ```
 
 ESBuild Plugin
@@ -91,50 +91,63 @@ Things Kept from CoffeeScript
 - `@` `this` shorthand `@` -> `this`, `@id` -> `this.id`
 - Prototype shorthand `X::` -> `X.prototype`, `X::a` -> `X.prototype.a`
 - Class static shorthand `@`
-- Postfix `if/unless`
+- Chained comparisons `a < b < c` -> `a < b && b < c`
+- Postfix `if/unless/while/until/for`
 - Block Strings `"""` / `'''`
   - `#{exp}` interpolation in `"""` strings
+- `when` inside `switch` automatically breaks
 - Multiple `,` separated `case`/`when` expressions
 - `else` -> `default` in `switch`
+- Array slices `list[0...2]` -> `list.slice(0, 2)`
+- Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` -> `numbers.splice(3, 4, ...[-3, -4, -5, -6])`
 - Implicit returns
+- Simplified number method calls `1.toFixed()` -> `1..toFixed()`
+- `if`/`switch` expressions
 - JSX 😿
-- TODO
-  - [ ] Chained comparisons
 
 Things Removed from CoffeeScript
 ---
 
-- `on/yes/off/no` (use `true/false`)
-- `isnt` (use `!==`)
-- `not` (use `!`)
+- `on/yes/off/no` (use `true/false`, `"civet coffeeCompat"`, or `"civet coffeeBooleans"` to add them back)
+- `isnt` (use `!==`, `"civet coffeeCompat"`, or `"civet coffeeIsnt"`)
+- `not` (use `!`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
+  - `not instanceof` (use `!(a instanceof b)`)
+  - `not in`
+  - `not of`
 - `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax)
 - `for from` (use JS `for of`)
+- `for own of` (use JS `for in` and check manually, switch to `Map#keys/values/entries`, or use `Object.create(null)`)
 - `and=`, `or=` (don't mix and match words and symbols)
+- `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables)
 - Iteration expression results
-- Implicit declarations
-- Postfix `while/until`
-- `///` Heregexp
-- Backtick Embedded JS (replaced by template literals)
+- Backtick embedded JS (replaced by template literals)
+- Will likely add later
+  - Optional assignment `x?.y = 3` -> `x != null ? x.y = 3 : undefined`
+  - Implicit `var` declarations (in compat mode only)
 - Might add later
-  - Comprensions (a case could be made for keeping them)
-  - Array slices `list[0...2]` (use `list.slice(0, 2)`)
-  - Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` (use `numbers.splice(3, 4, -3, -4, -5, -6)`)
+  - Braceless inline objects `x = coolStory: true`
+  - Comprensions
+  - `///` Heregexp
   - Ranges `[0...10]`
   - Rest parameter in any assignment position
+  - Multiple slice assignment `otherNumbers[0...] = numbers[3..6] = [-3, -4, -5, -6]`
 
 Things Changed from CoffeeScript
 ---
 
-- `==` -> `==` rather than `===` (can be kept with `"use coffee-compat"`)
-- `!=` -> `!=` rather than `!==` (can be kept with `"use coffee-compat"`)
+- `==` -> `==` rather than `===` (can be kept with `"civet coffeeCompat"`)
+- `!=` -> `!=` rather than `!==` (can be kept with `"civet coffeeCompat"`)
 - `for in` and `for of` are no longer swapped and become their JS equivalents.
 - `a...` is now `...a` just like JS
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
 - Existential `x?` -> `(x != null)` no longer checks for undeclared variables.
-- Embedded JS `\`\`` has been replaced with JS template literals.
-- No longer allowing multiple postfix `if/unless` on the same line.
-- No `else` block on `unless` (negate condition and use `if`)
-- `#{}` interpolation in `""` strings only when `"use coffee-compat"`
+- `x?()` -> `x?.()` instead of `if (typeof x === 'function') { x() }`
+- Backtick embedded JS has been replaced with JS template literals.
+- No longer allowing multiple postfix `if/unless` on the same line (use `&&` or `and` to combine conditions).
+- `#{}` interpolation in `""` strings only when `"civet coffeeCompat"` or `"civet coffeeInterpolation"`
+- Expanded chained comparisons to work on more operators `a in b instanceof C` -> `a in b && b instanceof C`
+- Postfix iteration/conditionals always wrap the statement [#5431](https://github.com/jashkenas/coffeescript/issues/5431)
+`try x() if y` -> `if (y) try x()`
 - Civet tries to keep the transpiled output verbatim as much as possible.
   In Coffee `(x)` -> `x;` but in Civet `(x)` -> `(x);`.
   Also in Coffee
@@ -181,12 +194,13 @@ Things Added that CoffeeScript didn't
   - Private identifiers `#id`
 - Convenience for ES6+ Features
   - Const assignment shorthand `a := b` -> `const a = b`; `{a, b} := c` -> `const {a, b} = c`
-  - `<` as `extends` shorthand
   - `@#id` -> `this.#id` shorthand for private identifiers
   - `import` shorthand `x from ./x` -> `import x from "./x"`
-  - `\`\`\`` Block Template Strings remove leading indentation for clarity
+  - Triple backtick Template Strings remove leading indentation for clarity
   - Class constructor shorthand `@( ... )`
   - ClassStaticBlock `@ { ... }`
+  - `<` as `extends` shorthand
+- Postfix loop `run() loop` -> `while(true) run()`
 - Shebang line is kept unmodified in output
   ```civet
   #!./node_modules/.bin/ts-node
@@ -196,12 +210,35 @@ Things Added that CoffeeScript didn't
 Things Changed from ES6
 ---
 
+- Implicit returns
 - Disallow no parens on single argument arrow function. `x => ...` must become `(x) => ...`
   The reasoning is `x -> ...` => `x(function() ...)` in CoffeeScript and having `->` and `=>`
   behave more differently than they already do is bad. Passing an anonymous function to an
   application without parens is also convenient.
-- Disallow comma operator in conditionals.
+- `for(i of x) ...` defaults to const declaration -> `for(const i of x) ...`
+- Disallow comma operator in conditionals. `if x, y`
 - Comma operator in case/when becomes multiple conditions.
+- Numbers can't end with a dot (otherwise would be ambiguous with CoffeeScript slices `y[0..x]`). This also implies that you can't access properties
+of numbers with `1..toString()` use `1.toString()` instead. When exponent follows a dot it is treated as a property access since an exponent
+could be a valid property `1.e10` -> `1..e10`. The workaround is to add a trailing zero `1.0e10` or remove the dot before the exponent `1e10`.
+- Additional reserved words `and`, `or`, `loop`, `until`, `unless`
+
+CoffeeScript Compatibility
+---
+
+Civet provides a compatability prologue directive that aims to be 97+% compatible with existing CoffeeScript2 code (still a work in progress).
+
+```
+coffeeBooleans (yes/no/on/off)
+coffeeComment  (# single line comments)
+coffeeEq       (`==` -> `===`, `!=` -> `!==`)
+coffeeInterpolation (`"a string with {myVar}"`)
+coffeeIsnt     (`isnt` -> `!==`)
+```
+
+You can use these with `"civet coffeeCompat"` to opt in to all or use them bit by bit with `"civet coffeeComment coffeeEq coffeeInterpolation"`.
+Another posibility is to slowly remove them to provide a way to migrate files a little at a time `"civet coffeeCompat -coffeeBooleans -coffeeComment -coffeeEq"`.
+Both camel case and hyphens work when specifying options `"civet coffee-compat"`. More options will be added over time until 97+% compatibility is achieved.
 
 Using Civet in your Node.js Environment
 ---

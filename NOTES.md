@@ -341,6 +341,28 @@ Probably a good idea to align with existing AST conventions where possible
 - https://esprima.org/demo/parse.html
 - https://github.com/estree/estree
 
+Block Regular Expressions
+---
+Heregexp, Block Regexp, `re.X`, `///`
+
+CoffeeScript's block regexp is a neat idea but is specified poorly and has bugs. Rebuilding it to match Python's `re.X` could be a valid approach.
+
+- https://docs.python.org/3/library/re.html#re.X
+
+IfExpressions
+---
+
+CoffeeScript allows for inline IfExpressions, we should too for compatibility and ease of porting.
+
+Inline expressions have a psuedo-block of comma separated expressions. Pure statements like `break`, `continue`, `return` are disallowed. We'd also disallow
+declarations.
+
+Currently this is colliding with the PostfixStatement. There's probably a clean way to get these into the grammar just need to figure it out.
+
+Expression/AssignmentExpression don't include the ExpressionizedStatements ExtendExpression does.
+
+This lets the specific places in the parser choose when and where to enable them.
+
 Timesheet
 ---
 
@@ -383,25 +405,33 @@ Timesheet
 2022-10-01 | 2.50  | parser cleanup; added multiple switch/when cases; coffee-compat `"#{}"` interpolation
 2022-10-09 | 2.25  | starting implicit returns
 2022-10-10 | 3.75  | AST nodes; more implicit returns
-2022-10-11 | 2.25  | implicit returns (method definition; fat arrow; longhand; void; set)
+2022-10-11 | 3.25  | implicit returns (method definition; fat arrow; longhand; void; set); starting auto-var
+2022-10-12 | 3.00  | civet prologues; number improvements
+2022-10-13 | 2.50  | coffeeBooleans; compat docs; implicit return hera compiler example test; big int hex/octal/binary
+2022-10-14 | 1.75  | chained comparisons
+2022-10-15 | 2.00  | TS interface type parameters; TS comma delimiters in interface; TS `?` suffix; TS callable interface; TS function overloads; TS declare function signature; TS multiple as; rest parameters; argument splats
+2022-10-17 | 0.50  | Don't insert semi-colons at every statement end
+2022-10-18 | 0.50  | type annotation for var decs
+2022-10-20 | 2.00  | Paren-less `for`; implicit const `for` dec
+2022-10-21 | 1.00  | unary op + eol source maps;
+2022-10-22 | 0.50  | making implicit returns match CS better
+2022-10-23 | 1.50  | .civet svg icon
+2022-10-24 | 3.50  | postfix iteration statements; keep leading newlines in block strings; feedback; index slicing
+2022-10-25 | 1.50  | basic splice assignment
+2022-10-26 | 1.00  | IfExpressions
+2022-10-27 | 5.75  | IfExpressions; if then; more expressionized statements; enabling extended expressions in more places; switch expression; const assignment -> function declaration transformation
+2022-10-28 | 0.50  | coffeeNot
+
+11:30am auto-var
 
 TODO:
 
-auto var
-
 - CoffeeCompat
-  - [x] implicit returns
-    - [x] FunctionExpression
-    - [x] SwitchStatement
-    - [x] EmptyStatement
-    - [x] IfStatement
-    - [x] IterationStatement
-    - [x] VariableDeclaration
-  - [ ] auto var
   - [ ] Chained Comparisons
+    - [x] working without refs
     - [ ] Floating ref node pointing to a VariableDeclaration
   - [ ] Comprehensions
-  - [ ] `"civet +coffee-compat -extra-bools"` style config
+  - [ ] auto var
 - LSP
   - [ ] auto-import suggest in .coffee
   - [ ] update imported file exports, see errors in importing file
