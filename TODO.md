@@ -10,21 +10,21 @@ TODO
   - [x] Don't actually need to check for returns anywhere in a function, always implicit return the last statement
 - [x] default const decs in `for in/of`
 - [x] Postfix iteration (`while/until/for/loop`)
-- [ ] CoffeeScript compat `for in`
-- [ ] const assignment for function shorthand should use function declaration since TypeScript function declarations are const by default
+- [x] const assignment for function shorthand should use function declaration since TypeScript function declarations are const by default
   ```
   fn := (x) -> x
   ---
   function fn(x) { return x }
   ```
+- [ ] Comprehensions
+  - [ ] CoffeeScript compat `for in`
+  - [ ] Civet replacement `for from`
 - [ ] Chained Comparisons (should work for all relational and equality operators)
   - [x] Basics working
   - [ ] use refs to avoid excess evaluations of middle results
 - [x] `1.toString()` -> `1..toString()`
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
-  - [ ] Comprehensions
-  - [ ] If/Switch Expressions
-    - [ ] Don't wrap switch in function instead assign to a ref, then assign ref to lhs (might not actually be possible when switch is nested deeper in an expression...)
+  - [x] If/Switch Expressions
   - [ ] Auto Var
   - [x] on/off/yes/no
   - [x] `"""` `#{}` Interpolations

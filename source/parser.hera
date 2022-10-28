@@ -146,7 +146,7 @@ AssignmentExpression
 
 AssignmentExpressionTail
   YieldExpression
-  (Async __)? ArrowFunction
+  ArrowFunction
 
   # NOTE: Eliminated left recursion
   # NOTE: Consolidated assignment ops
@@ -203,6 +203,11 @@ YieldTail
 
 # https://262.ecma-international.org/#prod-ArrowFunction
 ArrowFunction
+  ( Async __ )? ArrowFunctionTail ->
+    if ($1) $2.children.unshift($1)
+    return $2
+
+ArrowFunctionTail
   ThinArrowFunction
   Parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
     const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
@@ -212,7 +217,7 @@ ArrowFunction
     }
 
     return {
-      type: "FunctionExpression",
+      type: "ArrowFunction",
       children: $0,
     }
 
@@ -555,8 +560,6 @@ FunctionSignature
 
 # https://262.ecma-international.org/#prod-FunctionExpression
 FunctionExpression
-  # NOTE: Added CoffeeScript thin arrow function shorthand
-  ThinArrowFunction
   # TODO: block isn't actually optional in FunctionExpression only in declarations/TS overloads
   FunctionSignature BracedBlock?:block ->
     // TS Function overloads
@@ -574,10 +577,16 @@ FunctionExpression
       module.addImplicitReturns(block)
     }
 
+    // id is an empty array if not present so it can be filled later without having to adjust the children array
+    // like in the const assignment function declaration transformation
+    const id = $1[3] || []
+    $1[3] = id
+
     $1.push(block)
     return {
       type: "FunctionExpression",
       children: $1,
+      id,
     }
 
 ThinArrowFunction
@@ -587,14 +596,18 @@ ThinArrowFunction
       block = module.addImplicitReturns(block)
     }
 
+    const id = []
+
     return {
       type: "FunctionExpression",
       children: [
         { $loc: arrow.$loc, token: "function" },
+        id,
         params,
         suffix,
         block
-      ]
+      ],
+      id,
     }
 
 Arrow
@@ -631,7 +644,7 @@ EmptyBlock
 
 # This is a block that must include braces (function body, try/catch/finally)
 BracedBlock
-  __ OpenBrace EOS NestedBlockStatements:exps __ CloseBrace -> {
+  __ OpenBrace BracedContent:exps __ CloseBrace -> {
     type: "BlockStatement",
     expressions: exps,
     children: $0,
@@ -649,6 +662,10 @@ BracedBlock
       expressions: [s],
       children: $0,
     }
+
+BracedContent
+  &EOS NestedBlockStatements -> $2
+  TrailingComment* Statement
 
 NestedBlockStatements
   PushIndent NestedBlockStatement*:statements PopIndent ->
@@ -1475,12 +1492,29 @@ LexicalDeclaration
   }
   # NOTE: Added const shorthand
   # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
-  InsertConst:c ( BindingPattern / BindingIdentifier ) TypeSuffix? __ ConstAssignment:ca ExtendedExpression ->
+  InsertConst:c ( BindingPattern / BindingIdentifier ):id TypeSuffix? __ ConstAssignment:ca ExtendedExpression:e ->
     // Adjust position to space before assignment to make TypeScript remapping happier
     c.$loc = {
       pos: ca.$loc.pos - 1,
       length: ca.$loc.length + 1,
     }
+
+    // TODO: Better AST nodes so we don't have to adjust for whitespace nodes here
+    let exp
+    if (e.type === "FunctionExpression") {
+      exp = e
+    } else {
+      exp = e[1]
+    }
+
+    if (id[1]?.type === "Identifier" && exp?.type === "FunctionExpression") {
+      if (exp.id.length === 0) {
+        exp.id.push(" ", id, $3, $4)
+      }
+      exp.type = "FunctionDeclaration"
+      return exp
+    }
+
     return {
       type: "VariableDeclaration",
       children: $0
