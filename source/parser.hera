@@ -5,7 +5,10 @@
 # https://262.ecma-international.org/13.0/
 
 Program
-  Reset Init __ TopLevelStatement* __
+  Reset Init __ TopLevelStatement*:statements __ ->
+    module.processProgram(statements)
+
+    return $0
 
 TopLevelStatement
   EOS? ModuleItem StatementDelimiter
@@ -150,7 +153,7 @@ AssignmentExpressionTail
 
   # NOTE: Eliminated left recursion
   # NOTE: Consolidated assignment ops
-  (__ LeftHandSideExpression __ AssignmentOp)+ ExtendedExpression ->
+  ( __ LeftHandSideExpression __ AssignmentOp )+ ExtendedExpression ->
     // Splice assignment
     // TODO: this is kind of bonkers
     // TODO: Handle multiple assignments
@@ -731,7 +734,7 @@ NestedElementList
     return $skip
 
 NestedElement
-  Nested InlineElementList ArrayElementDelimiter
+  Nested ElementList ArrayElementDelimiter
 
 ArrayElementDelimiter
   _* Comma
@@ -748,13 +751,10 @@ ArrayElementDelimiter
 ElementList
   ArrayElementExpression ( __ Comma __ ArrayElementExpression )*
 
-InlineElementList
-  ArrayElementExpression ( _* Comma _* ArrayElementExpression )*
-
 # NOTE: Modified and simplified from the spec
 ArrayElementExpression
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  ((DotDotDot __ )? ExtendedExpression)?
+  ( ( DotDotDot __ )? ExtendedExpression )?
 
 # https://262.ecma-international.org/#prod-Elision
 Elision
@@ -764,10 +764,15 @@ Elision
 # https://262.ecma-international.org/#prod-ObjectLiteral
 # NOTE: Slightly simplified from spec
 ObjectLiteral
-  OpenBrace &EOS NestedPropertyDefinitions __ CloseBrace
-  OpenBrace __ PropertyDefinitionList __ (Comma __)? CloseBrace
-  OpenBrace __ CloseBrace
+  BracedObjectLiteral
   NestedObjectLiteral
+
+BracedObjectLiteral
+  OpenBrace BracedObjectLiteralContent? __ CloseBrace
+
+BracedObjectLiteralContent
+  &EOS NestedPropertyDefinitions
+  __ PropertyDefinitionList ( __ Comma )?
 
 NestedObjectLiteral
   InsertOpenBrace &EOS NestedPropertyDefinitions InsertNewline InsertIndent InsertCloseBrace
@@ -959,7 +964,7 @@ BinaryOpSymbol
   "|"
 
 UnaryOp
-  [!~+-] ->
+  /[!~+-](?!\s)/ ->
     return { $loc, token: $0 }
   ( Await / Delete / Void / Typeof ) __
   Not # only when CoffeeNotEnabled (see definition of `Not`)
@@ -2477,7 +2482,6 @@ Reset
     Object.defineProperty(module.config, "coffeeCompat", {
       set(b) {
         if (b) {
-          this.autoVar = true
           this.coffeeBooleans = true
           this.coffeeComment = true
           this.coffeeEq = true
@@ -2485,7 +2489,6 @@ Reset
           this.coffeeIsnt = true
           this.coffeeNot = true
         } else {
-          this.autoVar = false
           this.coffeeBooleans = false
           this.coffeeComment = false
           this.coffeeEq = false
@@ -2793,6 +2796,64 @@ Init
       return {
         $loc,
         token: str,
+      }
+    }
+
+    module.processProgram = function(statements) {
+      if (module.config.autoVar) {
+        // TODO: Add enclosing root block for scopes?
+        module.autoVar(statements)
+      }
+    }
+
+    // CoffeeScript compatible automatic var insertion
+    module.autoVar = function(statements) {
+      const scopes = [new Set]
+
+      // TODO: decs and function params
+      // NOTE: var and let/const have different scoping rules
+      // need to keep var scopes when entering functions and within a var scope keep
+      // track of lexical scopes within blocks
+      // also function parameters
+      function findDecs(statements) {
+
+      }
+
+      // This is just here as a sample for recursing through the AST
+      function hasReturnStatement(node) {
+        if (!node) return false
+        if (Array.isArray(node)) return node.some(hasReturnStatement)
+        if (node.type === "ReturnStatement") return true
+        // Don't recurse into nested functions
+        if (node.type === "FunctionExpression") return false
+        if (node.children) return hasReturnStatement(node.children)
+
+        return false
+      }
+
+      function findAssignments(statements) {
+        // TODO: need to recurse into nested nodes
+        const assignmentStatements = statements.filter(([,s]) => {
+          return s.type === 'AssignmentExpression'
+        })
+
+        const undeclaredIdentifiers = assignmentStatements.flatMap(([,a]) => {
+          return a.children[0].map((x) => {
+            return x[1].token
+          })
+        })
+
+        // Unique
+        return undeclaredIdentifiers.filter((x, i, a) => {
+          return a.indexOf(x) === i
+        })
+      }
+
+      const varIds = findAssignments(statements)
+
+      if (varIds.length) {
+        // TODO: get indent from first statement
+        statements.unshift(`var ${varIds.join(", ")};\n`)
       }
     }
 

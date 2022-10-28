@@ -420,9 +420,9 @@ Timesheet
 2022-10-25 | 1.50  | basic splice assignment
 2022-10-26 | 1.00  | IfExpressions
 2022-10-27 | 5.75  | IfExpressions; if then; more expressionized statements; enabling extended expressions in more places; switch expression; const assignment -> function declaration transformation
-2022-10-28 | 0.50  | coffeeNot
+2022-10-28 | 3.50  | coffeeNot; whitespace and assignment expressions; auto-var
 
-TODO:
+TODO: auto-var
 
 - CoffeeCompat
   - [ ] Chained Comparisons
