@@ -422,6 +422,7 @@ Timesheet
 2022-10-27 | 5.75  | IfExpressions; if then; more expressionized statements; enabling extended expressions in more places; switch expression; const assignment -> function declaration transformation
 2022-10-28 | 3.50  | coffeeNot; whitespace and assignment expressions; auto-var
 2022-10-29 | 1.00  | function/identifier ast
+2022-10-30 | 1.00  | declaration/binding identfier ast
 
 TODO: auto-var
 
