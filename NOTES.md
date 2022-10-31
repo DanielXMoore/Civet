@@ -423,6 +423,7 @@ Timesheet
 2022-10-28 | 3.50  | coffeeNot; whitespace and assignment expressions; auto-var
 2022-10-29 | 1.00  | function/identifier ast
 2022-10-30 | 1.00  | declaration/binding identfier ast
+2022-10-31 | 2.25  | AutoVar; BindingPattern AST
 
 TODO: auto-var
 

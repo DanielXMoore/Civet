@@ -506,42 +506,64 @@ BindingIdentifier
 
 # https://262.ecma-international.org/#prod-BindingPattern
 BindingPattern
-  __ ObjectBindingPattern ->
-    $2.children.unshift($1)
-    return $2
-  __ ArrayBindingPattern ->
-    $2.children.unshift($1)
-    return $2
+  __ ObjectBindingPattern:p ->
+    p.children.unshift($1)
+    return p
+  __ ArrayBindingPattern:p ->
+    p.children.unshift($1)
+    return p
 
 # https://262.ecma-international.org/#prod-ObjectBindingPattern
 # NOTE: Simplified from spec
 ObjectBindingPattern
-  OpenBrace ObjectBindingPatternContent __ CloseBrace ->
-    return {
-      type: "BindingPattern",
-      names: [], // TODO
-      children: $0
-    }
+  OpenBrace ObjectBindingPatternContent:c __ CloseBrace ->
+    c.children.unshift($1)
+    c.children.push($3, $4)
+    return c
 
 ObjectBindingPatternContent
   # NOTE: Added indentation based binding properties
-  &EOS NestedBindingProperties
-  BindingProperty* ( __ BindingRestProperty )?
+  &EOS NestedBindingProperties -> $2
+  BindingProperty*:props ( __ BindingRestProperty )?:rest ->
+    const names = props.flatMap((p) => p.names)
+
+    if (rest) {
+      props.push(...rest)
+      names.push(...rest[1].names)
+    }
+
+    return {
+      type: "BindingPattern",
+      names,
+      children: props
+    }
 
 # https://262.ecma-international.org/#prod-ArrayBindingPattern
 # NOTE: Simplified from spec
 ArrayBindingPattern
-  OpenBracket ArrayBindingPatternContent __ CloseBracket ->
+  OpenBracket ArrayBindingPatternContent:c __ CloseBracket ->
     return {
       type: "BindingPattern",
-      names: [], // TODO
+      names: c.names,
       children: $0
     }
 
 ArrayBindingPatternContent
   # NOTE: Added indentation based binding elements
-  &EOS NestedBindingElements
-  ( BindingElement / Elision )* ( __ BindingRestElement )?
+  &EOS NestedBindingElements -> $2
+  ( BindingElement / Elision )*:props ( __ BindingRestElement )?:rest ->
+    const names = props.flatMap((p) => p.names || [])
+
+    if (rest) {
+      props.push(...rest)
+      names.push(...rest[1].names)
+    }
+
+    return {
+      type: "BindingPattern",
+      names,
+      children: props
+    }
 
 # https://262.ecma-international.org/#prod-Elision
 Elision
@@ -549,42 +571,85 @@ Elision
   __ Comma
 
 NestedBindingProperties
-  PushIndent NestedBindingProperty*:props ( Nested BindingRestProperty )?:rest PopIndent ->
+  PushIndent NestedBindingProperty*:props NestedBindingRestProperty?:rest PopIndent ->
     if (!(props.length || rest)) return $skip
+    const names = props.flatMap(p => p.names)
     if (rest) {
       props.push(rest)
+      names.push(...rest.names)
     }
-    return props
+    return {
+      type: "BindingPattern",
+      children: props,
+      names: names,
+    }
 
 NestedBindingProperty
-  Nested BindingProperty
+  Nested BindingProperty ->
+    $2.children.unshift($1)
+    return $2
 
 # https://262.ecma-international.org/#prod-BindingProperty
 BindingProperty
-  __ PropertyName __ Colon ( BindingIdentifier / BindingPattern ) Initializer? ObjectPropertyDelimiter
-  BindingIdentifier Initializer? ObjectPropertyDelimiter
+  __ PropertyName __ Colon ( BindingIdentifier / BindingPattern ):b Initializer? ObjectPropertyDelimiter ->
+    return {
+      type: "BindingPattern",
+      names: b.names,
+      children: $0
+    }
+  BindingIdentifier:b Initializer? ObjectPropertyDelimiter ->
+    return {
+      type: "BindingPattern",
+      names: b.names,
+      children: $0
+    }
+
+NestedBindingRestProperty
+  Nested BindingRestProperty ->
+    $2.children.unshift($1)
+    return $2
 
 # https://262.ecma-international.org/#prod-BindingRestProperty
 BindingRestProperty
-  DotDotDot BindingIdentifier
+  DotDotDot BindingIdentifier ->
+    $2.children.unshift($1)
+    return $2
 
 NestedBindingElements
   PushIndent NestedBindingElement*:props ( Nested BindingRestElement )?:rest PopIndent ->
-    if (!props.length) return $skip
-    if (rest) props.push(rest)
-    return props
+    if (!(props.length || rest)) return $skip
+    const names = props.flatMap(p => p.names)
+    if (rest) {
+      props.push(...rest)
+      names.push(...rest[1].names)
+    }
+
+    return {
+      type: "BindingPattern",
+      children: props,
+      names: names,
+    }
 
 NestedBindingElement
-  Nested BindingElement
+  Nested BindingElement ->
+    $2.children.unshift($1)
+    return $2
 
 # https://262.ecma-international.org/#prod-BindingElement
 BindingElement
   # NOTE: Merged in SingleNameBinding
-  ( BindingIdentifier / BindingPattern ) Initializer? ArrayElementDelimiter
+  ( BindingIdentifier / BindingPattern ):binding Initializer? ArrayElementDelimiter ->
+    return {
+      type: "BindingPattern",
+      names: binding.names,
+      children: $0
+    }
 
 # https://262.ecma-international.org/#prod-BindingRestElement
 BindingRestElement
-  DotDotDot ( BindingIdentifier / BindingPattern )
+  DotDotDot ( BindingIdentifier / BindingPattern ):binding ->
+    binding.children.unshift($1)
+    return binding
 
 # https://262.ecma-international.org/#prod-FunctionDeclaration
 FunctionDeclaration
@@ -1538,11 +1603,11 @@ HoistableDeclaration
 # https://262.ecma-international.org/#prod-LexicalDeclaration
 LexicalDeclaration
   # NOTE: Eliminated left recursion
-  LetOrConst __ LexicalBinding ( __ Comma __ LexicalBinding )* ->
+  LetOrConst LexicalBinding:binding ( __ Comma LexicalBinding )*:tail ->
     return {
       type: "Declaration",
       children: $0,
-      names: [...$3.names].concat($4.flatMap(([,,,b]) => b.names)),
+      names: [...binding.names].concat(tail.flatMap(([,,b]) => b.names)),
     }
   # NOTE: Added const shorthand
   # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
@@ -2854,17 +2919,38 @@ Init
       }
     }
 
+    // Gather child nodes that match a predicate
+    // while recursing into nested expressions
+    // without recursing into nested blocks
+    function gatherNodes(node, predicate) {
+      if (node == null) return []
+
+      if (Array.isArray(node)) {
+        return node.flatMap((n) => gatherNodes(n, predicate))
+      }
+
+      if (predicate(node)) {
+        return [node]
+      }
+
+      switch(node.type) {
+        case "BlockStatement":
+          return []
+        default:
+          return gatherNodes(node.children, predicate)
+      }
+
+      return []
+    }
+
     module.processProgram = function(statements) {
       if (module.config.autoVar) {
-        // TODO: Add enclosing root block for scopes?
-        module.autoVar(statements)
+        module.autoVar(statements, [])
       }
     }
 
     // CoffeeScript compatible automatic var insertion
-    module.autoVar = function(statements) {
-      const scopes = [new Set]
-
+    module.autoVar = function(statements, scopes) {
       // TODO: decs and function params
       // NOTE: var and let/const have different scoping rules
       // need to keep var scopes when entering functions and within a var scope keep
@@ -2881,42 +2967,43 @@ Init
         return new Set(declarationNames)
       }
 
-      // This is just here as a sample for recursing through the AST
-      function hasReturnStatement(node) {
-        if (!node) return false
-        if (Array.isArray(node)) return node.some(hasReturnStatement)
-        if (node.type === "ReturnStatement") return true
-        // Don't recurse into nested functions
-        if (node.type === "FunctionExpression") return false
-        if (node.children) return hasReturnStatement(node.children)
-
-        return false
-      }
-
       function findAssignments(statements, decs) {
-        // TODO: need to recurse into nested nodes
-        const assignmentStatements = statements.filter(([,s]) => {
-          return s.type === 'AssignmentExpression'
+        const assignmentStatements = gatherNodes(statements, (node) => {
+          return node.type === 'AssignmentExpression'
         })
 
-        const undeclaredIdentifiers = assignmentStatements.flatMap(([,a]) => {
-          return a.children[0].map((x) => {
-            return x[1].name
+        const undeclaredIdentifiers = assignmentStatements.flatMap((a) => {
+          return a.children[0].flatMap((x) => {
+            return x[1].names || []
           })
         })
 
         // Unique, undeclared identifiers in this scope
         return undeclaredIdentifiers.filter((x, i, a) => {
-          if (!decs.has(x)) return a.indexOf(x) === i
+          if (!hasDec(x)) return a.indexOf(x) === i
         })
       }
 
+      function hasDec(name) {
+        return scopes.some((s) => s.has(name))
+      }
+
       const decs = findDecs(statements)
-      const varIds = findAssignments(statements, decs)
+      scopes.push(decs)
+      const varIds = findAssignments(statements, scopes)
+      // Add vars to decs
+      varIds.forEach((id) => decs.add(id))
+
+      // recurse into nested functions
+      const fnNodes = gatherNodes(statements, (s) => s.type === "FunctionExpression")
+      fnNodes.forEach((fnNode) => {
+        module.autoVar(fnNode.block.expressions, scopes)
+      })
 
       if (varIds.length) {
-        // TODO: get indent from first statement
-        statements.unshift(`var ${varIds.join(", ")};\n`)
+        // get indent from first statement
+        const indent = statements[0][0]
+        statements.unshift([indent, "var ", varIds.join(", "), "\n"])
       }
     }
 
