@@ -424,7 +424,7 @@ Timesheet
 2022-10-29 | 1.00  | function/identifier ast
 2022-10-30 | 1.00  | declaration/binding identfier ast
 2022-10-31 | 2.75  | AutoVar; BindingPattern AST; import decs
-2022-11-01 | 2.00  | AutoVar; ArrayLiteral AST
+2022-11-01 | 3.00  | AutoVar; ArrayLiteral AST; Object Literal AST; parens around destructuring object assignment
 
 TODO: auto-var
 
