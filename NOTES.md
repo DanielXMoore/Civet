@@ -424,6 +424,7 @@ Timesheet
 2022-10-29 | 1.00  | function/identifier ast
 2022-10-30 | 1.00  | declaration/binding identfier ast
 2022-10-31 | 2.75  | AutoVar; BindingPattern AST; import decs
+2022-11-01 | 2.00  | AutoVar; ArrayLiteral AST
 
 TODO: auto-var
 
@@ -431,8 +432,13 @@ TODO: auto-var
   - [ ] Chained Comparisons
     - [x] working without refs
     - [ ] Floating ref node pointing to a VariableDeclaration
-  - [ ] Comprehensions
   - [ ] auto var
+  - [ ] Coffee `for` loops
+    - [ ] `for own ... of`
+    - [ ] Comprehensions
+  - [ ] Soak assignments (needs refs)
+  - [ ] Ranges
+  - [ ] Braceless inline objects (conflicts with labels...)
 - LSP
   - [ ] auto-import suggest in .coffee
   - [ ] update imported file exports, see errors in importing file
