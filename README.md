@@ -103,6 +103,7 @@ Things Kept from CoffeeScript
 - Implicit returns
 - Simplified number method calls `1.toFixed()` -> `1..toFixed()`
 - `if`/`switch` expressions
+- Destructuring object assignment doesn't require being wrapped in parens at the statement level `{a, b} = c` -> `({a, b} = c)`
 - JSX 😿
 
 Things Removed from CoffeeScript
