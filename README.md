@@ -217,12 +217,13 @@ Things Changed from ES6
   behave more differently than they already do is bad. Passing an anonymous function to an
   application without parens is also convenient.
 - `for(i of x) ...` defaults to const declaration -> `for(const i of x) ...`
-- Disallow comma operator in conditionals. `if x, y`
-- Comma operator in case/when becomes multiple conditions.
+- Disallow comma operator in conditionals and many other places. `if x, y` is not allowed.
+- Comma operator in `case`/`when` instead becomes multiple conditions.
 - Numbers can't end with a dot (otherwise would be ambiguous with CoffeeScript slices `y[0..x]`). This also implies that you can't access properties
 of numbers with `1..toString()` use `1.toString()` instead. When exponent follows a dot it is treated as a property access since an exponent
 could be a valid property `1.e10` -> `1..e10`. The workaround is to add a trailing zero `1.0e10` or remove the dot before the exponent `1e10`.
 - Additional reserved words `and`, `or`, `loop`, `until`, `unless`
+- No whitespace between unary operators and operands. Mandatory whitespace between condition and ternary `?` ex. `x ? a : b` since `x?` is the unary existential operator.
 
 CoffeeScript Compatibility
 ---
