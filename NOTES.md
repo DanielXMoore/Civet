@@ -428,7 +428,7 @@ Timesheet
 2022-10-30 | 1.00  | declaration/binding identfier ast
 2022-10-31 | 2.75  | AutoVar; BindingPattern AST; import decs
 2022-11-01 | 3.50  | AutoVar; ArrayLiteral AST; Object Literal AST; parens around destructuring object assignment
-2022-11-02 | 1.75  | AutoVar: nested blocks; function params; for loops; var decs
+2022-11-02 | 2.00  | AutoVar: nested blocks; function params; for loops; var decs
 
 - CoffeeCompat
   - [ ] Chained Comparisons
