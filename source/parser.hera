@@ -228,7 +228,7 @@ ArrowFunction
 
 ArrowFunctionTail
   ThinArrowFunction
-  Parameters:params ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
+  Parameters:parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
     const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
     const isBlock = expOrBlock.type === "BlockStatement"
     if (module.config.implicitReturns && !isVoid && isBlock) {
@@ -237,7 +237,7 @@ ArrowFunctionTail
 
     return {
       type: "ArrowFunction",
-      params,
+      parameters,
       returnType: suffix,
       ts: false,
       block: expOrBlock,
@@ -492,11 +492,20 @@ MetaProperty
 Parameters
   NonEmptyParameters
   "" ->
-    return { $loc, token: "()" }
+    return {
+      type: "Parameters",
+      children:[{$loc, token: "()"}],
+      names: [],
+    }
 
 NonEmptyParameters
   # NOTE: BindingElement -> ParameterElement
-  TypeParameters? OpenParen ParameterElement* FunctionRestParameter? __ CloseParen
+  TypeParameters? OpenParen ParameterElement* FunctionRestParameter? __ CloseParen ->
+    return {
+      type: "Parameters",
+      children: $0,
+      names: $3.flatMap((p) => p.names),
+    }
 
 # https://262.ecma-international.org/#prod-FunctionRestParameter
 FunctionRestParameter
@@ -505,7 +514,12 @@ FunctionRestParameter
 # NOTE: Similar to BindingElement but appears in formal parameters list
 ParameterElement
   # NOTE: Merged in SingleNameBinding
-  ( BindingIdentifier / BindingPattern ) TypeSuffix? Initializer? ParameterElementDelimiter
+  ( BindingIdentifier / BindingPattern ) TypeSuffix? Initializer? ParameterElementDelimiter ->
+    return {
+      type: "Parameter",
+      children: $0,
+      names: $1.names,
+    }
 
 ParameterElementDelimiter
   _* Comma
@@ -672,7 +686,7 @@ FunctionDeclaration
 
 FunctionSignature
   # NOTE: Merged in async and generator with optionals
-  ( Async __ )? Function Star? BindingIdentifier?:id __ Parameters ReturnTypeSuffix? ->
+  ( Async __ )? Function Star? BindingIdentifier?:id __ Parameters:parameters ReturnTypeSuffix? ->
     // id is an empty array if not present so it can be filled later without having to adjust the children array
     // like in the const assignment function declaration transformation
     id = id || []
@@ -680,8 +694,8 @@ FunctionSignature
 
     return {
       type: "FunctionSignature",
-      id: id,
-      params: $6,
+      id,
+      parameters,
       returnType: $7,
       ts: false,
       block: null,
@@ -711,7 +725,7 @@ FunctionExpression
     return $1
 
 ThinArrowFunction
-  Parameters:params ReturnTypeSuffix?:suffix _* Arrow:arrow BracedOrEmptyBlock:block ->
+  Parameters:parameters ReturnTypeSuffix?:suffix _* Arrow:arrow BracedOrEmptyBlock:block ->
     const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
     if (module.config.implicitReturns && !isVoid) {
       block = module.addImplicitReturns(block)
@@ -722,14 +736,14 @@ ThinArrowFunction
     return {
       type: "FunctionExpression",
       id,
-      params,
+      parameters,
       returnType: suffix,
       ts: false,
       block: block,
       children: [
         { $loc: arrow.$loc, token: "function" },
         id,
-        params,
+        parameters,
         suffix,
         block
       ],
@@ -3100,11 +3114,10 @@ Init
 
     // CoffeeScript compatible automatic var insertion
     module.autoVar = function(statements, scopes) {
-      // TODO: decs and function params
       // NOTE: var and let/const have different scoping rules
       // need to keep var scopes when entering functions and within a var scope keep
       // track of lexical scopes within blocks
-      // also function parameters
+      // TODO: would be nice to collect the lower block var decs at the top of the containing var scope instead of inside each block
       function findDecs(statements) {
         const declarationNames = gatherNodes(statements, (node) => {
           if(node.type === "Declaration") {
@@ -3144,8 +3157,19 @@ Init
 
       // recurse into nested functions
       const fnNodes = gatherNodes(statements, (s) => s.type === "FunctionExpression")
-      fnNodes.forEach((fnNode) => {
-        module.autoVar(fnNode.block.expressions, scopes)
+
+      const blockNodes = new Set(gatherNodes(statements, (s) => s.type === "BlockStatement"))
+      // Remove function blocks, they get handled separately so parameter scopes get added
+      fnNodes.forEach(({block}) => blockNodes.delete(block))
+
+      blockNodes.forEach((block) => {
+        module.autoVar(block.expressions, scopes)
+      })
+
+      fnNodes.forEach(({block, parameters}) => {
+        scopes.push(new Set(parameters.names))
+        module.autoVar(block.expressions, scopes)
+        scopes.pop()
       })
 
       if (varIds.length) {
