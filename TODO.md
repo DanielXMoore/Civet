@@ -25,7 +25,7 @@ TODO
 - [x] `1.toString()` -> `1..toString()`
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
   - [x] If/Switch Expressions
-  - [ ] Auto Var
+  - [x] Auto Var
   - [x] on/off/yes/no
   - [x] `"""` `#{}` Interpolations
   - [x] `"` `#{}`Interpolations (with `"use coffee-compat"`)

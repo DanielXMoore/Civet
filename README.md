@@ -109,6 +109,7 @@ Things Kept from CoffeeScript
 Things Removed from CoffeeScript
 ---
 
+- Implicit `var` declarations (use `civet coffeeCompat` or `"civet autoVar"`)
 - `on/yes/off/no` (use `true/false`, `"civet coffeeCompat"`, or `"civet coffeeBooleans"` to add them back)
 - `isnt` (use `!==`, `"civet coffeeCompat"`, or `"civet coffeeIsnt"`)
 - `not` (use `!`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
@@ -124,7 +125,6 @@ Things Removed from CoffeeScript
 - Backtick embedded JS (replaced by template literals)
 - Will likely add later
   - Optional assignment `x?.y = 3` -> `x != null ? x.y = 3 : undefined`
-  - Implicit `var` declarations (in compat mode only)
 - Might add later
   - Braceless inline objects `x = coolStory: true`
   - Comprensions

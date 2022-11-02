@@ -425,14 +425,13 @@ Timesheet
 2022-10-30 | 1.00  | declaration/binding identfier ast
 2022-10-31 | 2.75  | AutoVar; BindingPattern AST; import decs
 2022-11-01 | 3.50  | AutoVar; ArrayLiteral AST; Object Literal AST; parens around destructuring object assignment
-
-TODO: auto-var
+2022-11-02 | 0.75  | AutoVar: nested blocks; function params
 
 - CoffeeCompat
   - [ ] Chained Comparisons
     - [x] working without refs
     - [ ] Floating ref node pointing to a VariableDeclaration
-  - [ ] auto var
+  - [x] auto var
   - [ ] Coffee `for` loops
     - [ ] `for own ... of`
     - [ ] Comprehensions
