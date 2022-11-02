@@ -310,8 +310,11 @@ processRootFile(default library)
 `fs` will not be found when checking file imports but will be found later when semantic checking by using the type references.
 
 
-Debugging Hera Parser State
+Debugging Hera
 ---
+
+Wrap an individual test with `describe.only "", ->`, throw a `debugger` statement into a parser rule, then `yarn test --inspect-brk`. Open up
+Chrome dev tools and step through.
 
 Adds a bright green cursor to the current position.
 
@@ -425,7 +428,7 @@ Timesheet
 2022-10-30 | 1.00  | declaration/binding identfier ast
 2022-10-31 | 2.75  | AutoVar; BindingPattern AST; import decs
 2022-11-01 | 3.50  | AutoVar; ArrayLiteral AST; Object Literal AST; parens around destructuring object assignment
-2022-11-02 | 0.75  | AutoVar: nested blocks; function params
+2022-11-02 | 1.75  | AutoVar: nested blocks; function params; for loops; var decs
 
 - CoffeeCompat
   - [ ] Chained Comparisons

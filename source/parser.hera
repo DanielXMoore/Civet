@@ -1373,43 +1373,78 @@ WhileClause
 ForStatement
   ForClause:clause Block:block ->
     clause.children.push(block)
+    clause.block = block
     return clause
 
 ForClause
-  For __ ForStatementControl  -> {
-    type: "IterationStatement",
-    children: $0,
-  }
+  For __ ForStatementControl:c  ->
+    const {children, declaration} = c
+    children.splice(0, 0, $1, ...$2)
+
+    return {
+      type: "ForStatement",
+      children: children,
+      declaration: declaration,
+      block: null,
+    }
 
 ForStatementControl
   # https://262.ecma-international.org/#prod-ForStatement
-  OpenParen __       ( LexicalDeclaration / VariableStatement / Expression? ) __ Semicolon Expression? Semicolon Expression? __ CloseParen
+  OpenParen __       ( LexicalDeclaration / VariableStatement / Expression? ):declaration __ Semicolon Expression? Semicolon Expression? __ CloseParen ->
+    return {
+      declaration,
+      children: $0,
+    }
   # NOTE: Added optional parens
-  InsertOpenParen __ ( LexicalDeclaration / VariableStatement / Expression? ) __ Semicolon Expression? Semicolon (!EOS Expression)? InsertCloseParen
+  InsertOpenParen __ ( LexicalDeclaration / VariableStatement / Expression? ):declaration __ Semicolon Expression? Semicolon (!EOS Expression)? InsertCloseParen ->
+    return {
+      declaration,
+      children: $0,
+    }
 
   # https://262.ecma-international.org/#prod-ForInOfStatement
   # NOTE: Consolidated declarations
-  OpenParen __    ForInOfDeclaration __ In ExtendedExpression __ CloseParen
+  # NOTE: Consolidated optional 'await'
+  ( Await __ )? OpenParen __    ForInOfDeclaration:declaration __ ( In / Of ) ExtendedExpression __ CloseParen ->
+    return {
+      declaration,
+      children: $0,
+    }
   # NOTE: Added optional parens
-  InsertOpenParen ForInOfDeclaration __ In ExtendedExpression InsertCloseParen
-  # NOTE: Consolidated optional 'await' and declarations
-  ( Await __ )? OpenParen __    ForInOfDeclaration __ Of ExtendedExpression __ CloseParen
-  # NOTE: Added optional parens
-  ( Await __ )? InsertOpenParen ForInOfDeclaration __ Of ExtendedExpression InsertCloseParen
+  ( Await __ )? InsertOpenParen ForInOfDeclaration:declaration __ ( In / Of ) ExtendedExpression InsertCloseParen ->
+    return {
+      declaration: declaration,
+      children: $0,
+    }
 
 # NOTE: Consolidated declarations
 ForInOfDeclaration
-  Var ForBinding
+  Var ForBinding:binding ->
+    return {
+      type: "ForDeclaration",
+      children: $0,
+      names: binding.names,
+    }
   ForDeclaration
   LeftHandSideExpression
 
 # https://262.ecma-international.org/#prod-ForDeclaration
 ForDeclaration
-  LetOrConst NonIdContinue ForBinding
+  LetOrConst:c NonIdContinue ForBinding:binding ->
+    return {
+      type: "ForDeclaration",
+      children: [c, binding],
+      names: binding.names,
+    }
   # NOTE: Added default implicit const to for bindings
   # NOTE: the assertion is a bit of a hack to prevent valid LHS expressions from only parsing the identifier and matching this rule
   # i.e. a.x would match as identifier `a` without this lookahead
-  InsertConst ForBinding /(?=[\s\)])/
+  InsertConst:c ForBinding:binding /(?=[\s\)])/ ->
+    return {
+      type: "ForDeclaration",
+      children: [c, binding],
+      names: binding.names,
+    }
 
 # https://262.ecma-international.org/#prod-ForBinding
 ForBinding
@@ -1827,19 +1862,39 @@ Initializer
 
 # https://262.ecma-international.org/#prod-VariableStatement
 VariableStatement
-  Var __ VariableDeclarationList -> {
-    type: "Declaration",
-    children: $0,
-  }
+  Var __ VariableDeclarationList ->
+    $3.children.splice(0, 0, $1, ...$2)
+    return $3
 
 # https://262.ecma-international.org/#prod-VariableDeclarationList
 VariableDeclarationList
-  VariableDeclaration ( __ Comma __ VariableDeclaration )*
+  VariableDeclaration ( __ Comma __ VariableDeclaration )* ->
+    let children
+    if ($2.length) {
+      children = [$1, ...$2]
+    }else {
+      children = [$1]
+    }
+
+    const names = children.flatMap((c) => c.names || [])
+
+    return {
+      type: "Declaration",
+      children,
+      names,
+    }
 
 # https://262.ecma-international.org/#prod-VariableDeclaration
 VariableDeclaration
-  BindingPattern TypeSuffix? Initializer
-  BindingIdentifier TypeSuffix? Initializer?
+  BindingPattern TypeSuffix? Initializer ->
+    if ($2) $1.children.push($2)
+    $1.children.push($3)
+    return $1
+
+  BindingIdentifier TypeSuffix? Initializer? ->
+    if ($2) $1.children.push($2)
+    if ($3) $1.children.push($3)
+    return $1
 
 # https://262.ecma-international.org/#prod-NumericLiteral
 NumericLiteral
@@ -2847,6 +2902,7 @@ Init
         case "ContinueStatement":
         case "DebuggerStatement":
         case "EmptyStatement":
+        case "ForStatement":
         case "IterationStatement":
         case "ReturnStatement":
         case "ThrowStatement":
@@ -3086,7 +3142,7 @@ Init
 
     // Gather child nodes that match a predicate
     // while recursing into nested expressions
-    // without recursing into nested blocks
+    // without recursing into nested blocks/for loops
     function gatherNodes(node, predicate) {
       if (node == null) return []
 
@@ -3100,6 +3156,7 @@ Init
 
       switch(node.type) {
         case "BlockStatement":
+        case "ForStatement":
           return []
         default:
           return gatherNodes(node.children, predicate)
@@ -3157,17 +3214,27 @@ Init
       // Add vars to decs
       varIds.forEach((id) => decs.add(id))
 
-      // recurse into nested functions
-      const fnNodes = gatherNodes(statements, (s) => s.type === "FunctionExpression")
+      const fnNodes  = gatherNodes(statements, (s) => s.type === "FunctionExpression")
+      const forNodes = gatherNodes(statements, (s) => s.type === "ForStatement")
 
       const blockNodes = new Set(gatherNodes(statements, (s) => s.type === "BlockStatement"))
-      // Remove function blocks, they get handled separately so parameter scopes get added
-      fnNodes.forEach(({block}) => blockNodes.delete(block))
+      // Remove function blocks and for statements, they get handled separately because they have additional parameter scopes and lexical scopes to add
+      fnNodes .forEach(({block}) => blockNodes.delete(block))
+      forNodes.forEach(({block}) => blockNodes.delete(block))
 
+      // recurse into nested blocks
       blockNodes.forEach((block) => {
         module.autoVar(block.expressions, scopes)
       })
 
+      // recurse into for loops
+      forNodes.forEach(({block, declaration}) => {
+        scopes.push(new Set(declaration.names))
+        module.autoVar(block.expressions, scopes)
+        scopes.pop()
+      })
+
+      // recurse into nested functions
       fnNodes.forEach(({block, parameters}) => {
         scopes.push(new Set(parameters.names))
         module.autoVar(block.expressions, scopes)
