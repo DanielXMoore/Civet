@@ -160,53 +160,77 @@ AssignmentExpressionTail
   # NOTE: Eliminated left recursion
   # NOTE: Consolidated assignment ops
   ( __ LeftHandSideExpression __ AssignmentOp )+ ExtendedExpression ->
-    // Splice assignment
-    // TODO: this is kind of bonkers
-    // TODO: Handle multiple assignments
-    const lastAssignment = $1[$1.length-1]
+    let tail = [], i = 0, len = $1.length
 
-    let tail = []
+    // Force parens around destructuring object assignments
+    // Walk from left to right the minimal number of parens are added and enclose all destructured assignments
+    // TODO: Could validate some lhs ecmascript rules here if we wanted to
+    while (i < len) {
+      const lastAssignment = $1[i++]
+      const [,lhs,,op] = lastAssignment
+      if (op.token !== "=") continue
 
-    // TODO: Handle optional assignment
-    if (lastAssignment[3].token === "=") {
-      const lhs = lastAssignment[1]
-
-      // Force parens around destructuring object assignments
+      // Only wrap with one set of parens
       if (lhs.type === "ObjectExpression") {
         lhs.children.splice(0, 0, "(")
         tail.push(")")
-      }
-
-      if (Array.isArray(lhs) && lhs.length > 1) {
-        const props = lhs[lhs.length-1]
-
-        if (Array.isArray(props)) {
-          const lastProp = props[props.length-1]
-
-          if(lastProp.type === "SliceExpression") {
-            const {start, end, children: c} = lastProp
-            // TODO: don't lose as many source mappings
-            c[0].token = ".splice("
-            c[1] = start
-            c[2] = ", "
-            if (end)
-              c[3] = [end, " - ", start]
-            else
-              c[3] = ["1/0"]
-            c[4] = [", ...", $2]
-            c[5] = ")"
-
-            // Remove assignment token
-            lastAssignment.pop()
-            if (module.isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment.pop()
-            return $1
-          }
-        }
+        break
       }
     }
 
+    // TODO: Handle optional assignment refs
+
+    // Walk from right to left to handle splices
+    i = len - 1
+    while (i >= 0) {
+      const lastAssignment = $1[i]
+
+      if (lastAssignment[3].token === "=") {
+        const lhs = lastAssignment[1]
+
+        // Splice assignment
+        if (Array.isArray(lhs) && lhs.length > 1) {
+          const props = lhs[lhs.length-1]
+
+          if (Array.isArray(props)) {
+            const lastProp = props[props.length-1]
+
+            // TODO: this is kind of bonkers
+            if(lastProp.type === "SliceExpression") {
+              const {start, end, children: c} = lastProp
+              // TODO: don't lose as many source mappings
+              c[0].token = ".splice("
+              c[1] = start
+              c[2] = ", "
+              if (end)
+                c[3] = [end, " - ", start]
+              else
+                c[3] = ["1/0"]
+              c[4] = [", ...", $2]
+              c[5] = ")"
+
+              // Remove assignment token
+              lastAssignment.pop()
+              if (module.isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment.pop()
+              // TODO: this only works for the last assignment, not multiple splice assignments, or splice assignments earlier in the chain
+              if ($1.length > 1) {
+                throw new Error("Not implemented yet! TODO: Handle multiple splice assignments")
+              }
+              return $1
+            }
+          }
+        }
+      }
+      i--
+    }
+
+    // Gather all identifier names from the lhs array
+    const names = $1.flatMap(([,l]) => l.names || [])
+
     return {
-      type: "AssignmentExpression", children: [...$0, ...tail]
+      type: "AssignmentExpression",
+      children: [...$0, ...tail],
+      names,
     }
 
   ConditionalExpression
@@ -1389,6 +1413,38 @@ ForClause
     }
 
 ForStatementControl
+  !CoffeeForLoopsEnabled ForStatementParameters -> $2
+  CoffeeForLoopsEnabled CoffeeForStatementParameters -> $2
+
+CoffeeForStatementParameters
+  # NOTE: Coffee for loops can't have parens
+  ( Await __ )? InsertOpenParen CoffeeForDeclaration:declaration __ ( In / Of / From ):kind ExtendedExpression InsertCloseParen ->
+    if (kind.token === "from") {
+      kind.token = "of"
+    } else if (kind.token === "of") {
+      kind.token = "in"
+    } else if (kind.token === "in") {
+      // TODO: Coffee loop comprehensions
+      throw new Error("Not implemented yet! TODO: Coffee loop comprehensions")
+    }
+
+    return {
+      declaration,
+      children: $0,
+    }
+
+CoffeeForDeclaration
+  ( __ "own" )? ForBinding:binding ->
+    if ($1) {
+      binding.children.splice(0, 0, ...$1)
+    }
+
+    // Flag as assignment for auto-var
+    binding.type = "AssignmentExpression"
+
+    return binding
+
+ForStatementParameters
   # https://262.ecma-international.org/#prod-ForStatement
   OpenParen __       ( LexicalDeclaration / VariableStatement / Expression? ):declaration __ Semicolon Expression? Semicolon Expression? __ CloseParen ->
     return {
@@ -2784,6 +2840,11 @@ CoffeeBooleansEnabled
     if(module.config.coffeeBooleans) return
     return $skip
 
+CoffeeForLoopsEnabled
+  "" ->
+    if(module.config.coffeeForLoops) return
+    return $skip
+
 CoffeeInterpolationEnabled
   "" ->
     if(module.config.coffeeInterpolation) return
@@ -2811,6 +2872,7 @@ Reset
       coffeeBooleans: false,
       coffeeComment: false,
       coffeeEq: false,
+      coffeeForLoops: false,
       coffeeInterpolation: false,
       coffeeIsnt: false,
       coffeeNot: false,
@@ -2825,6 +2887,7 @@ Reset
           this.coffeeBooleans = true
           this.coffeeComment = true
           this.coffeeEq = true
+          this.coffeeForLoops = true
           this.coffeeInterpolation = true
           this.coffeeIsnt = true
           this.coffeeNot = true
@@ -2833,6 +2896,7 @@ Reset
           this.coffeeBooleans = false
           this.coffeeComment = false
           this.coffeeEq = false
+          this.coffeeForLoops = false
           this.coffeeInterpolation = false
           this.coffeeIsnt = false
           this.coffeeNot = false
@@ -3197,13 +3261,11 @@ Init
 
       function findAssignments(statements, decs) {
         const assignmentStatements = gatherNodes(statements, (node) => {
-          return node.type === 'AssignmentExpression'
+          return node.type === "AssignmentExpression"
         })
 
         const undeclaredIdentifiers = assignmentStatements.flatMap((a) => {
-          return a.children[0].flatMap((x) => {
-            return x[1].names || []
-          })
+          return a.names
         })
 
         // Unique, undeclared identifiers in this scope
