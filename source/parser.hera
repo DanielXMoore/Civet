@@ -434,7 +434,7 @@ NonNullAssertion
 # Reserved words that will prevent spaced function application
 # ie: the 'of' in 'for x of ...'
 AdditionalReservedWords
-  /(of|then)(?!\p{ID_Continue}|[\u200C\u200D$])/
+  /(of|then|when)(?!\p{ID_Continue}|[\u200C\u200D$])/
 
 # https://262.ecma-international.org/#prod-MemberExpression
 MemberExpression
@@ -505,7 +505,12 @@ MemberBracketContent
     return $0
 
 PropertyAccess
-  ( QuestionMark / NonNullAssertion )? Dot ( IdentifierName / PrivateIdentifier )
+  ( QuestionMark / NonNullAssertion )? Dot ( IdentifierName / PrivateIdentifier ):id ->
+    id.type = "PropertyAccess"
+    id.children.unshift($2)
+    if ($1) id.children.unshift($1)
+
+    return id
 
 SuperProperty
   "super[" ExtendedExpression __ CloseBracket
@@ -1134,8 +1139,13 @@ ClassElementName
 PrivateIdentifier
   $("#" IdentifierName) ->
     return {
-      $loc: $loc,
-      token: $1,
+      type: "Identifier",
+      name: $0,
+      names: [$0],
+      children: [{
+        $loc: $loc,
+        token: $0,
+      }],
     }
 
 # https://262.ecma-international.org/#prod-GeneratorDeclaration
@@ -1426,47 +1436,50 @@ ForStatementControl
 
 CoffeeForStatementParameters
   # NOTE: Coffee for loops can't have parens
-  ( Await __ )? InsertOpenParen CoffeeForDeclaration:declaration __ ( In / Of / From ):kind ExtendedExpression:exp InsertCloseParen ->
+  ( Await __ )? InsertOpenParen CoffeeForDeclaration:declaration __ ( In / Of / From ):kind ExtendedExpression:exp InsertCloseParen ( __ When ExtendedExpression )? ->
     if (kind.token === "from") {
       kind.token = "of"
     } else if (kind.token === "of") {
       kind.token = "in"
     } else if (kind.token === "in") {
       // TODO: Coffee loop comprehensions
-      // If exp isn't a simple identifier use a ref
-
       const counterRef = {
-        type: "Identifier",
-        children: ["i"],
-        names: ["i"]
+        type: "Ref",
+        base: "i",
       }
 
       const lenRef = {
-        type: "Identifier",
-        children: ["len"],
-        names: ["len"]
+        type: "Ref",
+        base: "len",
       }
 
+      // If exp isn't a simple identifier use a ref
       const expRef = exp.type === "Identifier" ? exp : {
-        type: "Identifier",
-        children: ["ref"],
-        names: ["ref"]
+        type: "Ref",
+        base: "ref",
       }
 
       const varRef = declaration
 
+      // Trim a single leading space if present
+      module.insertTrimmingSpace(exp, "")
+
+      const expRefDec = (expRef !== exp) ? [expRef, " = ", exp, ", "] : []
+
       declaration = {
         type: "Declaration",
-        children: ["let ", counterRef, " = 0, ", lenRef, " = ", expRef, ".length"],
+        children: ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", expRef, ".length"],
         names: []
       }
+
+      const indent = "".padStart((module.currentIndent + 1) * 2)
 
       return {
         declaration,
         children: [$1, $2, declaration, "; ", counterRef, " < ", lenRef, "; ", counterRef, "++", $7],
         blockPrefix: [{
           type: "AssignmentExpression",
-          children: [varRef, " = ", expRef, "[", counterRef, "]\n"],
+          children: [indent, varRef, " = ", expRef, "[", counterRef, "]\n"],
           names: varRef.names,
         }]
       }
@@ -3268,8 +3281,11 @@ Init
           return []
         case "ForStatement":
           // Descend into expressions but not into declarations or the body of the for loop
-          if (node.declaration.type === "Declaration") return []
-          return gatherNodes(node.declaration, predicate)
+          const isDec = node.declaration.type === "Declaration"
+          return node.children.flatMap((n) => {
+            if (isDec && n === node.declaration) return []
+            return gatherNodes(n, predicate)
+          })
         default:
           return gatherNodes(node.children, predicate)
       }
@@ -3277,9 +3293,24 @@ Init
       return []
     }
 
+    function gatherRecursive(node, predicate) {
+      if (node == null) return []
+
+      if (Array.isArray(node)) {
+        return node.flatMap((n) => gatherNodes(n, predicate))
+      }
+
+      if (predicate(node)) {
+        return [node]
+      }
+
+      return gatherNodes(node.children, predicate)
+    }
+
     module.processProgram = function(statements) {
       if (module.config.autoVar) {
-        module.autoVar(statements, [])
+        createVarDecs(statements, [])
+        populateRefs(statements)
       }
     }
 
@@ -3293,8 +3324,49 @@ Init
       return new Set(declarationNames)
     }
 
+    function populateRefs(statements) {
+      const refNodes = gatherNodes(statements, ({type}) => type === "Ref")
+      const blockNodes = new Set(gatherNodes(statements, ({type}) => type === "BlockStatement"))
+      const forNodes = gatherNodes(statements, ({type}) => type === "ForStatement")
+
+      // Populate refs from inside out
+      forNodes.forEach(({declaration, block}) => {
+        // Need to include declarations with block because they share scope
+        populateRefs([declaration, ...block.children])
+        blockNodes.delete(block)
+      })
+
+      blockNodes.forEach(({expressions}) => populateRefs(expressions))
+
+      if (refNodes.length) {
+        // Find all ids within nested scopes
+        const ids = gatherRecursive(statements, (s) => s.type === "Identifier")
+        const names = new Set(ids.flatMap(({names}) => names || []))
+
+        // Populate each ref
+        refNodes.forEach((ref) => {
+          const {type, base} = ref
+          if (type !== "Ref") return
+
+          ref.type = "Identifier"
+
+          let n = 0
+          let name = base
+
+          // check for name collisions and increment name suffix
+          while (names.has(name)) {
+            n++
+            name = `${base}${n}`
+          }
+
+          names.add(name)
+          ref.children = ref.names = [name]
+        })
+      }
+    }
+
     // CoffeeScript compatible automatic var insertion
-    module.autoVar = function(statements, scopes, pushVar) {
+    function createVarDecs(statements, scopes, pushVar) {
       // NOTE: var and let/const have different scoping rules
       // need to keep var scopes when entering functions and within a var scope keep
       // track of lexical scopes within blocks
@@ -3343,20 +3415,20 @@ Init
 
       // recurse into nested blocks
       blockNodes.forEach((block) => {
-        module.autoVar(block.expressions, scopes, pushVar)
+        createVarDecs(block.expressions, scopes, pushVar)
       })
 
       // recurse into for loops
       forNodes.forEach(({block, declaration}) => {
         scopes.push(new Set(declaration.names))
-        module.autoVar(block.expressions, scopes, pushVar)
+        createVarDecs(block.expressions, scopes, pushVar)
         scopes.pop()
       })
 
       // recurse into nested functions
       fnNodes.forEach(({block, parameters}) => {
         scopes.push(new Set(parameters.names))
-        module.autoVar(block.expressions, scopes)
+        createVarDecs(block.expressions, scopes)
         scopes.pop()
       })
 

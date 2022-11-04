@@ -430,7 +430,7 @@ Timesheet
 2022-11-01 | 3.50  | AutoVar; ArrayLiteral AST; Object Literal AST; parens around destructuring object assignment
 2022-11-02 | 2.25  | AutoVar: nested blocks; function params; for loops; var decs; hoisting var decs
 2022-11-03 | 1.50  | Coffee for loops; chained assignment destructuring; chained assignment vars
-2022-11-04 | 1.00  | Coffee comprehensions
+2022-11-04 | 3.00  | Coffee comprehensions; refs
 
 - CoffeeCompat
   - [ ] Chained Comparisons
