@@ -119,6 +119,7 @@ Things Removed from CoffeeScript
 - `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax)
 - `for from` (use JS `for of`)
 - `for own of` (use JS `for in` and check manually, switch to `Map#keys/values/entries`, or use `Object.create(null)`)
+- `for ... when exp` (use `continue if exp`) inside loop
 - `and=`, `or=` (don't mix and match words and symbols)
 - `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables)
 - Iteration expression results
