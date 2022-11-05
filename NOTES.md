@@ -431,7 +431,7 @@ Timesheet
 2022-11-02 | 2.25  | AutoVar: nested blocks; function params; for loops; var decs; hoisting var decs
 2022-11-03 | 1.50  | Coffee for loops; chained assignment destructuring; chained assignment vars
 2022-11-04 | 3.00  | Coffee comprehensions; refs
-2022-11-05 | 0.50  | for when clause
+2022-11-05 | 1.00  | for when clause; coffee-compat of/in
 
 - CoffeeCompat
   - [ ] Chained Comparisons
