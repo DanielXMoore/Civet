@@ -116,12 +116,14 @@ Things Removed from CoffeeScript
   - `not instanceof` (use `!(a instanceof b)`)
   - `not in`
   - `not of`
+  - NOTE: CoffeeScript `not` precedence is dubious. `not a < b` should be equivalent to `!(a < b)` but it is in fact `!a < b`
 - `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax)
 - `for from` (use JS `for of`)
 - `for own of` (use JS `for in` and check manually, switch to `Map#keys/values/entries`, or use `Object.create(null)`)
-- `for ... when exp` (use `continue if exp`) inside loop
+- `for ... when <condition>` (use `continue if exp` inside loop, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `and=`, `or=` (don't mix and match words and symbols)
 - `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables)
+- `a of b` (use `a in b`, matching JS)
 - Iteration expression results
 - Backtick embedded JS (replaced by template literals)
 - Will likely add later
@@ -141,6 +143,7 @@ Things Changed from CoffeeScript
 - `!=` -> `!=` rather than `!==` (can be kept with `"civet coffeeCompat"`)
 - `for in` and `for of` are no longer swapped and become their JS equivalents.
 - `a...` is now `...a` just like JS
+- `a in b` is now `a in b` rather than `b.indexOf(a) >= 0`
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
 - Existential `x?` -> `(x != null)` no longer checks for undeclared variables.
 - `x?()` -> `x?.()` instead of `if (typeof x === 'function') { x() }`
