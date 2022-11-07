@@ -188,7 +188,11 @@ Things Added that CoffeeScript didn't
   - ClassStaticBlock `@ { ... }`
   - `<` as `extends` shorthand
 - Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc), [Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax), [Elm record access](https://elm-lang.org/docs/records#access)
-  `x.map &.name` -> `x.map(a => a.name)`, `x.map &.profile?.name[0...3]` -> `x.map(a => a.profile?.name[0...3])`
+  - access `x.map &.name` -> `x.map(a => a.name)`
+  - nested access + slices `x.map &.profile?.name[0...3]` -> `x.map(a => a.profile?.name.slice(0, 3))`
+  - function call `x.map &.callback a, b` -> `x.map($ => $.callback(a, b))`
+  - unary operators `x.map !!&`, -> `x.map($ => !!$)`
+  - binary operators `x.map &+1` -> `x.map($ => $+1)`
 - Postfix loop `run() loop` -> `while(true) run()`
 - Shebang line is kept unmodified in output
   ```civet
