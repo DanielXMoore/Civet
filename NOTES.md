@@ -433,7 +433,7 @@ Timesheet
 2022-11-04 | 3.00  | Coffee comprehensions; refs
 2022-11-05 | 1.00  | for when clause; coffee-compat of/in
 2022-11-06 | 1.50  | chained comparison `in` op
-2022-11-07 | 1.50  | coffee compat `for own ... of`
+2022-11-07 | 2.25  | coffee compat `for own ... of`; accessor blocks
 
 - CoffeeCompat
   - [ ] Chained Comparisons
