@@ -47,25 +47,6 @@ createCompilerHost := (options: CompilerOptions, moduleSearchLocations : string[
     fileCache[fileName]
 ```
 
-ESBuild Plugin
----
-
-```coffee
-esbuild = require "esbuild"
-civetPlugin = require "@danielx/civet/esbuild-plugin"
-
-esbuild.build
-  entryPoints: ['source/main.civet']
-  bundle: true
-  platform: 'node'
-  outfile: 'dist/main.js'
-  plugins: [
-    civetPlugin
-  ]
-.catch -> process.exit 1
-
-```
-
 Things Kept from CoffeeScript
 ---
 
