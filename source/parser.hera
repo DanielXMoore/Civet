@@ -476,7 +476,9 @@ MemberExpressionRest
     return $2
   # NOTE: Combined Optional and Property access
   # TODO: this doesn't yet work for arbitrarily deep nesting, only the first level
-  ( &EOS IndentedFurther )? PropertyAccess
+  ( &EOS IndentedFurther )? PropertyAccess ->
+    if ($1) $2.children.unshift($1[1])
+    return $2
   # NOTE: Added CoffeeScript :: prototype shorthand
   ( &EOS IndentedFurther )? "::" IdentifierName?:id ->
     if (id)
@@ -1282,10 +1284,23 @@ ModuleItem
 # https://262.ecma-international.org/#prod-StatementListItem
 StatementListItem
   Declaration
-  # NOTE: Added postfix conditionals
+  # NOTE: Added postfix conditionals/loops
   Statement:statement TrailingComment*:ws PostfixStatement?:post ->
     if (post) {
-      post.children.push(statement)
+      let block
+      if (post.type === "ForStatement") {
+        if (post.blockPrefix?.length) {
+          block = [" {", ...post.blockPrefix, ...statement, " }"]
+        } else {
+          block = statement
+        }
+      } else {
+        block = statement
+      }
+
+      post.block = block
+      post.children.push(block)
+
       // This removes trailing whitespace for easier testing
       if (!module.isWhitespaceOrEmpty(ws)) post.children.push(ws)
       return post
@@ -1461,7 +1476,6 @@ ForStatementControl
   !CoffeeForLoopsEnabled ForStatementParameters -> $2
   CoffeeForLoopsEnabled CoffeeForStatementParameters WhenCondition? ->
     if ($3) {
-      $2.blockPrefix = $2.blockPrefix || []
       const indent = "".padStart((module.currentIndent + 1) * 2)
       module.insertTrimmingSpace($3, "")
       $2.blockPrefix.push({
@@ -1478,10 +1492,21 @@ WhenCondition
 CoffeeForStatementParameters
   # NOTE: Coffee for loops can't have parens
   ( Await __ )? InsertOpenParen CoffeeForDeclaration:declaration __ ( In / Of / From ):kind ExtendedExpression:exp InsertCloseParen ->
+    let blockPrefix = []
+
     if (kind.token === "from") {
       kind.token = "of"
     } else if (kind.token === "of") {
-      kind.token = "in"
+      module.insertTrimmingSpace(declaration, "")
+      module.insertTrimmingSpace(exp, "")
+
+      if (declaration.own) {
+        const indent = "".padStart((module.currentIndent + 1) * 2)
+        const hasPropRef = module.getHasPropRef()
+
+        blockPrefix.push([indent, "if (!", hasPropRef, ".call(", exp, ", ", declaration, ")) continue\n"])
+      }
+      kind.token = "in "
     } else if (kind.token === "in") {
       // TODO: Coffee loop comprehensions
       const counterRef = {
@@ -1515,20 +1540,23 @@ CoffeeForStatementParameters
 
       const indent = "".padStart((module.currentIndent + 1) * 2)
 
+      blockPrefix.push([{
+        type: "AssignmentExpression",
+        children: [indent, varRef, " = ", expRef, "[", counterRef, "]\n"],
+        names: varRef.names,
+      }])
+
       return {
         declaration,
         children: [$1, $2, declaration, "; ", counterRef, " < ", lenRef, "; ", counterRef, "++", $7],
-        blockPrefix: [{
-          type: "AssignmentExpression",
-          children: [indent, varRef, " = ", expRef, "[", counterRef, "]\n"],
-          names: varRef.names,
-        }]
+        blockPrefix,
       }
     }
 
     return {
       declaration,
       children: $0,
+      blockPrefix,
     }
 
 CoffeeForDeclaration
@@ -2984,7 +3012,7 @@ Reset
       implicitReturns: true,
     }
 
-    let indexOfRef = null
+    let indexOfRef, hasPropRef
     module.prelude = []
 
     module.getIndexOfRef = function() {
@@ -3003,9 +3031,30 @@ Reset
         ts: true,
         children: [" as any"]
       }
-      module.prelude.push(["const ", indexOfRef, typeSuffix, " = [].indexOf", asAny, "\n"])
+      module.prelude.push(["", "const ", indexOfRef, typeSuffix, " = [].indexOf", asAny, "\n"])
 
       return indexOfRef
+    }
+
+    module.getHasPropRef = function() {
+      if (hasPropRef) return hasPropRef
+
+      hasPropRef = {
+        type: "Ref",
+        base: "hasProp",
+      }
+
+      const typeSuffix = {
+        ts: true,
+        children: [": <T>(this: T, prop: keyof T) => boolean"]
+      }
+      const asAny = {
+        ts: true,
+        children: [" as any"]
+      }
+      module.prelude.push(["", "const ", hasPropRef, typeSuffix, " = {}.hasOwnProperty", asAny, "\n"])
+
+      return hasPropRef
     }
 
     // Expand setting coffeeCompat to the individual options
@@ -3253,6 +3302,7 @@ Init
     // maintains $loc for source maps
     module.insertTrimmingSpace = function(spacing, c) {
       let target = spacing
+      if (!target) return
 
       if (Array.isArray(target)) return module.insertTrimmingSpace(target[0], c)
       if (target.children) return module.insertTrimmingSpace(target.children[0], c)
@@ -3355,7 +3405,7 @@ Init
           return []
         case "ForStatement":
           // Descend into expressions but not into declarations or the body of the for loop
-          const isDec = node.declaration.type === "Declaration"
+          const isDec = node.declaration?.type === "Declaration"
           return node.children.flatMap((n) => {
             if (isDec && n === node.declaration) return []
             return gatherNodes(n, predicate)
@@ -3382,13 +3432,14 @@ Init
     }
 
     module.processProgram = function(statements) {
-      if (module.config.autoVar) {
-        // Insert prelude
-        statements.unshift(...module.prelude)
+      // Insert prelude
+      statements.unshift(...module.prelude)
 
+      if (module.config.autoVar) {
         createVarDecs(statements, [])
-        populateRefs(statements)
       }
+
+      populateRefs(statements)
     }
 
     function findDecs(statements) {
@@ -3409,7 +3460,11 @@ Init
       // Populate refs from inside out
       forNodes.forEach(({declaration, block}) => {
         // Need to include declarations with block because they share scope
-        populateRefs([declaration, ...block.children])
+        if (block.type === "BlockStatement") {
+          populateRefs([declaration, ...block.children])
+        } else { // single non-block statement
+          populateRefs([declaration, ...block])
+        }
         blockNodes.delete(block)
       })
 

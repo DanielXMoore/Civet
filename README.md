@@ -54,7 +54,7 @@ Things Kept from CoffeeScript
 - `or` -> `||`
 - `and` -> `&&`
 - `loop` -> `while(true)`
-- `unless` conditional (without the `else`)
+- `unless exp` -> `if(!exp)`
 - `until condition` -> `while(!condition)`
 - Object literal syntax
   ```coffee
@@ -99,12 +99,12 @@ Things Removed from CoffeeScript
   - `not of`
   - NOTE: CoffeeScript `not` precedence is dubious. `not a < b` should be equivalent to `!(a < b)` but it is in fact `!a < b`
 - `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax)
-- `for from` (use JS `for of`)
-- `for own of` (use JS `for in` and check manually, switch to `Map#keys/values/entries`, or use `Object.create(null)`)
+- `for from` (use JS `for of`, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
+- `for own of` (use JS `for in` and check manually, switch to `Map#keys/values/entries`, or use `Object.create(null)`, or `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for ... when <condition>` (use `continue if exp` inside loop, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `and=`, `or=` (don't mix and match words and symbols)
 - `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables)
-- `a of b` (use `a in b`, matching JS)
+- `a of b` (use `a in b` matching JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
 - Iteration expression results
 - Backtick embedded JS (replaced by template literals)
 - Will likely add later
