@@ -103,7 +103,30 @@ IndentedApplicationAllowed
 BinaryOpExpression
   UnaryExpression ( __ BinaryOp __ UnaryExpression )* ->
     if ($2.length) {
-      return module.expandChainedComparisons($0)
+      const expandedOps = module.expandChainedComparisons($0)
+
+      // Expanded ops is [a, __, op1, __, b, __, op2, __, c, __, op3, __, d], etc.
+      // NOTE: all operators of higher precedence than relational have been merged into the operand expressions
+      let i = 2
+      while (i < expandedOps.length) {
+        const op = expandedOps[i]
+        // a in b -> indexOf.call(b, a) >= 0
+        // Currently indexOf is our only Ref type binary operator
+        if (op.type === "Ref") {
+          const [a, wsOp, op, wsB, b] = expandedOps.slice(i - 2, i + 3)
+
+          module.insertTrimmingSpace(wsOp, "")
+          module.insertTrimmingSpace(wsB, "")
+          expandedOps.splice(i - 2, 5, {
+            type: "Call",
+            children: [wsOp, op, ".call(", wsB, b, ", ", a, ") >= 0"]
+          })
+        } else {
+          i += 4
+        }
+      }
+
+      return expandedOps
     }
 
     return $1
@@ -2972,7 +2995,15 @@ Reset
         base: "indexOf",
       }
 
-      module.prelude.push(["const ", indexOfRef, " = [].indexOf\n"])
+      const typeSuffix = {
+        ts: true,
+        children: [": <T>(this: T[], searchElement: T) => boolean"]
+      }
+      const asAny = {
+        ts: true,
+        children: [" as any"]
+      }
+      module.prelude.push(["const ", indexOfRef, typeSuffix, " = [].indexOf", asAny, "\n"])
 
       return indexOfRef
     }
@@ -3141,7 +3172,7 @@ Init
       while (i < l) {
         const [, op] = binops[i]
 
-        if (relationalOps.includes(op.token)) {
+        if (relationalOps.includes(op.token) || op.type === "Ref") {
           chains.push(i)
         } else if (lowerPrecedenceOps.includes(op.token)) {
           // end of the chain
@@ -3160,7 +3191,8 @@ Init
         if (chains.length > 1) {
           chains.forEach((index, k) => {
             if (k > 0) {
-              results.push(" && ")
+              // NOTE: Inserting ws tokens to keep even operator spacing in the resulting array
+              results.push(" ", "&&", " ")
             }
             const [pre, op, post, exp] = binops[index]
 

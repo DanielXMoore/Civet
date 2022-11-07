@@ -128,9 +128,10 @@ Things Removed from CoffeeScript
 - Backtick embedded JS (replaced by template literals)
 - Will likely add later
   - Optional assignment `x?.y = 3` -> `x != null ? x.y = 3 : undefined`
+  - Loop expressions (at least in compatibility mode)
+  - Conditional assignment `a?[x] = 3` -> `a ? a[x] = 3 : undefined`
 - Might add later
   - Braceless inline objects `x = coolStory: true`
-  - Comprensions
   - `///` Heregexp
   - Ranges `[0...10]`
   - Rest parameter in any assignment position
@@ -205,6 +206,8 @@ Things Added that CoffeeScript didn't
   - Class constructor shorthand `@( ... )`
   - ClassStaticBlock `@ { ... }`
   - `<` as `extends` shorthand
+  - TODO: short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc), [Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax), [Elm record access](https://elm-lang.org/docs/records#access)
+  `x.map &.name` -> `x.map(a => a.name)`
 - Postfix loop `run() loop` -> `while(true) run()`
 - Shebang line is kept unmodified in output
   ```civet
