@@ -6,18 +6,23 @@ if process.argv.includes "--version"
 {prune} = generate
 
 encoding = "utf8"
-fs = require "fs"
+process.stdin.setEncoding encoding
 
-read = (stream, encoding) ->
+fs = require "fs"
+readline = require 'node:readline'
+
+readLines = (rl) ->
   new Promise (resolve, reject) ->
     parts = []
-    stream.resume()
-    stream.on 'data', (buffer) -> parts.push buffer
-    stream.on 'error', reject
-    stream.on 'end', ->
-      resolve Buffer.concat(parts).toString(encoding)
+    rl.on 'line', (buffer) -> parts.push buffer + '\n'
+    rl.on 'SIGINT', ->
+      rl.write '^C\n'
+      reject()
+    rl.on 'close', ->
+      resolve parts.join ''
 
-read(process.stdin, encoding).then (input) ->
+readLines readline.createInterface process.stdin, process.stdout
+.then (input) ->
   process.argv.includes "--ast"
   js = process.argv.includes "--js"
   inlineMap = process.argv.includes "--inline-map"
@@ -29,3 +34,4 @@ read(process.stdin, encoding).then (input) ->
 
   output = compile input, {js, inlineMap}
   process.stdout.write output
+.catch -> process.exit 1
