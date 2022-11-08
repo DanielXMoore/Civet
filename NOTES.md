@@ -435,11 +435,15 @@ Timesheet
 2022-11-05 | 1.00  | for when clause; coffee-compat of/in
 2022-11-06 | 1.50  | chained comparison `in` op
 2022-11-07 | 5.00  | coffee compat `for own ... of`; & blocks; civet cli read from stdin; coffeecompat bug fixes
+2022-11-08 | 2.25  | range literals;
 
 TODO: ranges
 
 - CoffeeCompat
   - [ ] Ranges
+    - [x] Range literals
+    - [ ] `for x in range`
+  - `do`
   - [ ] Chained Comparisons
     - [x] working without refs
     - [ ] Add refs

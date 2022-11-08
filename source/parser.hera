@@ -120,12 +120,29 @@ UnaryExpression
       return ["(", pre, "(", exp, ") != null)"]
     }
 
-    const result = [pre, exp, post]
-    if (!post) result.pop()
-    if (!pre.length) result.shift()
-    if (result.length === 1) return result[0]
+    // Combine unary - to create negative numeric literals
+    if (exp.type === "Literal") {
+      if (pre.length === 1 && pre[0].token === "-") {
+        exp.raw = `-${exp.raw}`
+        exp.children.unshift(pre[0])
+        if (post) exp.children.push(post)
+        return exp
+      }
+    }
 
-    return result
+    if (exp.children) {
+      exp.children.unshift(...pre)
+      if (post) exp.children.push(post)
+      return exp
+    } else if (Array.isArray(exp)) {
+      exp.unshift(...pre)
+      if (post) exp.push(post)
+      return exp
+    } else {
+      const result = [...pre, exp]
+      if (post) result.push(post)
+      return result
+    }
 
 UnaryPostfix
   QuestionMark
@@ -908,6 +925,7 @@ Literal
     return {
       type: "Literal",
       children: $0,
+      raw: $1.token,
     }
 
 LiteralContent
@@ -959,12 +977,17 @@ IdentifierReference
 
 # https://262.ecma-international.org/#prod-ArrayLiteral
 ArrayLiteral
-  OpenBracket ArrayLiteralContent __ CloseBracket ->
+  OpenBracket ArrayLiteralContent:content __ CloseBracket ->
+    if (content.type === "RangeExpression") {
+      content.children.push(...$3)
+      return content
+    }
+
     let children
-    if (Array.isArray($2)) {
-      children = [$1, ...$2, ...$3, $4]
+    if (Array.isArray(content)) {
+      children = [$1, ...content, ...$3, $4]
     } else {
-      children = [$1, $2, ...$3, $4]
+      children = [$1, content, ...$3, $4]
     }
 
     // Gather names when ArrayLiteral is used as a destructuring pattern
@@ -979,6 +1002,33 @@ ArrayLiteral
     }
 
 ArrayLiteralContent
+  ExtendedExpression:s __:ws ( DotDotDot / DotDot ):range ExtendedExpression:e ->
+    const inclusive = range.token === ".."
+    range.token = ","
+
+    if (s.type === "Literal" && e.type === "Literal") {
+      const start = JSON.parse(s.raw)
+      const end = JSON.parse(e.raw)
+      const step = end > start ? 1 : -1
+      const length = Math.abs(end - start) + (inclusive ? 1 : 0)
+
+      if (length <= 20) {
+        // Use array of literal values
+        return Array.from({ length }, (_, i) => start + i * step).join(", ")
+      }
+    }
+
+    const inclusiveAdjust = inclusive ? " + 1" : ""
+    const children = ["((s, e) => {let step = e > s ? 1 : -1; return Array.from({length: Math.abs(e - s)", inclusiveAdjust, "}, (_, i) => s + i * step)})(", s, ws, range, e, ")"]
+
+    return {
+      type: "RangeExpression",
+      children,
+      inclusive,
+      start: s,
+      end: e,
+    }
+
   NestedElementList
   ElementList
 
