@@ -21,17 +21,25 @@ readLines = (rl) ->
     rl.on 'close', ->
       resolve parts.join ''
 
-readLines readline.createInterface process.stdin, process.stdout
+readLines readline.createInterface process.stdin
 .then (input) ->
   process.argv.includes "--ast"
   js = process.argv.includes "--js"
   inlineMap = process.argv.includes "--inline-map"
 
+  filename = "unknown"
+  try
+    filename = fs.realpathSync '/dev/stdin'
+
   if ast
-    ast = prune parse input
+    ast = prune parse(input, {
+      filename
+    })
     process.stdout.write JSON.stringify(ast, null, 2)
     process.exit(0)
 
-  output = compile input, {js, inlineMap}
+  output = compile input, {filename, js, inlineMap}
   process.stdout.write output
-.catch -> process.exit 1
+.catch (e) ->
+  console.error e.message
+  process.exit 1
