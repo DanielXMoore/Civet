@@ -1,3 +1,4 @@
+"civet coffeeCompat"
 # TODO: Sourcemaps
 # track output line/column
 # - track source line/column

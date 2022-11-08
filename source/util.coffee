@@ -1,3 +1,5 @@
+"civet coffeeCompat"
+
 # Utility function to create a line/column lookup table for an input string
 locationTable = (input) ->
   linesRe = /([^\r\n]*)(\r\n|\r|\n|$)/y

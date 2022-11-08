@@ -1,3 +1,5 @@
+"civet coffeeCompat"
+
 { parse } = require "./parser"
 { prune } = gen = require "./generate"
 { SourceMap, base64Encode } = util = require "./util.coffee"
