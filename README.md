@@ -216,6 +216,7 @@ of numbers with `1..toString()` use `1.toString()` instead. When exponent follow
 could be a valid property `1.e10` -> `1..e10`. The workaround is to add a trailing zero `1.0e10` or remove the dot before the exponent `1e10`.
 - Additional reserved words `and`, `or`, `loop`, `until`, `unless`
 - No whitespace between unary operators and operands. Mandatory whitespace between condition and ternary `?` ex. `x ? a : b` since `x?` is the unary existential operator.
+- No labels (yet...)
 
 CoffeeScript Compatibility
 ---
