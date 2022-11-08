@@ -433,9 +433,12 @@ Timesheet
 2022-11-04 | 3.00  | Coffee comprehensions; refs
 2022-11-05 | 1.00  | for when clause; coffee-compat of/in
 2022-11-06 | 1.50  | chained comparison `in` op
-2022-11-07 | 3.75  | coffee compat `for own ... of`; accessor blocks
+2022-11-07 | 5.00  | coffee compat `for own ... of`; & blocks; civet cli read from stdin; coffeecompat bug fixes
+
+TODO: ranges
 
 - CoffeeCompat
+  - [ ] Ranges
   - [ ] Chained Comparisons
     - [x] working without refs
     - [ ] Floating ref node pointing to a VariableDeclaration
@@ -444,7 +447,6 @@ Timesheet
     - [x] `for own ... of`
     - [ ] Comprehensions
   - [ ] Soak assignments (needs refs)
-  - [ ] Ranges
   - [ ] Braceless inline objects (conflicts with labels...)
 - LSP
   - [ ] auto-import suggest in .coffee
