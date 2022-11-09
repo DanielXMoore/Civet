@@ -69,7 +69,7 @@ Things Kept from CoffeeScript
 - Indentation based block syntax
 - OptionalChain shorthand for index and function application `a?[b]` -> `a?.[b]`, `a?(b)` -> `a?.(b)`
 - `?=` null-coalescing assignment shorthand
-- `@` `this` shorthand `@` -> `this`, `@id` -> `this.id`
+- `@` `this` shorthand `@` -> `this`, `@id` -> `this.id`, `{@id} -> {id: this.id}`
 - Prototype shorthand `X::` -> `X.prototype`, `X::a` -> `X.prototype.a`
 - Class static shorthand `@`
 - Chained comparisons `a < b < c` -> `a < b && b < c`
@@ -108,7 +108,7 @@ Civet.
 - `for own of` (use JS `for in` and check manually, switch to `Map#keys/values/entries`, or use `Object.create(null)`, or `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for ... when <condition>` (use `continue if exp` inside loop, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `and=`, `or=` (don't mix and match words and symbols)
-- `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables)
+- `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables, `"civet coffeeCompat"`, or `"civet coffeeBinaryExistential"` enables this at the cost of losing JS ternary operator)
 - `a of b` (use `a in b` matching JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
 - Iteration expression results
 - Backtick embedded JS (replaced by template literals)
