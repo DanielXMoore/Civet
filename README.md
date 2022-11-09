@@ -91,6 +91,10 @@ Things Kept from CoffeeScript
 Things Removed from CoffeeScript
 ---
 
+Most of these can be enabled by adding a [`"civet coffeeCompat"` directive prologue](#coffeescript-compatibility) to the top of your file.
+The goal is to provide a very high level of compatibility with existing CoffeeScript code while offering a fine grained migration path to modern
+Civet.
+
 - Implicit `var` declarations (use `civet coffeeCompat` or `"civet autoVar"`)
 - `on/yes/off/no` (use `true/false`, `"civet coffeeCompat"`, or `"civet coffeeBooleans"` to add them back)
 - `isnt` (use `!==`, `"civet coffeeCompat"`, or `"civet coffeeIsnt"`)
@@ -227,11 +231,16 @@ CoffeeScript Compatibility
 Civet provides a compatability prologue directive that aims to be 97+% compatible with existing CoffeeScript2 code (still a work in progress).
 
 ```
+autoVar        (declare implicit vars based on assignment to undeclared identifiers)
 coffeeBooleans (yes/no/on/off)
 coffeeComment  (# single line comments)
+coffeeDo       ( `do ->`, disables ES6 do/while)
 coffeeEq       (`==` -> `===`, `!=` -> `!==`)
+coffeeForLoops (for in, of, from loops behavie like they do in CoffeeScript 2)
 coffeeInterpolation (`"a string with {myVar}"`)
 coffeeIsnt     (`isnt` -> `!==`)
+coffeeNot      (`not` -> "!") (currently doesn't support `not instanceof`, `not in`, `not of`)
+coffeeOf       (`a of b` -> `a in b`)
 ```
 
 You can use these with `"civet coffeeCompat"` to opt in to all or use them bit by bit with `"civet coffeeComment coffeeEq coffeeInterpolation"`.
