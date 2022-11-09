@@ -101,7 +101,6 @@ Civet.
 - `isnt` (use `!==`, `"civet coffeeCompat"`, or `"civet coffeeIsnt"`)
 - `not` (use `!`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
   - `not instanceof` (use `!(a instanceof b)`)
-  - `not in`
   - `not of`
   - NOTE: CoffeeScript `not` precedence is dubious. `not a < b` should be equivalent to `!(a < b)` but it is in fact `!a < b`
 - `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax, `"civet coffeeCompat"`, or `"civet coffeeDo"`)
@@ -236,11 +235,11 @@ coffeeBooleans (yes/no/on/off)
 coffeeComment  (# single line comments)
 coffeeDo       ( `do ->`, disables ES6 do/while)
 coffeeEq       (`==` -> `===`, `!=` -> `!==`)
-coffeeForLoops (for in, of, from loops behavie like they do in CoffeeScript 2)
-coffeeInterpolation (`"a string with {myVar}"`)
+coffeeForLoops (for in, of, from loops behave like they do in CoffeeScript)
+coffeeInterpolation (`"a string with #{myVar}"`)
 coffeeIsnt     (`isnt` -> `!==`)
-coffeeNot      (`not` -> "!") (currently doesn't support `not instanceof`, `not in`, `not of`)
-coffeeOf       (`a of b` -> `a in b`)
+coffeeNot      (`not` -> "!") (currently doesn't support `not instanceof`, `not of`)
+coffeeOf       (`a of b` -> `a in b`, `a in b` -> `b.indexOf(a) >= 0`, `a not in b` -> `b.indexOf(a) < 0`)
 ```
 
 You can use these with `"civet coffeeCompat"` to opt in to all or use them bit by bit with `"civet coffeeComment coffeeEq coffeeInterpolation"`.
