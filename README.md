@@ -199,8 +199,7 @@ Things Added that CoffeeScript didn't
   - binary operators `x.map &+1` -> `x.map($ => $+1)`
 - CoffeeScript improvements
   - Postfix loop `run() loop` -> `while(true) run()`
-  - TODO
-    - `["a".."z"]` character range literals
+  - Character range literals `["a".."z"]`, `['f'..'a']`, `['0'..'9']`
 - Shebang line is kept unmodified in output
   ```civet
   #!./node_modules/.bin/ts-node
