@@ -79,6 +79,7 @@ Things Kept from CoffeeScript
 - `when` inside `switch` automatically breaks
 - Multiple `,` separated `case`/`when` expressions
 - `else` -> `default` in `switch`
+- Range literals `[0...10]`, `[a..b]`, `[x - 2 .. x + 2]`
 - Array slices `list[0...2]` -> `list.slice(0, 2)`
 - Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` -> `numbers.splice(3, 4, ...[-3, -4, -5, -6])`
 - Implicit returns
@@ -98,7 +99,7 @@ Things Removed from CoffeeScript
   - `not in`
   - `not of`
   - NOTE: CoffeeScript `not` precedence is dubious. `not a < b` should be equivalent to `!(a < b)` but it is in fact `!a < b`
-- `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax)
+- `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax, `"civet coffeeCompat"`, or `"civet coffeeDo"`)
 - `for from` (use JS `for of`, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for own of` (use JS `for in` and check manually, switch to `Map#keys/values/entries`, or use `Object.create(null)`, or `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for ... when <condition>` (use `continue if exp` inside loop, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
@@ -114,15 +115,14 @@ Things Removed from CoffeeScript
 - Might add later
   - Braceless inline objects `x = coolStory: true`
   - `///` Heregexp
-  - Ranges `[0...10]`
   - Rest parameter in any assignment position
   - Multiple slice assignment `otherNumbers[0...] = numbers[3..6] = [-3, -4, -5, -6]`
 
 Things Changed from CoffeeScript
 ---
 
-- `==` -> `==` rather than `===` (can be kept with `"civet coffeeCompat"`)
-- `!=` -> `!=` rather than `!==` (can be kept with `"civet coffeeCompat"`)
+- `==` -> `==` rather than `===` (can be kept with `"civet coffeeCompat"` or `"civet coffeeEq"`)
+- `!=` -> `!=` rather than `!==` (can be kept with `"civet coffeeCompat"` or `"civet coffeeEq"`)
 - `for in` and `for of` are no longer swapped and become their JS equivalents.
 - `a...` is now `...a` just like JS
 - `a in b` is now `a in b` rather than `b.indexOf(a) >= 0`
@@ -193,7 +193,10 @@ Things Added that CoffeeScript didn't
   - function call `x.map &.callback a, b` -> `x.map($ => $.callback(a, b))`
   - unary operators `x.map !!&`, -> `x.map($ => !!$)`
   - binary operators `x.map &+1` -> `x.map($ => $+1)`
-- Postfix loop `run() loop` -> `while(true) run()`
+- CoffeeScript improvements
+  - Postfix loop `run() loop` -> `while(true) run()`
+  - TODO
+    - `["a".."z"]` character range literals
 - Shebang line is kept unmodified in output
   ```civet
   #!./node_modules/.bin/ts-node
