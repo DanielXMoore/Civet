@@ -435,14 +435,15 @@ Timesheet
 2022-11-05 | 1.00  | for when clause; coffee-compat of/in
 2022-11-06 | 1.50  | chained comparison `in` op
 2022-11-07 | 5.00  | coffee compat `for own ... of`; & blocks; civet cli read from stdin; coffeecompat bug fixes
-2022-11-08 | 5.75  | range literals; coffee do; condition/parenthesized expression refactor
+2022-11-08 | 6.25  | range literals; coffee do; condition/parenthesized expression refactor
 
-TODO: ranges
+TODO: character ranges
 
 - CoffeeCompat
   - [ ] Ranges
     - [x] Range literals
     - [x] `for x in range`
+    - [ ] Character ranges `["a".."Z"]`
   - [x] `do`
   - [ ] Chained Comparisons
     - [x] working without refs
@@ -457,7 +458,7 @@ TODO: ranges
       a for x in y when z by 2
     ```
   - [ ] Soak assignments (needs refs)
-  - [ ] Braceless inline objects (conflicts with labels...)
+  - [ ] Braceless inline objects (conflicts with labels... but labels could be loop statement only)
 - LSP
   - [ ] auto-import suggest in .coffee
   - [ ] update imported file exports, see errors in importing file
