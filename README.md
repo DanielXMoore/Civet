@@ -83,6 +83,7 @@ Things Kept from CoffeeScript
 - Array slices `list[0...2]` -> `list.slice(0, 2)`
 - Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` -> `numbers.splice(3, 4, ...[-3, -4, -5, -6])`
 - Implicit returns
+- Late assignment `x + y = z` -> `x + (y = z)`
 - Simplified number method calls `1.toFixed()` -> `1..toFixed()`
 - `if`/`switch` expressions
 - Destructuring object assignment doesn't require being wrapped in parens at the statement level `{a, b} = c` -> `({a, b} = c)`
