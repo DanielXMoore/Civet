@@ -16,6 +16,8 @@ TODO
   ---
   function fn(x) { return x }
   ```
+- [ ] Bugs
+  - [ ] correct &block precedence with unary ops, binary ops, and call expressions. It works by chance in simple cases but won't in very complex ones.
 - [ ] Comprehensions
   - [ ] CoffeeScript compat `for in`
   - [ ] Civet replacement `for from`
