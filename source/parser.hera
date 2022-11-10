@@ -1515,15 +1515,20 @@ StatementListItem
   # NOTE: Added postfix conditionals/loops
   Statement:statement TrailingComment*:ws PostfixStatement?:post ->
     if (post) {
-      let block
-      if (post.type === "ForStatement") {
-        if (post.blockPrefix?.length) {
-          block = [" {", ...post.blockPrefix, ...statement, " }"]
-        } else {
-          block = statement
-        }
+      let children, expressions
+      if (post.blockPrefix?.length) {
+        let indent = post.blockPrefix[0][0]
+        expressions = [...post.blockPrefix, [indent, statement]]
+        children = [" {\n", ...expressions, "\n", indent.slice(0, -2), "}"]
       } else {
-        block = statement
+        expressions = [["", statement]]
+        children = [" { ", ...expressions, " }"]
+      }
+
+      const block = {
+        type: "BlockStatement",
+        children,
+        expressions,
       }
 
       post.block = block
@@ -1927,13 +1932,13 @@ ForStatementParameters
   # https://262.ecma-international.org/#prod-ForInOfStatement
   # NOTE: Consolidated declarations
   # NOTE: Consolidated optional 'await'
-  ( Await __ )? OpenParen __    ForInOfDeclaration:declaration __ ( In / Of ) ExtendedExpression __ CloseParen ->
+  ( Await __ )? OpenParen __    ForInOfDeclaration:declaration __ ( In / Of ) ExpressionWithIndentedApplicationSuppressed __ CloseParen ->
     return {
       declaration,
       children: $0,
     }
   # NOTE: Added optional parens
-  ( Await __ )? InsertOpenParen ForInOfDeclaration:declaration __ ( In / Of ) ExtendedExpression InsertCloseParen ->
+  ( Await __ )? InsertOpenParen ForInOfDeclaration:declaration __ ( In / Of ) ExpressionWithIndentedApplicationSuppressed InsertCloseParen ->
     return {
       declaration: declaration,
       children: $0,
@@ -3531,7 +3536,7 @@ Init
       }
 
       // insert `results.push` to gather results array
-      module.insertPush(statement.block, resultsRef)
+      insertPush(statement.block, resultsRef)
 
       return {
         type: "IterationExpression",
@@ -3539,11 +3544,32 @@ Init
       }
     }
 
+    function wrapIterationReturningResults(statement, outerRef) {
+      const resultsRef = {
+        type: "Ref",
+        base: "results",
+      }
+
+      const declaration = {
+        type: "Declaration",
+        children: ["const ", resultsRef, "=[];"],
+      }
+
+      insertPush(statement.block, resultsRef)
+
+      statement.children.unshift(declaration)
+      if (outerRef) {
+        statement.children.push(";", outerRef, ".push(", resultsRef, ");")
+      } else {
+        statement.children.push(";return ", resultsRef, ";")
+      }
+    }
+
     // NOTE: this is almost the same as insertReturn but doesn't remove `breaks` in `when` and
     // does construct an else clause pushing undefined in if statements that lack them
     // and adds to the beginning and the end of the expression's children.
     // Maybe these insertion modifications can be refactored to be more DRY eventually.
-    module.insertPush = function insertPush(node, ref) {
+    function insertPush(node, ref) {
       if (!node) return
       // TODO: unify this with the `exp` switch
       switch (node.type) {
@@ -3592,11 +3618,13 @@ Init
         case "ContinueStatement":
         case "DebuggerStatement":
         case "EmptyStatement":
-        case "ForStatement":
-        case "IterationStatement":
         case "ReturnStatement":
         case "ThrowStatement":
         case "Declaration":
+          return
+        case "ForStatement":
+        case "IterationStatement":
+          wrapIterationReturningResults(exp, ref)
           return
         case "BlockStatement":
           insertPush(exp.expressions[exp.expressions.length - 1], ref)
@@ -3677,11 +3705,13 @@ Init
         case "ContinueStatement":
         case "DebuggerStatement":
         case "EmptyStatement":
-        case "ForStatement":
-        case "IterationStatement":
         case "ReturnStatement":
         case "ThrowStatement":
         case "Declaration":
+          return
+        case "ForStatement":
+        case "IterationStatement":
+          wrapIterationReturningResults(exp)
           return
         case "BlockStatement":
           insertReturn(exp.expressions[exp.expressions.length - 1])
