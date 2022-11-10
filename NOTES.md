@@ -439,9 +439,10 @@ Timesheet
 2022-11-09 | 7.50  | character ranges `["a".."f"]`; object with multiple properties on a line with optional commas at eol; `{@id}`; refactor compatibility tests; coffeeLineContinuation; coffeeClass function fields; coffeeBinaryExistential; late assignments; not in; argument splat trailing dots; braceless inline object literals;
 2022-11-10 | 4.50  | when then; `switch(false)`; expressionized statement $ shadowing bugfix; iteration expressions; iteration return results; coffee for in, index
 
-browser.coffee `for expressions`
+browser.coffee `postfix for expressions`
 grammar.coffee `aligned deep nesting`
-lexer.coffee `for expressions`
+helpers.coffee `heregex`
+lexer.coffee `postfix for expressions`
 
 - CoffeeCompat
   - [x] Ranges
