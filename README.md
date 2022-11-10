@@ -86,7 +86,7 @@ Things Kept from CoffeeScript
 - Late assignment `x + y = z` -> `x + (y = z)`
 - Braceless inline objects `x = coolStory: true`
 - Simplified number method calls `1.toFixed()` -> `1..toFixed()`
-- `if`/`switch` expressions
+- `if`/`switch`/`for`/`loop`/`while`/`throw` expressions
 - Destructuring object assignment doesn't require being wrapped in parens at the statement level `{a, b} = c` -> `({a, b} = c)`
 - JSX 😿
 
@@ -115,7 +115,6 @@ Civet.
 - Backtick embedded JS (replaced by template literals)
 - Will likely add later
   - Optional assignment `x?.y = 3` -> `x != null ? x.y = 3 : undefined`
-  - Loop expressions (at least in compatibility mode)
   - Conditional assignment `a?[x] = 3` -> `a ? a[x] = 3 : undefined`
 - Might add later
   - `///` Heregexp
