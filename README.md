@@ -84,6 +84,7 @@ Things Kept from CoffeeScript
 - Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` -> `numbers.splice(3, 4, ...[-3, -4, -5, -6])`
 - Implicit returns
 - Late assignment `x + y = z` -> `x + (y = z)`
+- Braceless inline objects `x = coolStory: true`
 - Simplified number method calls `1.toFixed()` -> `1..toFixed()`
 - `if`/`switch` expressions
 - Destructuring object assignment doesn't require being wrapped in parens at the statement level `{a, b} = c` -> `({a, b} = c)`
@@ -117,7 +118,6 @@ Civet.
   - Loop expressions (at least in compatibility mode)
   - Conditional assignment `a?[x] = 3` -> `a ? a[x] = 3 : undefined`
 - Might add later
-  - Braceless inline objects `x = coolStory: true`
   - `///` Heregexp
   - Rest parameter in any assignment position
   - Multiple slice assignment `otherNumbers[0...] = numbers[3..6] = [-3, -4, -5, -6]`

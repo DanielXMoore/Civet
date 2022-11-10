@@ -56,7 +56,7 @@ ArgumentsWithTrailingCallExpressions
 # https://262.ecma-international.org/#prod-ArgumentList
 ArgumentList
   # NOTE: Added nested arguments on separate new lines
-  &EOS NestedArgumentList
+  &EOS NestedArgumentList -> $2
   InlineArgumentExpressions
 
 NestedArgumentList
@@ -102,7 +102,7 @@ ApplicationStart
   #
   # IndentedApplicationAllowed gets turned of inside if conditions and switch conditions to prevent
   # indentation based function application from being used inside them. It is a bit of a hack.
-  IndentedApplicationAllowed &NestedObjectLiteral InsertOpenParen -> $3
+  IndentedApplicationAllowed &( EOS NestedPropertyDefinitions ) InsertOpenParen
 
 IndentedApplicationAllowed
   "" ->
@@ -360,10 +360,10 @@ ShortCircuitExpression
 # https://262.ecma-international.org/#prod-PrimaryExpression
 PrimaryExpression
   This
-  IdentifierReference
   Literal
   ArrayLiteral
   ObjectLiteral
+  IdentifierReference # NOTE: Must be below ObjectLiteral for inline objects `a: 1, b: 2` to not be shadowed by matching the first identifier
   FunctionExpression
   ClassExpression
   RegularExpressionLiteral
@@ -994,14 +994,14 @@ NullLiteral
 
 # https://262.ecma-international.org/#prod-BooleanLiteral
 BooleanLiteral
-  CoffeeScriptBooleanLiteral
-  "true" / "false" ->
+  CoffeeBooleansEnabled CoffeeScriptBooleanLiteral -> $2
+  ( "true" / "false" ) NonIdContinue ->
     return { $loc, token: $1 }
 
 CoffeeScriptBooleanLiteral
-  "yes" / "on" ->
+  ( "yes" / "on" ) NonIdContinue ->
     return { $loc, token: "true" }
-  "no" / "off" ->
+  ( "no" / "off" ) NonIdContinue ->
     return { $loc, token: "false" }
 
 Comma
@@ -1194,6 +1194,7 @@ ArrayElementExpression
 ObjectLiteral
   BracedObjectLiteral
   NestedObjectLiteral
+  InlineObjectLiteral
 
 BracedObjectLiteral
   OpenBrace BracedObjectLiteralContent? __ CloseBrace ->
@@ -1254,6 +1255,11 @@ NestedPropertyDefinition
     }
     return result
 
+InlineObjectLiteral
+  InsertOpenBrace SnugNamedProperty ( TrailingComment* Comma __ NamedProperty )* InsertCloseBrace ->
+    // Drop leading space from inserted brace
+    return [$1[1], $2, ...$3.flat(), $4]
+
 ObjectPropertyDelimiter
   _* Comma
   # Object closing delimits the property
@@ -1276,13 +1282,18 @@ PropertyDefinition
   # NOTE: Added CoffeeScript {@id} -> {id: this.id} shorthand
   At:at IdentifierReference:id &ObjectPropertyDelimiter ->
     at.token = "this."
-
     return {
       type: "Property",
       children: [id, ": ", at, id],
       names: id.names,
     }
+  NamedProperty
+  MethodDefinition
+  DotDotDot ExtendedExpression
+  # NOTE: this needs to be at the bottom to prevent shadowing PropertyName
+  IdentifierReference
 
+NamedProperty
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
   PropertyName __ Colon ExtendedExpression:exp ->
@@ -1291,10 +1302,16 @@ PropertyDefinition
       children: $0,
       names: exp.names || [],
     }
-  MethodDefinition
-  DotDotDot ExtendedExpression
-  # NOTE: this needs to be at the bottom to prevent shadowing PropertyName
-  IdentifierReference
+
+# Named property but doesn't allow any space between name and colon
+# used to distinguish between braceless inline objects and ternary expression conditions
+SnugNamedProperty
+  PropertyName Colon ExtendedExpression:exp ->
+    return {
+      type: "Property",
+      children: $0,
+      names: exp.names || [],
+    }
 
 PropertyName
   # https://262.ecma-international.org/#prod-LiteralPropertyName
