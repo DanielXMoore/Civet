@@ -437,7 +437,11 @@ Timesheet
 2022-11-07 | 5.00  | coffee compat `for own ... of`; & blocks; civet cli read from stdin; coffeecompat bug fixes
 2022-11-08 | 6.25  | range literals; coffee do; condition/parenthesized expression refactor
 2022-11-09 | 7.50  | character ranges `["a".."f"]`; object with multiple properties on a line with optional commas at eol; `{@id}`; refactor compatibility tests; coffeeLineContinuation; coffeeClass function fields; coffeeBinaryExistential; late assignments; not in; argument splat trailing dots; braceless inline object literals;
-2022-11-10 | 1.25  | when then; `switch(false)`;
+2022-11-10 | 2.50  | when then; `switch(false)`; expressionized statement $ shadowing bugfix; iteration expressions
+
+browser.coffee `for expressions`
+grammar.coffee `aligned deep nesting`
+lexer.coffee `for expressions`
 
 - CoffeeCompat
   - [x] Ranges

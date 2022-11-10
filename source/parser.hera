@@ -26,6 +26,7 @@ ExtendedExpression
 ExpressionizedStatement
   DebuggerExpression
   IfExpression
+  IterationExpression
   SwitchExpression
   ThrowExpression
 
@@ -1636,24 +1637,38 @@ IterationStatement
   WhileStatement
   ForStatement
 
+IterationExpression
+  IterationStatement ->
+    return module.expressionizeIteration($1)
+
 # NOTE: Added from CoffeeScript
 LoopStatement
   LoopClause:clause Block:block ->
+    clause.block = block
     clause.children.push(block)
     return clause
 
 LoopClause
-  Loop -> { type: "IterationStatement", children: $0 }
+  Loop -> {
+    type: "IterationStatement",
+    children: [ $1],
+    block: null
+  }
 
 # https://262.ecma-international.org/#prod-DoWhileStatement
 DoWhileStatement
   # NOTE: Condition provides optional parens
-  Do BracedBlock __ WhileClause -> { type: "IterationStatement", children: $0 }
+  Do BracedBlock:block __ WhileClause -> {
+    type: "IterationStatement",
+    children: $0,
+    block: block
+  }
 
 # https://262.ecma-international.org/#prod-WhileStatement
 WhileStatement
   # NOTE: Condition provides optional parens
   WhileClause:clause Block:block ->
+    clause.block = block
     clause.children.push(block)
     return clause
 
@@ -1668,7 +1683,8 @@ WhileClause
 
     return {
       type: "IterationStatement",
-      children: $0
+      children: $0,
+      block: null,
     }
 
 # https://262.ecma-international.org/#prod-ForStatement
@@ -2191,7 +2207,7 @@ ThrowExpression
   Throw ExtendedExpression ->
     return {
       type: "ThrowExpression",
-      children: ["(()=>{", ...$0, "})()"],
+      children: ["(()=>{", $0, "})()"],
     }
 
 MaybeNestedExpression
@@ -3503,6 +3519,110 @@ Init
         Object.assign(module.config, directive.config)
       }
     })
+
+    module.expressionizeIteration = function(statement) {
+      const resultsRef = {
+        type: "Ref",
+        base: "results",
+      }
+
+      // insert `results.push` to gather results array
+      module.insertPush(statement.block, resultsRef)
+
+      return {
+        type: "IterationExpression",
+        children: ["((", resultsRef, ")=>{", statement, "; return ", resultsRef, "})([])"],
+      }
+    }
+
+    // NOTE: this is almost the same as insertReturn but doesn't remove `breaks` in `when` and
+    // does construct an else clause pushing undefined in if statements that lack them
+    // and adds to the beginning and the end of the expression's children.
+    // Maybe these insertion modifications can be refactored to be more DRY eventually.
+    module.insertPush = function insertPush(node, ref) {
+      if (!node) return
+      // TODO: unify this with the `exp` switch
+      switch (node.type) {
+        case "AssignmentExpression":
+          node.children.unshift(ref, ".push(")
+          node.children.push(")")
+          return
+        case "Identifier":
+          node.children.unshift(ref, ".push(")
+          node.children.push(")")
+          return
+        case "BlockStatement":
+          insertPush(node.expressions[node.expressions.length - 1], ref)
+          return
+        case "ObjectExpression":
+          module.insertTrimmingSpace(node.children[0], "")
+          node.children.unshift(ref, ".push(")
+          node.children.push(")")
+          return
+        case "CaseBlock":
+          node.clauses.forEach((clause) => {
+            insertPush(clause, ref)
+          })
+          return
+        case "CaseClause":
+          // Don't adjust case clauses
+          return
+        case "WhenClause":
+          insertPush(node.expressions[node.expressions.length - 1], ref)
+          return
+        case "DefaultClause":
+          insertPush(node.expressions[node.expressions.length - 1], ref)
+          return
+      }
+      if (!Array.isArray(node)) return
+
+      const [, exp] = node
+      if (!exp) return
+
+      let indent = node[0]
+      // Hacky way to get the indent of the last expression
+      if (Array.isArray(indent)) indent = indent[indent.length - 1]
+
+      switch (exp.type) {
+        case "BreakStatement":
+        case "ContinueStatement":
+        case "DebuggerStatement":
+        case "EmptyStatement":
+        case "ForStatement":
+        case "IterationStatement":
+        case "ReturnStatement":
+        case "ThrowStatement":
+        case "Declaration":
+          return
+        case "BlockStatement":
+          insertPush(exp.expressions[exp.expressions.length - 1], ref)
+          return
+        case "IfStatement":
+          // if block
+          insertPush(exp.children[2], ref)
+          // else block
+          if (exp.children[3]) insertPush(exp.children[3][2], ref)
+          // Add else block pushing undefined if no else block
+          else exp.children.push([" else {\n", indent, ref, ".push(undefined)\n", indent, "}"])
+          return
+        case "SwitchStatement":
+          // insert a results.push in each case block
+          insertPush(exp.children[2], ref)
+          return
+        case "TryStatement":
+          // try block
+          insertPush(exp.children[1], ref)
+          // catch block
+          insertPush(exp.children[2][3], ref)
+          // NOTE: CoffeeScript doesn't add a push to an empty catch block but does add if there is any statement in the catch block
+          // NOTE: do not insert a push in the finally block
+          return
+      }
+
+      // Insert push wrapping expression
+      node.splice(1, 0, ref, ".push(")
+      node.push(")")
+    }
 
     // [indent, statement, semicolon]
     function insertReturn(node) {
