@@ -41,5 +41,5 @@ readLines readline.createInterface process.stdin
   output = compile input, {filename, js, inlineMap}
   process.stdout.write output
 .catch (e) ->
-  console.error e.message
+  console.error e
   process.exit 1
