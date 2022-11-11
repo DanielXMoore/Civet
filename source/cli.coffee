@@ -9,7 +9,10 @@ encoding = "utf8"
 process.stdin.setEncoding encoding
 
 fs = require "fs"
-readline = require 'node:readline'
+readline = try
+  require 'node:readline'
+catch
+  require 'readline'
 
 readLines = (rl) ->
   new Promise (resolve, reject) ->
