@@ -26,6 +26,7 @@ ExtendedExpression
 ExpressionizedStatement
   DebuggerExpression
   IfExpression
+  UnlessExpression
   IterationExpression
   SwitchExpression
   ThrowExpression
@@ -133,7 +134,9 @@ UnaryExpression
     // Handle "?" postfix
     if (post?.token === "?") {
       // v1.1 Can remove parens when unnecessary once exp returns a full AST node to determine if they are actually needed
-      return ["(", pre, "(", exp, ") != null)"]
+      return {
+        children: ["(", ...pre, "(", exp, ") != null)"]
+      }
     }
 
     // Combine unary - to create negative numeric literals
@@ -153,11 +156,15 @@ UnaryExpression
     } else if (Array.isArray(exp)) {
       exp.unshift(...pre)
       if (post) exp.push(post)
-      return exp
+      return {
+        children: exp
+      }
     } else {
       const result = [...pre, exp]
       if (post) result.push(post)
-      return result
+      return {
+        children: result
+      }
     }
 
   # NOTE: This is a little hacky to match CoffeeScript's behavior
@@ -377,7 +384,20 @@ PrimaryExpression
 # https://262.ecma-international.org/#prod-ParenthesizedExpression
 ParenthesizedExpression
   # NOTE: Currently ignoring early error checking in https://262.ecma-international.org/#prod-CoverParenthesizedExpressionAndArrowParameterList
-  OpenParen ExtendedExpression:exp __ CloseParen ->
+  OpenParen ExtendedExpression:exp ( TrailingComment* PostfixStatement )?:post __ CloseParen ->
+    if (post) {
+      let clause
+      switch (post[1].type) {
+        case "IterationStatement":
+        case "ForStatement":
+          clause = module.addPostfixStatement(exp, ...post)
+          return module.expressionizeIteration(clause)
+        case "IfStatement":
+          clause = module.expressionizeIfClause(post[1], exp)
+          return clause
+      }
+    }
+
     return {
       type: "ParenthesizedExpression",
       expression: exp,
@@ -1513,31 +1533,8 @@ ModuleItem
 StatementListItem
   Declaration
   # NOTE: Added postfix conditionals/loops
-  Statement:statement TrailingComment*:ws PostfixStatement?:post ->
-    if (post) {
-      let children, expressions
-      if (post.blockPrefix?.length) {
-        let indent = post.blockPrefix[0][0]
-        expressions = [...post.blockPrefix, [indent, statement]]
-        children = [" {\n", ...expressions, "\n", indent?.slice?.(0, -2), "}"]
-      } else {
-        expressions = [["", statement]]
-        children = [" { ", ...expressions, " }"]
-      }
-
-      const block = {
-        type: "BlockStatement",
-        children,
-        expressions,
-      }
-
-      post.block = block
-      post.children.push(block)
-
-      // This removes trailing whitespace for easier testing
-      if (!module.isWhitespaceOrEmpty(ws)) post.children.push(ws)
-      return post
-    }
+  Statement:statement ( TrailingComment* PostfixStatement )?:post ->
+    if (post) return module.addPostfixStatement(statement, ...post)
     return statement
 
 PostfixStatement
@@ -1606,17 +1603,11 @@ UnlessClause
 # NOTE: Added IfExpression from CoffeeScript
 IfExpression
   IfClause:clause ExpressionBlock:b ( __ Else ExpressionBlock )?:e ->
-    clause.children.shift() // Remove 'if'
-    clause.children.push("?", b, ":") // Add ternary
-    if (e) {
-      e.splice(1, 1) // Remove 'else'
-      clause.children.push(e)
-    }
-    else {
-      clause.children.push("void 0")
-    }
-    clause.type = "IfExpression"
-    return clause
+    return module.expressionizeIfClause(clause, b, e)
+
+UnlessExpression
+  UnlessClause:clause ExpressionBlock:b ( __ Else ExpressionBlock )?:e ->
+    return module.expressionizeIfClause(clause, b, e)
 
 # Block of expressions that can't include pure statements
 ExpressionBlock
@@ -1727,10 +1718,10 @@ ForStatementControl
     if ($3) {
       const indent = "".padStart((module.currentIndent + 1) * 2)
       module.insertTrimmingSpace($3, "")
-      $2.blockPrefix.push({
+      $2.blockPrefix.push([indent, {
         type: "IfStatement",
-        children: [indent, "if (!(", $3, ")) continue\n"],
-      })
+        children: ["if (!(", $3, ")) continue\n"],
+      }])
     }
 
     return $2
@@ -1835,7 +1826,7 @@ CoffeeForStatementParameters
             names: []
           }
 
-          blockPrefix.push([{
+          blockPrefix.push(["", {
             type: "AssignmentExpression",
             children: [], // Empty assignment to trigger auto-var
             names: varRef.names,
@@ -1891,9 +1882,9 @@ CoffeeForStatementParameters
         assignmentNames.push(...index.names)
       }
 
-      blockPrefix.push([{
+      blockPrefix.push([indent, {
         type: "AssignmentExpression",
-        children: [indent, varRef, " = ", expRef, "[", indexAssignment, counterRef, "]\n"],
+        children: [varRef, " = ", expRef, "[", indexAssignment, counterRef, "]\n"],
         names: assignmentNames,
       }])
 
@@ -3540,6 +3531,46 @@ Init
         Object.assign(module.config, directive.config)
       }
     })
+
+    module.expressionizeIfClause = function(clause, b, e) {
+      clause.children.shift() // Remove 'if'
+      clause.children.push("?", b, ":") // Add ternary
+      if (e) {
+        e.splice(1, 1) // Remove 'else'
+        clause.children.push(e)
+      }
+      else {
+        clause.children.push("void 0")
+      }
+      clause.type = "IfExpression"
+
+      return clause
+    }
+
+    module.addPostfixStatement = function(statement, ws, post) {
+      let children, expressions
+      if (post.blockPrefix?.length) {
+        let indent = post.blockPrefix[0][0]
+        expressions = [...post.blockPrefix, [indent, statement]]
+        children = [" {\n", ...expressions, "\n", indent?.slice?.(0, -2), "}"]
+      } else {
+        expressions = [["", statement]]
+        children = [" { ", ...expressions, " }"]
+      }
+
+      const block = {
+        type: "BlockStatement",
+        children,
+        expressions,
+      }
+
+      post.block = block
+      post.children.push(block)
+
+      // This removes trailing whitespace for easier testing
+      if (!module.isWhitespaceOrEmpty(ws)) post.children.push(ws)
+      return post
+    }
 
     module.expressionizeIteration = function(statement) {
       const resultsRef = {

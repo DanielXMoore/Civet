@@ -437,12 +437,12 @@ Timesheet
 2022-11-07 | 5.00  | coffee compat `for own ... of`; & blocks; civet cli read from stdin; coffeecompat bug fixes
 2022-11-08 | 6.25  | range literals; coffee do; condition/parenthesized expression refactor
 2022-11-09 | 7.50  | character ranges `["a".."f"]`; object with multiple properties on a line with optional commas at eol; `{@id}`; refactor compatibility tests; coffeeLineContinuation; coffeeClass function fields; coffeeBinaryExistential; late assignments; not in; argument splat trailing dots; braceless inline object literals;
-2022-11-10 | 4.50  | when then; `switch(false)`; expressionized statement $ shadowing bugfix; iteration expressions; iteration return results; coffee for in, index
+2022-11-10 | 6.00  | when then; `switch(false)`; expressionized statement $ shadowing bugfix; iteration expressions; iteration return results; coffee for in, index; postfix expression statements within parens; binary op exand bugfix; postfix expressions within parentheses; unless expression;
 
-browser.coffee `postfix for expressions`
+browser.coffee `postfix for expressions` inside `()`
 grammar.coffee `aligned deep nesting`
 helpers.coffee `heregex`
-lexer.coffee `postfix for expressions`
+lexer.coffee `postfix for expressions` inside `()`
 
 - CoffeeCompat
   - [x] Ranges
