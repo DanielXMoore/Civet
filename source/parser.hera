@@ -58,7 +58,7 @@ ArgumentsWithTrailingCallExpressions
 # https://262.ecma-international.org/#prod-ArgumentList
 ArgumentList
   # NOTE: Added nested arguments on separate new lines
-  &EOS NestedArgumentList -> $2
+  NestedArgumentList
   InlineArgumentExpressions
 
 NestedArgumentList
@@ -71,13 +71,13 @@ NestedArgument
 
 InlineArgumentExpressions
   # NOTE: Eliminated left recursion
-  # NOTE: Using ExtendedExpression to allow for If/Switch expressions
   ArgumentPart ( __ Comma TrailingComment* ArgumentPart )* ->
     if($2.length == 0) return $1
     return $0
 
 ArgumentPart
-  # Allow leading or trailing dots for argument splats
+  # NOTE: Using ExtendedExpression to allow for If/Switch expressions
+  # NOTE: Allow leading or trailing dots for argument splats like CoffeeScript
   DotDotDot ExtendedExpression
   ExtendedExpression DotDotDot? ->
     if ($2) {
@@ -93,10 +93,6 @@ ImplicitApplication
   # x y z => x(y(z))
   ApplicationStart ArgumentList InsertCloseParen
 
-# Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
-ApplicationStart
-  !EOS _:spacing !AdditionalReservedWords ->
-    return module.insertTrimmingSpace(spacing, "(")
   # Nested application for nested objects
   # someMethod => someMethod({
   #   a: b          a: b
@@ -104,7 +100,12 @@ ApplicationStart
   #
   # IndentedApplicationAllowed gets turned of inside if conditions and switch conditions to prevent
   # indentation based function application from being used inside them. It is a bit of a hack.
-  IndentedApplicationAllowed &( EOS NestedPropertyDefinitions ) InsertOpenParen
+  IndentedApplicationAllowed InsertOpenParen NestedObjectLiteral ( __ "," NestedObjectLiteral )* InsertCloseParen
+
+# Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
+ApplicationStart
+  !EOS _:spacing !AdditionalReservedWords ->
+    return module.insertTrimmingSpace(spacing, "(")
 
 IndentedApplicationAllowed
   "" ->
@@ -330,17 +331,9 @@ FatArrow
 # NOTE Different from
 # https://262.ecma-international.org/#prod-ConciseBody
 FatArrowBody
-  __ OpenBrace EOS NestedBlockStatements:exps __ CloseBrace -> {
-    type: "BlockStatement",
-    expressions: exps,
-    children: $0,
-  }
+  ExplicitBlock
   # NOTE: Added indentation based implied braces
-  InsertOpenBrace EOS NestedBlockStatements:exps InsertNewline InsertIndent InsertCloseBrace -> {
-    type: "BlockStatement",
-    expressions: exps,
-    children: $0,
-  }
+  ImplicitNestedBlock
   AssignmentExpression
   EmptyBlock
 
@@ -430,8 +423,8 @@ ExtendsToken
 # https://262.ecma-international.org/#prod-ClassBody
 # NOTE: Nesting and indentation sensitive
 ClassBody
-  __ OpenBrace (EOS NestedClassElements)? __ CloseBrace
-  InsertOpenBrace EOS NestedClassElements InsertNewline InsertIndent InsertCloseBrace
+  __ OpenBrace NestedClassElements? __ CloseBrace
+  InsertOpenBrace NestedClassElements InsertNewline InsertIndent InsertCloseBrace
 
 NestedClassElements
   PushIndent NestedClassElement*:elements PopIndent ->
@@ -688,7 +681,7 @@ ObjectBindingPattern
 
 ObjectBindingPatternContent
   # NOTE: Added indentation based binding properties
-  &EOS NestedBindingProperties -> $2
+  NestedBindingProperties
   BindingProperty*:props ( __ BindingRestProperty )?:rest ->
     const names = props.flatMap((p) => p.names)
 
@@ -715,7 +708,7 @@ ArrayBindingPattern
 
 ArrayBindingPatternContent
   # NOTE: Added indentation based binding elements
-  &EOS NestedBindingElements -> $2
+  NestedBindingElements
   ( BindingElement / Elision )*:props ( __ BindingRestElement )?:rest ->
     const names = props.flatMap((p) => p.names || [])
 
@@ -917,21 +910,26 @@ Arrow
   "->" ->
     return { $loc, token: $1}
 
+ExplicitBlock
+  __ OpenBrace NestedBlockStatements:block __ CloseBrace ->
+    block.bare = false
+    block.children.unshift($1, $2)
+    block.children.push($4, $5)
+    return block
+
+ImplicitNestedBlock
+  InsertOpenBrace NestedBlockStatements:block InsertNewline InsertIndent InsertCloseBrace ->
+    block.bare = false
+    block.children.unshift($1)
+    block.children.push($3, $4, $5)
+    return block
+
 # NOTE: This is the body of if/else/for/case etc.
 Block
-  __ OpenBrace EOS NestedBlockStatements:exps __ CloseBrace -> {
-    type: "BlockStatement",
-    expressions: exps,
-    children: $0,
-    bare: false,
-  }
+  ExplicitBlock
   # NOTE: Added indentation based implied braces
-  InsertOpenBrace EOS NestedBlockStatements:exps InsertNewline InsertIndent InsertCloseBrace -> {
-    type: "BlockStatement",
-    expressions: exps,
-    children: $0,
-    bare: false,
-  }
+  ImplicitNestedBlock
+
   ThenClause
   TrailingComment*:ws Statement:s ->
     const expressions = [$0]
@@ -962,21 +960,19 @@ EmptyBlock
     type: "BlockStatement",
     expressions: [],
     children: $0,
+    bare: false,
   }
 
 # This is a block that must include braces (function body, try/catch/finally)
 BracedBlock
-  TrailingComment* OpenBrace BracedContent:exps __ CloseBrace -> {
-    type: "BlockStatement",
-    expressions: exps,
-    children: $0,
-  }
+  TrailingComment* OpenBrace BracedContent:block __ CloseBrace ->
+    block.bare = false
+    block.children.unshift($1, $2)
+    block.children.push($4, $5)
+    return block
+
   # NOTE: Added indentation based implied braces
-  InsertOpenBrace EOS NestedBlockStatements:exps InsertNewline InsertIndent InsertCloseBrace -> {
-    type: "BlockStatement",
-    expressions: exps,
-    children: $0,
-  }
+  ImplicitNestedBlock
 
   # Immediate nested object literal
   InsertOpenBrace &EOS ObjectLiteral:s InsertCloseBrace ->
@@ -1001,13 +997,32 @@ BracedBlock
     }
 
 BracedContent
-  &EOS NestedBlockStatements -> $2
-  TrailingComment* Statement
+  NestedBlockStatements
+  TrailingComment* Statement ->
+    const expressions = [["", $2]]
+    return {
+      type: "BlockStatement",
+      expressions,
+      children: [$1, expressions],
+      bare: true,
+    }
 
 NestedBlockStatements
   PushIndent NestedBlockStatement*:statements PopIndent ->
     if (!statements.length) return $skip
-    return statements
+
+    const first = statements[0]
+    // separate EOS from indent
+    const ws = first[0]
+    const indent = ws.pop()
+    first[0] = indent
+
+    return {
+      type: "BlockStatement",
+      expressions: statements,
+      children: [ws, statements],
+      bare: true,
+    }
 
 NestedBlockStatement
   Nested StatementListItem StatementDelimiter
@@ -1261,7 +1276,7 @@ BracedObjectLiteral
     }
 
 BracedObjectLiteralContent
-  &EOS NestedPropertyDefinitions -> $2
+  NestedPropertyDefinitions
   __ PropertyDefinitionList ( __ Comma )? ->
     if ($1.length) {
       $2.splice(0, 0, ...$1)
@@ -1272,13 +1287,13 @@ BracedObjectLiteralContent
     return $2
 
 NestedObjectLiteral
-  InsertOpenBrace &EOS NestedPropertyDefinitions InsertNewline InsertIndent InsertCloseBrace ->
-    $3.unshift($1)
-    $3.push($4, $5, $6)
+  InsertOpenBrace NestedPropertyDefinitions InsertNewline InsertIndent InsertCloseBrace ->
+    $2.unshift($1)
+    $2.push($3, $4, $5)
 
     return {
       type: "ObjectExpression",
-      children: $3,
+      children: $2,
     }
 
 NestedPropertyDefinitions
@@ -1582,11 +1597,8 @@ EmptyStatement
 
 # https://262.ecma-international.org/#prod-BlockStatement
 BlockStatement
-  __ OpenBrace EOS NestedBlockStatements:exps __ CloseBrace !( __ "=" ) -> {
-    type: "BlockStatement",
-    children: $0,
-    expressions: exps,
-  }
+  # NOTE: Added lookahead for `=` to allow for destructuring assignment without parens
+  ExplicitBlock !( __ "=" ) -> $1
 
 # https://262.ecma-international.org/#prod-IfStatement
 IfStatement
@@ -1628,7 +1640,7 @@ UnlessExpression
 # Block of expressions that can't include pure statements
 ExpressionBlock
   # NOTE: Added indentation based implied braces
-  InsertOpenParen EOS NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseParen ->
+  InsertOpenParen NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseParen ->
     exps[exps.length-1].pop()
     return {
       type: "BlockExpressions",
@@ -2047,9 +2059,7 @@ SwitchExpression
 
 # https://262.ecma-international.org/#prod-CaseBlock
 CaseBlock
-  __ OpenBrace &EOS NestedCaseClauses:clauses __ CloseBrace ->
-    $0.splice(2, 1)
-
+  __ OpenBrace NestedCaseClauses:clauses __ CloseBrace ->
     return {
       type: "CaseBlock",
       clauses: clauses,
@@ -2057,9 +2067,7 @@ CaseBlock
     }
 
   # NOTE: Added optional braces with nesting
-  &EOS InsertOpenBrace NestedCaseClauses:clauses InsertNewline InsertIndent InsertCloseBrace ->
-    $0.shift()
-
+  InsertOpenBrace NestedCaseClauses:clauses InsertNewline InsertIndent InsertCloseBrace ->
     return {
       type: "CaseBlock",
       clauses: clauses,
@@ -2099,17 +2107,20 @@ CaseClause
       children: $0
     }
   # NOTE: Merged in default clause
-  Default ImpliedColon ( NestedBlockStatements / NoExpressions ):exps -> {
-    type: "DefaultClause",
-    expressions: exps,
-    children: $0
-  }
-  # NOTE: Added else from CoffeesScript
-  Else ImpliedColon ( NestedBlockStatements / ( TrailingComment* Statement ) ):exps ->
-    $1.token = "default"
+  Default ImpliedColon ( NestedBlockStatements / NoExpressions ):expressions ->
+    if (expressions.expressions) expressions = expressions.expressions
     return {
       type: "DefaultClause",
-      expressions: exps,
+      expressions,
+      children: $0
+    }
+  # NOTE: Added else from CoffeesScript
+  Else ImpliedColon ( NestedBlockStatements / ( TrailingComment* Statement ) ):expressions ->
+    $1.token = "default"
+    if (expressions.expressions) expressions = expressions.expressions
+    return {
+      type: "DefaultClause",
+      expressions,
       children: $0
     }
 
@@ -2698,7 +2709,10 @@ NonNewlineWhitespace
 
 # Optional whitespace including newlines and comments
 __
-  (Whitespace / Comment)*
+  # Fast path for whitespace without comments
+  # /(?!(?=\s|#|\/\/|\/\*))|[\s]+(?!(?:#|\/\/|\/\*))/ ->
+  #   return [{ $loc, token: $0 }]
+  ( Whitespace / Comment )*
 
 Whitespace
   [\s]+ ->
@@ -3117,10 +3131,10 @@ Namespace
   "namespace" NonIdContinue
 
 InterfaceBlock
-  __ OpenBrace EOS NestedInterfaceProperties __ CloseBrace
+  __ OpenBrace NestedInterfaceProperties __ CloseBrace
   __ OpenBrace ( __ InterfaceProperty )* __ CloseBrace
   # NOTE: Added indentation based implied braces
-  InsertOpenBrace EOS NestedInterfaceProperties InsertNewline InsertIndent InsertCloseBrace
+  InsertOpenBrace NestedInterfaceProperties InsertNewline InsertIndent InsertCloseBrace
 
 NestedInterfaceProperties
   PushIndent NestedInterfaceProperty*:props PopIndent ->
@@ -3141,10 +3155,10 @@ InterfacePropertyDelimiter
   &EOS
 
 NamespaceBlock
-  __ OpenBrace EOS NestedTypeDeclarations __ CloseBrace
+  __ OpenBrace NestedTypeDeclarations __ CloseBrace
   __ OpenBrace ( __ TypeDeclaration InterfacePropertyDelimiter)* __ CloseBrace
   # NOTE: Added indentation based implied braces
-  InsertOpenBrace EOS NestedTypeDeclarations InsertNewline InsertIndent InsertCloseBrace
+  InsertOpenBrace NestedTypeDeclarations InsertNewline InsertIndent InsertCloseBrace
 
 NestedTypeDeclarations
   PushIndent NestedTypeDeclaration*:decs PopIndent ->
@@ -3475,7 +3489,8 @@ Reset
         ts: true,
         children: [" as any"]
       }
-      module.prelude.push(["", "const ", indexOfRef, typeSuffix, " = [].indexOf", asAny, "\n"])
+      // [indent, statement]
+      module.prelude.push(["", ["const ", indexOfRef, typeSuffix, " = [].indexOf", asAny, "\n"]])
 
       return indexOfRef
     }
@@ -3496,7 +3511,8 @@ Reset
         ts: true,
         children: [" as any"]
       }
-      module.prelude.push(["", "const ", hasPropRef, typeSuffix, " = {}.hasOwnProperty", asAny, "\n"])
+      // [indent, statement]
+      module.prelude.push(["", ["const ", hasPropRef, typeSuffix, " = {}.hasOwnProperty", asAny, "\n"]])
 
       return hasPropRef
     }
@@ -4217,8 +4233,10 @@ Init
       })
 
       if (varIds.length) {
+        debugger
         // get indent from first statement
-        const indent = statements[0][0]
+        let indent = statements[0][0]
+        if (Array.isArray(indent)) indent = indent[indent.length - 1]
         statements.unshift([indent, "var ", varIds.join(", "), "\n"])
       }
     }
@@ -4268,7 +4286,7 @@ IndentedFurther
 # Indents one level deeper
 # Must be matched with PopIndent
 PushIndent
-  "" ->
+  &EOS "" ->
     module.currentIndent++
     if (module.verbose) {
       console.log("pushing indent", module.currentIndent)
