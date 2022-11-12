@@ -50,10 +50,7 @@ Arguments
 ArgumentsWithTrailingCallExpressions
   # Since this is recursive Arguments must consume input to avoid infinite recursion
   # NOTE: Do not allow trailing template literals to match
-  TrackIndent (( Arguments ( &EOS Samedent !Backtick CallExpressionRest )* PopIndent ) / PopIndent) ->
-    // No match, only restored indent
-    if (!$2) return $skip
-    return $2
+  Arguments ( Samedent !Backtick CallExpressionRest )*
 
 # https://262.ecma-international.org/#prod-ArgumentList
 ArgumentList
@@ -71,7 +68,7 @@ NestedArgument
 
 InlineArgumentExpressions
   # NOTE: Eliminated left recursion
-  ArgumentPart ( __ Comma TrailingComment* ArgumentPart )* ->
+  TrailingComment* ArgumentPart ( __ Comma TrailingComment* ( NestedObjectLiteral / ArgumentList ) )* ->
     if($2.length == 0) return $1
     return $0
 
@@ -986,7 +983,7 @@ BracedBlock
     }
 
   # One liner
-  InsertOpenBrace !EOS __ Statement:s InsertSpace InsertCloseBrace ->
+  InsertOpenBrace !EOS ( __ Statement ):s InsertSpace InsertCloseBrace ->
     // Remove !EOS assertion
     $0.splice(1, 1)
 
@@ -1744,7 +1741,7 @@ ForStatementControl
   !CoffeeForLoopsEnabled ForStatementParameters -> $2
   CoffeeForLoopsEnabled CoffeeForStatementParameters WhenCondition? ->
     if ($3) {
-      const indent = "".padStart((module.currentIndent + 1) * 2)
+      const indent = module.currentIndent.token + "  "
       module.insertTrimmingSpace($3, "")
       $2.blockPrefix.push([indent, {
         type: "IfStatement",
@@ -1761,7 +1758,7 @@ CoffeeForStatementParameters
   # NOTE: Coffee for loops can't have parens
   ( Await __ )? InsertOpenParen:open CoffeeForDeclaration:declaration CoffeeForIndex?:index __ ( In / Of / From ):kind ExtendedExpression:exp ( __ By ExtendedExpression )?:step InsertCloseParen:close ->
     let blockPrefix = []
-    const indent = "".padStart((module.currentIndent + 1) * 2)
+    const indent = module.currentIndent.token + "  "
 
     if (kind.token === "from") {
       if (step) {
@@ -1777,7 +1774,7 @@ CoffeeForStatementParameters
       module.insertTrimmingSpace(exp, "")
 
       if (declaration.own) {
-        const indent = "".padStart((module.currentIndent + 1) * 2)
+        const indent = module.currentIndent.token + "  "
         const hasPropRef = module.getHasPropRef()
 
         blockPrefix.push([indent, "if (!", hasPropRef, ".call(", exp, ", ", declaration, ")) continue\n"])
@@ -3377,7 +3374,7 @@ InsertNewline
 
 InsertIndent
   "" ->
-    return "".padStart(module.currentIndent * 2)
+    return module.currentIndent.token
 
 InsertSpace
   "" ->
@@ -3450,8 +3447,22 @@ CoffeeOfEnabled
 Reset
   "" ->
     // Storage for PushIndent/PopIndent
-    module.currentIndent = 0
-    module.indentLevels = [0]
+    module.indentLevels = [{
+      level: 0,
+      token: "",
+    }]
+
+    if (!module._init) {
+      module._init = true
+      Object.defineProperties(module, {
+        currentIndent: {
+          get() {
+            return module.indentLevels[module.indentLevels.length-1]
+          },
+        }
+      })
+    }
+
     module.verbose = false
     module.config = {
       autoVar: false,
@@ -4233,7 +4244,6 @@ Init
       })
 
       if (varIds.length) {
-        debugger
         // get indent from first statement
         let indent = statements[0][0]
         if (Array.isArray(indent)) indent = indent[indent.length - 1]
@@ -4255,30 +4265,35 @@ Indent
 
     return {
       $loc,
-      token: "".padStart(level * 2),
+      token: $1.join(''),
       level
     }
 
-# Tracks current indentation without assuming that it should nest deeper
-# Must be matched with PopIndent
-TrackIndent
-  "" ->
-    module.indentLevels.push(module.currentIndent)
+# Used in PushIndent to keep track of the last indent level for nesting
+TrackIndented
+  Indent:indent ->
+    const {level} = indent
+
+    if (level <= module.currentIndent.level) {
+      return $skip
+    }
+
+    module.indentLevels.push(indent)
 
 Samedent
-  EOS? Indent:indent ->
+  EOS Indent:indent ->
     const { level } = indent
-    const currentIndent = module.indentLevels[module.indentLevels.length-1]
-    if (level === currentIndent) {
+    const currentIndentLevel = module.currentIndent.level
+    if (level === currentIndentLevel) {
       return $0
     }
     return $skip
 
 IndentedFurther
-  EOS? Indent:indent ->
+  EOS Indent:indent ->
     const { level } = indent
-    const currentIndent = module.indentLevels[module.indentLevels.length-1]
-    if (level > currentIndent) {
+    const currentIndentLevel = module.currentIndent.level
+    if (level > currentIndentLevel) {
       return $0
     }
     return $skip
@@ -4286,12 +4301,9 @@ IndentedFurther
 # Indents one level deeper
 # Must be matched with PopIndent
 PushIndent
-  &EOS "" ->
-    module.currentIndent++
-    if (module.verbose) {
-      console.log("pushing indent", module.currentIndent)
-    }
-    module.indentLevels.push(module.currentIndent)
+  # TrackIndented pushes the indent level if it is deeper than the current level
+  # it will skip if it is not deeper
+  &( EOS TrackIndented )
 
 PopIndent
   "" ->
@@ -4299,17 +4311,15 @@ PopIndent
       console.log("popping indent", module.indentLevels[module.indentLevels.length-1], "->", module.indentLevels[module.indentLevels.length-2])
     }
     module.indentLevels.pop()
-    module.currentIndent = module.indentLevels[module.indentLevels.length-1]
 
 Nested
-  EOS?:eos Indent:indent ->
+  EOS:eos Indent:indent ->
     const { level } = indent
-    const currentIndent = module.indentLevels[module.indentLevels.length-1]
+    const currentIndent = module.currentIndent
     if (module.verbose) {
-      console.log("global indent", module.currentIndent)
       console.log("Indented", level, currentIndent)
     }
-    if (level !== currentIndent) {
+    if (level !== currentIndent.level) {
       if (module.verbose) {
         console.log("skipped nested")
       }
