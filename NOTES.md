@@ -439,12 +439,12 @@ Timesheet
 2022-11-09 | 7.50  | character ranges `["a".."f"]`; object with multiple properties on a line with optional commas at eol; `{@id}`; refactor compatibility tests; coffeeLineContinuation; coffeeClass function fields; coffeeBinaryExistential; late assignments; not in; argument splat trailing dots; braceless inline object literals;
 2022-11-10 | 6.00  | when then; `switch(false)`; expressionized statement $ shadowing bugfix; iteration expressions; iteration return results; coffee for in, index; postfix expression statements within parens; binary op exand bugfix; postfix expressions within parentheses; unless expression;
 2022-11-11 | 5.50  | nested block refactor
-2022-11-12 | 2.00  | gh issues; nesting refactor; deeper indentation; nested function args
+2022-11-12 | 2.50  | gh issues; nesting refactor; deeper indentation; nested function args
 
-browser.coffee `postfix for expressions` inside `()`
-grammar.coffee `aligned deep nesting`
+browser.coffee - parse completes
+grammar.coffee - 577 single line semi-colon separated statements in one line function body
 helpers.coffee `heregex`
-lexer.coffee `postfix for expressions` inside `()`
+lexer.coffee - for expression inside function arguments
 
 - CoffeeCompat
   - [x] Ranges
