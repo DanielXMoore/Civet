@@ -131,9 +131,22 @@ UnaryExpression
   UnaryOp*:pre UpdateExpression:exp UnaryPostfix?:post ->
     // Handle "?" postfix
     if (post?.token === "?") {
-      // v1.1 Can remove parens when unnecessary once exp returns a full AST node to determine if they are actually needed
-      return {
-        children: ["(", ...pre, "(", exp, ") != null)"]
+      post = {
+        $loc: post.$loc,
+        token: " != null",
+      }
+
+      switch (exp.type) {
+        case "Identifier":
+        case "Literal":
+          return Object.assign({}, exp, {
+            children: [...pre, ...exp.children, post]
+          })
+        default:
+          return {
+            type: "ParenthesizedExpression",
+            children: ["(", ...pre, "(", exp, ")", post, ")"]
+          }
       }
     }
 
@@ -345,10 +358,15 @@ ConditionalExpression
     return $1
 
 TernaryRest
+  NestedTernaryRest
   # NOTE: Ternary `a ? b : c` is disabled if CoffeeScript binary existential `a ? b` is enabled
-  !CoffeeBinaryExistentialEnabled __ QuestionMark ExtendedExpression __ Colon ExtendedExpression ->
-    $0.shift()
-    return $0
+  !CoffeeBinaryExistentialEnabled &" " TrailingComment* QuestionMark ExtendedExpression __ Colon ExtendedExpression ->
+    return $0.slice(2)
+
+NestedTernaryRest
+  PushIndent (Nested QuestionMark ExtendedExpression Nested Colon ExtendedExpression)? PopIndent ->
+    if ($2) return $2
+    return $skip
 
 # https://262.ecma-international.org/#prod-ShortCircuitExpression
 ShortCircuitExpression
@@ -1639,24 +1657,39 @@ UnlessClause
 
 # NOTE: Added IfExpression from CoffeeScript
 IfExpression
-  IfClause:clause ExpressionBlock:b ( __ Else ExpressionBlock )?:e ->
+  IfClause:clause ExpressionBlock:b ElseExpressionClause?:e ->
     return module.expressionizeIfClause(clause, b, e)
 
 UnlessExpression
-  UnlessClause:clause ExpressionBlock:b ( __ Else ExpressionBlock )?:e ->
+  UnlessClause:clause ExpressionBlock:b ElseExpressionClause?:e ->
     return module.expressionizeIfClause(clause, b, e)
+
+ElseExpressionClause
+  ( ( Samedent Else ) / ( TrailingComment* Else ) ) ElseExpressionBlock ->
+    return [...$1, $2]
 
 # Block of expressions that can't include pure statements
 ExpressionBlock
-  # NOTE: Added indentation based implied braces
   InsertOpenParen NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseParen ->
+    // Remove trailing expression delimiter
     exps[exps.length-1].pop()
     return {
       type: "BlockExpressions",
       expressions: exps,
       children: $0,
     }
-  Then? ExtendedExpression
+  Then ExtendedExpression
+
+ElseExpressionBlock
+  InsertOpenParen NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseParen ->
+    // Remove trailing expression delimiter
+    exps[exps.length-1].pop()
+    return {
+      type: "BlockExpressions",
+      expressions: exps,
+      children: $0,
+    }
+  !EOS ExtendedExpression -> $2
 
 NestedBlockExpressions
   PushIndent NestedBlockExpression*:exps PopIndent ->
@@ -2264,8 +2297,8 @@ ThrowExpression
     }
 
 MaybeNestedExpression
-  !EOS TrailingComment* AssignmentExpression ->
-    return [...$2, $3]
+  !EOS AssignmentExpression ->
+    return $2
   &EOS ObjectLiteral -> $2
 
 # https://262.ecma-international.org/#prod-ImportDeclaration
