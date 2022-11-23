@@ -440,7 +440,7 @@ Timesheet
 2022-11-10 | 6.00  | when then; `switch(false)`; expressionized statement $ shadowing bugfix; iteration expressions; iteration return results; coffee for in, index; postfix expression statements within parens; binary op exand bugfix; postfix expressions within parentheses; unless expression;
 2022-11-11 | 5.50  | nested block refactor
 2022-11-12 | 3.50  | gh issues; nesting refactor; deeper indentation; nested function args; single line multi-statement; access
-2022-11-22 | 1.50  | remove excess existential postfix parens; if/unless expression block improvements
+2022-11-22 | 6.00  | remove excess existential postfix parens; if/unless expression block improvements; reduce parser mutations for caching
 
 removing in place mutation so parser can use caching
 
