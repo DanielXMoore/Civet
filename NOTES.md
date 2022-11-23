@@ -442,6 +442,8 @@ Timesheet
 2022-11-12 | 3.50  | gh issues; nesting refactor; deeper indentation; nested function args; single line multi-statement; access
 2022-11-22 | 1.50  | remove excess existential postfix parens; if/unless expression block improvements
 
+removing in place mutation so parser can use caching
+
 browser.coffee - parse completes
 grammar.coffee - parse completes (slow)
 helpers.coffee `heregex`
