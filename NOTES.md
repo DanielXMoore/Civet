@@ -463,7 +463,7 @@ Timesheet
 2022-11-12 | 3.50  | gh issues; nesting refactor; deeper indentation; nested function args; single line multi-statement; access
 2022-11-22 | 6.00  | remove excess existential postfix parens; if/unless expression block improvements; reduce parser mutations for caching
 2022-11-23 | 6.00  | gh issues; caching
-2022-11-24 | 3.00  | expressionize iteration; reduce for rule handler mutations;
+2022-11-24 | 3.50  | expressionize iteration; reduce for rule handler mutations;
 
 removing in place mutation so parser can use caching
 
