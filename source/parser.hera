@@ -317,16 +317,10 @@ ArrowFunction
 ArrowFunctionTail
   ThinArrowFunction
   Parameters:parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
-    const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
-    const isBlock = expOrBlock.type === "BlockStatement"
-    if (module.config.implicitReturns && !isVoid && isBlock) {
-      module.addImplicitReturns(expOrBlock)
-    }
-
     return {
       type: "ArrowFunction",
       parameters,
-      returnType: suffix,
+      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
       ts: false,
       block: expOrBlock,
       children: $0,
@@ -465,7 +459,7 @@ FieldDefinition
       // TODO: => functions
       case "FunctionExpression":
         return {
-          type: "FunctionExpression",
+          ...exp,
           // Remove "function" token
           children: [id, ...exp.children.slice(1)]
         }
@@ -847,17 +841,12 @@ FunctionDeclaration
 
 FunctionSignature
   # NOTE: Merged in async and generator with optionals
-  ( Async __ )? Function Star? BindingIdentifier?:id __ Parameters:parameters ReturnTypeSuffix? ->
-    // id is an empty array if not present so it can be filled later without having to adjust the children array
-    // like in the const assignment function declaration transformation
-    id = id || []
-    $0[3] = id
-
+  ( Async __ )? Function Star? BindingIdentifier?:id __ Parameters:parameters ReturnTypeSuffix?:suffix ->
     return {
       type: "FunctionSignature",
       id,
       parameters,
-      returnType: $7,
+      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
       ts: false,
       block: null,
       children: $0,
@@ -873,17 +862,11 @@ FunctionExpression
       return signature
     }
 
-    const suffix = signature.returnType
-    const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
-    if (module.config.implicitReturns && !isVoid) {
-      module.addImplicitReturns(block)
-    }
-
     // Attach the block
     return {
-      ...$1,
+      ...signature,
       type: "FunctionExpression",
-      children: [...$1.children, block],
+      children: [...signature.children, block],
       block,
     }
 
@@ -917,23 +900,15 @@ FunctionExpression
 
 ThinArrowFunction
   Parameters:parameters ReturnTypeSuffix?:suffix _* Arrow:arrow BracedOrEmptyBlock:block ->
-    const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
-    if (module.config.implicitReturns && !isVoid) {
-      block = module.addImplicitReturns(block)
-    }
-
-    const id = []
-
     return {
       type: "FunctionExpression",
-      id,
+      id: undefined,
       parameters,
-      returnType: suffix,
+      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
       ts: false,
       block: block,
       children: [
         { $loc: arrow.$loc, token: "function" },
-        id,
         parameters,
         suffix,
         block
@@ -1413,15 +1388,10 @@ PropertyName
 MethodDefinition
   # NOTE: Not adding extra validation using PropertySetParameterList
   MethodSignature:sig BracedBlock:block ->
-    const isConstructor = sig.name       === "constructor"
-    const isVoid        = sig.returnType === "void"
-    const isSet         = sig.modifier   === "set"
-
-    if (module.config.implicitReturns && !isConstructor && !isSet && !isVoid) {
-      block = module.addImplicitReturns(block)
+    return {
+      type: "MethodDefinition",
+      children: $0,
     }
-
-    return $0
 
 MethodModifier
   # NOTE: Merged get/set definitions
@@ -1433,7 +1403,7 @@ MethodModifier
 
 # TypeScript method signature
 MethodSignature
-  ConstructorShorthand Parameters ->
+  ConstructorShorthand NonEmptyParameters ->
     return {
       type: "MethodSignature",
       children: $0,
@@ -2114,12 +2084,12 @@ EmptyCondition
 # NOTE: Added from CoffeeScript
 SwitchExpression
   SwitchStatement:e ->
-    // Add returns to when blocks
-    module.addImplicitReturns(e.children[2])
-    e.type = "SwitchExpression"
-    // wrap with IIFE
-    e.children = ["(()=>{", e.children, "})()"]
-    return e
+    return {
+      type: "SwitchExpression",
+      block: e.children[2],
+      // wrap with IIFE
+      children: ["(()=>{", e.children, "})()"]
+    }
 
 # https://262.ecma-international.org/#prod-CaseBlock
 CaseBlock
@@ -2495,7 +2465,7 @@ LexicalDeclaration
     // TODO: Better AST nodes so we don't have to adjust for whitespace nodes here
     if (exp?.children?.[0]?.token?.match(/^\s+$/)) exp.children.shift()
 
-    if (id.type === "Identifier" && exp?.type === "FunctionExpression" && exp.id.length === 0) {
+    if (id.type === "Identifier" && exp?.type === "FunctionExpression" && !exp.id) {
       const i = exp.children.findIndex(c => c?.token === "function") + 1
       exp = {
         ...exp,
@@ -3937,12 +3907,6 @@ Init
       node.splice(1, 0, "return ")
     }
 
-    module.addImplicitReturns = function(block) {
-      insertReturn(block)
-
-      return block
-    }
-
     module.isWhitespaceOrEmpty = function(node) {
       if (!node) return true
       if (!node.length) return true
@@ -4210,10 +4174,13 @@ Init
       return []
     }
 
+    // Gather nodes that match a predicate recursing into all unmatched children
+    // i.e. if the predicate matches a node it is not recursed into further
     function gatherRecursive(node, predicate) {
       if (node == null) return []
 
       if (Array.isArray(node)) {
+        // TODO: should this be `gatherRecursive`?
         return node.flatMap((n) => gatherNodes(n, predicate))
       }
 
@@ -4221,10 +4188,63 @@ Init
         return [node]
       }
 
+      // TODO: should this be `gatherRecursive`?
       return gatherNodes(node.children, predicate)
     }
 
+    function gatherRecursiveAll(node, predicate) {
+      if (node == null) return []
+
+      if (Array.isArray(node)) {
+        return node.flatMap((n) => gatherRecursiveAll(n, predicate))
+      }
+
+      const nodes = gatherRecursiveAll(node.children, predicate)
+      if (predicate(node)) {
+        nodes.push(node)
+      }
+
+      return nodes
+    }
+
+    function addImplicitReturns(statements) {
+      let fns = gatherRecursiveAll(statements, n => {
+        return (
+          n.type === "FunctionExpression" ||
+          n.type === "ArrowFunction"
+        )
+      })
+
+      fns.forEach(({ block, returnType }) => {
+        const isVoid  = returnType  === "void"
+        const isBlock = block?.type === "BlockStatement"
+        if (!isVoid && isBlock) {
+          insertReturn(block)
+        }
+      })
+
+      gatherRecursiveAll(statements, n => n.type === "MethodDefinition")
+      .forEach(({children: [sig, block]}) => {
+        const isConstructor = sig.name       === "constructor"
+        const isVoid        = sig.returnType === "void"
+        const isSet         = sig.modifier   === "set"
+
+        if (!isConstructor && !isSet && !isVoid) {
+          insertReturn(block)
+        }
+      })
+
+      // Add to SwitchExpressions
+      gatherRecursiveAll(statements, n => n.type === "SwitchExpression")
+      .forEach(({ block }) => {
+        insertReturn(block)
+      })
+    }
+
     module.processProgram = function(statements) {
+      if (module.config.implicitReturns) {
+        addImplicitReturns(statements)
+      }
       // Insert prelude
       statements.unshift(...module.prelude)
 
