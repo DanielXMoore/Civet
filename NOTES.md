@@ -316,10 +316,16 @@ Debugging Hera
 Wrap an individual test with `describe.only "", ->`, throw a `debugger` statement into a parser rule, then `yarn test --inspect-brk`. Open up
 Chrome dev tools and step through.
 
-Adds a bright green cursor to the current position.
+Adds a bright green cursor to the current position:
 
 ```javascript
 console.log(`${state.input.slice(0, state.pos)}%c^%c${state.input.slice(state.pos)}`, 'color: lime', 'color: inherit')
+```
+
+Or make the current letter green and underlined:
+
+```javascript
+console.log(`${state.input.slice(0, state.pos)}%c${state.input[state.pos]}\u0332%c${state.input.slice(state.pos+1)}`, 'color: lime', 'color: inherit')
 ```
 
 Getting current location in parse stack:
@@ -365,6 +371,21 @@ Currently this is colliding with the PostfixStatement. There's probably a clean 
 Expression/AssignmentExpression don't include the ExpressionizedStatements ExtendExpression does.
 
 This lets the specific places in the parser choose when and where to enable them.
+
+Hera Caching / PEG Caching
+---
+
+Caching can improve the worst case run times and allow for more flexible/liberal use of backtracking in the parser at the cost of
+increased average run time, avoiding mutation of parse results in the rule handlers, avoiding use of global state.
+
+For rules that require global state they can be excluded from caching (NOTE: may also need to exclude any rules up the tree that depend on those rules).
+
+Some follow on work to Hera can make this much easier but for now we're using an `enter`/`exit` event for rules. When the `enter`
+event returns a value of `{cache: ParseResult}` then the rule is skipped and returns the cached result. The `exit` event is called with
+the rule name, state (position), and parse result and can be used to populate a cache for future enter events.
+
+The cache is for each rule name store a result based on position, including `undefined` results to indicate that a match was not found at that position.
+This allows for fairly aggressive backtracking to re-interpret nearly identical leftward productions based on a token that appears much later.
 
 Timesheet
 ---
@@ -441,6 +462,8 @@ Timesheet
 2022-11-11 | 5.50  | nested block refactor
 2022-11-12 | 3.50  | gh issues; nesting refactor; deeper indentation; nested function args; single line multi-statement; access
 2022-11-22 | 6.00  | remove excess existential postfix parens; if/unless expression block improvements; reduce parser mutations for caching
+2022-11-23 | 6.00  | gh issues; caching
+2022-11-24 | 3.00  | expressionize iteration; reduce for rule handler mutations;
 
 removing in place mutation so parser can use caching
 
