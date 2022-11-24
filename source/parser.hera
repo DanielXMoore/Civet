@@ -17,10 +17,9 @@ TopLevelStatement
 ExtendedExpression
   # NOTE: Added IfExpression
   __ ExpressionizedStatement ->
-    if ($1.length) {
-      $2.children.splice(0, 0, ...$1)
-    }
-    return $2
+    return Object.assign({}, $2, {
+      children: [...$1, ...$2.children]
+    })
   AssignmentExpression
 
 ExpressionizedStatement
@@ -153,36 +152,36 @@ UnaryExpression
     // Combine unary - to create negative numeric literals
     if (exp.type === "Literal") {
       if (pre.length === 1 && pre[0].token === "-") {
-        exp.raw = `-${exp.raw}`
-        exp.children.unshift(pre[0])
-        if (post) exp.children.push(post)
-        return exp
+        const children = [pre[0], ...exp.children]
+        if (post) exp.children./**/push(post)
+
+        return {
+          type: "Literal",
+          children,
+          raw: `-${exp.raw}`
+        }
       }
     }
 
     if (exp.children) {
-      exp.children.unshift(...pre)
-      if (post) exp.children.push(post)
-      return exp
+      const children = [...pre, ...exp.children]
+      if (post) children./**/push(post)
+      return Object.assign({}, exp, { children })
     } else if (Array.isArray(exp)) {
-      exp.unshift(...pre)
-      if (post) exp.push(post)
-      return {
-        children: exp
-      }
+      const children = [...pre, ...exp]
+      if (post) children./**/push(post)
+      return { children }
     } else {
-      const result = [...pre, exp]
-      if (post) result.push(post)
-      return {
-        children: result
-      }
+      const children = [...pre, exp]
+      if (post) children./**/push(post)
+      return { children }
     }
 
   # NOTE: This is a little hacky to match CoffeeScript's behavior
   # https://coffeescript.org/#try:do%20x%20%2B%20y%0Ado%20x%20%3D%20y%0Ado%20-%3E%20x%20%3D%201
   CoffeeDoEnabled Do __:ws ( ( LeftHandSideExpression !( __ AssignmentOpSymbol ) ) / ArrowFunction / ExtendedExpression ):exp ->
-    module.insertTrimmingSpace(ws, "")
-    return ["(", ws, exp, ")()"]
+    ws = module.insertTrimmingSpace(ws, "")
+    return ["(", ...ws, exp, ")()"]
 
 UnaryPostfix
   QuestionMark
@@ -203,15 +202,20 @@ UpdateExpressionSymbol
 # https://262.ecma-international.org/#prod-AssignmentExpression
 AssignmentExpression
   # NOTE: Try to match a single line assignment expression before matching newline then assignment expression
-  TrailingComment* AssignmentExpressionTail ->
-    if ($1.length) {
-      if ($2.children) {
-        $2.children.splice(0, 0, ...$1)
-        return $2
+  TrailingComment*:ws AssignmentExpressionTail:tail ->
+    if (ws.length) {
+      // Glom whitespace into identifiers and literals to ease checking of "simple" refs
+      // NOTE: This can get weird if we depend on the specific location of children
+      if (tail.children && tail.type !== "IterationExpression") {
+        return {
+          ...tail,
+          children: [...ws, ...tail.children]
+        }
       }
       return $0
     }
-    return $2
+    return tail
+
   __ AssignmentExpressionTail
 
 AssignmentExpressionTail
@@ -238,7 +242,7 @@ ActualAssignment
       // Only wrap with one set of parens
       if (lhs.type === "ObjectExpression") {
         lhs.children.splice(0, 0, "(")
-        tail.push(")")
+        tail./**/push(")")
         break
       }
     }
@@ -309,23 +313,18 @@ YieldTail
 
 # https://262.ecma-international.org/#prod-ArrowFunction
 ArrowFunction
-  ( Async __ )? ArrowFunctionTail ->
-    if ($1) $2.children.unshift($1)
-    return $2
+  ( Async __ )? ArrowFunctionTail:tail ->
+    return Object.assign({}, tail, {
+      children: [...($1 || []), ...tail.children]
+    })
 
 ArrowFunctionTail
   ThinArrowFunction
   Parameters:parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
-    const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
-    const isBlock = expOrBlock.type === "BlockStatement"
-    if (module.config.implicitReturns && !isVoid && isBlock) {
-      module.addImplicitReturns(expOrBlock)
-    }
-
     return {
       type: "ArrowFunction",
       parameters,
-      returnType: suffix,
+      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
       ts: false,
       block: expOrBlock,
       children: $0,
@@ -352,8 +351,7 @@ ConditionalExpression
   # NOTE: Using ExtendedExpression to allow for If/Switch expressions
   ShortCircuitExpression TernaryRest? ->
     if ($2) {
-      $2.unshift($1)
-      return $2
+      return [$1, ...$2]
     }
     return $1
 
@@ -399,7 +397,11 @@ ParenthesizedExpression
         case "IterationStatement":
         case "ForStatement":
           clause = module.addPostfixStatement(exp, ...post)
-          return module.expressionizeIteration(clause)
+          return {
+            type: "IterationExpression",
+            children: [clause],
+            block: clause.block,
+          }
         case "IfStatement":
           clause = module.expressionizeIfClause(post[1], exp)
           return clause
@@ -464,10 +466,11 @@ FieldDefinition
     switch (exp.type) {
       // TODO: => functions
       case "FunctionExpression":
-        // Remove "function" token
-        exp.children.shift()
-        exp.id.push(id)
-        return exp
+        return {
+          ...exp,
+          // Remove "function" token
+          children: [id, ...exp.children.slice(1)]
+        }
       default:
         return [id, " = ", exp]
     }
@@ -551,8 +554,8 @@ MemberExpressionRest
     if ($1) {
       // Optional followed by a slice expression
       if ($1.length === 2 && $2.type === "SliceExpression") {
-        // Remove '.' from optional since it present in '.slice'
-        $1.pop()
+        // Remove '.' from optional since it is present in '.slice'
+        return [$1[0], $2]
       }
       return $0
     }
@@ -560,7 +563,9 @@ MemberExpressionRest
   # NOTE: Combined Optional and Property access
   # TODO: this doesn't yet work for arbitrarily deep nesting, only the first level
   IndentedFurther? PropertyAccess ->
-    if ($1) $2.children.unshift($1)
+    if ($1) return Object.assign({}, $2, {
+      children: [$1, ...$2.children]
+    })
     return $2
   # NOTE: Added TypeScript '!' non-null assertion
   NonNullAssertion
@@ -573,7 +578,7 @@ MemberBracketContent
       // TODO: Comments here should make it into the output
       // const ws  = $3[0]
       const sep = $3[1]
-      const end = $3[2]
+      let end = $3[2]
       const inclusive = sep.token === ".."
 
       sep.token = ", "
@@ -590,7 +595,7 @@ MemberBracketContent
       }
 
       if (inclusive) {
-        module.insertTrimmingSpace(end, "")
+        end = module.insertTrimmingSpace(end, "")
         return {
           type: "SliceExpression",
           start: $2,
@@ -612,11 +617,13 @@ MemberBracketContent
 
 PropertyAccess
   ( QuestionMark / NonNullAssertion )? Dot ( IdentifierName / PrivateIdentifier ):id ->
-    id.type = "PropertyAccess"
-    id.children.unshift($2)
-    if ($1) id.children.unshift($1)
+    const children = [$2, ...id.children]
+    if ($1) children./**/unshift($1)
 
-    return id
+    return {
+      type: "PropertyAccess",
+      children,
+    }
 
   # NOTE: Added CoffeeScript :: prototype shorthand
   DoubleColon:p IdentifierName?:id ->
@@ -678,41 +685,47 @@ ParameterElementDelimiter
 # https://262.ecma-international.org/#prod-BindingIdentifier
 BindingIdentifier
   __ Identifier ->
-    $2.children.unshift($1)
-    return $2
+    return Object.assign({}, $2, {
+      children: [...$1, ...$2.children],
+    })
 
 # https://262.ecma-international.org/#prod-BindingPattern
 BindingPattern
   __ ObjectBindingPattern:p ->
-    p.children.unshift($1)
-    return p
+    return {
+      children: [...$1, p],
+      names: p.names,
+    }
   __ ArrayBindingPattern:p ->
-    p.children.unshift($1)
-    return p
+    return {
+      children: [...$1, p],
+      names: p.names,
+    }
 
 # https://262.ecma-international.org/#prod-ObjectBindingPattern
 # NOTE: Simplified from spec
 ObjectBindingPattern
   OpenBrace ObjectBindingPatternContent:c __ CloseBrace ->
-    c.children.unshift($1)
-    c.children.push($3, $4)
-    return c
+    return {
+      children: [$1, ...c.children, ...$3, $4],
+      names: c.names,
+    }
 
 ObjectBindingPatternContent
   # NOTE: Added indentation based binding properties
   NestedBindingProperties
   BindingProperty*:props ( __ BindingRestProperty )?:rest ->
     const names = props.flatMap((p) => p.names)
+    const children = [...props]
 
     if (rest) {
-      props.push(...rest)
-      names.push(...rest[1].names)
+      children./**/push(...rest)
+      names./**/push(...rest[1].names)
     }
 
     return {
-      type: "BindingPattern",
       names,
-      children: props
+      children,
     }
 
 # https://262.ecma-international.org/#prod-ArrayBindingPattern
@@ -720,7 +733,6 @@ ObjectBindingPatternContent
 ArrayBindingPattern
   OpenBracket ArrayBindingPatternContent:c __ CloseBracket ->
     return {
-      type: "BindingPattern",
       names: c.names,
       children: $0
     }
@@ -730,16 +742,16 @@ ArrayBindingPatternContent
   NestedBindingElements
   ( BindingElement / Elision )*:props ( __ BindingRestElement )?:rest ->
     const names = props.flatMap((p) => p.names || [])
+    const children = [...props]
 
     if (rest) {
-      props.push(...rest)
-      names.push(...rest[1].names)
+      children./**/push(...rest)
+      names./**/push(...rest[1].names)
     }
 
     return {
-      type: "BindingPattern",
       names,
-      children: props
+      children,
     }
 
 # https://262.ecma-international.org/#prod-Elision
@@ -751,73 +763,74 @@ NestedBindingProperties
   PushIndent NestedBindingProperty*:props NestedBindingRestProperty?:rest PopIndent ->
     if (!(props.length || rest)) return $skip
     const names = props.flatMap(p => p.names)
+    const children = [...props]
     if (rest) {
-      props.push(rest)
-      names.push(...rest.names)
+      children./**/push(rest)
+      names./**/push(...rest.names)
     }
     return {
-      type: "BindingPattern",
-      children: props,
-      names: names,
+      children,
+      names,
     }
 
 NestedBindingProperty
-  Nested BindingProperty ->
-    $2.children.unshift($1)
-    return $2
+  Nested:indent BindingProperty:prop ->
+    return Object.assign({}, prop, {
+      children: [indent, ...prop.children],
+    })
 
 # https://262.ecma-international.org/#prod-BindingProperty
 BindingProperty
   __ PropertyName __ Colon ( BindingIdentifier / BindingPattern ):b Initializer? ObjectPropertyDelimiter ->
     return {
-      type: "BindingPattern",
       names: b.names,
       children: $0
     }
   BindingIdentifier:b Initializer? ObjectPropertyDelimiter ->
     return {
-      type: "BindingPattern",
       names: b.names,
       children: $0
     }
 
 NestedBindingRestProperty
-  Nested BindingRestProperty ->
-    $2.children.unshift($1)
-    return $2
+  Nested:indent BindingRestProperty:prop ->
+    return Object.assign({}, prop, {
+      children: [indent, ...prop.children],
+    })
 
 # https://262.ecma-international.org/#prod-BindingRestProperty
 BindingRestProperty
-  DotDotDot BindingIdentifier ->
-    $2.children.unshift($1)
-    return $2
+  DotDotDot:d BindingIdentifier:id ->
+    return Object.assign({}, id, {
+      children: [d, ...id.children],
+    })
 
 NestedBindingElements
   PushIndent NestedBindingElement*:props ( Nested BindingRestElement )?:rest PopIndent ->
     if (!(props.length || rest)) return $skip
     const names = props.flatMap(p => p.names)
+    const children = [...props]
     if (rest) {
-      props.push(...rest)
-      names.push(...rest[1].names)
+      children./**/push(...rest)
+      names./**/push(...rest[1].names)
     }
 
     return {
-      type: "BindingPattern",
-      children: props,
-      names: names,
+      children,
+      names,
     }
 
 NestedBindingElement
-  Nested BindingElement ->
-    $2.children.unshift($1)
-    return $2
+  Nested:indent BindingElement:element ->
+    return Object.assign({}, element, {
+      children: [indent, ...element.children],
+    })
 
 # https://262.ecma-international.org/#prod-BindingElement
 BindingElement
   # NOTE: Merged in SingleNameBinding
   ( BindingIdentifier / BindingPattern ):binding Initializer? ArrayElementDelimiter ->
     return {
-      type: "BindingPattern",
       names: binding.names,
       children: $0
     }
@@ -825,8 +838,10 @@ BindingElement
 # https://262.ecma-international.org/#prod-BindingRestElement
 BindingRestElement
   DotDotDot ( BindingIdentifier / BindingPattern ):binding ->
-    binding.children.unshift($1)
-    return binding
+    return {
+      names: binding.names,
+      children: [$1, ...binding.children],
+    }
 
 # https://262.ecma-international.org/#prod-FunctionDeclaration
 FunctionDeclaration
@@ -834,17 +849,12 @@ FunctionDeclaration
 
 FunctionSignature
   # NOTE: Merged in async and generator with optionals
-  ( Async __ )? Function Star? BindingIdentifier?:id __ Parameters:parameters ReturnTypeSuffix? ->
-    // id is an empty array if not present so it can be filled later without having to adjust the children array
-    // like in the const assignment function declaration transformation
-    id = id || []
-    $0[3] = id
-
+  ( Async __ )? Function Star? BindingIdentifier?:id __ Parameters:parameters ReturnTypeSuffix?:suffix ->
     return {
       type: "FunctionSignature",
       id,
       parameters,
-      returnType: $7,
+      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
       ts: false,
       block: null,
       children: $0,
@@ -860,17 +870,13 @@ FunctionExpression
       return signature
     }
 
-    const suffix = signature.returnType
-    const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
-    if (module.config.implicitReturns && !isVoid) {
-      module.addImplicitReturns(block)
-    }
-
     // Attach the block
-    $1.block = block
-    $1.children.push(block)
-    $1.type = "FunctionExpression"
-    return $1
+    return {
+      ...signature,
+      type: "FunctionExpression",
+      children: [...signature.children, block],
+      block,
+    }
 
   # Ruby/Crystal style block shorthand
   Ampersand !_ CallExpressionRest+ ->
@@ -902,23 +908,15 @@ FunctionExpression
 
 ThinArrowFunction
   Parameters:parameters ReturnTypeSuffix?:suffix _* Arrow:arrow BracedOrEmptyBlock:block ->
-    const isVoid = suffix?.children?.[1]?.[0]?.[1]?.token === "void"
-    if (module.config.implicitReturns && !isVoid) {
-      block = module.addImplicitReturns(block)
-    }
-
-    const id = []
-
     return {
       type: "FunctionExpression",
-      id,
+      id: undefined,
       parameters,
-      returnType: suffix,
+      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
       ts: false,
       block: block,
       children: [
         { $loc: arrow.$loc, token: "function" },
-        id,
         parameters,
         suffix,
         block
@@ -931,17 +929,17 @@ Arrow
 
 ExplicitBlock
   __ OpenBrace NestedBlockStatements:block __ CloseBrace ->
-    block.bare = false
-    block.children.unshift($1, $2)
-    block.children.push($4, $5)
-    return block
+    return Object.assign({}, block, {
+      children: [$1, $2, ...block.children, $4, $5],
+      bare: false,
+    })
 
 ImplicitNestedBlock
   InsertOpenBrace NestedBlockStatements:block InsertNewline InsertIndent InsertCloseBrace ->
-    block.bare = false
-    block.children.unshift($1)
-    block.children.push($3, $4, $5)
-    return block
+    return Object.assign({}, block, {
+      children: [$1, ...block.children, $3, $4, $5],
+      bare: false,
+    })
 
 # NOTE: This is the body of if/else/for/case etc.
 Block
@@ -985,9 +983,12 @@ EmptyBlock
 # This is a block that must include braces (function body, try/catch/finally)
 BracedBlock
   TrailingComment* OpenBrace BracedContent:block __ CloseBrace ->
-    block.bare = false
-    block.children.unshift($1, $2)
-    block.children.push($4, $5)
+    return {
+      type: "BlockStatement",
+      expressions: block.expressions,
+      children: [$1, $2, ...block.children, $4, $5],
+      bare: false,
+    }
     return block
 
   # NOTE: Added indentation based implied braces
@@ -995,31 +996,26 @@ BracedBlock
 
   # Immediate nested object literal
   InsertOpenBrace &EOS ObjectLiteral:s InsertCloseBrace ->
-    // Remove &EOS assertion
-    $0.splice(1, 1)
-
     return {
       type: "BlockStatement",
       expressions: [s],
-      children: $0,
+      // Remove &EOS assertion
+      children: [$1, s, $3],
     }
 
   # One liner
-  InsertOpenBrace !EOS SingleLineStatements:s InsertSpace InsertCloseBrace ->
-    // Remove !EOS assertion
-    $0.splice(1, 1)
-
+  InsertOpenBrace:o !EOS SingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ->
     return {
       type: "BlockStatement",
       expressions: s,
-      children: $0,
+      // Remove !EOS assertion
+      children: [o, s, ws, c],
     }
 
 SingleLineStatements
   ( TrailingComment* Statement ):first ( ( TrailingComment* Semicolon TrailingComment* ) Statement )*:rest ->
     if (rest.length) {
-      rest.unshift(first)
-      return rest
+      return [first, ...rest]
     }
     return [first]
 
@@ -1041,13 +1037,13 @@ NestedBlockStatements
     const first = statements[0]
     // separate EOS from indent
     const ws = first[0]
-    const indent = ws.pop()
+    const [indent] = ws.slice(-1)
     first[0] = indent
 
     return {
       type: "BlockStatement",
       expressions: statements,
-      children: [ws, statements],
+      children: [ws.slice(0, -1), statements],
       bare: true,
     }
 
@@ -1114,8 +1110,9 @@ IdentifierReference
 ArrayLiteral
   OpenBracket ArrayLiteralContent:content __ CloseBracket ->
     if (content.type === "RangeExpression") {
-      content.children.push(...$3)
-      return content
+      return Object.assign({}, content, {
+        children: [...content.children, ...$3],
+      })
     }
 
     let children
@@ -1133,7 +1130,7 @@ ArrayLiteral
     return {
       type: "ArrayExpression",
       children,
-      names: names,
+      names,
     }
 
 ArrayLiteralContent
@@ -1228,7 +1225,7 @@ NestedElement
   Nested ElementList ArrayElementDelimiter ->
     const result = [...$1, ...$2]
     if ($3) {
-      result.push($3)
+      result./**/push($3)
     }
     return result
 
@@ -1258,7 +1255,7 @@ ElementListRest
   __ Comma __ ArrayElementExpression ->
     const result = [...$1, $2, ...$3]
     if ($4) {
-      result.push($4)
+      result./**/push($4)
     }
     return result
 
@@ -1281,16 +1278,12 @@ ObjectLiteral
 BracedObjectLiteral
   OpenBrace BracedObjectLiteralContent? __ CloseBrace ->
     if($2) {
-      $2.unshift($1)
-      if ($3.length) {
-        $2.push(...$3)
-      }
-      $2.push($4)
+      const children = [$1, ...$2, ...$3, $4]
 
       return {
         type: "ObjectExpression",
-        children: $2,
-        names: $2.flatMap((c) => {
+        children,
+        names: children.flatMap((c) => {
           return c.names || []
         }),
       }
@@ -1305,22 +1298,17 @@ BracedObjectLiteral
 BracedObjectLiteralContent
   NestedPropertyDefinitions
   __ PropertyDefinitionList ( __ Comma )? ->
-    if ($1.length) {
-      $2.splice(0, 0, ...$1)
-    }
+    const result = [...$1, ...$2]
     if ($3) {
-      $2.push($3)
+      result./**/push(...$3[0], $3[1])
     }
-    return $2
+    return result
 
 NestedObjectLiteral
   InsertOpenBrace NestedPropertyDefinitions InsertNewline InsertIndent InsertCloseBrace ->
-    $2.unshift($1)
-    $2.push($3, $4, $5)
-
     return {
       type: "ObjectExpression",
-      children: $2,
+      children: [$1, ...$2, $3, $4, $5],
     }
 
 NestedPropertyDefinitions
@@ -1333,7 +1321,7 @@ NestedPropertyDefinition
   Nested PropertyDefinition ObjectPropertyDelimiter ->
     const result = [...$1, $2]
     if ($3) {
-      result.push($3)
+      result./**/push($3)
     }
     return result
 
@@ -1408,15 +1396,10 @@ PropertyName
 MethodDefinition
   # NOTE: Not adding extra validation using PropertySetParameterList
   MethodSignature:sig BracedBlock:block ->
-    const isConstructor = sig.name       === "constructor"
-    const isVoid        = sig.returnType === "void"
-    const isSet         = sig.modifier   === "set"
-
-    if (module.config.implicitReturns && !isConstructor && !isSet && !isVoid) {
-      block = module.addImplicitReturns(block)
+    return {
+      type: "MethodDefinition",
+      children: $0,
     }
-
-    return $0
 
 MethodModifier
   # NOTE: Merged get/set definitions
@@ -1428,7 +1411,7 @@ MethodModifier
 
 # TypeScript method signature
 MethodSignature
-  ConstructorShorthand Parameters ->
+  ConstructorShorthand NonEmptyParameters ->
     return {
       type: "MethodSignature",
       children: $0,
@@ -1491,7 +1474,14 @@ PrivateIdentifier
 
 # https://262.ecma-international.org/#prod-AssignmentOperator
 AssignmentOp
-  AssignmentOpSymbol ->
+  AssignmentOpSymbol TrailingComment* ->
+    if ($2.length) {
+      return {
+        token: $1,
+        children: [$1, ...$2]
+      }
+    }
+
     return { $loc, token: $1 }
 
 AssignmentOpSymbol
@@ -1632,9 +1622,12 @@ IfStatement
   # NOTE: Added paren-less condition
   # NOTE: Block isn't Statement so we can handle implied braces by nesting
   (IfClause / UnlessClause):clause Block:block ElseClause?:e ->
-    clause.children.push(block)
-    if (e) clause.children.push(e)
-    return clause
+    const children = [...clause.children, block]
+    if (e) children./**/push(e)
+    return {
+      type: "IfStatement",
+      children,
+    }
 
 ElseClause
   &EOS Samedent Else Block -> [$2, $3, $4]
@@ -1646,13 +1639,12 @@ IfClause
 UnlessClause
   Unless:kind Condition:condition ->
     // Rewrite unless to if
-    condition.children.unshift("(!")
-    condition.children.push(")")
     kind.token = "if"
 
     return {
       type: "IfStatement",
-      children: [kind, condition],
+      // TODO: Don't add unnecessary parens
+      children: [kind, ["(!", condition, ")"]],
     }
 
 # NOTE: Added IfExpression from CoffeeScript
@@ -1671,23 +1663,35 @@ ElseExpressionClause
 # Block of expressions that can't include pure statements
 ExpressionBlock
   InsertOpenParen NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseParen ->
-    // Remove trailing expression delimiter
-    exps[exps.length-1].pop()
+    // Remove final trailing expression delimiter
+    exps = exps.map((e, i) => {
+      if (i === exps.length - 1) {
+        return e.slice(0, -1)
+      }
+      return e
+    })
+
     return {
       type: "BlockExpressions",
       expressions: exps,
-      children: $0,
+      children: [$1, exps, $3, $4, $5],
     }
   Then ExtendedExpression
 
 ElseExpressionBlock
   InsertOpenParen NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseParen ->
-    // Remove trailing expression delimiter
-    exps[exps.length-1].pop()
+    // Remove final trailing expression delimiter
+    exps = exps.map((e, i) => {
+      if (i === exps.length - 1) {
+        return e.slice(0, -1)
+      }
+      return e
+    })
+
     return {
       type: "BlockExpressions",
       expressions: exps,
-      children: $0,
+      children: [$1, exps, $3, $4, $5],
     }
   !EOS ExtendedExpression -> $2
 
@@ -1709,20 +1713,25 @@ IterationStatement
 
 IterationExpression
   IterationStatement ->
-    return module.expressionizeIteration($1)
+    return {
+      type: "IterationExpression",
+      children: [$1],
+      block: $1.block,
+    }
 
 # NOTE: Added from CoffeeScript
 LoopStatement
   LoopClause:clause Block:block ->
-    clause.block = block
-    clause.children.push(block)
-    return clause
+    return {
+      type: "IterationStatement",
+      children: [...clause.children, block],
+      block,
+    }
 
 LoopClause
   Loop -> {
     type: "IterationStatement",
-    children: [ $1],
-    block: null
+    children: [$1],
   }
 
 # https://262.ecma-international.org/#prod-DoWhileStatement
@@ -1738,23 +1747,27 @@ DoWhileStatement
 WhileStatement
   # NOTE: Condition provides optional parens
   WhileClause:clause Block:block ->
-    clause.block = block
-    clause.children.push(block)
-    return clause
+    return {
+      type: "IterationStatement",
+      children: [...clause.children, block],
+      block: block
+    }
 
 WhileClause
   ( While / Until ):kind TrailingComment*:ws Condition:cond ->
     if (kind.token === "until") {
       kind.token = "while"
 
-      cond.children.unshift("(!")
-      cond.children.push(")")
+      // TODO: Don't add unnecessary parens
+      return {
+        type: "IterationStatement",
+        children: [kind, ...ws, ["(!", ...cond.children, ")"]]
+      }
     }
 
     return {
       type: "IterationStatement",
-      children: $0,
-      block: null,
+      children: [kind, ...ws, ...cond.children]
     }
 
 # https://262.ecma-international.org/#prod-ForStatement
@@ -1762,21 +1775,23 @@ WhileClause
 # NOTE: Merged into single rule
 ForStatement
   ForClause:clause Block:block ->
-    clause.children.push(block)
-    clause.block = block
+    // TODO: remove mutation
     if (clause.blockPrefix) {
       block.expressions.splice(0, 0, ...clause.blockPrefix)
     }
-    return clause
+    return {
+      ...clause,
+      children: [...clause.children, block],
+      block,
+    }
 
 ForClause
   For __ ForStatementControl:c  ->
     const {children, declaration} = c
-    children.splice(0, 0, $1, ...$2)
 
     return {
       type: "ForStatement",
-      children: children,
+      children: [$1, ...$2, ...children],
       declaration: declaration,
       block: null,
       blockPrefix: c.blockPrefix,
@@ -1787,10 +1802,9 @@ ForStatementControl
   CoffeeForLoopsEnabled CoffeeForStatementParameters WhenCondition? ->
     if ($3) {
       const indent = module.currentIndent.token + "  "
-      module.insertTrimmingSpace($3, "")
       $2.blockPrefix.push([indent, {
         type: "IfStatement",
-        children: ["if (!(", $3, ")) continue\n"],
+        children: ["if (!(", module.insertTrimmingSpace($3, ""), ")) continue\n"],
       }])
     }
 
@@ -1804,6 +1818,8 @@ CoffeeForStatementParameters
   ( Await __ )? InsertOpenParen:open CoffeeForDeclaration:declaration CoffeeForIndex?:index __ ( In / Of / From ):kind ExtendedExpression:exp ( __ By ExtendedExpression )?:step InsertCloseParen:close ->
     let blockPrefix = []
     const indent = module.currentIndent.token + "  "
+    exp = module.insertTrimmingSpace(exp, "")
+    declaration = module.insertTrimmingSpace(declaration, "")
 
     if (kind.token === "from") {
       if (step) {
@@ -1815,16 +1831,13 @@ CoffeeForStatementParameters
         throw new Error("Can't use 'by' with 'of' in CoffeeScript for loops")
       }
 
-      module.insertTrimmingSpace(declaration, "")
-      module.insertTrimmingSpace(exp, "")
-
       if (declaration.own) {
         const indent = module.currentIndent.token + "  "
         const hasPropRef = module.getHasPropRef()
 
-        blockPrefix.push([indent, "if (!", hasPropRef, ".call(", exp, ", ", declaration, ")) continue\n"])
+        blockPrefix./**/push([indent, "if (!", hasPropRef, ".call(", exp, ", ", declaration, ")) continue\n"])
       }
-      kind.token = "in "
+      kind.token = "in"
     } else if (kind.token === "in") { // CoffeeScript loop comprehensions
       const counterRef = {
         type: "Ref",
@@ -1845,10 +1858,10 @@ CoffeeForStatementParameters
         case "RangeExpression": {
           const {start, end, inclusive} = exp
 
-          const stepExp = step?.[2]
+          let stepExp = step?.[2]
           let stepRef
           if (stepExp) {
-            module.insertTrimmingSpace(stepExp, "")
+            stepExp = module.insertTrimmingSpace(stepExp, "")
             if (stepExp.type === "Literal") {
               stepRef = stepExp
             } else {
@@ -1896,7 +1909,7 @@ CoffeeForStatementParameters
             names: []
           }
 
-          blockPrefix.push(["", {
+          blockPrefix./**/push(["", {
             type: "AssignmentExpression",
             children: [], // Empty assignment to trigger auto-var
             names: varRef.names,
@@ -1932,11 +1945,10 @@ CoffeeForStatementParameters
       }
 
       const varRef = declaration
-
-      // Trim a single leading space if present
-      module.insertTrimmingSpace(exp, "")
-
-      const expRefDec = (expRef !== exp) ? [expRef, " = ", exp, ", "] : []
+      const expRefDec = (expRef !== exp)
+        // Trim a single leading space if present
+        ? [expRef, " = ", module.insertTrimmingSpace(exp, ""), ", "]
+        : []
 
       declaration = {
         type: "Declaration",
@@ -1947,12 +1959,12 @@ CoffeeForStatementParameters
       let indexAssignment
       let assignmentNames = [...varRef.names]
       if (index) {
-        module.insertTrimmingSpace(index, "")
+        index = module.insertTrimmingSpace(index, "")
         indexAssignment = [index, "="]
-        assignmentNames.push(...index.names)
+        assignmentNames./**/push(...index.names)
       }
 
-      blockPrefix.push([indent, {
+      blockPrefix./**/push([indent, {
         type: "AssignmentExpression",
         children: [varRef, " = ", expRef, "[", indexAssignment, counterRef, "]\n"],
         names: assignmentNames,
@@ -1967,14 +1979,15 @@ CoffeeForStatementParameters
 
     return {
       declaration,
-      children: $0,
+      children: [$1, open, declaration, $5, kind, " ", exp, close],
       blockPrefix,
     }
 
 CoffeeForIndex
-  TrailingComment* Comma TrailingComment* BindingIdentifier:id ->
-    id.children.unshift(...$1, ...$3)
-    return id
+  TrailingComment*:ws1 Comma TrailingComment*:ws2 BindingIdentifier:id ->
+    return Object.assign({}, id, {
+      children: [...ws1, ...ws2, ...id.children]
+    })
 
 CoffeeForDeclaration
   # NOTE: Coffee doesn't allow expression bindings like `for a.x in b`
@@ -2092,12 +2105,12 @@ EmptyCondition
 # NOTE: Added from CoffeeScript
 SwitchExpression
   SwitchStatement:e ->
-    // Add returns to when blocks
-    module.addImplicitReturns(e.children[2])
-    e.type = "SwitchExpression"
-    // wrap with IIFE
-    e.children = ["(()=>{", e.children, "})()"]
-    return e
+    return {
+      type: "SwitchExpression",
+      block: e.children[2],
+      // wrap with IIFE
+      children: ["(()=>{", e.children, "})()"]
+    }
 
 # https://262.ecma-international.org/#prod-CaseBlock
 CaseBlock
@@ -2122,10 +2135,11 @@ NestedCaseClauses
     return $skip
 
 NestedCaseClause
-  Nested CaseClause ->
-    // Bring the indent into the clause
-    $2.children.unshift($1)
-    return $2
+  Nested:indent CaseClause:clause ->
+    return Object.assign({}, clause, {
+      // Bring the indent into the clause
+      children: [indent, ...clause.children],
+    })
 
 # https://262.ecma-international.org/#prod-CaseClause
 CaseClause
@@ -2170,12 +2184,12 @@ CaseExpressionList
   ( _* ExpressionWithIndentedApplicationSuppressed ImpliedColon ) ( __ Comma ExpressionWithIndentedApplicationSuppressed ImpliedColon )* ->
     // Convert comma separated expression list to `case <exp>:`
     const result = $2.map(([ws, _comma, exp, col]) => {
-      module.insertTrimmingSpace(exp, "")
+      exp = module.insertTrimmingSpace(exp, "")
 
       if (ws.length) return [module.insertTrimmingSpace("case ", ws), exp, col]
       return ["case ", exp, col]
     })
-    result.unshift($1)
+    result./**/unshift($1)
 
     return result
 
@@ -2223,13 +2237,12 @@ CatchParameter
 # An expression with explicit or implied parentheses, for use in if/while/switch
 Condition
   ParenthesizedExpression !( TrailingComment* ( BinaryOp / AssignmentOp ) ) -> $1
-  InsertOpenParen ExpressionWithIndentedApplicationSuppressed:exp InsertCloseParen ->
+  InsertOpenParen:open ExpressionWithIndentedApplicationSuppressed:exp InsertCloseParen:close ->
     // Don't double wrap parethesized expressions
     if (exp.type === "ParenthesizedExpression") return exp
-    module.insertTrimmingSpace(exp, "")
     return {
       type: "ParenthesizedExpression",
-      children: $0
+      children: [open, module.insertTrimmingSpace(exp, ""), close],
     }
 
 ExpressionWithIndentedApplicationSuppressed
@@ -2333,8 +2346,11 @@ ImportClause
       }
     }
 
-    $1.type = "Declaration"
-    return $1
+    return {
+      type: "Declaration",
+      children: $0,
+      names: binding.names,
+    }
   NameSpaceImport
   NamedImports
 
@@ -2452,9 +2468,12 @@ LexicalDeclaration
   # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
   InsertConst:c ( BindingPattern / BindingIdentifier ):id TypeSuffix? __ ConstAssignment:ca ExtendedExpression:e ->
     // Adjust position to space before assignment to make TypeScript remapping happier
-    c.$loc = {
-      pos: ca.$loc.pos - 1,
-      length: ca.$loc.length + 1,
+    c = {
+      ...c,
+      $loc: {
+        pos: ca.$loc.pos - 1,
+        length: ca.$loc.length + 1,
+      }
     }
 
     let exp
@@ -2467,13 +2486,18 @@ LexicalDeclaration
     // TODO: Better AST nodes so we don't have to adjust for whitespace nodes here
     if (exp?.children?.[0]?.token?.match(/^\s+$/)) exp.children.shift()
 
-    if (id.type === "Identifier" && exp?.type === "FunctionExpression") {
-      if (exp.id.length === 0) {
-        exp.id.push(" ", id, $3, $4)
+    if (id.type === "Identifier" && exp?.type === "FunctionExpression" && !exp.id) {
+      const i = exp.children.findIndex(c => c?.token === "function") + 1
+      exp = {
+        ...exp,
+        // Insert id, type suffix, spacing
+        children: [...exp.children.slice(0, i), " ", id, $3, $4, ...exp.children.slice(i)]
       }
-      exp.type = "Declaration"
-      exp.names = id.names
-      return exp
+      return {
+        type: "Declaration",
+        children: [exp],
+        names: id.names,
+      }
     }
 
     return {
@@ -2489,13 +2513,22 @@ ConstAssignment
 # https://262.ecma-international.org/#prod-LexicalBinding
 LexicalBinding
   BindingPattern TypeSuffix? Initializer ->
-    if ($2) $1.children.push($2)
-    $1.children.push($3)
-    return $1
+    const children = [...$1.children]
+    if ($2) children./**/push($2)
+    children./**/push($3)
+    return {
+      children,
+      names: $1.names,
+    }
+
   BindingIdentifier TypeSuffix? Initializer? ->
-    if ($2) $1.children.push($2)
-    if ($3) $1.children.push($3)
-    return $1
+    const children = [...$1.children]
+    if ($2) children./**/push($2)
+    if ($3) children./**/push($3)
+    return {
+      children,
+      names: $1.names,
+    }
 
 # https://262.ecma-international.org/#prod-Initializer
 Initializer
@@ -2505,8 +2538,9 @@ Initializer
 # https://262.ecma-international.org/#prod-VariableStatement
 VariableStatement
   Var __ VariableDeclarationList ->
-    $3.children.splice(0, 0, $1, ...$2)
-    return $3
+    return Object.assign({}, $3, {
+      children: [$1, ...$2, ...$3.children],
+    })
 
 # https://262.ecma-international.org/#prod-VariableDeclarationList
 VariableDeclarationList
@@ -2529,14 +2563,22 @@ VariableDeclarationList
 # https://262.ecma-international.org/#prod-VariableDeclaration
 VariableDeclaration
   BindingPattern TypeSuffix? Initializer ->
-    if ($2) $1.children.push($2)
-    $1.children.push($3)
-    return $1
+    const children = [...$1.children]
+    if ($2) children./**/push($2)
+    children./**/push($3)
+    return {
+      children,
+      names: $1.names,
+    }
 
   BindingIdentifier TypeSuffix? Initializer? ->
-    if ($2) $1.children.push($2)
-    if ($3) $1.children.push($3)
-    return $1
+    const children = [...$1.children]
+    if ($2) children./**/push($2)
+    if ($3) children./**/push($3)
+    return {
+      children,
+      names: $1.names,
+    }
 
 # https://262.ecma-international.org/#prod-NumericLiteral
 NumericLiteral
@@ -3230,12 +3272,13 @@ TypeSuffix
 
 ReturnTypeSuffix
   __ Colon ( __ "asserts" NonIdContinue )? TypePredicate ->
-    if (!$3) $0.splice(2, 1)
-    if ($1.length === 0) $0.shift()
+    const children = [...$1, $2]
+    if ($3) children./**/push($3)
+    children./**/push($4)
 
     return {
       type: "ReturnTypeAnnotation",
-      children: $0,
+      children,
       ts: true,
     }
 
@@ -3254,9 +3297,7 @@ TypeBinary
 
 TypeUnary
   ( __ TypeUnaryOp NonIdContinue )* TypePrimary TypeUnarySuffix* ->
-    if (!$3.length) $0.pop()
-    if (!$1.length) $0.shift()
-    return $0
+    return [...$1, $2, ...$3]
 
 TypeUnarySuffix
   TypeIndexedAccess
@@ -3630,18 +3671,20 @@ Init
     })
 
     module.expressionizeIfClause = function(clause, b, e) {
-      clause.children.shift() // Remove 'if'
-      clause.children.push("?", b, ":") // Add ternary
+      const children = clause.children.slice(1) // Remove 'if'
+      children./**/push("?", b, ":") // Add ternary
       if (e) {
-        e.splice(1, 1) // Remove 'else'
-        clause.children.push(e)
+        // Remove 'else'
+        children./**/push(e[0], ...e.slice(2))
       }
       else {
-        clause.children.push("void 0")
+        children.push("void 0")
       }
-      clause.type = "IfExpression"
 
-      return clause
+      return {
+        type: "IfExpression",
+        children,
+      }
     }
 
     module.addPostfixStatement = function(statement, ws, post) {
@@ -3661,27 +3704,28 @@ Init
         expressions,
       }
 
-      post.block = block
-      post.children.push(block)
+      children = [...post.children]
+      children./**/push(block)
 
       // This removes trailing whitespace for easier testing
-      if (!module.isWhitespaceOrEmpty(ws)) post.children.push(ws)
-      return post
+      if (!module.isWhitespaceOrEmpty(ws)) children./**/push(ws)
+
+      return Object.assign({}, post, {
+        children,
+        block
+      })
     }
 
-    module.expressionizeIteration = function(statement) {
+    function expressionizeIteration(exp) {
       const resultsRef = {
         type: "Ref",
         base: "results",
       }
 
       // insert `results.push` to gather results array
-      insertPush(statement.block, resultsRef)
-
-      return {
-        type: "IterationExpression",
-        children: ["((", resultsRef, ")=>{", statement, "; return ", resultsRef, "})([])"],
-      }
+      insertPush(exp.block, resultsRef)
+      // Wrap with IIFE
+      exp.children = ["(", resultsRef, "=>{", ...exp.children, "; return ", resultsRef, "})([])"]
     }
 
     function wrapIterationReturningResults(statement, outerRef) {
@@ -3881,12 +3925,6 @@ Init
       node.splice(1, 0, "return ")
     }
 
-    module.addImplicitReturns = function(block) {
-      insertReturn(block)
-
-      return block
-    }
-
     module.isWhitespaceOrEmpty = function(node) {
       if (!node) return true
       if (!node.length) return true
@@ -3906,10 +3944,10 @@ Init
         // a not in b -> indexOf.call(b, a) < 0
         // Currently indexOf is our only Ref type binary operator
         if (op.ref) {
-          const [a, wsOp, op, wsB, b] = expandedOps.slice(i - 2, i + 3)
+          let [a, wsOp, op, wsB, b] = expandedOps.slice(i - 2, i + 3)
 
-          module.insertTrimmingSpace(wsOp, "")
-          module.insertTrimmingSpace(wsB, "")
+          wsOp = module.insertTrimmingSpace(wsOp, "")
+          wsB = module.insertTrimmingSpace(wsB, "")
           expandedOps.splice(i - 2, 5, {
             type: "Call",
             children: [wsOp, op.ref, ".call(", wsB, b, ", ", a, ")", op.suffix]
@@ -3999,7 +4037,7 @@ Init
     // Return an array of Rule names that correspond to the current call stack
     module.parsePosition = function() {
       let s = Error().stack.split(/\n    at /)
-      s.shift()
+      s./**/shift()
       s = s.filter((e) => !e.match(/^eval/)).map((e) => e.split(' ')[0])
       s = s.slice(1, s.indexOf('Program') + 1)
 
@@ -4030,18 +4068,25 @@ Init
 
     // Trims the first single space from the spacing array or node's children if present
     // maintains $loc for source maps
-    module.insertTrimmingSpace = function(spacing, c) {
-      let target = spacing
-      if (!target) return
+    module.insertTrimmingSpace = function(target, c) {
+      if (!target) return target
 
-      if (Array.isArray(target)) return module.insertTrimmingSpace(target[0], c)
-      if (target.children) return module.insertTrimmingSpace(target.children[0], c)
+      if (Array.isArray(target)) return target.map((e, i) => {
+        if (i === 0) return module.insertTrimmingSpace(e, c)
+        return e
+      })
+      if (target.children) return Object.assign({}, target, {
+        children: target.children.map((e, i) => {
+          if (i === 0) return module.insertTrimmingSpace(e, c)
+          return e
+        })
+      })
 
-      if (target.token) {
-        target.token = target.token.replace(/^ ?/, c)
-      }
+      if (target.token) return Object.assign({}, target, {
+        token: target.token.replace(/^ ?/, c)
+      })
 
-      return spacing
+      return target
     }
 
     // Split out leading newlines from the first indented line
@@ -4147,10 +4192,13 @@ Init
       return []
     }
 
+    // Gather nodes that match a predicate recursing into all unmatched children
+    // i.e. if the predicate matches a node it is not recursed into further
     function gatherRecursive(node, predicate) {
       if (node == null) return []
 
       if (Array.isArray(node)) {
+        // TODO: should this be `gatherRecursive`?
         return node.flatMap((n) => gatherNodes(n, predicate))
       }
 
@@ -4158,10 +4206,68 @@ Init
         return [node]
       }
 
+      // TODO: should this be `gatherRecursive`?
       return gatherNodes(node.children, predicate)
     }
 
+    function gatherRecursiveAll(node, predicate) {
+      if (node == null) return []
+
+      if (Array.isArray(node)) {
+        return node.flatMap((n) => gatherRecursiveAll(n, predicate))
+      }
+
+      const nodes = gatherRecursiveAll(node.children, predicate)
+      if (predicate(node)) {
+        nodes.push(node)
+      }
+
+      return nodes
+    }
+
+    function addImplicitReturns(statements) {
+      let fns = gatherRecursiveAll(statements, n => {
+        return (
+          n.type === "FunctionExpression" ||
+          n.type === "ArrowFunction"
+        )
+      })
+
+      fns.forEach(({ block, returnType }) => {
+        const isVoid  = returnType  === "void"
+        const isBlock = block?.type === "BlockStatement"
+        if (!isVoid && isBlock) {
+          insertReturn(block)
+        }
+      })
+
+      gatherRecursiveAll(statements, n => n.type === "MethodDefinition")
+      .forEach(({children: [sig, block]}) => {
+        const isConstructor = sig.name       === "constructor"
+        const isVoid        = sig.returnType === "void"
+        const isSet         = sig.modifier   === "set"
+
+        if (!isConstructor && !isSet && !isVoid) {
+          insertReturn(block)
+        }
+      })
+
+      // Add to SwitchExpressions
+      gatherRecursiveAll(statements, n => n.type === "SwitchExpression")
+      .forEach(({ block }) => {
+        insertReturn(block)
+      })
+    }
+
     module.processProgram = function(statements) {
+      if (module.config.implicitReturns) {
+        addImplicitReturns(statements)
+      }
+
+      // Modify iteration expressions
+      gatherRecursiveAll(statements, n => n.type === "IterationExpression")
+      .forEach((e) => expressionizeIteration(e))
+
       // Insert prelude
       statements.unshift(...module.prelude)
 
@@ -4254,13 +4360,13 @@ Init
       // Let descendent blocks add the var at the outer enclosing function scope
       if (!pushVar) {
         pushVar = function(name) {
-          varIds.push(name)
+          varIds./**/push(name)
           decs.add(name)
         }
       }
 
       const decs = findDecs(statements)
-      scopes.push(decs)
+      scopes./**/push(decs)
       const varIds = []
       findAssignments(statements, scopes)
       .forEach(pushVar)
@@ -4280,16 +4386,16 @@ Init
 
       // recurse into for loops
       forNodes.forEach(({block, declaration}) => {
-        scopes.push(new Set(declaration.names))
+        scopes./**/push(new Set(declaration.names))
         createVarDecs(block.expressions, scopes, pushVar)
-        scopes.pop()
+        scopes./**/pop()
       })
 
       // recurse into nested functions
       fnNodes.forEach(({block, parameters}) => {
-        scopes.push(new Set(parameters.names))
+        scopes./**/push(new Set(parameters.names))
         createVarDecs(block.expressions, scopes)
-        scopes.pop()
+        scopes./**/pop()
       })
 
       if (varIds.length) {
@@ -4359,7 +4465,7 @@ PopIndent
     if (module.verbose) {
       console.log("popping indent", module.indentLevels[module.indentLevels.length-1], "->", module.indentLevels[module.indentLevels.length-2])
     }
-    module.indentLevels.pop()
+    module.indentLevels./**/pop()
 
 Nested
   EOS:eos Indent:indent ->

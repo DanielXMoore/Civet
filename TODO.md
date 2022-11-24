@@ -17,6 +17,7 @@ TODO
   function fn(x) { return x }
   ```
 - [ ] Bugs
+  - [ ] Existential unary postfix `?` precedence https://coffeescript.org/#try:x%20%2B%20a.b.c%3F
   - [ ] correct &block precedence with unary ops, binary ops, and call expressions. It works by chance in simple cases but won't in very complex ones.
 - [ ] Comprehensions
   - [ ] CoffeeScript compat `for in`
@@ -26,6 +27,8 @@ TODO
   - [ ] use refs to avoid excess evaluations of middle results
 - [x] `1.toString()` -> `1..toString()`
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
+  - [ ] Implicit `async`
+  - [ ] Implicit generator functions
   - [x] If/Switch Expressions
   - [x] Auto Var
   - [x] on/off/yes/no
