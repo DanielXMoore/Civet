@@ -202,16 +202,20 @@ UpdateExpressionSymbol
 # https://262.ecma-international.org/#prod-AssignmentExpression
 AssignmentExpression
   # NOTE: Try to match a single line assignment expression before matching newline then assignment expression
-  TrailingComment* AssignmentExpressionTail ->
-    if ($1.length) {
-      if ($2.children) {
-        return Object.assign({}, $2, {
-          children: [...$1, ...$2.children]
-        })
+  TrailingComment*:ws AssignmentExpressionTail:tail ->
+    if (ws.length) {
+      // Glom whitespace into identifiers and literals to ease checking of "simple" refs
+      // NOTE: This can get weird if we depend on the specific location of children
+      if (tail.children && tail.type !== "IterationExpression") {
+        return {
+          ...tail,
+          children: [...ws, ...tail.children]
+        }
       }
       return $0
     }
-    return $2
+    return tail
+
   __ AssignmentExpressionTail
 
 AssignmentExpressionTail
@@ -393,7 +397,11 @@ ParenthesizedExpression
         case "IterationStatement":
         case "ForStatement":
           clause = module.addPostfixStatement(exp, ...post)
-          return module.expressionizeIteration(clause)
+          return {
+            type: "IterationExpression",
+            children: [clause],
+            block: clause.block,
+          }
         case "IfStatement":
           clause = module.expressionizeIfClause(post[1], exp)
           return clause
@@ -1466,7 +1474,14 @@ PrivateIdentifier
 
 # https://262.ecma-international.org/#prod-AssignmentOperator
 AssignmentOp
-  AssignmentOpSymbol ->
+  AssignmentOpSymbol TrailingComment* ->
+    if ($2.length) {
+      return {
+        token: $1,
+        children: [$1, ...$2]
+      }
+    }
+
     return { $loc, token: $1 }
 
 AssignmentOpSymbol
@@ -1698,7 +1713,11 @@ IterationStatement
 
 IterationExpression
   IterationStatement ->
-    return module.expressionizeIteration($1)
+    return {
+      type: "IterationExpression",
+      children: [$1],
+      block: $1.block,
+    }
 
 # NOTE: Added from CoffeeScript
 LoopStatement
@@ -1756,21 +1775,23 @@ WhileClause
 # NOTE: Merged into single rule
 ForStatement
   ForClause:clause Block:block ->
-    clause.children.push(block)
-    clause.block = block
+    // TODO: remove mutation
     if (clause.blockPrefix) {
       block.expressions.splice(0, 0, ...clause.blockPrefix)
     }
-    return clause
+    return {
+      ...clause,
+      children: [...clause.children, block],
+      block,
+    }
 
 ForClause
   For __ ForStatementControl:c  ->
     const {children, declaration} = c
-    children.splice(0, 0, $1, ...$2)
 
     return {
       type: "ForStatement",
-      children: children,
+      children: [$1, ...$2, ...children],
       declaration: declaration,
       block: null,
       blockPrefix: c.blockPrefix,
@@ -3695,19 +3716,16 @@ Init
       })
     }
 
-    module.expressionizeIteration = function(statement) {
+    function expressionizeIteration(exp) {
       const resultsRef = {
         type: "Ref",
         base: "results",
       }
 
       // insert `results.push` to gather results array
-      insertPush(statement.block, resultsRef)
-
-      return {
-        type: "IterationExpression",
-        children: ["((", resultsRef, ")=>{", statement, "; return ", resultsRef, "})([])"],
-      }
+      insertPush(exp.block, resultsRef)
+      // Wrap with IIFE
+      exp.children = ["(", resultsRef, "=>{", ...exp.children, "; return ", resultsRef, "})([])"]
     }
 
     function wrapIterationReturningResults(statement, outerRef) {
@@ -4245,6 +4263,11 @@ Init
       if (module.config.implicitReturns) {
         addImplicitReturns(statements)
       }
+
+      // Modify iteration expressions
+      gatherRecursiveAll(statements, n => n.type === "IterationExpression")
+      .forEach((e) => expressionizeIteration(e))
+
       // Insert prelude
       statements.unshift(...module.prelude)
 
