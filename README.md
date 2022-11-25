@@ -88,6 +88,7 @@ Things Kept from CoffeeScript
 - Simplified number method calls `1.toFixed()` -> `1..toFixed()`
 - `if`/`switch`/`for`/`loop`/`while`/`throw` expressions
 - Destructuring object assignment doesn't require being wrapped in parens at the statement level `{a, b} = c` -> `({a, b} = c)`
+- Prefix or postfix splats `[...a]`, `x = [a...]`
 - JSX 😿
 
 Things Removed from CoffeeScript
@@ -127,7 +128,6 @@ Things Changed from CoffeeScript
 - `==` -> `==` rather than `===` (can be kept with `"civet coffeeCompat"` or `"civet coffeeEq"`)
 - `!=` -> `!=` rather than `!==` (can be kept with `"civet coffeeCompat"` or `"civet coffeeEq"`)
 - `for in` and `for of` are no longer swapped and become their JS equivalents.
-- `a...` is now `...a` just like JS
 - `a in b` is now `a in b` rather than `b.indexOf(a) >= 0`
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
 - Existential `x?` -> `(x != null)` no longer checks for undeclared variables.
