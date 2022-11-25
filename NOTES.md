@@ -464,12 +464,16 @@ Timesheet
 2022-11-22 | 6.00  | remove excess existential postfix parens; if/unless expression block improvements; reduce parser mutations for caching
 2022-11-23 | 6.00  | gh issues; caching
 2022-11-24 | 4.50  | expressionize iteration; reduce for rule handler mutations; default to caching in cli; cli help/art
-2022-11-25 | 4.75  | postfix splat; arguments; optional slice start
+2022-11-25 | 5.00  | postfix splat; arguments; optional slice start
 
 browser.coffee - parse completes
-grammar.coffee - parse completes (slow)
-helpers.coffee `heregex`
-lexer.coffee - 461 for expression inside function arguments
+grammar.coffee - parse completes
+helpers.coffee - 78 `heregex`
+lexer.coffee
+  - 114:7 parser caching of nested/samedent `.` access?
+  - 181:9 long `and` / `or` conditional spanning multiple lines inside `if`
+  - 461 for expression inside function arguments
+nodes.coffee - 940 this args `(@value) ->`
 
 - CoffeeCompat
   - [x] Ranges
