@@ -30,10 +30,12 @@ gen = (node, options) ->
       return token
 
     if !node.children
+      debugger
       throw new Error("Unknown node", JSON.stringify(node))
 
     return gen node.children, options
 
+  debugger
   throw new Error("Unknown node", JSON.stringify(node))
 
 module.exports = gen
