@@ -62,15 +62,17 @@ makeCache = ->
       if !cache
         switch ruleName
           # Rules that are not cacheable
+          # Essentially anything that depends on mutable state in the parser like indents and the rules that depend on them
+          # One day this will be better supported by Hera
           when "TrackIndented", "Samedent", "IndentedFurther", "PushIndent", "PopIndent", "Nested", "InsertIndent",\
-            "Arguments", "ArgumentsWithTrailingCallExpressions", "ImplicitApplication", "IndentedApplicationAllowed", "ApplicationStart",\
+            "Arguments", "ArgumentsWithTrailingCallExpressions", "ApplicationStart",\
             "CallExpression", "CallExpressionRest", "LeftHandSideExpression", "ActualAssignment", "UpdateExpression",\
             "UnaryExpression", "BinaryOpExpression", "BinaryOpRHS", "ConditionalExpression", "ShortCircuitExpression",\
-            "NestedPropertyDefinitions", "NestedObject", "NestedObjectLiteral", "NestedBlockStatement",\
+            "NestedPropertyDefinitions", "NestedObject", "NestedImplicitObjectLiteral", "NestedImplicitPropertyDefinitions", "NestedBlockStatement",\
             "NestedInterfaceProperty",\
             "AssignmentExpressionTail", "AssignmentExpression", "ExtendedExpression", "Expression",\
             "ElseClause",\
-            "CoffeeCommentEnabled", "SingleLineComment"
+            "CoffeeCommentEnabled", "SingleLineComment", "Debugger"
 
             break
           else
