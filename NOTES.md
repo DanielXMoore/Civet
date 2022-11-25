@@ -464,8 +464,7 @@ Timesheet
 2022-11-22 | 6.00  | remove excess existential postfix parens; if/unless expression block improvements; reduce parser mutations for caching
 2022-11-23 | 6.00  | gh issues; caching
 2022-11-24 | 4.50  | expressionize iteration; reduce for rule handler mutations; default to caching in cli; cli help/art
-
-removing in place mutation so parser can use caching
+2022-11-25 | 4.75  | postfix splat; arguments; optional slice start
 
 browser.coffee - parse completes
 grammar.coffee - parse completes (slow)
