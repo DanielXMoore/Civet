@@ -111,7 +111,7 @@ Civet.
 - `for from` (use JS `for of`, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for own of` (use JS `for in` and check manually, switch to `Map#keys/values/entries`, or use `Object.create(null)`, or `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for ... when <condition>` (use `continue if exp` inside loop, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
-- `and=`, `or=` (don't mix and match words and symbols)
+- `and=`, `or=` (don't mix and match words and symbols, or use `"civet coffeeCompat"`, or `"civet coffeeWordAssignment"`)
 - `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables, `"civet coffeeCompat"`, or `"civet coffeeBinaryExistential"` enables this at the cost of losing JS ternary operator)
 - `a of b` (use `a in b` matching JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
 - Iteration expression results
@@ -249,6 +249,7 @@ coffeeInterpolation (`"a string with #{myVar}"`)
 coffeeIsnt     (`isnt` -> `!==`)
 coffeeNot      (`not` -> "!") (currently doesn't support `not instanceof`, `not of`)
 coffeeOf       (`a of b` -> `a in b`, `a in b` -> `b.indexOf(a) >= 0`, `a not in b` -> `b.indexOf(a) < 0`)
+coffeeWordAssignment (Allow `and=`, `or=`)
 ```
 
 You can use these with `"civet coffeeCompat"` to opt in to all or use them bit by bit with `"civet coffeeComment coffeeEq coffeeInterpolation"`.
