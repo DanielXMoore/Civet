@@ -89,6 +89,8 @@ Things Kept from CoffeeScript
 - `if`/`switch`/`for`/`loop`/`while`/`throw` expressions
 - Destructuring object assignment doesn't require being wrapped in parens at the statement level `{a, b} = c` -> `({a, b} = c)`
 - Prefix or postfix splats `[...a]`, `x = [a...]`
+- `///` Heregexp
+  - With some [changes](#things-changed-from-coffeescript).
 - JSX 😿
 
 Things Removed from CoffeeScript
@@ -118,7 +120,6 @@ Civet.
   - Optional assignment `x?.y = 3` -> `x != null ? x.y = 3 : undefined`
   - Conditional assignment `a?[x] = 3` -> `a ? a[x] = 3 : undefined`
 - Might add later
-  - `///` Heregexp
   - Rest parameter in any assignment position
   - Multiple slice assignment `otherNumbers[0...] = numbers[3..6] = [-3, -4, -5, -6]`
 
@@ -150,6 +151,15 @@ Things Changed from CoffeeScript
     x    +    3
   ```
   remains as is.
+- Heregex
+  - Allows both kinds of substitutions `#{..}`, `${..}`.
+  - Also allows both kinds of single line comments `//`, `#`.
+  - Keeps non-newline whitespace inside of character classes.
+  - Doesn't require escaping `#` after space inside of character classes.
+  - `#` is always the start of a comment outside of character classes regardless of leading space (CoffeeScript treats
+  `\s+#` as comment starts inside and outside of character classes).
+  - Might later add a compat flag to get more CoffeeScript compatibility.
+  - Might also later add a compat flag to only use ES interpolations and comments inside Heregexes.
 
 Things Added that CoffeeScript didn't
 ---

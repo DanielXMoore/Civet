@@ -2709,8 +2709,86 @@ CoffeeDoubleQuotedStringCharacters
 
 # https://262.ecma-international.org/#prod-RegularExpressionLiteral
 RegularExpressionLiteral
+  HeregexLiteral
   $("/" RegularExpressionBody "/" RegularExpressionFlags) ->
     return { $loc, token: $1 }
+
+RegularExpressionClass
+  $(OpenBracket RegularExpressionClassCharacters CloseBracket) ->
+    return { $loc, token: $1 }
+
+RegularExpressionClassCharacters
+  /(?:\\.|[^\]])*/ ->
+    return { $loc, token: $0 }
+
+HeregexLiteral
+  TripleSlash:open HeregexBody:body TripleSlash:close RegularExpressionFlags:flags ->
+    debugger
+    let hasSubstitutions = body.some((part) => part.type === "Substitution")
+
+    if (hasSubstitutions) {
+      const result = [
+        {...open, token: "RegExp(`"},
+        // Escape backticks, backslashes, and '$' in the body text
+        body.map(e => e.type === "Substitution"
+          ? e
+          : {
+            ...e,
+            token: e.token.replace(/`|\\|\$/g, "\\$&"),
+          }
+        ),
+        "`"
+      ]
+
+      if (flags.length) {
+        result.push(
+          ", ",
+          JSON.stringify(flags)
+        )
+      }
+      result.push( {...close, token: ")" })
+      return result
+    }
+
+    return $0
+
+HeregexBody
+  !TripleSlash HeregexPart* -> $2
+
+HeregexPart
+  RegularExpressionClass
+
+  CoffeeStringSubstitution -> { type: "Substitution", children: $1 }
+  TemplateSubstitution -> { type: "Substitution", children: $1 }
+
+  /(?:\\.)/ ->
+    let token = $0
+    switch ($0[1]) {
+      case "\n": token = "\\n"; break
+      case "\r": token = "\\r"; break
+      case " ": token =   " "; break
+    }
+    return { $loc, token }
+
+  HeregexComment ->
+    return { $loc, token: "" }
+  # NOTE: CoffeeScript strips out all unescaped whitespace chars
+  # but Python doesn't strip out whitespace inside character classes
+  # or inside '(?' groups and assertions
+  # TODO: this behavior should be toggled by a coffeeCompat directive
+  /[\s]+/ ->
+    return { $loc, token: "" }
+  # Escape forward slashes (that aren't part of a triple slash)
+  /\/(?!\/\/)/ ->
+    return { $loc, token: "\\/" }
+  /[^\/\s#\\]+/ ->
+    return { $loc, token: $0 }
+
+HeregexComment
+  # NOTE: CoffeeScript doesn't treat JS comments as regex comments
+  # TODO: this behavior should be toggled by a coffeeCompat directive
+  JSSingleLineComment
+  CoffeeSingleLineComment
 
 # https://262.ecma-international.org/#prod-RegularExpressionBody
 # NOTE: Simplified a little from the spec, ignoring <PS>, <LS>
@@ -2758,9 +2836,13 @@ Comment
   SingleLineComment
 
 SingleLineComment
-  /\/\/[^\r\n]*/ ->
-    return { $loc, token: $0 }
+  JSSingleLineComment
   CoffeeCommentEnabled CoffeeSingleLineComment
+
+JSSingleLineComment
+  # JS Comments are two slashes not followed by a third (because that is a heregex)
+  /\/\/(?!\/)[^\r\n]*/ ->
+    return { $loc, token: $0 }
 
 # https://262.ecma-international.org/#prod-MultiLineComment
 MultiLineComment
@@ -3071,6 +3153,11 @@ TripleDoubleQuote
 TripleSingleQuote
   "'''" ->
     return { $loc, token: "`" }
+
+# Used in Heregex
+TripleSlash
+  "///" ->
+    return { $loc, token: '/' }
 
 TripleTick
   "```" ->

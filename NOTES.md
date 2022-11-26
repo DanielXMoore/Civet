@@ -465,6 +465,7 @@ Timesheet
 2022-11-23 | 6.00  | gh issues; caching
 2022-11-24 | 4.50  | expressionize iteration; reduce for rule handler mutations; default to caching in cli; cli help/art
 2022-11-25 | 5.00  | postfix splat; arguments; optional slice start
+2022-11-26 | 3.50  | Heregex
 
 browser.coffee - parse completes
 grammar.coffee - parse completes
@@ -476,6 +477,11 @@ lexer.coffee
 nodes.coffee - 940 this args `(@value) ->`
 
 - CoffeeCompat
+  - [x] Heregex
+    - [x] Character classes
+    - [x] Comments
+    - [x] Substitutions
+  - [ ] At arguments `(@a) ->`
   - [x] Ranges
     - [x] Range literals
     - [x] `for x in range`
