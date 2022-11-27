@@ -693,10 +693,26 @@ ParameterElementDelimiter
 
 # https://262.ecma-international.org/#prod-BindingIdentifier
 BindingIdentifier
-  __ Identifier ->
-    return Object.assign({}, $2, {
-      children: [...$1, ...$2.children],
-    })
+  # NOTE: Added @param for binding identifiers
+  # The parser will allow them in const/let/var declarations but JS/TS doesn't allow them there
+  __:ws At?:at Identifier:id ->
+    if (at) {
+      const ref = {
+        type: "Ref",
+        base: id.name,
+      }
+
+      return {
+        type: "AtBinding",
+        children: [...ws, ref],
+        ref,
+      }
+    }
+
+    return {
+      ...id,
+      children: [...ws, ...id.children],
+    }
 
 # https://262.ecma-international.org/#prod-BindingPattern
 BindingPattern
@@ -783,10 +799,7 @@ NestedBindingProperties
     }
 
 NestedBindingProperty
-  Nested:indent BindingProperty:prop ->
-    return Object.assign({}, prop, {
-      children: [indent, ...prop.children],
-    })
+  Nested BindingProperty
 
 # https://262.ecma-international.org/#prod-BindingProperty
 BindingProperty
@@ -796,6 +809,15 @@ BindingProperty
       children: $0
     }
   BindingIdentifier:b Initializer? ObjectPropertyDelimiter ->
+    if (b.type === "AtBinding") {
+      return {
+        type: "AtBindingProperty",
+        ref: b.ref,
+        names: [],
+        children: $0
+      }
+    }
+
     return {
       names: b.names,
       children: $0
@@ -803,16 +825,18 @@ BindingProperty
 
 NestedBindingRestProperty
   Nested:indent BindingRestProperty:prop ->
-    return Object.assign({}, prop, {
+    return {
+      ...prop,
       children: [indent, ...prop.children],
-    })
+    }
 
 # https://262.ecma-international.org/#prod-BindingRestProperty
 BindingRestProperty
   DotDotDot:d BindingIdentifier:id ->
-    return Object.assign({}, id, {
+    return {
+      ...id,
       children: [d, ...id.children],
-    })
+    }
 
 NestedBindingElements
   PushIndent NestedBindingElement*:props ( Nested BindingRestElement )?:rest PopIndent ->
@@ -979,12 +1003,14 @@ BracedOrEmptyBlock
 
 EmptyBlock
   # Implied empty block
-  InsertOpenBrace InsertCloseBrace -> {
-    type: "BlockStatement",
-    expressions: [],
-    children: $0,
-    bare: false,
-  }
+  InsertOpenBrace InsertCloseBrace ->
+    const expressions = []
+    return {
+      type: "BlockStatement",
+      expressions,
+      children: [$1, expressions, $2],
+      bare: false,
+    }
 
 # This is a block that must include braces (function body, try/catch/finally)
 BracedBlock
@@ -1374,10 +1400,9 @@ PropertyDefinitionList
 PropertyDefinition
   # NOTE: Added CoffeeScript {@id} -> {id: this.id} shorthand
   At:at IdentifierReference:id &ObjectPropertyDelimiter ->
-    at.token = "this."
     return {
       type: "Property",
-      children: [id, ": ", at, id],
+      children: [id, ": ", {...at, token: "this."}, id],
       names: id.names,
     }
   NamedProperty
@@ -4336,44 +4361,93 @@ Init
       return nodes
     }
 
-    function addImplicitReturns(statements) {
-      let fns = gatherRecursiveAll(statements, n => {
+    function processAtParams(f) {
+      const { parameters, block } = f
+      // TODO?
+      if (!block) return
+
+      const { expressions } = block
+
+      if (!expressions) return
+
+      let indent
+      if (expressions.length === 0) {
+        indent = ""
+      } else {
+        indent = expressions[0][0]
+      }
+
+      // @params all happen to be refs right now
+      const thisAssignments = gatherRecursiveAll(parameters, (n) => n.type === "Ref")
+      .map((ref) => {
+        const { base: name } = ref
+        return [indent, [`this.${name} = `, ref], ";\n"]
+      })
+
+      block.expressions.unshift(...thisAssignments)
+    }
+
+    // Adjusts @binding inside object properties that need to be aliased
+    // see test/function.civet binding pattern
+    function adjustAtBindings(statements) {
+      gatherRecursiveAll(statements, n => n.type === "AtBindingProperty")
+      .forEach(binding => {
+        const { ref } = binding
+
+        if (ref.names[0] !== ref.base) {
+          binding.children.unshift(ref.base, ": ")
+        }
+      })
+    }
+
+    function processFunctions(statements) {
+      gatherRecursiveAll(statements, n => {
         return (
           n.type === "FunctionExpression" ||
           n.type === "ArrowFunction"
         )
       })
-
-      fns.forEach(({ block, returnType }) => {
-        const isVoid  = returnType  === "void"
-        const isBlock = block?.type === "BlockStatement"
-        if (!isVoid && isBlock) {
-          insertReturn(block)
+      .forEach((f) => {
+        processAtParams(f)
+        const { block, returnType } = f
+        if (module.config.implicitReturns) {
+          const isVoid  = returnType  === "void"
+          const isBlock = block?.type === "BlockStatement"
+          if (!isVoid && isBlock) {
+            insertReturn(block)
+          }
         }
       })
 
       gatherRecursiveAll(statements, n => n.type === "MethodDefinition")
-      .forEach(({children: [sig, block]}) => {
-        const isConstructor = sig.name       === "constructor"
-        const isVoid        = sig.returnType === "void"
-        const isSet         = sig.modifier   === "set"
+      .forEach((f) => {
+        processAtParams(f)
+        const {children: [sig, block]} = f
+        if (module.config.implicitReturns) {
+          const isConstructor = sig.name       === "constructor"
+          const isVoid        = sig.returnType === "void"
+          const isSet         = sig.modifier   === "set"
 
-        if (!isConstructor && !isSet && !isVoid) {
-          insertReturn(block)
+          if (!isConstructor && !isSet && !isVoid) {
+            insertReturn(block)
+          }
         }
-      })
-
-      // Add to SwitchExpressions
-      gatherRecursiveAll(statements, n => n.type === "SwitchExpression")
-      .forEach(({ block }) => {
-        insertReturn(block)
       })
     }
 
-    module.processProgram = function(statements) {
+    function processSwitchExpressions(statements) {
       if (module.config.implicitReturns) {
-        addImplicitReturns(statements)
+        // Add returns to SwitchExpressions
+        gatherRecursiveAll(statements, n => n.type === "SwitchExpression")
+        .forEach(({ block }) => {
+          insertReturn(block)
+        })
       }
+    }
+
+    module.processProgram = function(statements) {
+      processFunctions(statements)
+      processSwitchExpressions(statements)
 
       // Modify iteration expressions
       gatherRecursiveAll(statements, n => n.type === "IterationExpression")
@@ -4387,6 +4461,7 @@ Init
       }
 
       populateRefs(statements)
+      adjustAtBindings(statements)
     }
 
     function findDecs(statements) {

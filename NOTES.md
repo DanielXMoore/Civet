@@ -465,7 +465,7 @@ Timesheet
 2022-11-23 | 6.00  | gh issues; caching
 2022-11-24 | 4.50  | expressionize iteration; reduce for rule handler mutations; default to caching in cli; cli help/art
 2022-11-25 | 5.00  | postfix splat; arguments; optional slice start
-2022-11-26 | 3.75  | Heregex; coffeeWordAssignment
+2022-11-26 | 5.25  | Heregex; coffeeWordAssignment; @param binding
 
 browser.coffee - parse completes
 grammar.coffee - parse completes
