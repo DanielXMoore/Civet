@@ -466,15 +466,14 @@ Timesheet
 2022-11-24 | 4.50  | expressionize iteration; reduce for rule handler mutations; default to caching in cli; cli help/art
 2022-11-25 | 5.00  | postfix splat; arguments; optional slice start
 2022-11-26 | 5.25  | Heregex; coffeeWordAssignment; @param binding
+2022-11-28 | 1.50  | nested expressions; removed unnecessary parens in if/else expressions;
 
 browser.coffee - parse completes
 grammar.coffee - parse completes
 helpers.coffee - parse completes
 lexer.coffee
-  - 114:7 parser caching of nested/samedent `.` access?
-  - 181:9 long `and` / `or` conditional spanning multiple lines inside `if`
-  - 461 for expression inside function arguments
-nodes.coffee - 940 this args `(@value) ->`
+  - 916 destructuring rest binding in non-end position
+nodes.coffee - 1027 postfix if inside expression blocks
 
 - CoffeeCompat
   - [x] Heregex
