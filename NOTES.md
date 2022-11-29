@@ -466,7 +466,10 @@ Timesheet
 2022-11-24 | 4.50  | expressionize iteration; reduce for rule handler mutations; default to caching in cli; cli help/art
 2022-11-25 | 5.00  | postfix splat; arguments; optional slice start
 2022-11-26 | 5.25  | Heregex; coffeeWordAssignment; @param binding
-2022-11-28 | 1.50  | nested expressions; removed unnecessary parens in if/else expressions;
+2022-11-28 | 2.00  | nested expressions; removed unnecessary parens in if/else expressions; any position spread
+2022-11-29 | 2.75  | re-order non-end rest property
+
+non-end rest element
 
 browser.coffee - parse completes
 grammar.coffee - parse completes
