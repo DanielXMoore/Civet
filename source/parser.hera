@@ -225,6 +225,7 @@ ActualAssignment
     // Force parens around destructuring object assignments
     // Walk from left to right the minimal number of parens are added and enclose all destructured assignments
     // TODO: Could validate some lhs ecmascript rules here if we wanted to
+    // TODO: re-order non-end rest properties of objects
     while (i < len) {
       const lastAssignment = $1[i++]
       const [,lhs,,op] = lastAssignment
@@ -667,6 +668,7 @@ Parameters
 
 NonEmptyParameters
   # NOTE: BindingElement -> ParameterElement
+  # TODO: Allow tailing parameters after FunctionRestParameter
   TypeParameters? OpenParen ParameterElement* FunctionRestParameter? __ CloseParen ->
     return {
       type: "Parameters",
@@ -742,13 +744,14 @@ ObjectBindingPattern
 ObjectBindingPatternContent
   # NOTE: Added indentation based binding properties
   NestedBindingProperties
-  BindingProperty*:props ( __ BindingRestProperty )?:rest ->
-    const names = props.flatMap((p) => p.names)
+  BindingProperty*:props BindingRestProperty?:rest BindingProperty*:after ->
+    const names = props.flatMap(p => p.names)
     const children = [...props]
 
     if (rest) {
-      children./**/push(...rest)
-      names./**/push(...rest[1].names)
+      [rest, after] = module.reorderBindingRestProperty(rest, after)
+      children./**/push(...after, rest)
+      names./**/push(...after.flatMap(p => p.names), ...rest.names)
     }
 
     return {
@@ -768,6 +771,7 @@ ArrayBindingPattern
 ArrayBindingPatternContent
   # NOTE: Added indentation based binding elements
   NestedBindingElements
+  # TODO: Allow tailing BindingElements after BindingRestElement
   ( BindingElement / Elision )*:props ( __ BindingRestElement )?:rest ->
     const names = props.flatMap((p) => p.names || [])
     const children = [...props]
@@ -788,13 +792,15 @@ Elision
   __ Comma
 
 NestedBindingProperties
-  PushIndent NestedBindingProperty*:props NestedBindingRestProperty?:rest PopIndent ->
+  # NOTE: Add NestedBindingProperties after rest from CoffeeScript
+  PushIndent NestedBindingProperty*:props NestedBindingRestProperty?:rest NestedBindingProperty*:after PopIndent ->
     if (!(props.length || rest)) return $skip
     const names = props.flatMap(p => p.names)
     const children = [...props]
     if (rest) {
-      children./**/push(rest)
-      names./**/push(...rest.names)
+      [rest, after] = module.reorderBindingRestProperty(rest, after)
+      children./**/push(...after, rest)
+      names./**/push(...after.flatMap(p => p.names), ...rest.names)
     }
     return {
       children,
@@ -802,7 +808,11 @@ NestedBindingProperties
     }
 
 NestedBindingProperty
-  Nested BindingProperty
+  Nested:indent BindingProperty:prop ->
+    return {
+      ...prop,
+      children: [...indent, ...prop.children],
+    }
 
 # https://262.ecma-international.org/#prod-BindingProperty
 BindingProperty
@@ -835,13 +845,14 @@ NestedBindingRestProperty
 
 # https://262.ecma-international.org/#prod-BindingRestProperty
 BindingRestProperty
-  DotDotDot:d BindingIdentifier:id ->
+  __:ws DotDotDot:d BindingIdentifier:id ObjectPropertyDelimiter:delimiter ->
     return {
       ...id,
-      children: [d, ...id.children],
+      children: [...ws, d, ...id.children, delimiter],
     }
 
 NestedBindingElements
+  # TODO: allow tailing binding elements after rest element
   PushIndent NestedBindingElement*:props ( Nested BindingRestElement )?:rest PopIndent ->
     if (!(props.length || rest)) return $skip
     const names = props.flatMap(p => p.names)
@@ -858,9 +869,10 @@ NestedBindingElements
 
 NestedBindingElement
   Nested:indent BindingElement:element ->
-    return Object.assign({}, element, {
+    return {
+      ...element,
       children: [indent, ...element.children],
-    })
+    }
 
 # https://262.ecma-international.org/#prod-BindingElement
 BindingElement
@@ -1298,14 +1310,29 @@ ElementListRest
 ArrayElementExpression
   # NOTE: Allow for postfix splat like CoffeeScript
   ExtendedExpression:exp __:ws DotDotDot:dots &ArrayElementDelimiter ->
-    return [...ws, dots, exp]
+    return {
+      type: "SpreadElement",
+      children: [...ws, dots, exp],
+      names: exp.names,
+    }
 
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  ( ( DotDotDot __ )? ExtendedExpression )? ->
-    if ($1 && !$1[0]) {
-      return $1[1]
+  ( ( DotDotDot __ )? ExtendedExpression )?:expMaybeSpread &ArrayElementDelimiter ->
+    if (expMaybeSpread) {
+      const [spread, exp] = expMaybeSpread
+
+      if(!spread) {
+        return exp
+      } else {
+        return {
+          type: "SpreadElement",
+          children: [...spread, exp],
+          names: exp.names,
+        }
+      }
     }
-    return $1
+
+    return undefined
 
 # https://262.ecma-international.org/#prod-ObjectLiteral
 # NOTE: Slightly simplified from spec
@@ -1356,12 +1383,11 @@ NestedImplicitPropertyDefinitions
     return defs.flat()
 
 NestedImplicitPropertyDefinition
-  Nested NamedProperty ObjectPropertyDelimiter ->
-    const result = [...$1, $2]
-    if ($3) {
-      result./**/push($3)
+  Nested:ws NamedProperty:prop ObjectPropertyDelimiter:delimiter ->
+    return {
+      ...prop,
+      children: [...ws, ...prop.children, delimiter],
     }
-    return result
 
 NestedPropertyDefinitions
   PushIndent NestedPropertyDefinition*:defs PopIndent ->
@@ -1370,17 +1396,24 @@ NestedPropertyDefinitions
 
 NestedPropertyDefinition
   # TODO: This may be a little weird/ambiguous with single identifier shorthand
-  Nested PropertyDefinition ObjectPropertyDelimiter ->
-    const result = [...$1, $2]
-    if ($3) {
-      result./**/push($3)
+  Nested:ws PropertyDefinition:prop ObjectPropertyDelimiter:delimiter ->
+    return {
+      ...prop,
+      children: [...ws, ...prop.children, delimiter],
     }
-    return result
 
 InlineObjectLiteral
-  InsertOpenBrace SnugNamedProperty ( TrailingComment* Comma __ NamedProperty )* InsertCloseBrace ->
+  InsertOpenBrace:open SnugNamedProperty ImplicitInlineObjectPropertyDelimiter ( NamedProperty ImplicitInlineObjectPropertyDelimiter )* InsertCloseBrace:close ->
     // Drop leading space from inserted brace
-    return [$1[1], $2, ...$3.flat(), $4]
+    return [open[1], $2, $3, ...$4, close]
+
+# This is different from ObjectPropertyDelimiter because the braces are implicit so we can't look ahead to find the closing one
+# Instead we see if the next line matches a NamedProperty and if so we insert a comma
+ImplicitInlineObjectPropertyDelimiter
+  &( EOS NamedProperty ) -> ","
+  # NOTE: This is hacky but used for when an inline object is inside a ternary conditional
+  &( __ ":" ) -> ""
+  &EOS -> ""
 
 ObjectPropertyDelimiter
   _* Comma
@@ -1390,34 +1423,39 @@ ObjectPropertyDelimiter
     return { $loc, token: "," }
 
 PropertyDefinitionList
-  PropertyDefinition ( ObjectPropertyDelimiter __ PropertyDefinition )* ->
-    if ($2.length) {
-      return [].concat($1 || [], ...$2)
-    }
-    if ($1) {
-      return [].concat($1)
-    }
-    return []
+  ( PropertyDefinition ObjectPropertyDelimiter )+ ->
+    return $0.map(([prop, delim]) => {
+      return {
+        ...prop,
+        children: [...prop.children, delim],
+      }
+    })
 
 # https://262.ecma-international.org/#prod-PropertyDefinition
 PropertyDefinition
   # NOTE: Added CoffeeScript {@id} -> {id: this.id} shorthand
-  At:at IdentifierReference:id &ObjectPropertyDelimiter ->
+  __:ws At:at IdentifierReference:id ->
     return {
       type: "Property",
-      children: [id, ": ", {...at, token: "this."}, id],
+      children: [...ws, id, ": ", {...at, token: "this."}, id],
       names: id.names,
     }
   NamedProperty
   MethodDefinition
-  DotDotDot ExtendedExpression
+  __:ws DotDotDot:dots ExtendedExpression:exp ->
+    return {
+      type: "SpreadProperty",
+      children: [...ws, dots, exp],
+      names: exp.names,
+    }
   # NOTE: this needs to be at the bottom to prevent shadowing PropertyName
-  IdentifierReference
+  __:ws IdentifierReference:id  ->
+    return {...id, children: [...ws, ...id.children]}
 
 NamedProperty
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  PropertyName __ Colon ExtendedExpression:exp ->
+  __ PropertyName __ Colon ExtendedExpression:exp ->
     return {
       type: "Property",
       children: $0,
@@ -2880,7 +2918,8 @@ ReservedWord
   CoffeeBooleansEnabled /(?:on|off|yes|no)(?!\p{ID_Continue})/
   CoffeeIsntEnabled /(?:isnt)(?!\p{ID_Continue})/
   CoffeeForLoopsEnabled /(?:by)(?!\p{ID_Continue})/
-  /(?:and|as|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|interface|is|loop|new|null|or|return|static|super|switch|this|throw|true|try|typeof|unless|until|var|void|while|with|yield)(?!\p{ID_Continue})/
+  # NOTE: Added `let`, Civet assumes strict mode
+  /(?:and|as|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|interface|is|let|loop|new|null|or|return|static|super|switch|this|throw|true|try|typeof|unless|until|var|void|while|with|yield)(?!\p{ID_Continue})/
 
 # https://262.ecma-international.org/#sec-comments
 Comment
@@ -4310,6 +4349,22 @@ Init
         $loc,
         token: str,
       }
+    }
+
+    module.reorderBindingRestProperty = function(rest, after) {
+      // Swap delimiters of last property and rest so that an omitted trailing comma doesn't end up in the middle
+      if (after.length) {
+        const
+          [restDelim]       = rest.children.slice(-1),
+          lastAfterProp     = after[after.length - 1],
+          lastAfterChildren = lastAfterProp.children,
+          [lastDelim]       = lastAfterChildren.slice(-1)
+
+        rest = {...rest, children: [...rest.children.slice(0, -1), lastDelim]}
+        after = [...after.slice(0, -1), {...lastAfterProp, children: [...lastAfterChildren.slice(0, -1), restDelim]}]
+      }
+
+      return [rest, after]
     }
 
     // Gather child nodes that match a predicate
