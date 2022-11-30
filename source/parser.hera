@@ -220,78 +220,12 @@ ActualAssignment
   # NOTE: Eliminated left recursion
   # NOTE: Consolidated assignment ops
   ( __ LeftHandSideExpression __ AssignmentOp )+ ExtendedExpression ->
-    let tail = [], i = 0, len = $1.length
-
-    // Force parens around destructuring object assignments
-    // Walk from left to right the minimal number of parens are added and enclose all destructured assignments
-    // TODO: Could validate some lhs ecmascript rules here if we wanted to
-    // TODO: re-order non-end rest properties of objects
-    while (i < len) {
-      const lastAssignment = $1[i++]
-      const [,lhs,,op] = lastAssignment
-      if (op.token !== "=") continue
-
-      // Only wrap with one set of parens
-      if (lhs.type === "ObjectExpression") {
-        lhs.children.splice(0, 0, "(")
-        tail./**/push(")")
-        break
-      }
-    }
-
-    // TODO: Handle optional assignment refs
-
-    // Walk from right to left to handle splices
-    i = len - 1
-    while (i >= 0) {
-      const lastAssignment = $1[i]
-
-      if (lastAssignment[3].token === "=") {
-        const lhs = lastAssignment[1]
-
-        // Splice assignment
-        if (Array.isArray(lhs) && lhs.length > 1) {
-          const props = lhs[lhs.length-1]
-
-          if (Array.isArray(props)) {
-            const lastProp = props[props.length-1]
-
-            // TODO: this is kind of bonkers
-            if(lastProp.type === "SliceExpression") {
-              const {start, end, children: c} = lastProp
-              // TODO: don't lose as many source mappings
-              c[0].token = ".splice("
-              c[1] = start
-              c[2] = ", "
-              if (end)
-                c[3] = [end, " - ", start]
-              else
-                c[3] = ["1/0"]
-              c[4] = [", ...", $2]
-              c[5] = ")"
-
-              // Remove assignment token
-              lastAssignment.pop()
-              if (module.isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment.pop()
-              // TODO: this only works for the last assignment, not multiple splice assignments, or splice assignments earlier in the chain
-              if ($1.length > 1) {
-                throw new Error("Not implemented yet! TODO: Handle multiple splice assignments")
-              }
-              return $1
-            }
-          }
-        }
-      }
-      i--
-    }
-
-    // Gather all identifier names from the lhs array
-    const names = $1.flatMap(([,l]) => l.names || [])
-
     return {
       type: "AssignmentExpression",
-      children: [...$0, ...tail],
-      names,
+      children: $0,
+      // NOTE: This null marks the assignment for later processing to distinguish it
+      // from fake assignments that only add a name to a scope
+      names: null,
     }
 
 # https://262.ecma-international.org/#prod-YieldExpression
@@ -1342,9 +1276,9 @@ ObjectLiteral
   InlineObjectLiteral
 
 BracedObjectLiteral
-  OpenBrace BracedObjectLiteralContent? __ CloseBrace ->
-    if($2) {
-      const children = [$1, ...$2, ...$3, $4]
+  OpenBrace:open BracedObjectLiteralContent?:content ( __ CloseBrace ):close ->
+    if(content) {
+      const children = [open, ...content, close]
 
       return {
         type: "ObjectExpression",
@@ -1357,18 +1291,13 @@ BracedObjectLiteral
 
     return {
       type: "ObjectExpression",
-      children: [$1, ...$3, $4],
+      children: [open, close],
       names: [],
     }
 
 BracedObjectLiteralContent
   NestedPropertyDefinitions
-  __ PropertyDefinitionList ( __ Comma )? ->
-    const result = [...$1, ...$2]
-    if ($3) {
-      result./**/push(...$3[0], $3[1])
-    }
-    return result
+  PropertyDefinitionList
 
 NestedImplicitObjectLiteral
   InsertOpenBrace NestedImplicitPropertyDefinitions InsertNewline InsertIndent InsertCloseBrace ->
@@ -1411,7 +1340,7 @@ InlineObjectLiteral
 # Instead we see if the next line matches a NamedProperty and if so we insert a comma
 ImplicitInlineObjectPropertyDelimiter
   &( EOS NamedProperty ) -> ","
-  # NOTE: This is hacky but used for when an inline object is inside a ternary conditional
+  # NOTE: This is hacky but used when an inline object is inside a ternary conditional
   &( __ ":" ) -> ""
   &EOS -> ""
 
@@ -4515,7 +4444,118 @@ Init
       }
     }
 
+    function processAssignments(statements) {
+      gatherRecursiveAll(statements, n => n.type === "AssignmentExpression" && n.names === null)
+      .forEach(exp => {
+        let $0 = exp.children, [$1, $2] = $0, tail = [], i = 0, len = $1.length
+
+        // Force parens around destructuring object assignments
+        // Walk from left to right the minimal number of parens are added and enclose all destructured assignments
+        // TODO: Could validate some lhs ecmascript rules here if we wanted to
+        let wrapped = false
+        while (i < len) {
+          const lastAssignment = $1[i++]
+          const [,lhs,,op] = lastAssignment
+          if (op.token !== "=") continue
+
+          // Only wrap with one set of parens
+          if (lhs.type === "ObjectExpression") {
+            // TODO: re-order non-end rest properties of object destructuring
+            // check if has spread
+            const spreadIndex = lhs.children.findIndex((child) => child.type === "SpreadProperty"),
+              hasSpread = spreadIndex >= 0
+
+            if (hasSpread) {
+              const len2 = lhs.children.length,
+                after = lhs.children.splice(spreadIndex + 1, len2 - spreadIndex - 2)
+
+              if (after.length) {
+                if (after.some((child) => child.type === "SpreadProperty")) {
+                  // TODO: Attach error to node
+                  throw new Error("Cannot have multiple spread properties in object destructuring")
+                }
+
+                debugger
+
+                // Swap last delimiter with spread delimiter
+                const lastAfterChildren = after[after.length - 1].children,
+                  afterDelimiter = lastAfterChildren.pop(),
+                  spread = lhs.children[spreadIndex],
+                  spreadDelimiter = spread.children.pop()
+
+                spread.children.push(afterDelimiter)
+                lastAfterChildren.push(spreadDelimiter)
+                lhs.children.splice(spreadIndex, 0, ...after)
+              }
+            }
+
+            if (!wrapped) {
+              wrapped = true
+              // TODO: remove mutation
+              lhs.children.splice(0, 0, "(")
+              tail./**/push(")")
+            }
+          }
+        }
+
+        // TODO: Handle optional assignment refs
+
+        // Walk from right to left to handle splices
+        i = len - 1
+        while (i >= 0) {
+          const lastAssignment = $1[i]
+
+          if (lastAssignment[3].token === "=") {
+            const lhs = lastAssignment[1]
+
+            // Splice assignment
+            if (Array.isArray(lhs) && lhs.length > 1) {
+              const props = lhs[lhs.length-1]
+
+              if (Array.isArray(props)) {
+                const lastProp = props[props.length-1]
+
+                // TODO: this is kind of bonkers
+                if(lastProp.type === "SliceExpression") {
+                  const {start, end, children: c} = lastProp
+                  // TODO: don't lose as many source mappings
+                  c[0].token = ".splice("
+                  c[1] = start
+                  c[2] = ", "
+                  if (end)
+                    c[3] = [end, " - ", start]
+                  else
+                    c[3] = ["1/0"]
+                  c[4] = [", ...", $2]
+                  c[5] = ")"
+
+                  // Remove assignment token
+                  lastAssignment.pop()
+                  if (module.isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment.pop()
+                  // TODO: this only works for the last assignment, not multiple splice assignments, or splice assignments earlier in the chain
+                  if ($1.length > 1) {
+                    throw new Error("Not implemented yet! TODO: Handle multiple splice assignments")
+                  }
+
+                  exp.children = [$1]
+                  exp.names = []
+                  return
+                }
+              }
+            }
+          }
+          i--
+        }
+
+        // Gather all identifier names from the lhs array
+        const names = $1.flatMap(([,l]) => l.names || [])
+        exp.children = [$1, $2, ...tail]
+        exp.names = names
+      })
+    }
+
     module.processProgram = function(statements) {
+      processAssignments(statements)
       processFunctions(statements)
       processSwitchExpressions(statements)
 
