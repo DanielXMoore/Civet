@@ -647,7 +647,7 @@ NonEmptyParameters
 
 # https://262.ecma-international.org/#prod-FunctionRestParameter
 FunctionRestParameter
-  __ BindingRestElement:id TypeSuffix? ParameterElementDelimiter ->
+  BindingRestElement:id TypeSuffix? ParameterElementDelimiter ->
     return {
       type: "FunctionRestParameter",
       children: $0,
@@ -747,18 +747,39 @@ ArrayBindingPatternContent
   # NOTE: Added indentation based binding elements
   NestedBindingElements
   # TODO: Allow tailing BindingElements after BindingRestElement
-  ( BindingElement / Elision )*:props ( __ BindingRestElement )?:rest ->
+  ( BindingElement / Elision )*:props ( BindingRestElement ArrayElementDelimiter )?:rest ( BindingElement / Elision )*:after ->
     const names = props.flatMap((p) => p.names || [])
     const children = [...props]
 
+    let blockPrefix
+
     if (rest) {
-      children./**/push(...rest)
-      names./**/push(...rest[1].names)
+      const [ restBinding ] = rest
+      // Drop delimiter
+      children./**/push(restBinding)
+      names./**/push(...restBinding.names)
+
+      if (after.length) {
+        const spliceRef = module.getSpliceRef()
+        let restIdentifier
+        if (restBinding.type === "AtBinding") {
+          restIdentifier = restBinding.ref
+        } else {
+          restIdentifier = restBinding.names[0]
+        }
+
+        blockPrefix = {
+          type: "AssignmentExpression",
+          children: ["let [", module.insertTrimmingSpace(after, ""), "] = ", spliceRef, ".call(", restIdentifier, ", -", after.length.toString(), ")"],
+          names: after.flatMap(p => p.names),
+        }
+      }
     }
 
     return {
       names,
       children,
+      blockPrefix,
     }
 
 # https://262.ecma-international.org/#prod-Elision
@@ -828,13 +849,34 @@ BindingRestProperty
 
 NestedBindingElements
   # TODO: allow tailing binding elements after rest element
-  PushIndent NestedBindingElement*:props ( Nested BindingRestElement )?:rest PopIndent ->
+  PushIndent NestedBindingElement*:props ( Nested BindingRestElement ArrayElementDelimiter )?:rest NestedBindingElement*:after PopIndent ->
     if (!(props.length || rest)) return $skip
-    const names = props.flatMap(p => p.names)
-    const children = [...props]
+    const names = props.flatMap(p => p.names),
+      children = [...props]
+
+    let blockPrefix
+
     if (rest) {
+      const [ , restBinding ] = rest
+      let restIdentifier
+      if (restBinding.type === "AtBinding") {
+        restIdentifier = restBinding.binding.ref
+      } else {
+        restIdentifier = restBinding.names[0]
+      }
+
+      if (after.length) {
+        const spliceRef = module.getSpliceRef()
+
+        blockPrefix = {
+          type: "AssignmentExpression",
+          children: ["let [", module.insertTrimmingSpace(after, ""), "] = ", spliceRef, ".call(", restIdentifier, ", -", after.length.toString(), ")"],
+          names: after.flatMap(p => p.names),
+        }
+      }
+
       children./**/push(...rest)
-      names./**/push(...rest[1].names)
+      names./**/push(...restBinding.names)
     }
 
     return {
@@ -860,10 +902,10 @@ BindingElement
 
 # https://262.ecma-international.org/#prod-BindingRestElement
 BindingRestElement
-  DotDotDot ( BindingIdentifier / BindingPattern ):binding ->
+  __:ws DotDotDot:dots ( BindingIdentifier / BindingPattern ):binding ->
     return {
       ...binding,
-      children: [$1, ...binding.children],
+      children: [...ws, dots, ...binding.children],
     }
 
 # https://262.ecma-international.org/#prod-FunctionDeclaration
@@ -3746,13 +3788,6 @@ Reset
         base: "splice",
       }
 
-      const typeSuffix = {
-        ts: true,
-        children: [": <T>(this: T[], start: number, deleteCount?: number) => T[]"]
-      }
-      // [indent, statement]
-      module.prelude.push(["", ["const ", spliceRef, typeSuffix, " = [].splice", asAny, "\n"]])
-
       return spliceRef
     }
 
@@ -4423,15 +4458,17 @@ Init
       if (!expressions) return
       const { blockPrefix } = parameters
 
-      if (blockPrefix) {
-        let indent
-        if (expressions.length === 0) {
-          indent = ""
-        } else {
-          indent = expressions[0][0]
-        }
-        block.expressions.unshift([indent, blockPrefix, ";\n"])
+      let indent
+      if (!expressions.length) {
+        indent = ""
+      } else {
+        indent = expressions[0][0]
       }
+
+      gatherRecursiveAll(parameters, n => n.blockPrefix)
+      .forEach(({ blockPrefix }) => {
+        expressions.unshift([indent, blockPrefix, ";\n"])
+      })
     }
 
     function processAtParams(f) {
@@ -4626,6 +4663,25 @@ Init
       })
     }
 
+    // Don't push to prelude unless ref actually ends up in final parse tree,
+    // the parse could backtrack and not actually use the ref!
+    function checkSpliceRef(statements) {
+      const spliceRef = module.getSpliceRef()
+      if (gatherRecursiveAll(statements, n => n === spliceRef).length) {
+        const typeSuffix = {
+          ts: true,
+          children: [": <T>(this: T[], start: number, deleteCount?: number) => T[]"]
+        }
+
+        const asAny = {
+          ts: true,
+          children: [" as any"]
+        }
+        // [indent, statement]
+        module.prelude.push(["", ["const ", spliceRef, typeSuffix, " = [].splice", asAny, "\n"]])
+      }
+    }
+
     module.processProgram = function(statements) {
       processAssignments(statements)
       processFunctions(statements)
@@ -4634,6 +4690,9 @@ Init
       // Modify iteration expressions
       gatherRecursiveAll(statements, n => n.type === "IterationExpression")
       .forEach((e) => expressionizeIteration(e))
+
+      // NOTE: This must be done after function processing because that inserts the ref into the block body
+      checkSpliceRef(statements)
 
       // Insert prelude
       statements.unshift(...module.prelude)

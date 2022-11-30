@@ -468,7 +468,7 @@ Timesheet
 2022-11-26 | 5.25  | Heregex; coffeeWordAssignment; @param binding
 2022-11-28 | 2.00  | nested expressions; removed unnecessary parens in if/else expressions; any position spread
 2022-11-29 | 4.25  | re-order non-end rest property
-2022-11-30 | 1.00  | non-end rest parameter
+2022-11-30 | 2.00  | non-end rest parameter; non-end rest element
 
 non-end rest element
 
