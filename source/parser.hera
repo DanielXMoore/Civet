@@ -417,9 +417,9 @@ This
   "this" ->
     return { $loc, token: $1 }
   # NOTE: Added @identifier shorthand, also works for private identifiers
-  At ( "#"? IdentifierName ) ->
-    $1.token = "this."
-    return $0
+  At:t $( "#"? IdentifierName ):id ->
+    // Extract children from 'Identifier' node because this won't interfere with refs
+    return [{...t, token: "this."}, id]
   # NOTE: Added '@' as a 'this' shorthand from CoffeeScript
   At ->
     $1.token = "this"
@@ -602,17 +602,58 @@ Parameters
 
 NonEmptyParameters
   # NOTE: BindingElement -> ParameterElement
-  # TODO: Allow tailing parameters after FunctionRestParameter
-  TypeParameters? OpenParen ParameterElement* FunctionRestParameter? __ CloseParen ->
+  TypeParameters?:tp OpenParen:open ParameterElement*:pes FunctionRestParameter?:rest ParameterElement*:after ( __ CloseParen ):close ->
+    const names = pes.flatMap(p => p.names)
+    if (rest) {
+      let restIdentifier
+      if (rest.binding.type === "AtBinding") {
+        restIdentifier = rest.binding.ref
+      } else {
+        names.push(...rest.names)
+        restIdentifier = rest.names[0]
+      }
+
+      let blockPrefix
+      if (after.length) {
+        const spliceRef = module.getSpliceRef()
+
+        blockPrefix = {
+          type: "AssignmentExpression",
+          children: ["let [", module.insertTrimmingSpace(after, ""), "] = ", spliceRef, ".call(", restIdentifier, ", -", after.length.toString(), ")"],
+          names: after.flatMap(p => p.names),
+        }
+      }
+
+      return {
+        type: "Parameters",
+        children: [
+          tp,
+          open,
+          ...pes,
+          // Remove delimiter
+          {...rest, children: rest.children.slice(0, -1)},
+          close,
+        ],
+        names,
+        blockPrefix,
+      }
+    }
+
     return {
       type: "Parameters",
-      children: $0,
-      names: $3.flatMap((p) => p.names),
+      children: [tp, open, ...pes, close],
+      names: pes.flatMap((p) => p.names),
     }
 
 # https://262.ecma-international.org/#prod-FunctionRestParameter
 FunctionRestParameter
-  __ BindingRestElement TypeSuffix?
+  __ BindingRestElement:id TypeSuffix? ParameterElementDelimiter ->
+    return {
+      type: "FunctionRestParameter",
+      children: $0,
+      names: id.names,
+      binding: id,
+    }
 
 # NOTE: Similar to BindingElement but appears in formal parameters list
 ParameterElement
@@ -821,7 +862,7 @@ BindingElement
 BindingRestElement
   DotDotDot ( BindingIdentifier / BindingPattern ):binding ->
     return {
-      names: binding.names,
+      ...binding,
       children: [$1, ...binding.children],
     }
 
@@ -3690,8 +3731,30 @@ Reset
       implicitReturns: true,
     }
 
-    let indexOfRef, hasPropRef
+    let indexOfRef, hasPropRef, spliceRef
+    const asAny = {
+      ts: true,
+      children: [" as any"]
+    }
     module.prelude = []
+
+    module.getSpliceRef = function () {
+      if (spliceRef) return spliceRef
+
+      spliceRef = {
+        type: "Ref",
+        base: "splice",
+      }
+
+      const typeSuffix = {
+        ts: true,
+        children: [": <T>(this: T[], start: number, deleteCount?: number) => T[]"]
+      }
+      // [indent, statement]
+      module.prelude.push(["", ["const ", spliceRef, typeSuffix, " = [].splice", asAny, "\n"]])
+
+      return spliceRef
+    }
 
     module.getIndexOfRef = function() {
       if (indexOfRef) return indexOfRef
@@ -3704,10 +3767,6 @@ Reset
       const typeSuffix = {
         ts: true,
         children: [": <T>(this: T[], searchElement: T) => boolean"]
-      }
-      const asAny = {
-        ts: true,
-        children: [" as any"]
       }
       // [indent, statement]
       module.prelude.push(["", ["const ", indexOfRef, typeSuffix, " = [].indexOf", asAny, "\n"]])
@@ -3726,10 +3785,6 @@ Reset
       const typeSuffix = {
         ts: true,
         children: [": <T>(this: T, prop: keyof T) => boolean"]
-      }
-      const asAny = {
-        ts: true,
-        children: [" as any"]
       }
       // [indent, statement]
       module.prelude.push(["", ["const ", hasPropRef, typeSuffix, " = {}.hasOwnProperty", asAny, "\n"]])
@@ -4360,6 +4415,25 @@ Init
       return nodes
     }
 
+    function processParams(f) {
+      processAtParams(f)
+      const { parameters, block } = f
+      if (!block) return
+      const { expressions } = block
+      if (!expressions) return
+      const { blockPrefix } = parameters
+
+      if (blockPrefix) {
+        let indent
+        if (expressions.length === 0) {
+          indent = ""
+        } else {
+          indent = expressions[0][0]
+        }
+        block.expressions.unshift([indent, blockPrefix, ";\n"])
+      }
+    }
+
     function processAtParams(f) {
       const { parameters, block } = f
       // TODO?
@@ -4407,7 +4481,7 @@ Init
         )
       })
       .forEach((f) => {
-        processAtParams(f)
+        processParams(f)
         const { block, returnType } = f
         if (module.config.implicitReturns) {
           const isVoid  = returnType  === "void"
@@ -4420,7 +4494,7 @@ Init
 
       gatherRecursiveAll(statements, n => n.type === "MethodDefinition")
       .forEach((f) => {
-        processAtParams(f)
+        processParams(f)
         const {children: [sig, block]} = f
         if (module.config.implicitReturns) {
           const isConstructor = sig.name       === "constructor"
