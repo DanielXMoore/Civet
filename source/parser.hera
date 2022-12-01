@@ -606,7 +606,7 @@ NonEmptyParameters
     const names = pes.flatMap(p => p.names)
     if (rest) {
       let restIdentifier
-      if (rest.binding.type === "AtBinding") {
+      if (rest.binding.ref) {
         restIdentifier = rest.binding.ref
       } else {
         names.push(...rest.names)
@@ -757,16 +757,17 @@ ArrayBindingPatternContent
       const [ restBinding ] = rest
       // Drop delimiter
       children./**/push(restBinding)
-      names./**/push(...restBinding.names)
+
+      let restIdentifier
+      if (restBinding.ref) {
+        restIdentifier = restBinding.ref
+      } else {
+        restIdentifier = restBinding.names[0]
+        names./**/push(...restBinding.names)
+      }
 
       if (after.length) {
         const spliceRef = module.getSpliceRef()
-        let restIdentifier
-        if (restBinding.type === "AtBinding") {
-          restIdentifier = restBinding.ref
-        } else {
-          restIdentifier = restBinding.names[0]
-        }
 
         blockPrefix = {
           type: "AssignmentExpression",
@@ -841,10 +842,15 @@ NestedBindingRestProperty
 
 # https://262.ecma-international.org/#prod-BindingRestProperty
 BindingRestProperty
-  __:ws DotDotDot:d BindingIdentifier:id ObjectPropertyDelimiter:delimiter ->
+  __:ws DotDotDot:dots BindingIdentifier:id ObjectPropertyDelimiter:delimiter ->
     return {
       ...id,
-      children: [...ws, d, ...id.children, delimiter],
+      children: [...ws, dots, ...id.children, delimiter],
+    }
+  __:ws BindingIdentifier:id DotDotDot:dots ObjectPropertyDelimiter:delimiter ->
+    return {
+      ...id,
+      children: [...ws, dots, ...id.children, delimiter],
     }
 
 NestedBindingElements
@@ -859,7 +865,7 @@ NestedBindingElements
     if (rest) {
       const [ , restBinding ] = rest
       let restIdentifier
-      if (restBinding.type === "AtBinding") {
+      if (restBinding.ref) {
         restIdentifier = restBinding.binding.ref
       } else {
         restIdentifier = restBinding.names[0]
@@ -903,10 +909,26 @@ BindingElement
 
 # https://262.ecma-international.org/#prod-BindingRestElement
 BindingRestElement
-  __:ws DotDotDot:dots ( BindingIdentifier / BindingPattern ):binding ->
+  __:ws DotDotDot:dots ( BindingIdentifier / BindingPattern / EmptyBindingPattern ):binding ->
     return {
       ...binding,
       children: [...ws, dots, ...binding.children],
+    }
+  __:ws ( BindingIdentifier / BindingPattern ):binding DotDotDot:dots ->
+    return {
+      ...binding,
+      children: [...ws, dots, ...binding.children],
+    }
+
+# NOTE: Allows for empty binding rest pattern like in CoffeeScript
+EmptyBindingPattern
+  "" ->
+    const ref = { type: "Ref", base: "ref" }
+    return {
+      type: "EmptyBinding",
+      children: [ref],
+      names: [],
+      ref,
     }
 
 # https://262.ecma-international.org/#prod-FunctionDeclaration
@@ -915,7 +937,7 @@ FunctionDeclaration
 
 FunctionSignature
   # NOTE: Merged in async and generator with optionals
-  ( Async __ )? Function Star? BindingIdentifier?:id __ Parameters:parameters ReturnTypeSuffix?:suffix ->
+  ( Async __ )? Function Star? BindingIdentifier?:id __ NonEmptyParameters:parameters ReturnTypeSuffix?:suffix ->
     return {
       type: "FunctionSignature",
       id,
@@ -4466,18 +4488,28 @@ Init
         indent = expressions[0][0]
       }
 
-      function insertRestSplices(s, p) {
+      const thisAssignments = []
+      const splices = []
+      function insertRestSplices(s, p, thisAssignments) {
         gatherRecursiveAll(s, n => n.blockPrefix)
         .forEach(({ blockPrefix }) => {
           p.push([indent, blockPrefix, ";\n"])
-          insertRestSplices(blockPrefix, p)
+          // Insert `this` assignments
+          gatherRecursiveAll(blockPrefix, (n) => n.type === "AtBinding")
+          .map(({ref}) => {
+            const { base: name } = ref
+            thisAssignments.push([indent, [`this.${name} = `, ref], ";\n"])
+          })
+
+          // Search for any further nested splices
+          insertRestSplices(blockPrefix, p, thisAssignments)
         })
 
         return p
       }
 
-      expressions.unshift(...insertRestSplices(parameters, []))
-
+      insertRestSplices(parameters, splices, thisAssignments)
+      expressions.unshift(...splices, ...thisAssignments)
     }
 
     function processAtParams(f) {
@@ -4496,9 +4528,8 @@ Init
         indent = expressions[0][0]
       }
 
-      // @params all happen to be refs right now
-      const thisAssignments = gatherRecursiveAll(parameters, (n) => n.type === "Ref")
-      .map((ref) => {
+      const thisAssignments = gatherRecursiveAll(parameters, (n) => n.type === "AtBinding")
+      .map(({ref}) => {
         const { base: name } = ref
         return [indent, [`this.${name} = `, ref], ";\n"]
       })
