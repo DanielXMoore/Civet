@@ -1220,7 +1220,7 @@ ArrayLiteral
       names,
     }
 
-ArrayLiteralContent
+RangeExpression
   ExtendedExpression:s __:ws ( DotDotDot / DotDot ):range ExtendedExpression:e ->
     const inclusive = range.token === ".."
     range.token = ","
@@ -1299,6 +1299,8 @@ ArrayLiteralContent
       end: e,
     }
 
+ArrayLiteralContent
+  RangeExpression
   NestedElementList
   ElementList
 
@@ -1309,12 +1311,23 @@ NestedElementList
     return $skip
 
 NestedElement
-  Nested ElementList ArrayElementDelimiter ->
-    const result = [...$1, ...$2]
-    if ($3) {
-      result./**/push($3)
+  Nested:indent ElementList:list ArrayElementDelimiter:delimiter ->
+    const {length} = list
+    if (length) {
+      // Prepend indent to first element and append delimiter to last element
+      return list.map((e, i) => {
+        if (i === 0 && i === length - 1) {
+          return {...e, children: [indent, ...e.children, delimiter]}
+        }
+        if (i === 0) {
+          return {...e, children: [indent, ...e.children]}
+        }
+        if (i === length - 1) {
+          return {...e, children: [...e.children, delimiter]}
+        }
+        return e
+      })
     }
-    return result
 
 ArrayElementDelimiter
   _* Comma
@@ -1329,27 +1342,31 @@ ArrayElementDelimiter
 # https://262.ecma-international.org/#prod-ElementList
 # NOTE: Modified and simplified from the spec
 ElementList
-  ArrayElementExpression ElementListRest* ->
-    if ($2.length) {
-      return [].concat($1 || [], ...$2)
+  ArrayElementExpression:first ElementListRest*:rest ->
+    if (rest.length) {
+      return [{
+        ...first,
+        children: [...first.children, rest[0][0]],
+      }].concat(rest.map(([_, e], i) => {
+        const delim = rest[i+1]?.[0]
+        return {
+          ...e,
+          children: [...e.children, delim],
+        }
+      }))
     }
-    if ($1) {
-      return [].concat($1)
-    }
-    return []
+
+    return [first]
 
 ElementListRest
-  __ Comma __ ArrayElementExpression ->
-    const result = [...$1, $2, ...$3]
-    if ($4) {
-      result./**/push($4)
-    }
-    return result
+  # NOTE: This is an explicit comma because we could be in a nested list and we don't want to match
+  # the &EOS delimiter
+  ( __ Comma __ ) ArrayElementExpression
 
 # NOTE: Modified and simplified from the spec
 ArrayElementExpression
   # NOTE: Allow for postfix splat like CoffeeScript
-  ExtendedExpression:exp __:ws DotDotDot:dots &ArrayElementDelimiter ->
+  ExtendedExpression:exp __:ws DotDotDot:dots ->
     return {
       type: "SpreadElement",
       children: [...ws, dots, exp],
@@ -1357,12 +1374,16 @@ ArrayElementExpression
     }
 
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  ( ( DotDotDot __ )? ExtendedExpression )?:expMaybeSpread &ArrayElementDelimiter ->
+  ( ( __ DotDotDot __ )? ExtendedExpression )?:expMaybeSpread &ArrayElementDelimiter ->
     if (expMaybeSpread) {
       const [spread, exp] = expMaybeSpread
 
       if(!spread) {
-        return exp
+        return {
+          type: "ArrayElement",
+          children: [exp],
+          names: exp.names,
+        }
       } else {
         return {
           type: "SpreadElement",
@@ -1372,7 +1393,10 @@ ArrayElementExpression
       }
     }
 
-    return undefined
+    return {
+      type: "ElisionElement",
+      children: [],
+    }
 
 # https://262.ecma-international.org/#prod-ObjectLiteral
 # NOTE: Slightly simplified from spec
@@ -4610,60 +4634,11 @@ Init
           if (op.token !== "=") continue
 
           if (lhs.type === "ObjectExpression") {
-            const spreadIndex = lhs.children.findIndex((child) => child.type === "SpreadProperty"),
-              hasSpread = spreadIndex >= 0
-
-            // Re-order non-end spreads
-            if (hasSpread) {
-              const len2 = lhs.children.length,
-                after = lhs.children.splice(spreadIndex + 1, len2 - spreadIndex - 2)
-
-              // re-order non-end rest properties of object destructuring
-              if (after.length) {
-                if (after.some((child) => child.type === "SpreadProperty")) {
-                  // TODO: Attach error to node
-                  throw new Error("Cannot have multiple spread properties in object destructuring")
-                }
-
-                // Swap last delimiter with spread delimiter
-                const lastAfterChildren = after[after.length - 1].children,
-                  afterDelimiter = lastAfterChildren.pop(),
-                  spread = lhs.children[spreadIndex],
-                  spreadDelimiter = spread.children.pop()
-
-                // TODO: Recurse into pattern properties
-
-                spread.children.push(afterDelimiter)
-                lastAfterChildren.push(spreadDelimiter)
-                lhs.children.splice(spreadIndex, 0, ...after)
-              }
-            }
-
             // Wrap with parens to distinguish from braced blocks
             if (!wrapped) {
               wrapped = true
               lhs.children./**/splice(0, 0, "(")
               tail./**/push(")")
-            }
-          } else if (lhs.type === "ArrayExpression") {
-            // check if has spread
-            const spreadIndex = lhs.children.findIndex((child) => child.type === "SpreadElement"),
-              hasSpread = spreadIndex >= 0
-
-            if (hasSpread) {
-              const len2 = lhs.children.length,
-                after = lhs.children.splice(spreadIndex + 1, len2 - spreadIndex - 2)
-
-              // split out non-end rest properties of array destructuring
-              if (after.length) {
-                if (after.some((child) => child.type === "SpreadElement")) {
-                  // TODO: Attach error to node
-                  throw new Error("Cannot have multiple spread elements in array destructuring")
-                }
-
-                // TODO: insert splice call
-                // TODO: recurse into pattern properties
-              }
             }
           }
         }
@@ -4710,6 +4685,62 @@ Init
                   exp.children = [$1]
                   exp.names = []
                   return
+                }
+              }
+            } else if (lhs.type === "ObjectExpression") {
+              const spreadIndex = lhs.children.findIndex((child) => child.type === "SpreadProperty"),
+                hasSpread = spreadIndex >= 0
+
+              // Re-order non-end spreads
+              if (hasSpread) {
+                const len2 = lhs.children.length,
+                  after = lhs.children.splice(spreadIndex + 1, len2 - spreadIndex - 2)
+
+                // re-order non-end rest properties of object destructuring
+                if (after.length) {
+                  if (after.some((child) => child.type === "SpreadProperty")) {
+                    // TODO: Attach error to node
+                    throw new Error("Cannot have multiple spread properties in object destructuring")
+                  }
+
+                  // Swap last delimiter with spread delimiter
+                  const lastAfterChildren = after[after.length - 1].children,
+                    afterDelimiter = lastAfterChildren.pop(),
+                    spread = lhs.children[spreadIndex],
+                    spreadDelimiter = spread.children.pop()
+
+                  // TODO: Recurse into pattern properties
+
+                  spread.children.push(afterDelimiter)
+                  lastAfterChildren.push(spreadDelimiter)
+                  lhs.children.splice(spreadIndex, 0, ...after)
+                }
+              }
+            } else if (lhs.type === "ArrayExpression") {
+              // check if has spread
+              const spreadIndex = lhs.children.findIndex((child) => child.type === "SpreadElement"),
+                hasSpread = spreadIndex >= 0
+
+              if (hasSpread) {
+                const len2 = lhs.children.length,
+                  after = lhs.children.splice(spreadIndex + 1, len2 - spreadIndex - 2)
+
+                // split out non-end rest properties of array destructuring
+                if (after.length) {
+                  if (after.some((child) => child.type === "SpreadElement")) {
+                    // TODO: Attach error to node
+                    throw new Error("Cannot have multiple spread elements in array destructuring")
+                  }
+
+                  const spread = lhs.children[spreadIndex],
+                    spreadDelimiter = spread.children.pop()
+
+                  // insert splice call
+                  const spliceRef = module.getSpliceRef()
+                  // TODO: don't just jam it on tail, use `(<assignment>,<splice assignment>,<rhs ref>)` to maintain return value
+                  tail.push(["\n[", after ,"] = ", spliceRef, ".call(", spread.names[0], ", -", after.length.toString(), ")"])
+
+                  // TODO: recurse into pattern elements
                 }
               }
             }
