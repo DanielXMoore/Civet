@@ -397,6 +397,7 @@ Timesheet
 2022-08-26 | 2.50  | lsp experiment; hover; prototype shorthand; until
 2022-08-27 | 1.00  | bugfix return followed by non-nested expression; esbuild plugin;
 2022-08-28 | 2.00  | Source maps
+
 2022-09-03 | 0.25  | LSP
 2022-09-04 | 4.50  | LSP
 2022-09-05 | 5.00  | running mocha with .civet and .ts files; remove 'as' suffix from js transpilation; document symbols; sourcemapping
