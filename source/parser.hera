@@ -619,7 +619,7 @@ NonEmptyParameters
 
         blockPrefix = {
           type: "AssignmentExpression",
-          children: ["let [", module.insertTrimmingSpace(after, ""), "] = ", spliceRef, ".call(", restIdentifier, ", -", after.length.toString(), ")"],
+          children: ["[", module.insertTrimmingSpace(after, ""), "] = ", spliceRef, ".call(", restIdentifier, ", -", after.length.toString(), ")"],
           names: after.flatMap(p => p.names),
         }
       }
@@ -703,7 +703,7 @@ BindingPattern
     }
   __ ArrayBindingPattern:p ->
     return {
-      children: [...$1, p],
+      children: [...$1, p.children],
       names: p.names,
     }
 
@@ -771,7 +771,7 @@ ArrayBindingPatternContent
 
         blockPrefix = {
           type: "AssignmentExpression",
-          children: ["let [", module.insertTrimmingSpace(after, ""), "] = ", spliceRef, ".call(", restIdentifier, ", -", after.length.toString(), ")"],
+          children: ["[", module.insertTrimmingSpace(after, ""), "] = ", spliceRef, ".call(", restIdentifier, ", -", after.length.toString(), ")"],
           names: after.flatMap(p => p.names),
         }
       }
@@ -876,7 +876,7 @@ NestedBindingElements
 
         blockPrefix = {
           type: "AssignmentExpression",
-          children: ["let [", module.insertTrimmingSpace(after, ""), "] = ", spliceRef, ".call(", restIdentifier, ", -", after.length.toString(), ")"],
+          children: ["[", module.insertTrimmingSpace(after, ""), "] = ", spliceRef, ".call(", restIdentifier, ", -", after.length.toString(), ")"],
           names: after.flatMap(p => p.names),
         }
       }
@@ -2628,7 +2628,7 @@ LexicalDeclaration
     }
   # NOTE: Added const shorthand
   # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
-  InsertConst:c ( BindingPattern / BindingIdentifier ):id TypeSuffix? __ ConstAssignment:ca ExtendedExpression:e ->
+  InsertConst:c ( BindingPattern / BindingIdentifier ):id TypeSuffix?:suffix __:ws ConstAssignment:ca ExtendedExpression:e ->
     // Adjust position to space before assignment to make TypeScript remapping happier
     c = {
       ...c,
@@ -2662,10 +2662,17 @@ LexicalDeclaration
       }
     }
 
+    let [splices, thisAssignments] = module.gatherBindingCode(id)
+
+    splices = splices.map(s => [", ", s])
+    thisAssignments = thisAssignments.map(a => [";", a])
+
+    const children = [c, id, suffix, ...ws, ca, e, ...splices, ...thisAssignments]
+
     return {
       type: "Declaration",
       names: id.names,
-      children: $0
+      children,
     }
 
 ConstAssignment
@@ -4498,7 +4505,6 @@ Init
     }
 
     function processParams(f) {
-      processAtParams(f)
       const { parameters, block } = f
       if (!block) return
       const { expressions } = block
@@ -4512,53 +4518,12 @@ Init
         indent = expressions[0][0]
       }
 
-      const thisAssignments = []
-      const splices = []
-      function insertRestSplices(s, p, thisAssignments) {
-        gatherRecursiveAll(s, n => n.blockPrefix)
-        .forEach(({ blockPrefix }) => {
-          p.push([indent, blockPrefix, ";\n"])
-          // Insert `this` assignments
-          gatherRecursiveAll(blockPrefix, (n) => n.type === "AtBinding")
-          .map(({ref}) => {
-            const { base: name } = ref
-            thisAssignments.push([indent, [`this.${name} = `, ref], ";\n"])
-          })
+      const [splices, thisAssignments] = gatherBindingCode(parameters)
 
-          // Search for any further nested splices
-          insertRestSplices(blockPrefix, p, thisAssignments)
-        })
+      const prefix = splices.map(s => ["let ", s]).concat(thisAssignments)
+      .map((s) => [indent, s, ";\n"])
 
-        return p
-      }
-
-      insertRestSplices(parameters, splices, thisAssignments)
-      expressions.unshift(...splices, ...thisAssignments)
-    }
-
-    function processAtParams(f) {
-      const { parameters, block } = f
-      // TODO?
-      if (!block) return
-
-      const { expressions } = block
-
-      if (!expressions) return
-
-      let indent
-      if (expressions.length === 0) {
-        indent = ""
-      } else {
-        indent = expressions[0][0]
-      }
-
-      const thisAssignments = gatherRecursiveAll(parameters, (n) => n.type === "AtBinding")
-      .map(({ref}) => {
-        const { base: name } = ref
-        return [indent, [`this.${name} = `, ref], ";\n"]
-      })
-
-      block.expressions.unshift(...thisAssignments)
+      expressions.unshift(...prefix)
     }
 
     // Adjusts @binding inside object properties that need to be aliased
@@ -4924,6 +4889,34 @@ Init
         statements.unshift([indent, "var ", varIds.join(", "), "\n"])
       }
     }
+
+    function gatherBindingCode(statements) {
+      const thisAssignments = []
+      const splices = []
+
+      function insertRestSplices(s, p, thisAssignments) {
+        gatherRecursiveAll(s, n => n.blockPrefix || n.type === "AtBinding")
+        .forEach((n) => {
+          // Insert `this` assignments
+          if (n.type === "AtBinding") {
+            const { ref } = n, { base: name } = ref
+            thisAssignments.push([`this.${name} = `, ref])
+            return
+          }
+          const { blockPrefix } = n
+          p.push(blockPrefix)
+
+          // Search for any further nested splices, and at bindings
+          insertRestSplices(blockPrefix, p, thisAssignments)
+        })
+      }
+
+      insertRestSplices(statements, splices, thisAssignments)
+
+      return [splices, thisAssignments]
+    }
+
+    module.gatherBindingCode = gatherBindingCode
 
     return $0
 
