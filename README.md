@@ -90,7 +90,9 @@ Things Kept from CoffeeScript
 - Simplified number method calls `1.toFixed()` -> `1..toFixed()`
 - `if`/`switch`/`for`/`loop`/`while`/`throw` expressions
 - Destructuring object assignment doesn't require being wrapped in parens at the statement level `{a, b} = c` -> `({a, b} = c)`
-- Prefix or postfix splats `[...a]`, `x = [a...]`
+- Prefix or postfix rest/splats `[...a]`, `x = [a...]`
+- RestProperty in any position `{a, ...b, c} = d` -> `{a, c, ...b} = d`
+- RestElement/RestParameter in any position `(first, ...midle, last) ->` -> `function(first, ...middle) { let [last] = middle.splice(-1)}`
 - `///` Heregexp
   - With some [changes](#things-changed-from-coffeescript).
 - JSX 😿
