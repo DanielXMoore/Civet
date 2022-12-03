@@ -320,20 +320,7 @@ ParenthesizedExpression
   # NOTE: Currently ignoring early error checking in https://262.ecma-international.org/#prod-CoverParenthesizedExpressionAndArrowParameterList
   OpenParen ExtendedExpression:exp ( TrailingComment* PostfixStatement )?:post __ CloseParen ->
     if (post) {
-      let clause
-      switch (post[1].type) {
-        case "IterationStatement":
-        case "ForStatement":
-          clause = module.addPostfixStatement(exp, ...post)
-          return {
-            type: "IterationExpression",
-            children: [clause],
-            block: clause.block,
-          }
-        case "IfStatement":
-          clause = module.expressionizeIfClause(post[1], exp)
-          return clause
-      }
+      return module.attachPostfixStatementAsExpression(exp, post)
     }
 
     return {
@@ -1891,7 +1878,12 @@ NestedBlockExpressions
     return exps
 
 NestedBlockExpression
-  Nested ExtendedExpression ExpressionDelimiter
+  Nested:ws ExtendedExpression:exp ( TrailingComment* PostfixStatement )?:post ExpressionDelimiter:d ->
+    if (post) {
+      return [ws, module.attachPostfixStatementAsExpression(exp, post), d]
+    }
+
+    return [ws, exp, d]
 
 # https://262.ecma-international.org/#prod-IterationStatement
 IterationStatement
@@ -4726,6 +4718,25 @@ Init
       }
     }
 
+    module.attachPostfixStatementAsExpression = function (exp, post) {
+      let clause
+      switch (post[1].type) {
+        case "IterationStatement":
+        case "ForStatement":
+          clause = module.addPostfixStatement(exp, ...post)
+          return {
+            type: "IterationExpression",
+            children: [clause],
+            block: clause.block,
+          }
+        case "IfStatement":
+          clause = module.expressionizeIfClause(post[1], exp)
+          return clause
+        default:
+          throw new Error("Unknown postfix statement")
+      }
+    }
+
     module.processProgram = function(statements) {
       processAssignments(statements)
       processFunctions(statements)
@@ -4814,18 +4825,17 @@ Init
       }
 
       function findAssignments(statements, decs) {
-        const assignmentStatements = gatherNodes(statements, (node) => {
+        let assignmentStatements = gatherNodes(statements, (node) => {
           return node.type === "AssignmentExpression"
         })
 
-        const undeclaredIdentifiers = assignmentStatements.flatMap((a) => {
-          return a.names
-        })
+        if (assignmentStatements.length) {
+          // Get nested assignments that could be in expressions
+          assignmentStatements = assignmentStatements
+          .concat(findAssignments(assignmentStatements.map(s => s.children), decs))
+        }
 
-        // Unique, undeclared identifiers in this scope
-        return undeclaredIdentifiers.filter((x, i, a) => {
-          if (!hasDec(x)) return a.indexOf(x) === i
-        })
+        return assignmentStatements
       }
 
       // Let descendent blocks add the var at the outer enclosing function scope
@@ -4839,8 +4849,15 @@ Init
       const decs = findDecs(statements)
       scopes./**/push(decs)
       const varIds = []
-      findAssignments(statements, scopes)
-      .forEach(pushVar)
+      const assignmentStatements = findAssignments(statements, scopes)
+      const undeclaredIdentifiers = assignmentStatements.flatMap((a) => {
+        return a.names
+      })
+
+      // Unique, undeclared identifiers in this scope
+      undeclaredIdentifiers.filter((x, i, a) => {
+        if (!hasDec(x)) return a.indexOf(x) === i
+      }).forEach(pushVar)
 
       const fnNodes  = gatherNodes(statements, (s) => s.type === "FunctionExpression")
       const forNodes = gatherNodes(statements, (s) => s.type === "ForStatement")
