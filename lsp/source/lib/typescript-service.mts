@@ -21,7 +21,7 @@ const {
 } = ts
 
 import { TextDocument } from "vscode-languageserver-textdocument"
-import { fileURLToPath } from "url"
+import { fileURLToPath, pathToFileURL } from "url"
 import { createRequire } from "module"
 // TODO: project Coffee version?
 import { compile as coffeeCompile } from "coffeescript"
@@ -149,7 +149,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
       const path = fileURLToPath(doc.uri)
 
       // Something may have changed so notify TS by updating the project version
-      // Still not too sure exactly how TS uses this. Read `sychronizeHostData` in `typescript/src/sercivces/services.ts` for more info.
+      // Still not too sure exactly how TS uses this. Read `synchronizeHostData` in `typescript/src/sercivces/services.ts` for more info.
       projectVersion++
 
       const extension = getExtensionFromPath(path)
@@ -335,7 +335,8 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
   function initTranspiledDoc(path: string) {
     // Create an empty document, it will be updated on-demand when `getScriptSnapshot` is called
     // `path` must be the in the format that TypeScript Language Service expects
-    const transpiledDoc = TextDocument.create(path, "none", -1, "")
+    const uri = pathToFileURL(path).toString()
+    const transpiledDoc = TextDocument.create(uri, "none", -1, "")
     // Add transpiled doc
     documents.add(transpiledDoc)
     pathMap.set(path, transpiledDoc)
@@ -413,8 +414,9 @@ function TSService(projectURL = "./") {
       const civetFiles = sys.readDirectory(civetFolder)
 
       // One day it would be nice to load plugins that could be transpiled but that is a whole can of worms.
-      // VSCode Node verions, esm loaders, etc.
+      // VSCode Node versions, esm loaders, etc.
       const pluginFiles = civetFiles.filter(file => file.endsWith("plugin.mjs"))
+      .map(file => pathToFileURL(file).toString())
 
       for (const filePath of pluginFiles) {
         console.info("Loading plugin", filePath)
