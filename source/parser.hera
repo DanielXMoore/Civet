@@ -713,6 +713,7 @@ BindingPattern
 ObjectBindingPattern
   OpenBrace ObjectBindingPatternContent:c __ CloseBrace ->
     return {
+      type: "ObjectBindingPattern",
       children: [$1, ...c.children, ...$3, $4],
       names: c.names,
     }
@@ -740,6 +741,7 @@ ObjectBindingPatternContent
 ArrayBindingPattern
   OpenBracket ArrayBindingPatternContent:c __ CloseBracket ->
     return {
+      type: "ArrayBindingPattern",
       names: c.names,
       children: $0
     }
@@ -747,7 +749,6 @@ ArrayBindingPattern
 ArrayBindingPatternContent
   # NOTE: Added indentation based binding elements
   NestedBindingElements
-  # TODO: Allow tailing BindingElements after BindingRestElement
   ( BindingElement / Elision )*:props ( BindingRestElement ArrayElementDelimiter )?:rest ( BindingElement / Elision )*:after ->
     const names = props.flatMap((p) => p.names || [])
     const children = [...props]
@@ -854,7 +855,6 @@ BindingRestProperty
     }
 
 NestedBindingElements
-  # TODO: allow tailing binding elements after rest element
   PushIndent NestedBindingElement*:props ( Nested BindingRestElement ArrayElementDelimiter )?:rest NestedBindingElement*:after PopIndent ->
     if (!(props.length || rest)) return $skip
     const names = props.flatMap(p => p.names),
@@ -949,7 +949,7 @@ FunctionSignature
 
 # https://262.ecma-international.org/#prod-FunctionExpression
 FunctionExpression
-  # TODO: block isn't actually optional in FunctionExpression only in declarations/TS overloads
+  # NOTE: block isn't actually optional in FunctionExpression only in declarations/TS overloads
   FunctionSignature:signature BracedBlock?:block ->
     // TS Function overloads
     if (!block) {
@@ -1192,8 +1192,13 @@ IdentifierName
 IdentifierReference
   Identifier
 
+UpcomingAssignment
+  &( __ "=" !( "=" / ">" ) )
+
 # https://262.ecma-international.org/#prod-ArrayLiteral
 ArrayLiteral
+  # NOTE: Check ArrayBindingPattern case of lhs destructuring
+  ArrayBindingPattern UpcomingAssignment -> $1
   OpenBracket ArrayLiteralContent:content __:ws CloseBracket ->
     if (content.type === "RangeExpression") {
       return {...content,
@@ -1409,6 +1414,8 @@ ArrayElementExpression
 # https://262.ecma-international.org/#prod-ObjectLiteral
 # NOTE: Slightly simplified from spec
 ObjectLiteral
+  # NOTE: Check for object binding pattern in case of destructuring to an object lhs
+  ObjectBindingPattern UpcomingAssignment -> $1
   BracedObjectLiteral
   NestedImplicitObjectLiteral
   InlineObjectLiteral
@@ -4041,6 +4048,7 @@ Init
         case "BlockStatement":
           insertPush(node.expressions[node.expressions.length - 1], ref)
           return
+        case "ObjectBindingPattern":
         case "ObjectExpression":
           module.insertTrimmingSpace(node.children[0], "")
           node.children.unshift(ref, ".push(")
@@ -4128,6 +4136,7 @@ Init
         case "BlockStatement":
           insertReturn(node.expressions[node.expressions.length - 1])
           return
+        case "ObjectBindingPattern":
         case "ObjectExpression":
           module.insertTrimmingSpace(node.children[0], "")
           node.children.unshift("return ")
@@ -4538,10 +4547,22 @@ Init
 
     // Adjusts @binding inside object properties that need to be aliased
     // see test/function.civet binding pattern
-    function adjustAtBindings(statements) {
+    function adjustAtBindings(statements, asThis=false) {
       gatherRecursiveAll(statements, n => n.type === "AtBindingProperty")
       .forEach(binding => {
         const { ref } = binding
+
+        if (asThis) {
+          // Convert from @x to x: this.x keeping any whitespace or initializer to the right
+          const atBinding = binding.children[0]
+          atBinding.children.pop()
+          atBinding.type = undefined
+
+          binding.children.unshift(ref.base, ": this.", ref.base)
+          binding.type = "Property"
+          binding.ref = undefined
+          return
+        }
 
         if (ref.names[0] !== ref.base) {
           binding.children.unshift(ref.base, ": ")
@@ -4594,6 +4615,14 @@ Init
       }
     }
 
+    function processBindingPatternLHS(lhs, tail) {
+      // Expand AtBindings first before gathering splices
+      adjustAtBindings(lhs, true)
+      const [splices, thisAssignments] = module.gatherBindingCode(lhs)
+      // TODO: This isn't quite right for compound assignments, may need to wrap with parens and use comma to return the complete value
+      tail.push(...splices.map(s => [", ", s]), ...thisAssignments.map(a => ["; ", a]))
+    }
+
     function processAssignments(statements) {
       gatherRecursiveAll(statements, n => n.type === "AssignmentExpression" && n.names === null)
       .forEach(exp => {
@@ -4608,7 +4637,7 @@ Init
           const [,lhs,,op] = lastAssignment
           if (op.token !== "=") continue
 
-          if (lhs.type === "ObjectExpression") {
+          if (lhs.type === "ObjectExpression" || lhs.type === "ObjectBindingPattern") {
             // Wrap with parens to distinguish from braced blocks
             if (!wrapped) {
               wrapped = true
@@ -4662,63 +4691,10 @@ Init
                   return
                 }
               }
-            } else if (lhs.type === "ObjectExpression") {
-              const spreadIndex = lhs.children.findIndex((child) => child.type === "SpreadProperty"),
-                hasSpread = spreadIndex >= 0
-
-              // Re-order non-end spreads
-              if (hasSpread) {
-                const len2 = lhs.children.length,
-                  after = lhs.children.splice(spreadIndex + 1, len2 - spreadIndex - 2)
-
-                // re-order non-end rest properties of object destructuring
-                if (after.length) {
-                  if (after.some((child) => child.type === "SpreadProperty")) {
-                    // TODO: Attach error to node
-                    throw new Error("Cannot have multiple spread properties in object destructuring")
-                  }
-
-                  // Swap last delimiter with spread delimiter
-                  const lastAfterChildren = after[after.length - 1].children,
-                    afterDelimiter = lastAfterChildren.pop(),
-                    spread = lhs.children[spreadIndex],
-                    spreadDelimiter = spread.children.pop()
-
-                  // TODO: Recurse into pattern properties
-
-                  spread.children.push(afterDelimiter)
-                  lastAfterChildren.push(spreadDelimiter)
-                  lhs.children.splice(spreadIndex, 0, ...after)
-                }
-              }
-            } else if (lhs.type === "ArrayExpression") {
-              // check if has spread
-              const spreadIndex = lhs.children.findIndex((child) => child.type === "SpreadElement"),
-                hasSpread = spreadIndex >= 0
-
-              if (hasSpread) {
-                const len2 = lhs.children.length,
-                  after = lhs.children.splice(spreadIndex + 1, len2 - spreadIndex - 2)
-
-                // split out non-end rest properties of array destructuring
-                if (after.length) {
-                  if (after.some((child) => child.type === "SpreadElement")) {
-                    // TODO: Attach error to node
-                    throw new Error("Cannot have multiple spread elements in array destructuring")
-                  }
-
-                  const spread = lhs.children[spreadIndex],
-                    spreadDelimiter = spread.children.pop(),
-                    spreadRef = spread.children[spread.children.length - 1]
-
-                  // insert splice call
-                  const spliceRef = module.getSpliceRef()
-                  // TODO: don't just jam it on tail, use `(<assignment>,<splice assignment>,<rhs ref>)` to maintain return value
-                  tail.push(["\n[", after ,"] = ", spliceRef, ".call(", spreadRef, ", -", after.length.toString(), ")"])
-
-                  // TODO: recurse into pattern elements
-                }
-              }
+            } else if (lhs.type === "ObjectBindingPattern" || lhs.type === "ArrayBindingPattern") {
+              processBindingPatternLHS(lhs, tail)
+            } else if (lhs.type === "ObjectExpression" || lhs.type === "ArrayExpression") {
+              throw new Error("lhs must be a binding pattern")
             }
           }
           i--

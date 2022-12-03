@@ -472,7 +472,8 @@ Timesheet
 2022-11-30 | 2.50  | non-end rest parameter; non-end rest element; nested non-end rest elements
 
 2022-12-01 | 4.00  | @binding inside nested rest element; postfix `...` in element and property bindings; lhs non-end rest element
-2022-12-02 | 3.50  | const assignment non-end rest element; inline object; coffee compat
+2022-12-02 | 4.50  | const assignment non-end rest element; inline object; coffee compat
+2022-12-03 | 0.50  | binding pattern LHS
 
 browser.coffee - parse completes
 grammar.coffee - parse completes
