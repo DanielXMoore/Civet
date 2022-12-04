@@ -241,18 +241,19 @@ CoffeeScript Compatibility
 
 Civet provides a compatability prologue directive that aims to be 97+% compatible with existing CoffeeScript2 code (still a work in progress).
 
-```
-autoVar        (declare implicit vars based on assignment to undeclared identifiers)
-coffeeBooleans (yes/no/on/off)
-coffeeComment  (# single line comments)
-coffeeDo       ( `do ->`, disables ES6 do/while)
-coffeeEq       (`==` -> `===`, `!=` -> `!==`)
-coffeeForLoops (for in, of, from loops behave like they do in CoffeeScript)
-coffeeInterpolation (`"a string with #{myVar}"`)
-coffeeIsnt     (`isnt` -> `!==`)
-coffeeNot      (`not` -> "!") (currently doesn't support `not instanceof`, `not of`)
-coffeeOf       (`a of b` -> `a in b`, `a in b` -> `b.indexOf(a) >= 0`, `a not in b` -> `b.indexOf(a) < 0`)
-```
+| Configuration       | What it enables |
+|---------------------|---------------------------------------------------------------------|
+| autoVar             | declare implicit vars based on assignment to undeclared identifiers |
+| coffeeBooleans      | `yes`, `no`, `on`, `off` |
+| coffeeComment       | `# single line comments` |
+| coffeeDo            | `do ->`, disables ES6 do/while |
+| coffeeEq            | `==` -> `===`, `!=` -> `!==` |
+| coffeeForLoops      | for in, of, from loops behave like they do in CoffeeScript |
+| coffeeInterpolation | `"a string with #{myVar}"` |
+| coffeeIsnt          | `isnt` -> `!==` |
+| coffeeNot           | `not` -> `!`, `a not instanceof b` -> `!(a instanceof b)`; `not of` is not yet supported  |
+| coffeeOf            | `a of b` -> `a in b`, `a in b` -> `b.indexOf(a) >= 0`, `a not in b` -> `b.indexOf(a) < 0` |
+
 
 You can use these with `"civet coffeeCompat"` to opt in to all or use them bit by bit with `"civet coffeeComment coffeeEq coffeeInterpolation"`.
 Another possibility is to slowly remove them to provide a way to migrate files a little at a time `"civet coffeeCompat -coffeeBooleans -coffeeComment -coffeeEq"`.
