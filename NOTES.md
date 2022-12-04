@@ -473,14 +473,17 @@ Timesheet
 
 2022-12-01 | 4.00  | @binding inside nested rest element; postfix `...` in element and property bindings; lhs non-end rest element
 2022-12-02 | 4.50  | const assignment non-end rest element; inline object; coffee compat
-2022-12-03 | 2.50  | binding pattern LHS
+2022-12-03 | 4.00  | binding pattern LHS; coffee compat
 
 browser.coffee - parse completes
+cake.coffee    - parse completes
+coffeescript.coffee - 292: as is a keyword in civet
+command.coffee - 450 space after unary not
 grammar.coffee - parse completes
 helpers.coffee - parse completes
 lexer.coffee - parse completes
 nodes.coffee
-  - 1027 unless/else if expression
+  - 1554 `not instanceof`
 
 - CoffeeCompat
   - [x] Heregex
