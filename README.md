@@ -108,8 +108,8 @@ Civet.
 - `on/yes/off/no` (use `true/false`, `"civet coffeeCompat"`, or `"civet coffeeBooleans"` to add them back)
 - `isnt` (use `!==`, `"civet coffeeCompat"`, or `"civet coffeeIsnt"`)
 - `not` (use `!`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
-  - `not instanceof` (use `!(a instanceof b)`)
-  - `not of`
+  - `not instanceof` (use `!(a instanceof b)`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
+  - `not of` use (`"civet coffeeCompat"`, or `"civet coffeeNot"`)
   - NOTE: CoffeeScript `not` precedence is dubious. `not a < b` should be equivalent to `!(a < b)` but it is in fact `!a < b`
 - `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax, `"civet coffeeCompat"`, or `"civet coffeeDo"`)
 - `for from` (use JS `for of`, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
@@ -251,7 +251,7 @@ Civet provides a compatability prologue directive that aims to be 97+% compatibl
 | coffeeForLoops      | for in, of, from loops behave like they do in CoffeeScript |
 | coffeeInterpolation | `"a string with #{myVar}"` |
 | coffeeIsnt          | `isnt` -> `!==` |
-| coffeeNot           | `not` -> `!`, `a not instanceof b` -> `!(a instanceof b)`; `not of` is not yet supported  |
+| coffeeNot           | `not` -> `!`, `a not instanceof b` -> `!(a instanceof b)`, `a not of b` -> `!(a in b)`    |
 | coffeeOf            | `a of b` -> `a in b`, `a in b` -> `b.indexOf(a) >= 0`, `a not in b` -> `b.indexOf(a) < 0` |
 
 
