@@ -58,8 +58,13 @@ Arguments
 
 # Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
 ApplicationStart
-  &NestedImplicitObjectLiteral
+  IndentedApplicationAllowed &NestedImplicitObjectLiteral
   !EOS &( _+ !AdditionalReservedWords )
+
+IndentedApplicationAllowed
+  "" ->
+    if (module.suppressIndentedApplication) return $skip
+    return
 
 ArgumentsWithTrailingCallExpressions
   # Since this is recursive Arguments must consume input to avoid infinite recursion
@@ -2136,29 +2141,21 @@ CoffeeForStatementParameters
           }
       }
 
-      if (step) {
-        throw new Error("by clause not yet implement in non-range for in loops")
-      }
-
       const varRef = declaration
-      const expRefDec = (expRef !== exp)
-        // Trim a single leading space if present
-        ? [expRef, " = ", module.insertTrimmingSpace(exp, ""), ", "]
-        : []
+      let increment = "++",
+        indexAssignment,
+        assignmentNames = [...varRef.names]
 
-      declaration = {
-        type: "Declaration",
-        children: ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", expRef, ".length"],
-        names: []
-      }
-
-      let indexAssignment
-      let assignmentNames = [...varRef.names]
       if (index) {
         index = module.insertTrimmingSpace(index, "")
         indexAssignment = [index, "="]
         assignmentNames./**/push(...index.names)
       }
+
+      const expRefDec = (expRef !== exp)
+        // Trim a single leading space if present
+        ? [expRef, " = ", module.insertTrimmingSpace(exp, ""), ", "]
+        : []
 
       blockPrefix./**/push([indent, {
         type: "AssignmentExpression",
@@ -2166,9 +2163,42 @@ CoffeeForStatementParameters
         names: assignmentNames,
       }])
 
+      declaration = {
+        type: "Declaration",
+        children: ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", expRef, ".length"],
+        names: []
+      }
+
+      let condition = [counterRef, " < ", lenRef, "; "]
+
+      if (step) {
+        let [stepWs, , stepExp] = step
+        stepWs = module.insertTrimmingSpace(stepWs, "")
+        if (stepExp.type === "Literal") {
+          increment = [" +=", ...stepWs, stepExp]
+          // Negative step loops are reversed
+          if ( stepExp.raw[0] === "-") {
+            declaration = {
+              type: "Declaration",
+              children: ["let ", ...expRefDec, counterRef, " = ", expRef, ".length - 1"],
+              names: []
+            }
+            condition = [counterRef, " >= 0; "]
+          }
+        } else {
+          throw new Error("TODO: Support non-literal step in CoffeeScript for loops")
+        }
+
+        return {
+          declaration,
+          children: [$1, open, declaration, "; ", ...condition, counterRef, increment, close],
+          blockPrefix,
+        }
+      }
+
       return {
         declaration,
-        children: [$1, open, declaration, "; ", counterRef, " < ", lenRef, "; ", counterRef, "++", close],
+        children: [$1, open, declaration, "; ", ...condition, counterRef, increment, close],
         blockPrefix,
       }
     }
@@ -2214,13 +2244,13 @@ ForStatementParameters
   # https://262.ecma-international.org/#prod-ForInOfStatement
   # NOTE: Consolidated declarations
   # NOTE: Consolidated optional 'await'
-  ( Await __ )? OpenParen __    ForInOfDeclaration:declaration __ ( In / Of ) ExtendedExpression __ CloseParen ->
+  ( Await __ )? OpenParen __    ForInOfDeclaration:declaration __ ( In / Of ) ExpressionWithIndentedApplicationSuppressed __ CloseParen ->
     return {
       declaration,
       children: $0,
     }
   # NOTE: Added optional parens
-  ( Await __ )? InsertOpenParen ForInOfDeclaration:declaration __ ( In / Of ) ExtendedExpression InsertCloseParen ->
+  ( Await __ )? InsertOpenParen ForInOfDeclaration:declaration __ ( In / Of ) ExpressionWithIndentedApplicationSuppressed InsertCloseParen ->
     return {
       declaration: declaration,
       children: $0,
@@ -2377,7 +2407,7 @@ CaseClause
     }
 
 CaseExpressionList
-  ( _* ExtendedExpression ImpliedColon ) ( __ Comma ExtendedExpression ImpliedColon )* ->
+  ( _* ExpressionWithIndentedApplicationSuppressed ImpliedColon ) ( __ Comma ExpressionWithIndentedApplicationSuppressed ImpliedColon )* ->
     // Convert comma separated expression list to `case <exp>:`
     const result = $2.map(([ws, _comma, exp, col]) => {
       exp = module.insertTrimmingSpace(exp, "")
@@ -2433,13 +2463,25 @@ CatchParameter
 # An expression with explicit or implied parentheses, for use in if/while/switch
 Condition
   ParenthesizedExpression !( TrailingComment* ( BinaryOp / AssignmentOp / Dot / QuestionMark ) ) -> $1
-  InsertOpenParen:open ExtendedExpression:exp InsertCloseParen:close ->
+  InsertOpenParen:open ExpressionWithIndentedApplicationSuppressed:exp InsertCloseParen:close ->
     // Don't double wrap parethesized expressions
     if (exp.type === "ParenthesizedExpression") return exp
     return {
       type: "ParenthesizedExpression",
       children: [open, module.insertTrimmingSpace(exp, ""), close],
     }
+
+ExpressionWithIndentedApplicationSuppressed
+  SuppressIndentedApplication ExtendedExpression?:exp ->
+    module.suppressIndentedApplication = false
+
+    if (exp) return exp
+    return $skip
+
+SuppressIndentedApplication
+  "" ->
+    module.suppressIndentedApplication = true
+
 
 # https://262.ecma-international.org/#prod-ExpressionStatement
 ExpressionStatement

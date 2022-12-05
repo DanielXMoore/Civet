@@ -70,6 +70,7 @@ makeCache = ->
             "UnaryExpression", "BinaryOpExpression", "BinaryOpRHS", "ConditionalExpression", "ShortCircuitExpression",\
             "NestedPropertyDefinitions", "NestedObject", "NestedImplicitObjectLiteral", "NestedImplicitPropertyDefinitions", "NestedBlockStatement",\
             "NestedInterfaceProperty",\
+            "IndentedApplicationAllowed", "ExpressionWithIndentedApplicationSuppressed", "SuppressIndentedApplication",\
             "AssignmentExpressionTail", "AssignmentExpression", "ExtendedExpression", "Expression", "MemberExpressionRest",\
             "ElseClause",\
             "CoffeeCommentEnabled", "SingleLineComment", "Debugger"
