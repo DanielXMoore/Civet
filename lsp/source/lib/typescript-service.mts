@@ -174,7 +174,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
         // Deleting the snapshot will force a new one to be created when requested
         snapshotMap.delete(transpiledPath)
 
-        return
+        // Also continue to add the original document
       }
 
       // Plain non-transpiled document
