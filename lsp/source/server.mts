@@ -25,7 +25,7 @@ import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic } 
 import assert from "assert"
 
 import ts, { displayPartsToString, GetCompletionsAtPositionOptions } from 'typescript';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -141,7 +141,8 @@ connection.onHover(({ textDocument, position }) => {
     // console.log("onHover2", sourcePath, position)
 
     const p = transpiledDoc.offsetAt(position)
-    info = service.getQuickInfoAtPosition(transpiledDoc.uri, p)
+    const transpiledPath = documentToSourcePath(transpiledDoc)
+    info = service.getQuickInfoAtPosition(transpiledPath, p)
     // console.log("onHover3", info)
 
   }
@@ -214,7 +215,8 @@ connection.onCompletion(({ textDocument, position, context: _context }) => {
   }
 
   const p = transpiledDoc.offsetAt(position)
-  const completions = service.getCompletionsAtPosition(transpiledDoc.uri, p, completionOptions)
+  const transpiledPath = documentToSourcePath(transpiledDoc)
+  const completions = service.getCompletionsAtPosition(transpiledPath, p, completionOptions)
   if (!completions) return;
 
   return convertCompletions(completions)
@@ -253,7 +255,8 @@ connection.onDefinition(({ textDocument, position }) => {
     }
 
     const p = transpiledDoc.offsetAt(position)
-    definitions = service.getDefinitionAtPosition(transpiledDoc.uri, p)
+    const transpiledPath = documentToSourcePath(transpiledDoc)
+    definitions = service.getDefinitionAtPosition(transpiledPath, p)
   }
 
   if (!definitions) return
@@ -296,7 +299,8 @@ connection.onDocumentSymbol(({ textDocument }) => {
     assert(transpiledDoc)
 
     document = transpiledDoc
-    navTree = service.getNavigationTree(transpiledDoc.uri)
+    const transpiledPath = documentToSourcePath(transpiledDoc)
+    navTree = service.getNavigationTree(transpiledPath)
     sourcemapLines = meta.sourcemapLines
   }
 
