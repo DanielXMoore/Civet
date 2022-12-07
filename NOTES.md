@@ -477,7 +477,7 @@ Timesheet
 2022-12-04 | 3.25  | `not instanceof` in coffee compat; `#### single line comments`; `not of`; `for ... by`; restored suppress indented application hack
 2022-12-05 | 1.75  | keyword breaks; check for catch clause; reserved word @refs; return if expression
 2022-12-06 | 4.00  | LSP set up debugging; normalizing file extensions so things work on windows
-2022-12-07 | 0.50  | PR; export implicit from;
+2022-12-07 | 1.50  | PR; export implicit from; show Civet parse errors in LSP
 
 browser.coffee - parse completes
 cake.coffee    - parse completes
