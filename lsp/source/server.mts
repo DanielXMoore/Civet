@@ -13,6 +13,7 @@ import {
   DocumentSymbol,
   CompletionItem,
   Location,
+  DiagnosticSeverity,
 } from 'vscode-languageserver/node';
 
 import {
@@ -340,7 +341,7 @@ function updateDiagnostics(document: TextDocument) {
 
   // Non-transpiled
   if (sourcePath.match(tsSuffix)) {
-    const diagnostics : Diagnostic[] = [
+    const diagnostics: Diagnostic[] = [
       ...service.getSyntacticDiagnostics(sourcePath),
       ...service.getSemanticDiagnostics(sourcePath),
       ...service.getSuggestionDiagnostics(sourcePath),
@@ -358,19 +359,57 @@ function updateDiagnostics(document: TextDocument) {
     console.log("no meta for ", sourcePath)
     return
   }
-  const sourcemapLines = meta.sourcemapLines
-  const transpiledDoc = meta.transpiledDoc
+  const { sourcemapLines, transpiledDoc, parseErrors } = meta
   if (!transpiledDoc) return
 
   const transpiledPath = documentToSourcePath(transpiledDoc)
   const diagnostics: Diagnostic[] = [];
-  [
-    ...service.getSyntacticDiagnostics(transpiledPath),
-    ...service.getSemanticDiagnostics(transpiledPath),
-    ...service.getSuggestionDiagnostics(transpiledPath),
-  ].forEach((diagnostic) => {
-    diagnostics.push(convertDiagnostic(diagnostic, transpiledDoc, sourcemapLines))
-  })
+
+  if (parseErrors?.length) {
+    diagnostics.push(...parseErrors.map((e: Error) => {
+      const { message } = e
+
+      let start = { line: 0, character: 0 }, end = { line: 0, character: 10 }
+      try {
+        const match = errorRe.exec(message)
+        if (match) {
+          const
+            line = parseInt(match[1]) - 1,
+            column = parseInt(match[2]) - 1
+
+          start = {
+            line,
+            character: column
+          }
+
+          end = {
+            line,
+            character: column + 3
+          }
+        }
+
+      } catch { }
+
+      return {
+        severity: DiagnosticSeverity.Error,
+        // Don't need to transform the range, it's already in the source file coordinates
+        range: {
+          start,
+          end,
+        },
+        message: message,
+        source: 'ts'
+      }
+    }).filter(x => !!x))
+  } else {
+    [
+      ...service.getSyntacticDiagnostics(transpiledPath),
+      ...service.getSemanticDiagnostics(transpiledPath),
+      ...service.getSuggestionDiagnostics(transpiledPath),
+    ].forEach((diagnostic) => {
+      diagnostics.push(convertDiagnostic(diagnostic, transpiledDoc, sourcemapLines))
+    })
+  }
 
   connection.sendDiagnostics({
     uri: document.uri,
@@ -379,6 +418,9 @@ function updateDiagnostics(document: TextDocument) {
 
   return
 }
+
+// NOTE: this is a bit of a hack, Hera should provide enhanced error objects with line and column info
+const errorRe = /(\d+):(\d+)/
 
 connection.onDidChangeWatchedFiles(_change => {
   // Monitored files have change in VSCode

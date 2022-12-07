@@ -55,6 +55,7 @@ interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithF
 interface FileMeta {
   sourcemapLines: SourceMap["data"]["lines"] | undefined
   transpiledDoc: TextDocument | undefined
+  parseErrors: Error[] | undefined
 }
 
 interface Host extends LanguageServiceHost {
@@ -288,7 +289,9 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
       // The source document is ahead of the transpiled document
       if (source && sourceDocVersion > transpiledDoc.version) {
         const transpiledCode = doTranspileAndUpdateMeta(transpiledDoc, sourceDocVersion, transpiler, sourcePath, source)
-        snapshot = ScriptSnapshot.fromString(transpiledCode)
+        if(transpiledCode !== undefined) {
+          snapshot = ScriptSnapshot.fromString(transpiledCode)
+        }
       }
 
       if (!snapshot) {
@@ -306,28 +309,31 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
     return snapshot
   }
 
-  function createOrUpdateMeta(path: string, transpiledDoc: TextDocument, sourcemapLines?: SourceMap["data"]["lines"]) {
+  function createOrUpdateMeta(path: string, transpiledDoc: TextDocument, sourcemapLines?: SourceMap["data"]["lines"], parseErrors?: Error[]) {
     let meta = fileMetaData.get(path)
 
     if (!meta) {
       meta = {
         sourcemapLines,
         transpiledDoc,
+        parseErrors,
       }
 
       fileMetaData.set(path, meta)
     } else {
       meta.sourcemapLines = sourcemapLines
+      meta.parseErrors = parseErrors
     }
   }
 
-  function doTranspileAndUpdateMeta(transpiledDoc: TextDocument, version: number, transpiler: Transpiler, sourcePath: string, sourceCode: string): string {
+  function doTranspileAndUpdateMeta(transpiledDoc: TextDocument, version: number, transpiler: Transpiler, sourcePath: string, sourceCode: string): string | undefined {
     // Definitely do not want to throw errors here, it can make TypeScript very unhappy if it can't get a snapshot/version
     try {
       var result = transpiler.compile(sourcePath, sourceCode)
-    } catch (e) {
-      // TODO: add error to diagnostics
-      console.error(e)
+    } catch (e: unknown) {
+      // Add parse errors to meta
+      createOrUpdateMeta(sourcePath, transpiledDoc, undefined, [e as Error])
+      return
     }
 
     if (result) {
@@ -337,7 +343,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
 
       return transpiledCode
     }
-    return ""
+    return
   }
 
   function initTranspiledDoc(path: string) {
@@ -456,15 +462,10 @@ function TSService(projectURL = "./") {
   }
 
   function transpileCivet(path: string, source: string) {
-    try {
-      return Civet.compile(source, {
-        filename: path,
-        sourceMap: true
-      })
-    } catch (e) {
-      console.error(e)
-      return
-    }
+    return Civet.compile(source, {
+      filename: path,
+      sourceMap: true
+    })
   }
 }
 
