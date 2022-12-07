@@ -198,7 +198,8 @@ Things Added that CoffeeScript didn't
 - Convenience for ES6+ Features
   - Const assignment shorthand `a := b` -> `const a = b`; `{a, b} := c` -> `const {a, b} = c`
   - `@#id` -> `this.#id` shorthand for private identifiers
-  - `import` shorthand `x from ./x` -> `import x from "./x"`
+  - `import` shorthand: `x from ./x` -> `import x from "./x"`
+  - `export` shorthand: `export x, y` -> `export {x, y}`
   - Triple backtick Template Strings remove leading indentation for clarity
   - Class constructor shorthand `@( ... )`
   - ClassStaticBlock `@ { ... }`
