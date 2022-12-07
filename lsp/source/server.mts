@@ -362,7 +362,7 @@ function updateDiagnostics(document: TextDocument) {
   const transpiledDoc = meta.transpiledDoc
   if (!transpiledDoc) return
 
-  const transpiledPath = transpiledDoc.uri
+  const transpiledPath = documentToSourcePath(transpiledDoc)
   const diagnostics: Diagnostic[] = [];
   [
     ...service.getSyntacticDiagnostics(transpiledPath),

@@ -27,6 +27,9 @@ import { createRequire } from "module"
 import { compile as coffeeCompile } from "coffeescript"
 import { convertCoffeeScriptSourceMap } from "./util.mjs"
 
+// Import version from package.json
+import { version } from "../../package.json"
+
 // HACK to get __dirname working in tests with ts-node
 // ts-node needs everything to be modules for .civet files to work
 // and modules don't have __dirname
@@ -80,10 +83,9 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
   const { rootDir } = compilationSettings
   assert(rootDir, "Most have root dir for now")
 
-  const scriptFileNames: Set<string> = new Set(initialFileNames)
+  const scriptFileNames: Set<string> = new Set(initialFileNames.map(getCanonicalFileName))
   const fileMetaData: Map<string, FileMeta> = new Map;
 
-  const documents: Set<TextDocument> = new Set();
   const pathMap: Map<string, TextDocument> = new Map
   const snapshotMap: Map<string, IScriptSnapshot> = new Map
 
@@ -147,6 +149,8 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
      */
     addOrUpdateDocument(doc: TextDocument): void {
       const path = fileURLToPath(doc.uri)
+      // Clear any cached snapshot for this document
+      snapshotMap.delete(path)
 
       // Something may have changed so notify TS by updating the project version
       // Still not too sure exactly how TS uses this. Read `synchronizeHostData` in `typescript/src/sercivces/services.ts` for more info.
@@ -165,27 +169,22 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
 
         if (!transpiledDoc) {
           initTranspiledDoc(transpiledPath)
-
-          // Add source doc
-          documents.add(doc)
-          pathMap.set(path, doc)
         }
-
         // Deleting the snapshot will force a new one to be created when requested
         snapshotMap.delete(transpiledPath)
 
-        // Also continue to add the original document
+        // Add the original document to pathMap but *not* scriptFileNames
+        // Document map is so that the transpiled doc can update when the original changes
+        pathMap.set(path, doc)
+        return
       }
 
       // Plain non-transpiled document
       if (!scriptFileNames.has(path)) {
-        documents.add(doc)
         scriptFileNames.add(path)
         pathMap.set(path, doc)
       }
 
-      // Clear the cached snapshot for this document
-      snapshotMap.delete(path)
       return
     },
     getMeta(path: string) {
@@ -201,13 +200,22 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
     getCompilationSettings() {
       return compilationSettings;
     },
-    // TODO: Handle source documents and document updates
+    /**
+     * NOTE: TypeScript likes to pass in paths with only forward slashes regardless of the OS.
+     * So we need to normalize them here and in `getScriptVersion`.
+     */
     getScriptSnapshot(path: string) {
+      path = getCanonicalFileName(path)
       const snap = getOrCreatePathSnapshot(path)
-      // console.log("getScriptSnapshot", path, snap)
+
       return snap
     },
+    /**
+     * NOTE: TypeScript likes to pass in paths with only forward slashes regardless of the OS.
+     * So we need to normalize them here and in `getScriptSnapshot`.
+     */
     getScriptVersion(path: string) {
+      path = getCanonicalFileName(path)
       const version = pathMap.get(path)?.version.toString() || "0"
       // console.log("getScriptVersion", path, version)
       return version
@@ -338,17 +346,26 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
     const uri = pathToFileURL(path).toString()
     const transpiledDoc = TextDocument.create(uri, "none", -1, "")
     // Add transpiled doc
-    documents.add(transpiledDoc)
     pathMap.set(path, transpiledDoc)
     // Transpiled doc gets added to scriptFileNames
     scriptFileNames.add(path)
 
     return transpiledDoc
   }
+
+  /**
+   * Normalize slashes based on the OS.
+   */
+  function getCanonicalFileName(fileName: string): string {
+    return path.join(fileName)
+  }
 }
 
 function TSService(projectURL = "./") {
   const logger = console
+
+  logger.info("CIVET", version)
+
   const projectPath = fileURLToPath(projectURL)
   const tsConfigPath = `${projectPath}tsconfig.json`
   const { config } = readConfigFile(tsConfigPath, sys.readFile)
