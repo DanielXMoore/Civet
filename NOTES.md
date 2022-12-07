@@ -476,16 +476,21 @@ Timesheet
 2022-12-03 | 4.00  | binding pattern LHS; coffee compat;
 2022-12-04 | 3.25  | `not instanceof` in coffee compat; `#### single line comments`; `not of`; `for ... by`; restored suppress indented application hack
 2022-12-05 | 1.75  | keyword breaks; check for catch clause; reserved word @refs; return if expression
+2022-12-06 | 4.00  | LSP set up debugging; normalizing file extensions so things work on windows
+2022-12-07 | 0.50  | PR; export implicit from;
 
 browser.coffee - parse completes
 cake.coffee    - parse completes
-coffeescript.coffee - 292: as is a keyword in civet
-command.coffee - 450 space after unary not
+coffeescript.coffee
+  - 292: as is a keyword in civet
+command.coffee
+  - 450 space after unary not
 grammar.coffee - parse completes
 helpers.coffee - parse completes
 lexer.coffee - parse completes
 nodes.coffee
   - 4965 leading space before `.` access
+  - 6007 function application, nested inside if expression, nested inside array
 
 - CoffeeCompat
   - [x] Heregex
