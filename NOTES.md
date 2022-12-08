@@ -478,6 +478,7 @@ Timesheet
 2022-12-05 | 1.75  | keyword breaks; check for catch clause; reserved word @refs; return if expression
 2022-12-06 | 4.00  | LSP set up debugging; normalizing file extensions so things work on windows
 2022-12-07 | 1.50  | PR; export implicit from; show Civet parse errors in LSP
+2022-12-08 | 0.75  | GH; export x =
 
 browser.coffee - parse completes
 cake.coffee    - parse completes
