@@ -26,6 +26,7 @@ TODO
   - [x] Basics working
   - [ ] use refs to avoid excess evaluations of middle results
 - [x] `1.toString()` -> `1..toString()`
+- [ ] `export x = ...` from CoffeeScript
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
   - [ ] Implicit `async`
   - [ ] Implicit generator functions
