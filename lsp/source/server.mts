@@ -308,8 +308,10 @@ connection.onDocumentSymbol(({ textDocument }) => {
   const items: DocumentSymbol[] = []
 
   // The root represents the file. Ignore this when showing in the UI
-  for (const child of navTree.childItems!) {
-    convertNavTree(child, items, document, sourcemapLines)
+  if (navTree.childItems) {
+    for (const child of navTree.childItems) {
+      convertNavTree(child, items, document, sourcemapLines)
+    }
   }
 
   return items
