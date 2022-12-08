@@ -26,7 +26,7 @@ TODO
   - [x] Basics working
   - [ ] use refs to avoid excess evaluations of middle results
 - [x] `1.toString()` -> `1..toString()`
-- [ ] `export x = ...` from CoffeeScript
+- [x] `export x = ...` from CoffeeScript
 - [ ] CoffeeScript Compat (cli flag or directive prolog "Coffee Compatability" for when Coffee is incompatible with JS)
   - [ ] Implicit `async`
   - [ ] Implicit generator functions
@@ -138,9 +138,3 @@ TODO
       - [x] Find out why diagnostic has weird `| undefined` in array types (it was excess comma in multi-line array bug)
 - [ ] Syntax Experiments
   - [ ] Explore `gen.next(args, ...)` shorthand
-
-TODONT
----
-
-- [ ] CoffeeScript features
-  - [ ] Heregex
