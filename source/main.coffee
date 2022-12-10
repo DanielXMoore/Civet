@@ -1,6 +1,6 @@
 "civet coffeeCompat"
 
-{ parse } = parser = require "./parser"
+{ parse } = require "./parser"
 { prune } = gen = require "./generate"
 { SourceMap, base64Encode } = util = require "./util.coffee"
 
@@ -88,7 +88,7 @@ makeCache = ->
         else
           cache.set(state.pos, result)
 
-      if parser.verbose and result
+      if parse.config.verbose and result
         console.log "Parsed #{JSON.stringify state.input[state.pos...result.pos]} [pos #{state.pos}-#{result.pos}] as #{ruleName}"#, JSON.stringify(result.value)
 
       return
