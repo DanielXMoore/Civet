@@ -69,11 +69,13 @@ makeCache = ->
             "CallExpression", "CallExpressionRest", "LeftHandSideExpression", "ActualAssignment", "UpdateExpression",\
             "UnaryExpression", "BinaryOpExpression", "BinaryOpRHS", "ConditionalExpression", "ShortCircuitExpression",\
             "NestedPropertyDefinitions", "NestedObject", "NestedImplicitObjectLiteral", "NestedImplicitPropertyDefinitions", "NestedBlockStatement",\
-            "NestedInterfaceProperty",\
+            "NestedElement", "NestedElementList", "NestedBindingElement", "NestedBindingElements", "NestedInterfaceProperty",\
+            "MemberExpression", "PrimaryExpression",\
             "IndentedApplicationAllowed", "ExpressionWithIndentedApplicationSuppressed", "SuppressIndentedApplication",\
             "AssignmentExpressionTail", "AssignmentExpression", "ExtendedExpression", "Expression", "MemberExpressionRest",\
             "ElseClause",\
-            "CoffeeCommentEnabled", "SingleLineComment", "Debugger"
+            "CoffeeCommentEnabled", "SingleLineComment", "Debugger",\
+            "JSXElement", "JSXChild", "JSXChildren", "JSXFragment", "JSXNestedChildren"
 
             break
           else
@@ -85,6 +87,9 @@ makeCache = ->
           cache.set(state.pos, {...result})
         else
           cache.set(state.pos, result)
+
+      if parse.config.verbose and result
+        console.log "Parsed #{JSON.stringify state.input[state.pos...result.pos]} [pos #{state.pos}-#{result.pos}] as #{ruleName}"#, JSON.stringify(result.value)
 
       return
 

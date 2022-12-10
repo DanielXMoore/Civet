@@ -212,6 +212,8 @@ Things Added that CoffeeScript didn't
   - function call `x.map &.callback a, b` -> `x.map($ => $.callback(a, b))`
   - unary operators `x.map !!&`, -> `x.map($ => !!$)`
   - binary operators `x.map &+1` -> `x.map($ => $+1)`
+- Indentation JSX: instead of explicitly closing `<tag>`s or `<>`s,
+  you can indent the children and Civet will close your tags for you
 - CoffeeScript improvements
   - Postfix loop `run() loop` -> `while(true) run()`
   - Character range literals `["a".."z"]`, `['f'..'a']`, `['0'..'9']`

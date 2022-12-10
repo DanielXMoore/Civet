@@ -1706,7 +1706,10 @@ BinaryOpSymbol
   "<="
   ">="
   "<<"
-  "<"
+  # NOTE: Avoid matching JSX opening tag by requiring non-identifier character
+  # (e.g. whitespace) after "<".  This does forbid 1<2 or x<y.
+  /<(?!\p{ID_Start}|[_$])/ ->
+    return "<"
   ">>>"
   ">>"
   ">"
@@ -2574,9 +2577,15 @@ ThrowExpression
     }
 
 MaybeNestedExpression
+  # Not nested case
   !EOS ExtendedExpression ->
     return $2
-  &EOS ObjectLiteral -> $2
+  # Avoid wrapping object return value in parentheses.
+  &EOS ObjectLiteral ->
+    return $2
+  # Value after `return` needs to be wrapped in parentheses
+  # if it starts on another line.
+  &EOS InsertSpace InsertOpenParen PushIndent Nested ExtendedExpression PopIndent InsertNewline InsertIndent InsertCloseParen
 
 # https://262.ecma-international.org/#prod-ImportDeclaration
 ImportDeclaration
@@ -3490,12 +3499,19 @@ Yield
 # https://facebook.github.io/jsx/#prod-JSXElement
 JSXElement
   JSXSelfClosingElement
-  JSXOpeningElement JSXChildren* __ JSXClosingElement ->
+  JSXOpeningElement JSXChildren? __ JSXClosingElement ->
     // Check that tags match
-    if ($1[1] !== $4[2]) {
-      throw new Error(`mismatched closing tags at ${JSON.stringify($loc)}`)
-    }
+    if ($1[1] !== $4[2]) return $skip
     return $0
+  # NOTE: c1 matches "same-line" children, while c2 matches indented children
+  JSXOpeningElement:open (_ / JSXChild)*:c1 JSXNestedChildren:c2 InsertNewline InsertIndent ->
+    if (c1.length || c2.length) {
+      return [...$0, ["</", open[1], ">"]]
+    } else {
+      return [open.slice(0, -1), " />"]
+    }
+  JSXOpeningElement ->
+    throw new Error(`could not parse JSX element "${require('./generate')($0)}" at pos ${$loc.pos}`)
 
 # https://facebook.github.io/jsx/#prod-JSXSelfClosingElement
 JSXSelfClosingElement
@@ -3512,6 +3528,8 @@ JSXClosingElement
 # https://facebook.github.io/jsx/#prod-JSXFragment
 JSXFragment
   "<>" JSXChildren? "</>"
+  "<>" JSXNestedChildren InsertNewline InsertIndent ->
+    return [...$0, "</>"]
 
 # https://facebook.github.io/jsx/#prod-JSXElementName
 JSXElementName
@@ -3561,6 +3579,13 @@ JSXAttributeValue
 JSXChildren
   ( __ JSXChild )*
 
+JSXNestedChildren
+  PushIndent ( Nested JSXChild+ )* PopIndent ->
+    if ($2.length) return $2
+    return $skip
+  &EOS ->
+    return []
+
 # https://facebook.github.io/jsx/#prod-JSXChild
 JSXChild
   JSXText
@@ -3571,7 +3596,10 @@ JSXChild
 # https://facebook.github.io/jsx/#prod-JSXText
 JSXText
   # NOTE: not currently excluding https://facebook.github.io/jsx/#prod-HTMLCharacterReference
-  [^{}<>]+
+  # NOTE: Additionally forbidding leading whitespace, so it can be used for
+  # indentation (by JSXNestedChildren) or ignored by JSXChildren,
+  # and newlines which we leave for the next indentation.
+  [^{}<>\s][^{}<>\n\r]*
 
 # https://facebook.github.io/jsx/#prod-JSXChildExpression
 JSXChildExpression
@@ -3954,8 +3982,7 @@ Reset
       })
     }
 
-    module.verbose = false
-    module.config = {
+    module.config = parse.config = {
       autoVar: false,
       coffeeBinaryExistential: false,
       coffeeBooleans: false,
@@ -3971,6 +3998,7 @@ Reset
       coffeeOf: false,
       implicitReturns: true,
       tab: undefined, // default behavior = same as space
+      verbose: false,
     }
 
     let indexOfRef, hasPropRef, spliceRef
@@ -5110,6 +5138,9 @@ TrackIndented
     if (level <= module.currentIndent.level) {
       return $skip
     }
+    if (module.config.verbose) {
+      console.log("pushing indent", indent)
+    }
 
     module.indentLevels.push(indent)
 
@@ -5140,7 +5171,7 @@ PushIndent
 
 PopIndent
   "" ->
-    if (module.verbose) {
+    if (module.config.verbose) {
       console.log("popping indent", module.indentLevels[module.indentLevels.length-1], "->", module.indentLevels[module.indentLevels.length-2])
     }
     module.indentLevels./**/pop()
@@ -5149,11 +5180,11 @@ Nested
   EOS:eos Indent:indent ->
     const { level } = indent
     const currentIndent = module.currentIndent
-    if (module.verbose) {
+    if (module.config.verbose) {
       console.log("Indented", level, currentIndent)
     }
     if (level !== currentIndent.level) {
-      if (module.verbose) {
+      if (module.config.verbose) {
         console.log("skipped nested")
       }
       return $skip
