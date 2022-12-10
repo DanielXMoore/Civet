@@ -118,13 +118,11 @@ Civet.
 - `for ... when <condition>` (use `continue if exp` inside loop, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables, `"civet coffeeCompat"`, or `"civet coffeeBinaryExistential"` enables this at the cost of losing JS ternary operator)
 - `a of b` (use `a in b` matching JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
-- Iteration expression results
 - Backtick embedded JS (replaced by template literals)
 - Will likely add later
   - Optional assignment `x?.y = 3` -> `x != null ? x.y = 3 : undefined`
   - Conditional assignment `a?[x] = 3` -> `a ? a[x] = 3 : undefined`
 - Might add later
-  - Rest parameter in any assignment position
   - Multiple slice assignment `otherNumbers[0...] = numbers[3..6] = [-3, -4, -5, -6]`
 
 Things Changed from CoffeeScript
@@ -242,6 +240,8 @@ could be a valid property `1.e10` -> `1..e10`. The workaround is to add a traili
     @@methodDecorator
     method() {}
   ```
+- `when` inside switch automatically breaks and adds block scope.
+- `else` inside switch adds block scope.
 - No whitespace between unary operators and operands. Mandatory whitespace between condition and ternary `?` ex. `x ? a : b` since `x?` is the unary existential operator.
 - No labels (yet...)
 
