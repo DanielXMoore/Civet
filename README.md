@@ -7,6 +7,7 @@ The CoffeeScript of TypeScript. Much closer to ES2015+ (for better or worse).
 
 - [Online Civet Playground](https://civet-web.vercel.app/)
 - [Civet VSCode Extension](https://marketplace.visualstudio.com/items?itemName=DanielX.civet)
+- [Discord Server](https://discord.gg/xkrW9GebBc)
 
 Quickstart Guide
 ---
@@ -236,13 +237,20 @@ Things Changed from ES6
 of numbers with `1..toString()` use `1.toString()` instead. When exponent follows a dot it is treated as a property access since an exponent
 could be a valid property `1.e10` -> `1..e10`. The workaround is to add a trailing zero `1.0e10` or remove the dot before the exponent `1e10`.
 - Additional reserved words `and`, `or`, `loop`, `until`, `unless`
+- Experimental decorator syntax is `@@` instead of `@` because `@` is premium real estate and `@id` -> `this.id`, and `@` is also static fields/methods, etc.
+  ```
+  @@classDecorator
+  class X
+    @@methodDecorator
+    method() {}
+  ```
 - No whitespace between unary operators and operands. Mandatory whitespace between condition and ternary `?` ex. `x ? a : b` since `x?` is the unary existential operator.
 - No labels (yet...)
 
 CoffeeScript Compatibility
 ---
 
-Civet provides a compatability prologue directive that aims to be 97+% compatible with existing CoffeeScript2 code (still a work in progress).
+Civet provides a compatibility prologue directive that aims to be 97+% compatible with existing CoffeeScript2 code (still a work in progress).
 
 | Configuration       | What it enables |
 |---------------------|---------------------------------------------------------------------|
@@ -257,10 +265,22 @@ Civet provides a compatability prologue directive that aims to be 97+% compatibl
 | coffeeNot           | `not` -> `!`, `a not instanceof b` -> `!(a instanceof b)`, `a not of b` -> `!(a in b)`    |
 | coffeeOf            | `a of b` -> `a in b`, `a in b` -> `b.indexOf(a) >= 0`, `a not in b` -> `b.indexOf(a) < 0` |
 
-
 You can use these with `"civet coffeeCompat"` to opt in to all or use them bit by bit with `"civet coffeeComment coffeeEq coffeeInterpolation"`.
 Another possibility is to slowly remove them to provide a way to migrate files a little at a time `"civet coffeeCompat -coffeeBooleans -coffeeComment -coffeeEq"`.
 Both camel case and hyphens work when specifying options `"civet coffee-compat"`. More options will be added over time until 97+% compatibility is achieved.
+
+Other Options
+---
+
+The `"civet"` prologue directive can also specify the following options:
+
+| Configuration       | What it enables |
+|---------------------|---------------------------------------|
+| tab=NNN             | treat tab like NNN spaces (default=1) |
+
+For example, `"civet tab=2"` or `"civet tab=4"` lets you mix tabs and spaces
+in a file and be treated like they'd render in VSCode with `editor.tabSize`
+set accordingly.
 
 Using Civet in your Node.js Environment
 ---
