@@ -69,11 +69,13 @@ makeCache = ->
             "CallExpression", "CallExpressionRest", "LeftHandSideExpression", "ActualAssignment", "UpdateExpression",\
             "UnaryExpression", "BinaryOpExpression", "BinaryOpRHS", "ConditionalExpression", "ShortCircuitExpression",\
             "NestedPropertyDefinitions", "NestedObject", "NestedImplicitObjectLiteral", "NestedImplicitPropertyDefinitions", "NestedBlockStatement",\
-            "NestedInterfaceProperty",\
+            "NestedElement", "NestedElementList", "NestedBindingElement", "NestedBindingElements", "NestedInterfaceProperty",\
+            "MemberExpression", "PrimaryExpression",\
             "IndentedApplicationAllowed", "ExpressionWithIndentedApplicationSuppressed", "SuppressIndentedApplication",\
             "AssignmentExpressionTail", "AssignmentExpression", "ExtendedExpression", "Expression", "MemberExpressionRest",\
             "ElseClause",\
-            "CoffeeCommentEnabled", "SingleLineComment", "Debugger"
+            "CoffeeCommentEnabled", "SingleLineComment", "Debugger",\
+            "JSXElement", "JSXChild", "JSXChildren", "JSXFragment", "JSXNestedChildren"
 
             break
           else
