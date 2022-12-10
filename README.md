@@ -235,6 +235,13 @@ Things Changed from ES6
 of numbers with `1..toString()` use `1.toString()` instead. When exponent follows a dot it is treated as a property access since an exponent
 could be a valid property `1.e10` -> `1..e10`. The workaround is to add a trailing zero `1.0e10` or remove the dot before the exponent `1e10`.
 - Additional reserved words `and`, `or`, `loop`, `until`, `unless`
+- Experimental decorator syntax is `@@` instead of `@` because `@` is premium real estate and `@id` -> `this.id`, and `@` is also static fields/methods, etc.
+  ```
+  @@classDecorator
+  class X
+    @@methodDecorator
+    method() {}
+  ```
 - No whitespace between unary operators and operands. Mandatory whitespace between condition and ternary `?` ex. `x ? a : b` since `x?` is the unary existential operator.
 - No labels (yet...)
 
