@@ -55,10 +55,8 @@ Things Kept from CoffeeScript
 ---
 
 - `is` -> `===`
-- `or` -> `||`
-- `and` -> `&&`
-- `or=` -> `||=`
-- `and=` -> `&&=`
+- `or`,  `or=`  -> `||`, `||=`
+- `and`, `and=` -> `&&`, `&&=`
 - `loop` -> `while(true)`
 - `unless exp` -> `if(!exp)`
 - `until condition` -> `while(!condition)`
@@ -124,7 +122,6 @@ Civet.
 - Backtick embedded JS (replaced by template literals)
 - Will likely add later
   - Conditional assignment `a?[x] = 3` -> `a ? a[x] = 3 : undefined`
-- Might add later
   - Multiple slice assignment `otherNumbers[0...] = numbers[3..6] = [-3, -4, -5, -6]`
 
 Things Changed from CoffeeScript
@@ -155,7 +152,8 @@ Things Changed from CoffeeScript
     x    +    3
   ```
   remains as is.
-- Heregex
+- Heregex / re.X
+  - Stay closer to the [Python spec](https://docs.python.org/3/library/re.html#re.X)
   - Allows both kinds of substitutions `#{..}`, `${..}`.
   - Also allows both kinds of single line comments `//`, `#`.
   - Keeps non-newline whitespace inside of character classes.
