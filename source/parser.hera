@@ -1524,10 +1524,13 @@ PropertyDefinitionList
 PropertyDefinition
   # NOTE: Added CoffeeScript {@id} -> {id: this.id} shorthand
   __:ws At:at IdentifierReference:id ->
+    const value = [{...at, token: "this."}, id]
     return {
       type: "Property",
-      children: [...ws, id, ": ", {...at, token: "this."}, id],
+      children: [...ws, id, ": ", ...value],
+      name: id,
       names: id.names,
+      value,
     }
   NamedProperty
   __:ws MethodDefinition:def ->
@@ -1540,6 +1543,7 @@ PropertyDefinition
       type: "SpreadProperty",
       children: [...ws, dots, exp],
       names: exp.names,
+      value: [dots, exp],
     }
   # NOTE: this needs to be at the bottom to prevent shadowing PropertyName
   __:ws IdentifierReference:id  ->
@@ -1548,11 +1552,13 @@ PropertyDefinition
 NamedProperty
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  __ PropertyName __ Colon ExtendedExpression:exp ->
+  __ PropertyName:name __ Colon ExtendedExpression:exp ->
     return {
       type: "Property",
       children: $0,
+      name: name,
       names: exp.names || [],
+      value: exp,
     }
 
 # Named property but doesn't allow any space between name and colon
@@ -1572,7 +1578,11 @@ PropertyName
   IdentifierName
   # https://262.ecma-international.org/#prod-ComputedPropertyName
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  OpenBracket ExtendedExpression __ CloseBracket
+  OpenBracket ExtendedExpression __ CloseBracket ->
+    return {
+      type: "ComputedPropertyName",
+      children: $0,
+    }
 
 Decorator
   AtAt IdentifierReference Arguments?
@@ -1583,10 +1593,13 @@ Decorators
 # https://262.ecma-international.org/#prod-MethodDefinition
 MethodDefinition
   # NOTE: Not adding extra validation using PropertySetParameterList
-  Decorators? MethodSignature:signature BracedBlock:block ->
+  # NOTE: If this node layout changes, be sure to update `convertMethodTOFunction`
+  Decorators?:decorators MethodSignature:signature BracedBlock:block ->
     return {
       type: "MethodDefinition",
       children: $0,
+      name: signature.name,
+      decorators,
       signature,
       block,
       parameters: signature.parameters,
@@ -1598,7 +1611,7 @@ MethodModifier
   # NOTE: Merged async and generator into MethodModifier
   ( Async __ ) ( Star __ )?
   Star __
-  Async __
+  #Async __
 
 # TypeScript method signature
 MethodSignature
@@ -1611,6 +1624,7 @@ MethodSignature
       parameters,
     }
 
+  # NOTE: If this node layout changes, be sure to update `convertMethodTOFunction`
   MethodModifier? ClassElementName:name _* NonEmptyParameters:parameters ReturnTypeSuffix?:suffix ->
     // Normalize name so we can check if it is `constructor`
     if (name.name) {
@@ -3232,7 +3246,7 @@ AtAt
 
 Async
   "async" ->
-    return { $loc, token: $1 }
+    return { $loc, token: $1, type: 'Async' }
 
 Await
   "await" NonIdContinue ->
@@ -3344,7 +3358,7 @@ Function
 
 GetOrSet
   ( "get" / "set" ) NonIdContinue ->
-    return { $loc, token: $1 }
+    return { $loc, token: $1, type: 'GetOrSet' }
 
 If
   # NOTE: Pull a single space into the 'if ' token so if it is replaced
@@ -3560,8 +3574,49 @@ JSXAttributes
 # NOTE: Merged SpreadAttribute and Attribute
 JSXAttribute
   # https://facebook.github.io/jsx/#prod-JSXSpreadAttribute
-  # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  OpenBrace __ DotDotDot ExtendedExpression __ CloseBrace
+  # allows something like
+  #   OpenBrace __ DotDotDot ExtendedExpression __ CloseBrace
+  # (where ExtendedExpression additionally allows If/Switch expressions).
+  # More generally, we allow any braced object literal:
+  # {foo} is equivalent to foo={foo}, and
+  # {foo, bar: baz} is equivalent to foo={foo} and bar={baz}.
+  # {...foo} is a special case.
+  BracedObjectLiteral ->
+    const {children} = $1
+    const parts = [] // JSX attributes
+    const rest = []  // parts that need to be in {...rest} form
+    for (let i = 1; i < children.length - 1; i++) {
+      if (i > 1) parts.push(' ')
+      const part = children[i]
+      switch (part.type) {
+        case 'Identifier':
+          parts.push([part.name, '={', part.name, '}'])
+          break
+        case 'Property':
+          if (part.name.type === 'ComputedPropertyName') {
+            rest.push(part)
+          } else {
+            parts.push([part.name, '={', module.insertTrimmingSpace(part.value, ''), '}'])
+          }
+          break
+        case 'SpreadProperty':
+          parts.push(['{', part.value, '}'])
+          break
+        case 'MethodDefinition':
+          try {
+            parts.push([part.name, '={', module.convertMethodToFunction(part), '}'])
+          } catch {  // get or set
+            rest.push(part)
+          }
+          break
+        default:
+          throw new Error(`invalid object literal type in JSX attribute: ${part.type}`)
+      }
+    }
+    if (rest.length) {
+      parts.push(['{...{', ...rest, '}}'])
+    }
+    return parts
 
   # https://facebook.github.io/jsx/#prod-JSXAttribute
   JSXAttributeName JSXAttributeInitializer?
@@ -4386,6 +4441,7 @@ Init
 
     module.isWhitespaceOrEmpty = function(node) {
       if (!node) return true
+      if (node.token) return node.token.match(/^\s*$/)
       if (!node.length) return true
       if (typeof node === "string") return node.match(/^\s*$/)
       if (Array.isArray(node)) return node.every(module.isWhitespaceOrEmpty)
@@ -4928,6 +4984,35 @@ Init
           return clause
         default:
           throw new Error("Unknown postfix statement")
+      }
+    }
+
+    // Given a MethodDefinition, convert into a FunctionExpression
+    module.convertMethodToFunction = function(method) {
+      const {decorators, signature, block} = method
+      let opening = signature.children[0] // MethodModifier
+      if (opening) {
+        if (opening[0].type === 'GetOrSet') {
+          throw new Error('cannot convert get/set method to function')
+        } else if (opening[0][0]?.type === 'Async') {
+          // put function after async
+          opening = [opening[0][0], " function ", ...opening.slice(1)]
+        } else {
+          opening = ["function ", ...opening]
+        }
+      } else {
+        opening = "function ";
+      }
+      return {
+        ...signature,
+        id: signature.name,
+        type: "FunctionExpression",
+        children: [
+          decorators,
+          [opening, ...signature.children.slice(1)],
+          block,
+        ],
+        block,
       }
     }
 
