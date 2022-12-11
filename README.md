@@ -123,7 +123,6 @@ Civet.
 - `a of b` (use `a in b` matching JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
 - Backtick embedded JS (replaced by template literals)
 - Will likely add later
-  - Optional assignment `x?.y = 3` -> `x != null ? x.y = 3 : undefined`
   - Conditional assignment `a?[x] = 3` -> `a ? a[x] = 3 : undefined`
 - Might add later
   - Multiple slice assignment `otherNumbers[0...] = numbers[3..6] = [-3, -4, -5, -6]`
