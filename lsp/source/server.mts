@@ -9,7 +9,6 @@ import {
   InitializeResult,
   MarkupKind,
   TextDocumentIdentifier,
-  HandlerResult,
   DocumentSymbol,
   CompletionItem,
   Location,
@@ -19,14 +18,14 @@ import {
 import {
   TextDocument
 } from 'vscode-languageserver-textdocument';
-
 import TSService from './lib/typescript-service.mjs';
 import * as Previewer from "./lib/previewer.mjs";
 import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic } from './lib/util.mjs';
 import assert from "assert"
 
 import ts, { displayPartsToString, GetCompletionsAtPositionOptions } from 'typescript';
-import { fileURLToPath, pathToFileURL } from 'url';
+import { fileURLToPath } from 'url';
+import { setTimeout } from 'timers/promises';
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -41,6 +40,9 @@ let hasDiagnosticRelatedInformationCapability = false;
 
 let service: ReturnType<typeof TSService>;
 let rootDir: string;
+
+// TODO Propagate this to an extension setting
+const diagnosticsPropagationDelay = 100;
 
 connection.onInitialize(async (params: InitializeParams) => {
   const capabilities = params.capabilities;
@@ -337,7 +339,13 @@ documents.onDidChangeContent(({ document }) => {
   updateDiagnostics(document)
 });
 
-function updateDiagnostics(document: TextDocument) {
+function updateDiagnostics(srcDoc: TextDocument) {
+  updateDiagnosticsForDoc(srcDoc)
+  scheduleUpdateDiagnostics(srcDoc.uri)
+}
+
+function updateDiagnosticsForDoc(document: TextDocument) {
+  console.log("Updating diagnostics for doc:", document.uri)
   const sourcePath = documentToSourcePath(document)
   assert(sourcePath)
 
@@ -419,6 +427,43 @@ function updateDiagnostics(document: TextDocument) {
   })
 
   return
+}
+
+// Using a cancellation token we prevent parallel executions of scheduleUpdateDiagnostics
+let runningDiagnosticsUpdate: { isCanceled: boolean } | undefined
+
+// Asynchronously update diagnostics for all the documents
+// other than the ones in skip list
+const updatePendingDiagnostics = async (
+  status: { isCanceled: boolean },
+  skippedUris: Set<string>
+) => {
+  await setTimeout(diagnosticsPropagationDelay)
+  if (status?.isCanceled) return
+  for (let doc of documents.all()) {
+    if (skippedUris.has(doc.uri)) {
+      // We can skip this document because it was updated
+      // right after the content update
+      continue
+    }
+    updateDiagnosticsForDoc(doc)
+    await setTimeout(diagnosticsPropagationDelay)
+    if (status?.isCanceled) return
+  }
+}
+
+function scheduleUpdateDiagnostics(srcDocUri?: string) {
+  if (runningDiagnosticsUpdate) {
+    runningDiagnosticsUpdate.isCanceled = true
+  }
+  runningDiagnosticsUpdate = {
+    isCanceled: false
+  }
+  const skippedUris = new Set<string>()
+  if (srcDocUri) {
+    skippedUris.add(srcDocUri)
+  }
+  updatePendingDiagnostics(runningDiagnosticsUpdate, skippedUris)
 }
 
 // NOTE: this is a bit of a hack, Hera should provide enhanced error objects with line and column info
