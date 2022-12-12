@@ -210,6 +210,8 @@ Things Added that CoffeeScript didn't
   - Many attribute values (basic literals, array literals, braced object
     literals, regular expressions, template strings, and parenthesized
     expressions) do not need braces.  `foo=bar` -> `foo={bar}`
+  - Attributes can use computed property names:
+    `[expr]={value}` -> `{...{[expr]: value}}`
 - CoffeeScript improvements
   - Postfix loop `run() loop` -> `while(true) run()`
   - Character range literals `["a".."z"]`, `['f'..'a']`, `['0'..'9']`
