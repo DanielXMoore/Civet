@@ -97,7 +97,7 @@ Things Kept from CoffeeScript
 - RestElement/RestParameter in any position `(first, ...midle, last) ->` -> `function(first, ...middle) { let [last] = middle.splice(-1)}`
 - `///` Heregexp
   - With some [changes](#things-changed-from-coffeescript).
-- JSX 😿
+- JSX
 
 Things Removed from CoffeeScript
 ---
@@ -201,8 +201,12 @@ Things Added that CoffeeScript didn't
   - unary operators `x.map !!&`, -> `x.map($ => !!$)`
   - binary operators `x.map &+1` -> `x.map($ => $+1)`
 - Flagging shorthand [from LiveScript](https://livescript.net/#literals) `{+debug, -live}` -> `{debug: true, live: false}`
-- Indentation JSX: instead of explicitly closing `<tag>`s or `<>`s,
-  you can indent the children and Civet will close your tags for you
+- JSX enhancements:
+  - Indentation: instead of explicitly closing `<tag>`s or `<>`s,
+    you can indent the children and Civet will close your tags for you
+  - Any braced object literal can be used as an attribute.
+    `{foo}` -> `foo={foo}`, `{foo: bar}` -> `foo={bar}`,
+    `{...foo}` remains as is; methods and getters/setters work too.
 - CoffeeScript improvements
   - Postfix loop `run() loop` -> `while(true) run()`
   - Character range literals `["a".."z"]`, `['f'..'a']`, `['0'..'9']`
