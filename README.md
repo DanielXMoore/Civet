@@ -207,6 +207,9 @@ Things Added that CoffeeScript didn't
   - Any braced object literal can be used as an attribute.
     `{foo}` -> `foo={foo}`, `{foo: bar}` -> `foo={bar}`,
     `{...foo}` remains as is; methods and getters/setters work too.
+  - Many attribute values (basic literals, array literals, braced object
+    literals, regular expressions, template strings, and parenthesized
+    expressions) do not need braces.  `foo=bar` -> `foo={bar}`
 - CoffeeScript improvements
   - Postfix loop `run() loop` -> `while(true) run()`
   - Character range literals `["a".."z"]`, `['f'..'a']`, `['0'..'9']`
