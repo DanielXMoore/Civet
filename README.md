@@ -142,17 +142,7 @@ Things Changed from CoffeeScript
 - Postfix iteration/conditionals always wrap the statement [#5431](https://github.com/jashkenas/coffeescript/issues/5431)
 `try x() if y` -> `if (y) try x()`
 - Civet tries to keep the transpiled output verbatim as much as possible.
-  In Coffee `(x)` -> `x;` but in Civet `(x)` -> `(x);`.
-  Also in Coffee
-  ```coffee
-    x    +    3
-  ```
-  -> `x + 3` without the spacing
-  In Civet
-  ```typescript
-    x    +    3
-  ```
-  remains as is.
+  In Coffee `(x)` -> `x;` but in Civet `(x)` -> `(x);`. Spacing and comments are also preserved as much as possible.
 - Heregex / re.X
   - Stay closer to the [Python spec](https://docs.python.org/3/library/re.html#re.X)
   - Allows both kinds of substitutions `#{..}`, `${..}`.
