@@ -142,7 +142,7 @@ Things Changed from CoffeeScript
 - Postfix iteration/conditionals always wrap the statement [#5431](https://github.com/jashkenas/coffeescript/issues/5431)
 `try x() if y` -> `if (y) try x()`
 - Civet tries to keep the transpiled output verbatim as much as possible.
-  In Coffee `(x)` -> `x;` but in Civet `(x)` -> `(x);`. Spacing and comments are also preserved as much as possible.
+  In Coffee `(x)` -> `x;` but in Civet `(x)` -> `(x)`. Spacing and comments are also preserved as much as possible.
 - Heregex / re.X
   - Stay closer to the [Python spec](https://docs.python.org/3/library/re.html#re.X)
   - Allows both kinds of substitutions `#{..}`, `${..}`.
@@ -171,8 +171,8 @@ Things Added that CoffeeScript didn't
     ```
     ```typescript
       class A {
-        readonly x = 3;
-      };
+        readonly x = 3
+      }
     ```
 - JS Compatability
   - `var`, `let`, `const`
@@ -186,7 +186,7 @@ Things Added that CoffeeScript didn't
   - `get`/`set` method definitions
   - Private identifiers `#id`
 - Convenience for ES6+ Features
-  - Const assignment shorthand `a := b` -> `const a = b`; `{a, b} := c` -> `const {a, b} = c`
+  - Const assignment shorthand `a := b` -> `const a = b`, `{a, b} := c` -> `const {a, b} = c`
   - `@#id` -> `this.#id` shorthand for private identifiers
   - `import` shorthand: `x from ./x` -> `import x from "./x"`
   - `export` shorthand: `export x, y` -> `export {x, y}`
