@@ -68,7 +68,13 @@ makeCache = ->
             "Arguments", "ArgumentsWithTrailingCallExpressions", "ApplicationStart",\
             "CallExpression", "CallExpressionRest", "LeftHandSideExpression", "ActualAssignment", "UpdateExpression",\
             "UnaryExpression", "BinaryOpExpression", "BinaryOpRHS", "ConditionalExpression", "ShortCircuitExpression",\
-            "NestedPropertyDefinitions", "NestedObject", "NestedImplicitObjectLiteral", "NestedImplicitPropertyDefinitions", "NestedBlockStatement",\
+            "ImplicitNestedBlock",\
+            "ObjectLiteral",\
+            "NestedObject",\
+            "NestedImplicitObjectLiteral",\
+            "BracedObjectLiteralContent",\
+            "NestedPropertyDefinitions",\
+            "NestedImplicitPropertyDefinition", "NestedImplicitPropertyDefinitions", "NestedBlockStatement",\
             "NestedElement", "NestedElementList", "NestedBindingElement", "NestedBindingElements", "NestedInterfaceProperty",\
             "MemberExpression", "PrimaryExpression",\
             "IndentedApplicationAllowed", "ExpressionWithIndentedApplicationSuppressed", "SuppressIndentedApplication",\
