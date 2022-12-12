@@ -120,7 +120,8 @@ Civet.
 - `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables, `"civet coffeeCompat"`, or `"civet coffeeBinaryExistential"` enables this at the cost of losing JS ternary operator)
 - `a of b` (use `a in b` matching JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
 - Backtick embedded JS (replaced by template literals)
-- Will likely add later
+- Will add later
+  - `a %% b` -> `(a % b + b) % b`
   - Conditional assignment `a?[x] = 3` -> `a ? a[x] = 3 : undefined`
   - Multiple slice assignment `otherNumbers[0...] = numbers[3..6] = [-3, -4, -5, -6]`
 
@@ -209,6 +210,7 @@ Things Added that CoffeeScript didn't
   - function call `x.map &.callback a, b` -> `x.map($ => $.callback(a, b))`
   - unary operators `x.map !!&`, -> `x.map($ => !!$)`
   - binary operators `x.map &+1` -> `x.map($ => $+1)`
+- Flagging shorthand [from LiveScript](https://livescript.net/#literals) `{+debug, -live}` -> `{debug: true, live: false}`
 - Indentation JSX: instead of explicitly closing `<tag>`s or `<>`s,
   you can indent the children and Civet will close your tags for you
 - CoffeeScript improvements
