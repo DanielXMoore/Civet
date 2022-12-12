@@ -480,7 +480,8 @@ Timesheet
 2022-12-07 | 1.50  | PR; export implicit from; show Civet parse errors in LSP
 2022-12-08 | 0.75  | GH; export x =
 2022-12-09 | 1.00  | GH Issues/PRs
-2022-12-10 | 2.00  | GH Issues/PRs; Decorators
+2022-12-10 | 3.00  | GH Issues/PRs; Decorators; empty when;
+2022-12-11 | 2.50  | PRs/ amp blocks; InsertComma
 
 browser.coffee - parse completes
 cake.coffee    - parse completes
