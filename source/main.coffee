@@ -11,7 +11,7 @@ module.exports =
   compile: (src, options=defaultOptions) ->
     filename = options.filename or "unknown"
 
-    if options.cache
+    if !options.noCache
       events = makeCache()
 
     ast = prune parse(src, {
@@ -41,18 +41,25 @@ module.exports =
   generate: gen
   util: util
 
+# logs = []
 makeCache = ->
   caches = new Map
+
+  # stack = []
 
   events =
     enter: (ruleName, state) ->
       cache = caches.get(ruleName)
       if cache
         if cache.has(state.pos)
+          # logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "💰"
           result = cache.get(state.pos)
           return {
             cache: if result then { ...result }
           }
+
+      # logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "\u2192"
+      # stack.push(ruleName)
 
       return
 
@@ -96,6 +103,8 @@ makeCache = ->
 
       if parse.config.verbose and result
         console.log "Parsed #{JSON.stringify state.input[state.pos...result.pos]} [pos #{state.pos}-#{result.pos}] as #{ruleName}"#, JSON.stringify(result.value)
+      # stack.pop(ruleName)
+      # logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + " " + (if result then "✅" else "❌")
 
       return
 

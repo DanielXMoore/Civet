@@ -51,7 +51,7 @@ readLines = (rl) ->
 readLines readline.createInterface process.stdin
 .then (input) ->
   ast =       process.argv.includes "--ast"
-  cache =    !process.argv.includes "--no-cache"
+  noCache =   process.argv.includes "--no-cache"
   inlineMap = process.argv.includes "--inline-map"
   js =        process.argv.includes "--js"
 
@@ -61,7 +61,7 @@ readLines readline.createInterface process.stdin
 
   output = compile input, {
     ast,
-    cache,
+    noCache,
     filename,
     inlineMap,
     js,
