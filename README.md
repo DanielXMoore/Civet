@@ -71,12 +71,12 @@ Things Kept from CoffeeScript
   ```
 - Optional semi-colons
 - Indentation based block syntax
-- OptionalChain shorthand for index and function application `a?[b]` -> `a?.[b]`, `a?(b)` -> `a?.(b)`
+- OptionalChain shorthand for index and function application: `a?[b]` -> `a?.[b]`, `a?(b)` -> `a?.(b)`
 - `?=` null-coalescing assignment shorthand
-- `@` `this` shorthand `@` -> `this`, `@id` -> `this.id`, `{@id} -> {id: this.id}`
-- Prototype shorthand `X::` -> `X.prototype`, `X::a` -> `X.prototype.a`
+- `@` `this` shorthand: `@` -> `this`, `@id` -> `this.id`, `{@id} -> {id: this.id}`
+- Prototype shorthand: `X::` -> `X.prototype`, `X::a` -> `X.prototype.a`
 - Class static shorthand `@`
-- Chained comparisons `a < b < c` -> `a < b && b < c`
+- Chained comparisons: `a < b < c` -> `a < b && b < c`
 - Postfix `if/unless/while/until/for`
 - Block Strings `"""` / `'''`
   - `#{exp}` interpolation in `"""` strings
@@ -106,7 +106,7 @@ Most of these can be enabled by adding a [`"civet coffeeCompat"` directive prolo
 The goal is to provide a very high level of compatibility with existing CoffeeScript code while offering a fine grained migration path to modern
 Civet.
 
-- Implicit `var` declarations (use `civet coffeeCompat` or `"civet autoVar"`)
+- Implicit `var` declarations (use `"civet coffeeCompat"` or `"civet autoVar"`)
 - `on/yes/off/no` (use `true/false`, `"civet coffeeCompat"`, or `"civet coffeeBooleans"` to add them back)
 - `isnt` (use `!==`, `"civet coffeeCompat"`, or `"civet coffeeIsnt"`)
 - `not` (use `!`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
@@ -117,8 +117,8 @@ Civet.
 - `for from` (use JS `for of`, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for own of` (use JS `for in` and check manually, switch to `Map#keys/values/entries`, or use `Object.create(null)`, or `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for ... when <condition>` (use `continue if exp` inside loop, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
-- `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables, `"civet coffeeCompat"`, or `"civet coffeeBinaryExistential"` enables this at the cost of losing JS ternary operator)
-- `a of b` (use `a in b` matching JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
+- `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables; `"civet coffeeCompat"`, or `"civet coffeeBinaryExistential"` enables `a ? b` at the cost of losing JS ternary operator)
+- `a of b` (use `a in b` as in JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
 - Backtick embedded JS (replaced by template literals)
 - Will add later
   - `a %% b` -> `(a % b + b) % b`
@@ -174,19 +174,20 @@ Things Added that CoffeeScript didn't
         readonly x = 3
       }
     ```
-- JS Compatability
+- JS Compatibility
   - `var`, `let`, `const`
   - JS Comment Syntax `//` and `/* */`
   - `function` keyword
-  - Braced Blocks
+  - Braced Blocks (as an alternative to indentation)
   - `f?.(x)` function application and `a?.[x]` index OptionalChain longhand
   - `a ? b : c` ConditionalExpression
   - `case` statement
   - `do`, `do { ... } until condition`
+  - Method definitions `foo(args) ...` in objects/classes
   - `get`/`set` method definitions
   - Private identifiers `#id`
 - Convenience for ES6+ Features
-  - Const assignment shorthand `a := b` -> `const a = b`, `{a, b} := c` -> `const {a, b} = c`
+  - Const assignment shorthand: `a := b` -> `const a = b`, `{a, b} := c` -> `const {a, b} = c`
   - `@#id` -> `this.#id` shorthand for private identifiers
   - `import` shorthand: `x from ./x` -> `import x from "./x"`
   - `export` shorthand: `export x, y` -> `export {x, y}`
@@ -201,7 +202,7 @@ Things Added that CoffeeScript didn't
   - unary operators `x.map !!&`, -> `x.map($ => !!$)`
   - binary operators `x.map &+1` -> `x.map($ => $+1)`
 - Flagging shorthand [from LiveScript](https://livescript.net/#literals) `{+debug, -live}` -> `{debug: true, live: false}`
-- JSX enhancements:
+- JSX enhancements (inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)):
   - Indentation: instead of explicitly closing `<tag>`s or `<>`s,
     you can indent the children and Civet will close your tags for you
   - Any braced object literal can be used as an attribute.
