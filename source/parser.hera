@@ -4196,6 +4196,7 @@ Reset
 
     module.config = parse.config = {
       autoVar: false,
+      autoLet: false,
       coffeeBinaryExistential: false,
       coffeeBooleans: false,
       coffeeClasses: false,
@@ -5239,6 +5240,10 @@ Init
         createVarDecs(statements, [])
       }
 
+      if (module.config.autoLet) {
+        createLetDecs(statements, [])  
+      }
+
       populateRefs(statements)
       adjustAtBindings(statements)
     }
@@ -5375,6 +5380,61 @@ Init
         if (Array.isArray(indent)) indent = indent[indent.length - 1]
         statements.unshift([indent, "var ", varIds.join(", "), "\n"])
       }
+    }
+
+    function createLetDecs(statements, scopes) {
+      function hasDec(name) {
+        return scopes.some((s) => s.has(name))
+      }
+
+      function insertBeforeAssignment(assignment, content) {
+        if (assignment.children && assignment.children.length) {
+          let indent = assignment.children[0][0][0]
+          if (Array.isArray(indent)) indent = indent[indent.length - 1]
+          assignment.children.unshift([indent, ...content])
+        }
+      }
+
+      let currentScope = new Set()
+      scopes.push(currentScope)
+
+
+      const fnNodes  = gatherNodes(statements, (s) => s.type === "FunctionExpression")
+      const forNodes = gatherNodes(statements, (s) => s.type === "ForStatement")
+      const nodes = gatherNodes(statements, (s) => s.type === "BlockStatement" || s.type === "AssignmentExpression")
+
+      for (const node of nodes) {
+        if (node.type == "AssignmentExpression") {
+          let undeclaredIdentifiers = node.names.filter(name => !hasDec(name))
+          if (node.children.length) createLetDecs(node.children, scopes)
+          undeclaredIdentifiers.forEach((name) => currentScope.add(name))
+          if (node.names.length === undeclaredIdentifiers.length) { 
+            insertBeforeAssignment(node, ["let "])
+          }
+          else if (undeclaredIdentifiers.length > 0) {
+            insertBeforeAssignment(node, ["let ", undeclaredIdentifiers.join(", "), "\n"]) 
+          }
+        }
+        else {
+          let block = node
+          let fnNode  = fnNodes .find((fnNode)  => fnNode.block  === block)
+          let forNode = forNodes.find((forNode) => forNode.block === block)
+          if (fnNode != null) { 
+            scopes.push(new Set(fnNode.parameters.names))
+            createLetDecs(block.expressions, scopes)
+            scopes.pop()
+          }
+          else if (forNode != null) {
+            scopes.push(new Set(forNode.declaration.names))
+            createLetDecs(block.expressions, scopes)
+            scopes.pop() 
+          }
+          else 
+            createLetDecs(block.expressions, scopes)
+        }
+      }
+
+      scopes.pop()
     }
 
     function gatherBindingCode(statements) {
