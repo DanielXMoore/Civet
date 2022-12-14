@@ -128,10 +128,10 @@ Civet.
 Things Changed from CoffeeScript
 ---
 
-- `==` → `==` rather than `===` (can be kept with `"civet coffeeCompat"` or `"civet coffeeEq"`)
-- `!=` → `!=` rather than `!==` (can be kept with `"civet coffeeCompat"` or `"civet coffeeEq"`)
-- `for in` and `for of` are no longer swapped and become their JS equivalents.
-- `a in b` is now `a in b` rather than `b.indexOf(a) >= 0`
+- `==` → `==` rather than `===` (unless you specify `"civet coffeeCompat"` or `"civet coffeeEq"`)
+- `!=` → `!=` rather than `!==` (unless you specify `"civet coffeeCompat"` or `"civet coffeeEq"`)
+- `for in` and `for of` are no longer swapped and become their JS equivalents (unless you specify `"civet coffeeCompat"` or `"civet CoffeeOf"`)
+- `a in b` now remains `a in b` rather than becoming `b.indexOf(a) >= 0` (unless you specify `"civet coffeeCompat"` or `"coffeeOf"`)
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
 - Existential `x?` → `(x != null)` no longer checks for undeclared variables.
 - `x?()` → `x?.()` instead of `if (typeof x === 'function') { x() }`
@@ -139,8 +139,8 @@ Things Changed from CoffeeScript
 - No longer allowing multiple postfix `if/unless` on the same line (use `&&` or `and` to combine conditions).
 - `#{}` interpolation in `""` strings only when `"civet coffeeCompat"` or `"civet coffeeInterpolation"`
 - Expanded chained comparisons to work on more operators `a in b instanceof C` → `a in b && b instanceof C`
-- Postfix iteration/conditionals always wrap the statement [#5431](https://github.com/jashkenas/coffeescript/issues/5431)
-`try x() if y` → `if (y) try x()`
+- Postfix iteration/conditionals always wrap the statement [#5431](https://github.com/jashkenas/coffeescript/issues/5431):
+  `try x() if y` → `if (y) try x()`
 - Civet tries to keep the transpiled output verbatim as much as possible.
   In Coffee `(x)` → `x;` but in Civet `(x)` → `(x)`. Spacing and comments are also preserved as much as possible.
 - Heregex / re.X
@@ -196,16 +196,16 @@ Things Added that CoffeeScript didn't
   - ClassStaticBlock `@ { ... }`
   - `<` as `extends` shorthand
 - Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc), [Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax), [Elm record access](https://elm-lang.org/docs/records#access)
-  - access `x.map &.name` → `x.map(a => a.name)`
-  - nested access + slices `x.map &.profile?.name[0...3]` → `x.map(a => a.profile?.name.slice(0, 3))`
-  - function call `x.map &.callback a, b` → `x.map($ => $.callback(a, b))`
-  - unary operators `x.map !!&` → `x.map($ => !!$)`
-  - binary operators `x.map &+1` → `x.map($ => $+1)`
+  - Access: `x.map &.name` → `x.map(a => a.name)`
+  - Nested access + slices: `x.map &.profile?.name[0...3]` → `x.map(a => a.profile?.name.slice(0, 3))`
+  - Function call: `x.map &.callback a, b` → `x.map($ => $.callback(a, b))`
+  - Unary operators: `x.map !!&` → `x.map($ => !!$)`
+  - Binary operators: `x.map &+1` → `x.map($ => $+1)`
 - Flagging shorthand [from LiveScript](https://livescript.net/#literals) `{+debug, -live}` → `{debug: true, live: false}`
 - JSX enhancements (inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)):
   - Indentation: instead of explicitly closing `<tag>`s or `<>`s,
     you can indent the children and Civet will close your tags for you
-  - Any braced object literal can be used as an attribute.
+  - Any braced object literal can be used as an attribute:
     `{foo}` → `foo={foo}`, `{foo: bar}` → `foo={bar}`,
     `{...foo}` remains as is; methods and getters/setters work too.
   - Many attribute values (basic literals, array literals, braced object
