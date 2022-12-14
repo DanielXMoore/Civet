@@ -44,7 +44,7 @@ Expression
 
 # https://262.ecma-international.org/#prod-Arguments
 Arguments
-  OpenParen ArgumentList? ( __ Comma )? __ CloseParen
+  ExplicitArguments
   # NOTE: Added spacing based implicit function application
   # Trailing (__ MemberExpressionRest)* is to capture trailing .someMethod and bind them at the right place
 
@@ -55,6 +55,9 @@ Arguments
   # x y z => x(y(z))
   ApplicationStart InsertOpenParen:open _*:ws ArgumentList:args InsertCloseParen:close ->
     return [open, module.insertTrimmingSpace(ws, ""), args, close]
+
+ExplicitArguments
+  OpenParen ArgumentList? ( __ Comma )? __ CloseParen
 
 # Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
 ApplicationStart
@@ -106,10 +109,7 @@ ArgumentPart
 
 BinaryOpExpression
   UnaryExpression BinaryOpRHS* ->
-    if ($2.length) {
-      return module.processBinaryOpExpression($0)
-    }
-
+    if ($2.length) return module.processBinaryOpExpression($0)
     return $1
 
 BinaryOpRHS
@@ -124,54 +124,7 @@ UnaryExpression
   # https://262.ecma-international.org/#prod-AwaitExpression
   # NOTE: Eliminated left recursion
   UnaryOp*:pre UpdateExpression:exp UnaryPostfix?:post ->
-    // Handle "?" postfix
-    if (post?.token === "?") {
-      post = {
-        $loc: post.$loc,
-        token: " != null",
-      }
-
-      switch (exp.type) {
-        case "Identifier":
-        case "Literal":
-          return {...exp,
-            children: [...pre, ...exp.children, post]
-          }
-        default:
-          return {
-            type: "ParenthesizedExpression",
-            children: ["(", ...pre, "(", exp, ")", post, ")"]
-          }
-      }
-    }
-
-    // Combine unary - to create negative numeric literals
-    if (exp.type === "Literal") {
-      if (pre.length === 1 && pre[0].token === "-") {
-        const children = [pre[0], ...exp.children]
-        if (post) exp.children./**/push(post)
-
-        return {
-          type: "Literal",
-          children,
-          raw: `-${exp.raw}`
-        }
-      }
-    }
-
-    if (exp.children) {
-      const children = [...pre, ...exp.children]
-      if (post) children./**/push(post)
-      return Object.assign({}, exp, { children })
-    } else if (Array.isArray(exp)) {
-      const children = [...pre, ...exp]
-      if (post) children./**/push(post)
-      return { children }
-    } else {
-      const children = [...pre, exp]
-      if (post) children./**/push(post)
-      return { children }
-    }
+    return module.processUnaryExpression(pre, exp, post)
 
   # NOTE: This is a little hacky to match CoffeeScript's behavior
   # https://coffeescript.org/#try:do%20x%20%2B%20y%0Ado%20x%20%3D%20y%0Ado%20-%3E%20x%20%3D%201
@@ -3054,10 +3007,10 @@ CoffeeStringSubstitution
 
 CoffeeInterpolatedDoubleQuotedString
   CoffeeInterpolationEnabled DoubleQuote:s ( CoffeeDoubleQuotedStringCharacters / CoffeeStringSubstitution )*:parts DoubleQuote:e ->
-    const noInterpolations = parts.length === 1 && parts[0].token != null
-    if (noInterpolations) {
+    // Check for no interpolations
+    if (parts.length === 0 || (parts.length === 1 && parts[0].token != null)) {
       return {
-        token: `"${module.modifyString(parts[0].token)}"`,
+        token: parts.length ? `"${module.modifyString(parts[0].token)}"` : '""',
         $loc,
       }
     }
@@ -3531,12 +3484,13 @@ Throw
   "throw" NonIdContinue ->
     return { $loc, token: $1 }
 
-# NOTE: These become a single backtick
+# NOTE: These become a single backtick, to properly escape "s and newlines
+# and in case there are interpolations
 TripleDoubleQuote
   "\"\"\"" ->
     return { $loc, token: "`" }
 
-# NOTE: These become a single backtick
+# NOTE: These become a single backtick, to properly escape 's and newlines
 TripleSingleQuote
   "'''" ->
     return { $loc, token: "`" }
@@ -3719,9 +3673,14 @@ JSXAttributeInitializer
 # https://facebook.github.io/jsx/#prod-JSXAttributeValue
 JSXAttributeValue
   # https://facebook.github.io/jsx/#prod-JSXDoubleStringCharacters
-  /"[^"]*"/
   # https://facebook.github.io/jsx/#prod-JSXSingleStringCharacters
-  /'[^']*'/
+  # But double-quoted strings may turn into interpolation,
+  # and some triple-quoted strings may not use interpolation.
+  # So try to match but skip here if we find interpolation,
+  # and add parens in InlineJSXAttributeValue otherwise.
+  StringLiteral ->
+    if (module.isTemplateLiteral($1)) return $skip
+    return $1
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
   OpenBrace ExtendedExpression __ CloseBrace
   JSXElement
@@ -3729,22 +3688,94 @@ JSXAttributeValue
   InsertInlineOpenBrace InlineJSXAttributeValue InsertCloseBrace
 
 # JSX shorthand to avoid explicit braces when unnecessary.
-# Subset of PrimaryExpression; omissions documented in comments below.
 InlineJSXAttributeValue
+  InlineJSXUnaryExpression InlineJSXBinaryOpRHS* ->
+    if ($2.length) return module.processBinaryOpExpression($0)
+    return $1
+
+# BinaryOpRHS without whitespace and without ExpressionizedStatement
+InlineJSXBinaryOpRHS
+  BinaryOp ( ParenthesizedAssignment / InlineJSXUnaryExpression ) ->
+    // NOTE: Inserting empty whitespace arrays to be compatible with BinaryOpRHS and `processBinaryOpExpression`
+    return [[], $1, [], $2]
+
+# JSXUnaryExpression, with InlineJSX prefixes and no Do (which has whitespace)
+InlineJSXUnaryExpression
+  InlineJSXUnaryOp*:pre InlineJSXUpdateExpression:exp InlineJSXUnaryPostfix?:post ->
+    return module.processUnaryExpression(pre, exp, post)
+
+# UnaryOp, restricted to whitespace-free symbol operators
+InlineJSXUnaryOp
+  /[!~+-](?!\s|[!~+-]*&)/ ->
+    return { $loc, token: $0 }
+
+# UnaryPostfix, restricted to whitespace-free symbol operators
+InlineJSXUnaryPostfix
+  QuestionMark
+
+# UpdateExpression, with LeftHandSideExpression -> InlineJSXCallExpression
+InlineJSXUpdateExpression
+  UpdateExpressionSymbol UnaryExpression
+  InlineJSXCallExpression UpdateExpressionSymbol? ->
+    if ($2) return $0
+    return $1
+
+# CallExpression, with only explicit function calls.
+# This also acts as a replacement for LeftHandSideExpression
+# (we don't allow New because that has whitespace).
+InlineJSXCallExpression
+  "super" ExplicitArguments
+  "import" OpenParen ExtendedExpression __ CloseParen
+  InlineJSXMemberExpression InlineJSXCallExpressionRest* ->
+    if ($2.length) return $0
+    return $1
+
+# CallExpressionRest, with only explicit function calls.
+InlineJSXCallExpressionRest
+  MemberExpressionRest
+  TemplateLiteral
+  ( OptionalShorthand / NonNullAssertion )? ExplicitArguments
+
+# MemberExpression, with PrimaryExpression -> InlineJSXPrimaryExpression
+InlineJSXMemberExpression
+  InlineJSXPrimaryExpression InlineJSXMemberExpressionRest* ->
+    if ($2.length) return $0
+    return $1
+  SuperProperty
+  MetaProperty
+
+# MemberExpressionRest without optional IndentFurther before PropertyAccess
+InlineJSXMemberExpressionRest
+  ( OptionalShorthand / NonNullAssertion )? MemberBracketContent ->
+    if ($1) {
+      // Optional followed by a slice expression
+      if ($1.length === 2 && $2.type === "SliceExpression") {
+        // Remove '.' from optional since it is present in '.slice'
+        return [$1[0], $2]
+      }
+      return $0
+    }
+    return $2
+  PropertyAccess
+  NonNullAssertion
+
+# Subset of PrimaryExpression; omissions documented below.
+InlineJSXPrimaryExpression
   NullLiteral
   BooleanLiteral
   NumericLiteral
-  # omitting StringLiteral from LiteralContent which doesn't need braces
+  # StringLiteral that doesn't need braces already matched in JSXAttributeValue
+  StringLiteral
   ThisLiteral
   ArrayLiteral
-  # requiring braces on ObjectLiteral; this allows {a, b} even though `a, b` doesn't work as an inline object
+  # Requiring braces on ObjectLiteral; this allows {a, b} even though `a, b` doesn't work as an inline object
   BracedObjectLiteral
   IdentifierReference
-  # omitting FunctionExpression and ClassExpression
+  # Omitting FunctionExpression and ClassExpression which have whitespace
   RegularExpressionLiteral
   TemplateLiteral
   ParenthesizedExpression
-  # omitting JSXElement and JSXFragment which don't need braces
+  # Omitting JSXElement and JSXFragment which don't need braces
 
 JSXMixedChildren
   # NOTE: c1 matches "same-line" children, while c2 matches indented children
@@ -4293,6 +4324,57 @@ Init
       }
     })
 
+    module.processUnaryExpression = (pre, exp, post) => {
+      // Handle "?" postfix
+      if (post?.token === "?") {
+        post = {
+          $loc: post.$loc,
+          token: " != null",
+        }
+
+        switch (exp.type) {
+          case "Identifier":
+          case "Literal":
+            return {...exp,
+              children: [...pre, ...exp.children, post]
+            }
+          default:
+            return {
+              type: "ParenthesizedExpression",
+              children: ["(", ...pre, "(", exp, ")", post, ")"]
+            }
+        }
+      }
+
+      // Combine unary - to create negative numeric literals
+      if (exp.type === "Literal") {
+        if (pre.length === 1 && pre[0].token === "-") {
+          const children = [pre[0], ...exp.children]
+          if (post) exp.children./**/push(post)
+
+          return {
+            type: "Literal",
+            children,
+            raw: `-${exp.raw}`
+          }
+        }
+      }
+
+      if (exp.children) {
+        const children = [...pre, ...exp.children]
+        if (post) children./**/push(post)
+        return Object.assign({}, exp, { children })
+      } else if (Array.isArray(exp)) {
+        const children = [...pre, ...exp]
+        if (post) children./**/push(post)
+        return { children }
+      } else {
+        const children = [...pre, exp]
+        if (post) children./**/push(post)
+        return { children }
+      }
+    }
+
     module.expressionizeIfClause = function(clause, b, e) {
       const children = clause.children.slice(1) // Remove 'if'
       children./**/push("?", b) // Add ternary
@@ -4562,6 +4644,13 @@ Init
       if (!node.length) return true
       if (typeof node === "string") return node.match(/^\s*$/)
       if (Array.isArray(node)) return node.every(module.isWhitespaceOrEmpty)
+    }
+
+    // Test whether a given StringLiteral is a
+    module.isTemplateLiteral = function(node) {
+      let s = node
+      while (s && s[0] && !s.token) s = s[0]
+      return s.token?.startsWith?.('`')
     }
 
     module.processBinaryOpExpression = function($0) {

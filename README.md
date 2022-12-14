@@ -208,9 +208,12 @@ Things Added that CoffeeScript didn't
   - Any braced object literal can be used as an attribute:
     `{foo}` → `foo={foo}`, `{foo: bar}` → `foo={bar}`,
     `{...foo}` remains as is; methods and getters/setters work too.
-  - Many attribute values (basic literals, array literals, braced object
-    literals, regular expressions, template strings, and parenthesized
-    expressions) do not need braces.  `foo=bar` → `foo={bar}`
+  - Attribute values without whitespace or suitably wrapped
+    (parenthesized expressions, strings and template strings,
+    regular expressions, array literals, braced object literals)
+    do not need braces:
+    `foo=bar` → `foo={bar}`, `count=count()` → `count={count()}`,
+    `sum=x+1` → `sum={x+1}`, `list=[1, 2, 3]` → `list={[1, 2, 3]}`
   - Attributes can use computed property names:
     `[expr]={value}` → `{...{[expr]: value}}`
 - CoffeeScript improvements
