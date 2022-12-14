@@ -54,12 +54,12 @@ createCompilerHost := (options: CompilerOptions, moduleSearchLocations : string[
 Things Kept from CoffeeScript
 ---
 
-- `is` -> `===`
-- `or`,  `or=`  -> `||`, `||=`
-- `and`, `and=` -> `&&`, `&&=`
-- `loop` -> `while(true)`
-- `unless exp` -> `if(!exp)`
-- `until condition` -> `while(!condition)`
+- `is` → `===`
+- `or`,  `or=`  → `||`, `||=`
+- `and`, `and=` → `&&`, `&&=`
+- `loop` → `while(true)`
+- `unless exp` → `if(!exp)`
+- `until condition` → `while(!condition)`
 - Object literal syntax
   ```coffee
   x =
@@ -71,30 +71,30 @@ Things Kept from CoffeeScript
   ```
 - Optional semi-colons
 - Indentation based block syntax
-- OptionalChain shorthand for index and function application `a?[b]` -> `a?.[b]`, `a?(b)` -> `a?.(b)`
+- OptionalChain shorthand for index and function application: `a?[b]` → `a?.[b]`, `a?(b)` → `a?.(b)`
 - `?=` null-coalescing assignment shorthand
-- `@` `this` shorthand `@` -> `this`, `@id` -> `this.id`, `{@id} -> {id: this.id}`
-- Prototype shorthand `X::` -> `X.prototype`, `X::a` -> `X.prototype.a`
+- `@` `this` shorthand: `@` → `this`, `@id` → `this.id`, `{@id} → {id: this.id}`
+- Prototype shorthand: `X::` → `X.prototype`, `X::a` → `X.prototype.a`
 - Class static shorthand `@`
-- Chained comparisons `a < b < c` -> `a < b && b < c`
+- Chained comparisons: `a < b < c` → `a < b && b < c`
 - Postfix `if/unless/while/until/for`
 - Block Strings `"""` / `'''`
   - `#{exp}` interpolation in `"""` strings
 - `when` inside `switch` automatically breaks
 - Multiple `,` separated `case`/`when` expressions
-- `else` -> `default` in `switch`
+- `else` → `default` in `switch`
 - Range literals `[0...10]`, `[a..b]`, `[x - 2 .. x + 2]`
-- Array slices `list[0...2]` -> `list.slice(0, 2)`
-- Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` -> `numbers.splice(3, 4, ...[-3, -4, -5, -6])`
+- Array slices `list[0...2]` → `list.slice(0, 2)`
+- Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` → `numbers.splice(3, 4, ...[-3, -4, -5, -6])`
 - Implicit returns
-- Late assignment `x + y = z` -> `x + (y = z)`
+- Late assignment `x + y = z` → `x + (y = z)`
 - Braceless inline objects `x = coolStory: true`
-- Simplified number method calls `1.toFixed()` -> `1..toFixed()`
+- Simplified number method calls `1.toFixed()` → `1..toFixed()`
 - `if`/`switch`/`for`/`loop`/`while`/`throw` expressions
-- Destructuring object assignment doesn't require being wrapped in parens at the statement level `{a, b} = c` -> `({a, b} = c)`
+- Destructuring object assignment doesn't require being wrapped in parens at the statement level `{a, b} = c` → `({a, b} = c)`
 - Prefix or postfix rest/splats `[...a]`, `x = [a...]`
-- RestProperty in any position `{a, ...b, c} = d` -> `{a, c, ...b} = d`
-- RestElement/RestParameter in any position `(first, ...midle, last) ->` -> `function(first, ...middle) { let [last] = middle.splice(-1)}`
+- RestProperty in any position `{a, ...b, c} = d` → `{a, c, ...b} = d`
+- RestElement/RestParameter in any position `(first, ...midle, last) ->` → `function(first, ...middle) { let [last] = middle.splice(-1)}`
 - `///` Heregexp
   - With some [changes](#things-changed-from-coffeescript).
 - JSX
@@ -106,7 +106,7 @@ Most of these can be enabled by adding a [`"civet coffeeCompat"` directive prolo
 The goal is to provide a very high level of compatibility with existing CoffeeScript code while offering a fine grained migration path to modern
 Civet.
 
-- Implicit `var` declarations (use `civet coffeeCompat` or `"civet autoVar"`)
+- Implicit `var` declarations (use `"civet coffeeCompat"` or `"civet autoVar"`)
 - `on/yes/off/no` (use `true/false`, `"civet coffeeCompat"`, or `"civet coffeeBooleans"` to add them back)
 - `isnt` (use `!==`, `"civet coffeeCompat"`, or `"civet coffeeIsnt"`)
 - `not` (use `!`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
@@ -117,32 +117,32 @@ Civet.
 - `for from` (use JS `for of`, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for own of` (use JS `for in` and check manually, switch to `Map#keys/values/entries`, or use `Object.create(null)`, or `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for ... when <condition>` (use `continue if exp` inside loop, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
-- `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables, `"civet coffeeCompat"`, or `"civet coffeeBinaryExistential"` enables this at the cost of losing JS ternary operator)
-- `a of b` (use `a in b` matching JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
+- `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables; `"civet coffeeCompat"`, or `"civet coffeeBinaryExistential"` enables `a ? b` at the cost of losing JS ternary operator)
+- `a of b` (use `a in b` as in JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
 - Backtick embedded JS (replaced by template literals)
 - Will add later
-  - `a %% b` -> `(a % b + b) % b`
-  - Conditional assignment `a?[x] = 3` -> `a ? a[x] = 3 : undefined`
+  - `a %% b` → `(a % b + b) % b`
+  - Conditional assignment `a?[x] = 3` → `a ? a[x] = 3 : undefined`
   - Multiple slice assignment `otherNumbers[0...] = numbers[3..6] = [-3, -4, -5, -6]`
 
 Things Changed from CoffeeScript
 ---
 
-- `==` -> `==` rather than `===` (can be kept with `"civet coffeeCompat"` or `"civet coffeeEq"`)
-- `!=` -> `!=` rather than `!==` (can be kept with `"civet coffeeCompat"` or `"civet coffeeEq"`)
-- `for in` and `for of` are no longer swapped and become their JS equivalents.
-- `a in b` is now `a in b` rather than `b.indexOf(a) >= 0`
+- `==` → `==` rather than `===` (unless you specify `"civet coffeeCompat"` or `"civet coffeeEq"`)
+- `!=` → `!=` rather than `!==` (unless you specify `"civet coffeeCompat"` or `"civet coffeeEq"`)
+- `for in` and `for of` are no longer swapped and become their JS equivalents (unless you specify `"civet coffeeCompat"` or `"civet CoffeeOf"`)
+- `a in b` now remains `a in b` rather than becoming `b.indexOf(a) >= 0` (unless you specify `"civet coffeeCompat"` or `"coffeeOf"`)
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
-- Existential `x?` -> `(x != null)` no longer checks for undeclared variables.
-- `x?()` -> `x?.()` instead of `if (typeof x === 'function') { x() }`
+- Existential `x?` → `(x != null)` no longer checks for undeclared variables.
+- `x?()` → `x?.()` instead of `if (typeof x === 'function') { x() }`
 - Backtick embedded JS has been replaced with JS template literals.
 - No longer allowing multiple postfix `if/unless` on the same line (use `&&` or `and` to combine conditions).
 - `#{}` interpolation in `""` strings only when `"civet coffeeCompat"` or `"civet coffeeInterpolation"`
-- Expanded chained comparisons to work on more operators `a in b instanceof C` -> `a in b && b instanceof C`
-- Postfix iteration/conditionals always wrap the statement [#5431](https://github.com/jashkenas/coffeescript/issues/5431)
-`try x() if y` -> `if (y) try x()`
+- Expanded chained comparisons to work on more operators `a in b instanceof C` → `a in b && b instanceof C`
+- Postfix iteration/conditionals always wrap the statement [#5431](https://github.com/jashkenas/coffeescript/issues/5431):
+  `try x() if y` → `if (y) try x()`
 - Civet tries to keep the transpiled output verbatim as much as possible.
-  In Coffee `(x)` -> `x;` but in Civet `(x)` -> `(x)`. Spacing and comments are also preserved as much as possible.
+  In Coffee `(x)` → `x;` but in Civet `(x)` → `(x)`. Spacing and comments are also preserved as much as possible.
 - Heregex / re.X
   - Stay closer to the [Python spec](https://docs.python.org/3/library/re.html#re.X)
   - Allows both kinds of substitutions `#{..}`, `${..}`.
@@ -158,7 +158,7 @@ Things Added that CoffeeScript didn't
 ---
 
 - TypeScript Compatibility
-  - Auto-rewrite `.[mc]ts` -> `.[mc]js` in imports (workaround for: https://github.com/microsoft/TypeScript/issues/37582)
+  - Auto-rewrite `.[mc]ts` → `.[mc]js` in imports (workaround for: https://github.com/microsoft/TypeScript/issues/37582)
   - Function annotations
   - `namespace`
   - `interface`
@@ -174,46 +174,47 @@ Things Added that CoffeeScript didn't
         readonly x = 3
       }
     ```
-- JS Compatability
+- JS Compatibility
   - `var`, `let`, `const`
   - JS Comment Syntax `//` and `/* */`
   - `function` keyword
-  - Braced Blocks
+  - Braced Blocks (as an alternative to indentation)
   - `f?.(x)` function application and `a?.[x]` index OptionalChain longhand
   - `a ? b : c` ConditionalExpression
   - `case` statement
   - `do`, `do { ... } until condition`
+  - Method definitions `foo(args) ...` in objects/classes
   - `get`/`set` method definitions
   - Private identifiers `#id`
 - Convenience for ES6+ Features
-  - Const assignment shorthand `a := b` -> `const a = b`, `{a, b} := c` -> `const {a, b} = c`
-  - `@#id` -> `this.#id` shorthand for private identifiers
-  - `import` shorthand: `x from ./x` -> `import x from "./x"`
-  - `export` shorthand: `export x, y` -> `export {x, y}`
+  - Const assignment shorthand: `a := b` → `const a = b`, `{a, b} := c` → `const {a, b} = c`
+  - `@#id` → `this.#id` shorthand for private identifiers
+  - `import` shorthand: `x from ./x` → `import x from "./x"`
+  - `export` shorthand: `export x, y` → `export {x, y}`
   - Triple backtick Template Strings remove leading indentation for clarity
   - Class constructor shorthand `@( ... )`
   - ClassStaticBlock `@ { ... }`
   - `<` as `extends` shorthand
 - Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc), [Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax), [Elm record access](https://elm-lang.org/docs/records#access)
-  - access `x.map &.name` -> `x.map(a => a.name)`
-  - nested access + slices `x.map &.profile?.name[0...3]` -> `x.map(a => a.profile?.name.slice(0, 3))`
-  - function call `x.map &.callback a, b` -> `x.map($ => $.callback(a, b))`
-  - unary operators `x.map !!&`, -> `x.map($ => !!$)`
-  - binary operators `x.map &+1` -> `x.map($ => $+1)`
-- Flagging shorthand [from LiveScript](https://livescript.net/#literals) `{+debug, -live}` -> `{debug: true, live: false}`
-- JSX enhancements:
+  - Access: `x.map &.name` → `x.map(a => a.name)`
+  - Nested access + slices: `x.map &.profile?.name[0...3]` → `x.map(a => a.profile?.name.slice(0, 3))`
+  - Function call: `x.map &.callback a, b` → `x.map($ => $.callback(a, b))`
+  - Unary operators: `x.map !!&` → `x.map($ => !!$)`
+  - Binary operators: `x.map &+1` → `x.map($ => $+1)`
+- Flagging shorthand [from LiveScript](https://livescript.net/#literals) `{+debug, -live}` → `{debug: true, live: false}`
+- JSX enhancements (inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)):
   - Indentation: instead of explicitly closing `<tag>`s or `<>`s,
     you can indent the children and Civet will close your tags for you
-  - Any braced object literal can be used as an attribute.
-    `{foo}` -> `foo={foo}`, `{foo: bar}` -> `foo={bar}`,
+  - Any braced object literal can be used as an attribute:
+    `{foo}` → `foo={foo}`, `{foo: bar}` → `foo={bar}`,
     `{...foo}` remains as is; methods and getters/setters work too.
   - Many attribute values (basic literals, array literals, braced object
     literals, regular expressions, template strings, and parenthesized
-    expressions) do not need braces.  `foo=bar` -> `foo={bar}`
+    expressions) do not need braces.  `foo=bar` → `foo={bar}`
   - Attributes can use computed property names:
-    `[expr]={value}` -> `{...{[expr]: value}}`
+    `[expr]={value}` → `{...{[expr]: value}}`
 - CoffeeScript improvements
-  - Postfix loop `run() loop` -> `while(true) run()`
+  - Postfix loop `run() loop` → `while(true) run()`
   - Character range literals `["a".."z"]`, `['f'..'a']`, `['0'..'9']`
 - Shebang line is kept unmodified in output
   ```civet
@@ -229,14 +230,14 @@ Things Changed from ES6
   The reasoning is `x -> ...` => `x(function() ...)` in CoffeeScript and having `->` and `=>`
   behave more differently than they already do is bad. Passing an anonymous function to an
   application without parens is also convenient.
-- `for(i of x) ...` defaults to const declaration -> `for(const i of x) ...`
+- `for(i of x) ...` defaults to const declaration → `for(const i of x) ...`
 - Disallow comma operator in conditionals and many other places. `if x, y` is not allowed.
 - Comma operator in `case`/`when` instead becomes multiple conditions.
 - Numbers can't end with a dot (otherwise would be ambiguous with CoffeeScript slices `y[0..x]`). This also implies that you can't access properties
 of numbers with `1..toString()` use `1.toString()` instead. When exponent follows a dot it is treated as a property access since an exponent
-could be a valid property `1.e10` -> `1..e10`. The workaround is to add a trailing zero `1.0e10` or remove the dot before the exponent `1e10`.
+could be a valid property `1.e10` → `1..e10`. The workaround is to add a trailing zero `1.0e10` or remove the dot before the exponent `1e10`.
 - Additional reserved words `and`, `or`, `loop`, `until`, `unless`
-- Experimental decorator syntax is `@@` instead of `@` because `@` is premium real estate and `@id` -> `this.id`, and `@` is also static fields/methods, etc.
+- Experimental decorator syntax is `@@` instead of `@` because `@` is premium real estate and `@id` → `this.id`, and `@` is also static fields/methods, etc.
   ```
   @@classDecorator
   class X
@@ -259,12 +260,12 @@ Civet provides a compatibility prologue directive that aims to be 97+% compatibl
 | coffeeBooleans      | `yes`, `no`, `on`, `off` |
 | coffeeComment       | `# single line comments` |
 | coffeeDo            | `do ->`, disables ES6 do/while |
-| coffeeEq            | `==` -> `===`, `!=` -> `!==` |
+| coffeeEq            | `==` → `===`, `!=` → `!==` |
 | coffeeForLoops      | for in, of, from loops behave like they do in CoffeeScript |
 | coffeeInterpolation | `"a string with #{myVar}"` |
-| coffeeIsnt          | `isnt` -> `!==` |
-| coffeeNot           | `not` -> `!`, `a not instanceof b` -> `!(a instanceof b)`, `a not of b` -> `!(a in b)`    |
-| coffeeOf            | `a of b` -> `a in b`, `a in b` -> `b.indexOf(a) >= 0`, `a not in b` -> `b.indexOf(a) < 0` |
+| coffeeIsnt          | `isnt` → `!==` |
+| coffeeNot           | `not` → `!`, `a not instanceof b` → `!(a instanceof b)`, `a not of b` → `!(a in b)`    |
+| coffeeOf            | `a of b` → `a in b`, `a in b` → `b.indexOf(a) >= 0`, `a not in b` → `b.indexOf(a) < 0` |
 
 You can use these with `"civet coffeeCompat"` to opt in to all or use them bit by bit with `"civet coffeeComment coffeeEq coffeeInterpolation"`.
 Another possibility is to slowly remove them to provide a way to migrate files a little at a time `"civet coffeeCompat -coffeeBooleans -coffeeComment -coffeeEq"`.
