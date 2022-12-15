@@ -387,6 +387,24 @@ the rule name, state (position), and parse result and can be used to populate a 
 The cache is for each rule name store a result based on position, including `undefined` results to indicate that a match was not found at that position.
 This allows for fairly aggressive backtracking to re-interpret nearly identical leftward productions based on a token that appears much later.
 
+CoffeeCompat
+---
+
+Tests of parsing the CoffeeScript source.
+
+browser.coffee - parse completes
+cake.coffee    - parse completes
+coffeescript.coffee
+  - 292: as is a keyword in civet
+command.coffee
+  - 450 space after unary not
+grammar.coffee - parse completes
+helpers.coffee - parse completes
+lexer.coffee - parse completes
+nodes.coffee
+  - 4965 leading space before `.` access
+  - 6007 function application, nested inside if expression, nested inside array
+
 Timesheet
 ---
 
@@ -481,58 +499,10 @@ Timesheet
 2022-12-08 | 0.75  | GH; export x =
 2022-12-09 | 1.00  | GH Issues/PRs
 2022-12-10 | 3.00  | GH Issues/PRs; Decorators; empty when;
-2022-12-11 | 2.50  | PRs/ amp blocks; InsertComma
+2022-12-11 | 3.50  | PRs/ amp blocks; InsertComma
+2022-12-12 | 1.50  | PRs; Implements spacing; README
+2022-12-13 | 3.00  | let declaration shorthand; PRs; discord lang design discussions
+2022-12-14 | 2.00  | PRs;
+2022-12-15 | 3.00  | PRs; GH Issues;
 
-browser.coffee - parse completes
-cake.coffee    - parse completes
-coffeescript.coffee
-  - 292: as is a keyword in civet
-command.coffee
-  - 450 space after unary not
-grammar.coffee - parse completes
-helpers.coffee - parse completes
-lexer.coffee - parse completes
-nodes.coffee
-  - 4965 leading space before `.` access
-  - 6007 function application, nested inside if expression, nested inside array
-
-- CoffeeCompat
-  - [x] Heregex
-    - [x] Character classes
-    - [x] Comments
-    - [x] Substitutions
-  - [ ] At arguments `(@a) ->`
-  - [x] Ranges
-    - [x] Range literals
-    - [x] `for x in range`
-    - [x] Character ranges `["a".."z"]`
-  - [x] `do`
-  - [ ] `classes`
-    - [ ] Coffee2 method definitions
-      - [x] ->
-      - [ ] =>
-  - [x] `not in`
-  - [x] `{@id}`
-  - [x] `a ? b`
-  - [ ] `x = length: 2` inline braceless object literals
-  - [ ] Chained Comparisons
-    - [x] working without refs
-    - [ ] Add refs
-  - [x] auto var
-  - [x] argument splat trailing dots `x(y...) -> x(...y)`
-  - [ ] `for` expressions
-  - [ ] Coffee `for` loops
-    - [x] `for own ... of`
-    - [ ] Comprehensions
-    - [ ] `for x in y by z`
-    - Handle both of these:
-    ```
-      a for x in y by 2 when z
-      a for x in y when z by 2
-    ```
-  - [ ] Soak assignments
-  - [x] Braceless inline objects (conflicts with labels... but labels could be loop statement only)
-- LSP
-  - [ ] auto-import suggest in .coffee
-  - [ ] update imported file exports, see errors in importing file
-  - [ ] vscode commands
+Semantic token provider: use {token, $loc} objects annotated with a semantic tag
