@@ -88,7 +88,8 @@ makeCache = ->
             "AssignmentExpressionTail", "AssignmentExpression", "ExtendedExpression", "Expression", "MemberExpressionRest",\
             "ElseClause",\
             "CoffeeCommentEnabled", "SingleLineComment", "Debugger",\
-            "JSXElement", "JSXChild", "JSXChildren", "JSXFragment", "JSXNestedChildren", "JSXMixedChildren"
+            "JSXElement", "TypedJSXElement", "JSXFragment", "TypedJSXFragment",\
+            "JSXChild", "JSXChildren", "JSXNestedChildren", "JSXMixedChildren"
 
             break
           else

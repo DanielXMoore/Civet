@@ -217,6 +217,11 @@ Things Added that CoffeeScript didn't
     `sum=x+1` → `sum={x+1}`, `list=[1, 2, 3]` → `list={[1, 2, 3]}`
   - Attributes can use computed property names:
     `[expr]={value}` → `{...{[expr]: value}}`
+  - `"civet solid"` flag adds correct types for JSX elements and fragments.
+    Use `"civet solid client"` (default) for client-only code,
+    `"civet solid server"` for server-only code (SSR only), or
+    `"civet solid client server"` for isomorphic code that runs on
+    client and server (SSR + hydration).
 - CoffeeScript improvements
   - Postfix loop `run() loop` → `while(true) run()`
   - Character range literals `["a".."z"]`, `['f'..'a']`, `['0'..'9']`
