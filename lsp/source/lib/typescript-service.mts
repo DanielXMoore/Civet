@@ -399,7 +399,7 @@ function TSService(projectURL = "./") {
 
   const transpilerDefinitions = [{
     extension: ".civet" as const,
-    target: ".ts" as ts.Extension,
+    target: ".tsx" as ts.Extension,
     compile: transpileCivet,
   }, {
     extension: ".coffee",

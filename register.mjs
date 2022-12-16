@@ -31,7 +31,7 @@ export async function load(url, context, next) {
 
     // NOTE: Assuming ts-node hook follows load hook
     // NOTE: This causes .civet files to show up as .ts in ts-node error reporting (TODO: May be able to add a sourcemapping)
-    const result = await next(url.replace(extensionsRegex, ".ts"), {
+    const result = await next(url.replace(extensionsRegex, ".tsx"), {
       // ts-node won't transpile unless this is module
       // can't use commonjs since we don't rewrite imports
       format: "module",
