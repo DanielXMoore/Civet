@@ -16,7 +16,7 @@ fi
 # Bump the point version and publish to npm
 
 coffee build/bump-version.coffee
-npm publish
+npm publish --otp $1
 git add package.json
 git commit -m "Bump version"
 git push

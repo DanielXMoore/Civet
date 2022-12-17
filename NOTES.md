@@ -509,6 +509,6 @@ Timesheet
 2022-12-14 | 2.00  | PRs;
 2022-12-15 | 3.00  | PRs; GH Issues;
 2022-12-16 | 1.50  | civet.dev; gh pages; PR
-2022-12-17 | 0.50  | PRs; TypeArguments in function application
+2022-12-17 | 2.50  | PRs; TypeArguments in function application; badge; npm release
 
 Semantic token provider: use {token, $loc} objects annotated with a semantic tag
