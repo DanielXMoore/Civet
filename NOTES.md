@@ -405,6 +405,10 @@ nodes.coffee
   - 4965 leading space before `.` access
   - 6007 function application, nested inside if expression, nested inside array
 
+GitHub Pages www -> apex domain
+---
+https://stackoverflow.com/questions/54817253/github-pages-https-www-redirect
+
 Timesheet
 ---
 
@@ -505,5 +509,6 @@ Timesheet
 2022-12-14 | 2.00  | PRs;
 2022-12-15 | 3.00  | PRs; GH Issues;
 2022-12-16 | 1.50  | civet.dev; gh pages; PR
+2022-12-17 | 0.50  | PRs; TypeArguments in function application
 
 Semantic token provider: use {token, $loc} objects annotated with a semantic tag
