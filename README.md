@@ -241,7 +241,7 @@ Things Changed from ES6
   behave more differently than they already do is bad. Passing an anonymous function to an
   application without parens is also convenient.
 - `for(i of x) ...` defaults to const declaration → `for(const i of x) ...`
-- Disallow comma operator in conditionals and many other places. `if x, y` is not allowed.
+- Disallow comma operator in conditionals and many other places. `if x, y` is not allowed. But `for i = 0, l = a.length; i < l; i++, i *= 2` is allowed.
 - Comma operator in `case`/`when` instead becomes multiple conditions.
 - Numbers can't end with a dot (otherwise would be ambiguous with CoffeeScript slices `y[0..x]`). This also implies that you can't access properties
 of numbers with `1..toString()` use `1.toString()` instead. When exponent follows a dot it is treated as a property access since an exponent
