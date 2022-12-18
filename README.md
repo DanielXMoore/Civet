@@ -11,6 +11,7 @@ The CoffeeScript of TypeScript. Much closer to ES2015+ (for better or worse).
 - [Online Civet Playground](https://civet-web.vercel.app/)
 - [Civet VSCode Extension](https://marketplace.visualstudio.com/items?itemName=DanielX.civet)
 - [Discord Server](https://discord.gg/xkrW9GebBc)
+- Starter templates for [Solid](https://github.com/orenelbaum/solid-civet-template) and [Solid Start](https://github.com/orenelbaum/solid-start-civet-template)
 
 Quickstart Guide
 ---
