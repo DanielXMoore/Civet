@@ -272,8 +272,8 @@ PrimaryExpression
   TemplateLiteral
   ParenthesizedExpression
   # https://facebook.github.io/jsx/#sec-jsx-PrimaryExpression
-  JSXElement
-  JSXFragment
+  TypedJSXElement
+  TypedJSXFragment
 
 # https://262.ecma-international.org/#prod-ParenthesizedExpression
 ParenthesizedExpression
@@ -3550,25 +3550,36 @@ Yield
 
 ## JSX
 
+TypedJSXElement
+  JSXElement ->
+    const type = module.typeOfJSXElement($1)
+    return type ? [
+      { ts: true, children: ["("] },
+      $1,
+      { ts: true, children: [" as any as ", type, ")"] }
+    ] : $1
+
 # https://facebook.github.io/jsx/#prod-JSXElement
 JSXElement
   JSXSelfClosingElement
   JSXOpeningElement JSXChildren? __ JSXClosingElement ->
     // Check that tags match
     if ($1[1] !== $4[2]) return $skip
-    return $0
+    return { type: "JSXElement", children: $0 }
+  # NOTE: Auto-closing element with indented children
   JSXOpeningElement:open JSXMixedChildren:children InsertNewline InsertIndent ->
-    if (children.length) {
-      return [...$0, ["</", open[1], ">"]]
-    } else {
-      return [open.slice(0, -1), " />"]
+    return {
+      type: "JSXElement",
+      children: children.jsxChildren.length ? [...$0, ["</", open[1], ">"]]
+                                            : [open.slice(0, -1), " />"]
     }
   JSXOpeningElement ->
     throw new Error(`could not parse JSX element "${require('./generate')($0)}" at pos ${$loc.pos}`)
 
 # https://facebook.github.io/jsx/#prod-JSXSelfClosingElement
 JSXSelfClosingElement
-  "<" $JSXElementName CompactTypeArguments? JSXAttributes? __ "/>"
+  "<" $JSXElementName CompactTypeArguments? JSXAttributes? __ "/>" ->
+    return { type: "JSXElement", children: $0 }
 
 # https://facebook.github.io/jsx/#prod-JSXOpeningElement
 JSXOpeningElement
@@ -3578,11 +3589,26 @@ JSXOpeningElement
 JSXClosingElement
   "</" __ $JSXElementName __ ">"
 
+TypedJSXFragment
+  JSXFragment ->
+    const type = module.typeOfJSXFragment($1)
+    return type ? [
+      { ts: true, children: ["("] },
+      $1,
+      { ts: true, children: [" as any as ", type, ")"] }
+    ] : $1
+
 # https://facebook.github.io/jsx/#prod-JSXFragment
 JSXFragment
-  "<>" JSXChildren? __ "</>"
+  "<>" JSXChildren? __ "</>" ->
+    if ($2) {
+      return { type: "JSXFragment", children: $0, jsxChildren: $2.jsxChildren }
+    } else {
+      return { type: "JSXFragment", children: $0, jsxChildren: [] }
+    }
+  # NOTE: Auto-closing fragment with indented children
   "<>" JSXMixedChildren InsertNewline InsertIndent ->
-    return [...$0, "</>"]
+    return { type: "JSXFragment", children: [...$0, "</>"], jsxChildren: $2.jsxChildren }
 
 # https://facebook.github.io/jsx/#prod-JSXElementName
 JSXElementName
@@ -3790,26 +3816,44 @@ InlineJSXPrimaryExpression
 JSXMixedChildren
   # NOTE: c1 matches "same-line" children, while c2 matches indented children
   # Used in indentation-based JSX
-  (_ / JSXChild)*:c1 JSXNestedChildren:c2 ->
-    return c1.concat(c2)
+  JSXChild*:c1 JSXNestedChildren:c2 ->
+    return {
+      children: c1.concat(c2),
+      jsxChildren: c1.concat(c2.jsxChildren),
+    }
 
 # https://facebook.github.io/jsx/#prod-JSXChildren
+# JSX eats whitespace around newlines
 JSXChildren
-  ( __ JSXChild )*
+  ( ( NonNewlineWhitespace? EOL NonNewlineWhitespace? )* JSXChild )* ->
+    return {
+      children: $1,
+      jsxChildren: $1.map(children => children[1]),
+    }
 
 JSXNestedChildren
   PushIndent ( Nested JSXChild+ )* PopIndent ->
-    if ($2.length) return $2
+    if ($2.length) {
+      return {
+        children: $2,
+        jsxChildren: [].concat(...$2.map(nestedChildren => nestedChildren[1])),
+      }
+    }
     return $skip
   &EOS ->
-    return []
+    return { children: [], jsxChildren: [] }
 
 # https://facebook.github.io/jsx/#prod-JSXChild
 JSXChild
   JSXText
   JSXElement
   JSXFragment
-  OpenBrace JSXChildExpression? __ CloseBrace
+  OpenBrace JSXChildExpression?:expression __ CloseBrace ->
+    return {
+      type: "JSXChildExpression",
+      children: $0,
+      expression,
+    }
 
 # https://facebook.github.io/jsx/#prod-JSXText
 JSXText
@@ -3817,7 +3861,12 @@ JSXText
   # NOTE: additionally excluding newlines to leave the next indentation;
   # leading whitespace will actually be consumed by JSXChildren or
   # JSXNestedChildren (where it's used for indentation).
-  [^{}<>\r\n]+
+  [^{}<>\r\n]+ ->
+    return {
+      type: "JSXText",
+      token: $0,
+      $loc,
+    }
 
 # https://facebook.github.io/jsx/#prod-JSXChildExpression
 JSXChildExpression
@@ -4236,6 +4285,9 @@ Reset
       coffeeNot: false,
       coffeeOf: false,
       implicitReturns: true,
+      solid: false,
+      client: false, // default behavior: client only
+      server: false,
       tab: undefined, // default behavior = same as space
       verbose: false,
     }
@@ -4263,6 +4315,31 @@ Reset
         // [indent, statement]
         module.prelude.push(["", ["const ", hasPropRef, typeSuffix, " = {}.hasOwnProperty", module.asAny, "\n"]])
       },
+      JSX(jsxRef) {
+        module.prelude.push({
+          ts: true,
+          children: [
+            "import type { JSX as ", jsxRef, " } from 'solid-js';\n",
+          ],
+        })
+      },
+      IntrinsicElements(intrinsicElementsRef) {
+        // JSX.IntrinsicElements[TagName] gives HTMLAttributes<ElementType> or
+        // SVGCoreAttributes<ElementType> or various subinterfaces of those.
+        // All of them extend DOMAttributes<ElementType>, though.  See
+        // https://raw.githubusercontent.com/ryansolid/dom-expressions/main/packages/dom-expressions/src/jsx.d.ts
+        // Thanks to @thetarnav for the TypeScript magic to extract ElementType.
+        // (TypeScript's HTMLElementTagNameMap and SVGElementTagNameMap are an
+        // alternative, but don't necessary match Solid's IntrinsicElements.)
+        const JSX = module.getRef("JSX")
+        module.prelude.push({
+          ts: true,
+          children: [
+            "type ", intrinsicElementsRef, "<K extends keyof ", JSX, ".IntrinsicElements> =\n",
+            "  ", JSX, ".IntrinsicElements[K] extends ", JSX, ".DOMAttributes<infer T> ? T : unknown;\n",
+          ],
+        })
+      },
     }
     const refs = {}
 
@@ -4279,18 +4356,67 @@ Reset
 
     module.typeOfJSXElement = function($1) {
       if (module.config.solid) {
-        let open = $1
+        if (module.config.server && !module.config.client) {  // server only
+          return ["string"]
+        }
+        let open = $1.children
         while (Array.isArray(open[0])) open = open[0]
         open = open[1]  // skip "<"
         // "An intrinsic element always begins with a lowercase letter,
         // and a value-based element always begins with an uppercase letter."
         // [https://www.typescriptlang.org/docs/handbook/jsx.html]
-        return typeof open === 'string' && open[0] === open[0].toLowerCase() ?
+        const clientType =
+          typeof open === 'string' && open[0] === open[0].toLowerCase() ?
           [module.getRef("IntrinsicElements"), '<"', open, '">'] :
           ['ReturnType<typeof ', open, '>']
+        if (module.config.server) {  // isomorphic code for client + server
+          return ["string", " | ", clientType]
+        } else {  // client only (default)
+          return clientType
+        }
       }
     }
 
+    module.typeOfJSXFragment = function($1) {
+      if (module.config.solid) {
+        let type = []
+        let lastType
+        for (let child of $1.jsxChildren) {
+          switch (child.type) {
+            case "JSXText":
+              // Solid combines multiple consecutive texts into one string
+              if (lastType !== "JSXText") {
+                type.push("string")
+              }
+              break
+            case "JSXElement":
+              type.push(module.typeOfJSXElement(child))
+              break
+            case "JSXFragment":
+              // Solid flattens fragments of fragments into one array.
+              type.push(...module.typeOfJSXFragment(child))
+              break
+            case "JSXChildExpression":
+              // Solid discards empty expressions
+              if (child.expression) {
+                type.push(["typeof ", child.expression])
+              }
+              break
+            default:
+              throw new Error(`unknown child in JSXFragment: ${JSON.stringify(child)}`)
+          }
+          lastType = child.type
+        }
+        // Solid doesn't wrap single fragment child in an array
+        if (type.length === 1) {
+          return type[0]
+        } else {
+          type = type.map((t) => [t, ", "]).flat()
+          type.pop() // remove trailing comma
+          return ["[", type, "]"]
+        }
+      }
+    }
 
     // Expand setting coffeeCompat to the individual options
     Object.defineProperty(module.config, "coffeeCompat", {
