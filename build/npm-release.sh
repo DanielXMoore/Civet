@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+# NOTE: This script doesn't work yet but its a good start
+
 # exit if current branch is not master
 if [[ $(git branch --show-current) != "master" ]]; then
   echo "Current branch is not master. Please switch to master branch."
@@ -16,7 +18,7 @@ fi
 # Bump the point version and publish to npm
 
 coffee build/bump-version.coffee
-npm publish --otp $1
+npm publish --otp "$1"
 git add package.json
 git commit -m "Bump version"
 git push
