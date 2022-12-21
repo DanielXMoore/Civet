@@ -513,5 +513,6 @@ Timesheet
 2022-12-18 | 1.00  | PRs; TypeArgument refactor; npm release
 2022-12-19 | 0.25  | PR
 2022-12-20 | 0.25  | autoLet PR; npm release; autoVar test;
+2022-12-21 | 0.25  | automate site build
 
 Semantic token provider: use {token, $loc} objects annotated with a semantic tag
