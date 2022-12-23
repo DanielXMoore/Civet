@@ -347,9 +347,31 @@ NestedClassElement
 # https://262.ecma-international.org/#prod-ClassElement
 ClassElement
   # NOTE: Combined optional static and Method/Field definition
-  Decorators? ( Static TrailingComment* )? ( MethodDefinition / FieldDefinition )
+  Decorators? AccessModifier? ( Static TrailingComment* )? ClassElementDefinition
   # ClassStaticBlock
   Static BracedBlock
+
+ClassElementDefinition
+  ( MethodDefinition / FieldDefinition )
+
+AccessModifier
+  ( Public / Private / Protected ) __ ->
+    return {
+      ts: true,
+      children: $0
+    }
+
+Public
+  "public" ->
+    return { $loc, token: $1 }
+
+Private
+  "private" ->
+    return { $loc, token: $1 }
+
+Protected
+  "protected" ->
+    return { $loc, token: $1 }
 
 # https://262.ecma-international.org/#prod-FieldDefinition
 FieldDefinition
@@ -565,7 +587,7 @@ Parameters
     return {
       type: "Parameters",
       children: [{$loc, token: "()"}],
-      names: [],
+      names: []
     }
 
 NonEmptyParameters
@@ -587,7 +609,7 @@ NonEmptyParameters
 
         blockPrefix = {
           children: ["[", module.insertTrimmingSpace(after, ""), "] = ", spliceRef, ".call(", restIdentifier, ", -", after.length.toString(), ")"],
-          names: after.flatMap(p => p.names),
+          names: after.flatMap(p => p.names)
         }
       }
 
@@ -626,12 +648,12 @@ FunctionRestParameter
 
 # NOTE: Similar to BindingElement but appears in formal parameters list
 ParameterElement
-  # NOTE: Merged in SingleNameBinding
-  ( BindingIdentifier / BindingPattern ) TypeSuffix? Initializer? ParameterElementDelimiter ->
+  __ AccessModifier? ( BindingIdentifier / BindingPattern ) TypeSuffix? Initializer? ParameterElementDelimiter ->
     return {
       type: "Parameter",
       children: $0,
-      names: $1.names,
+      names: $3.names,
+      accessModifier: $2,
     }
 
 ParameterElementDelimiter
@@ -1602,7 +1624,6 @@ MethodModifier
   ( Async __ ) ( Star __ )?
   Star __
   #Async __
-
 # TypeScript method signature
 MethodSignature
   ConstructorShorthand NonEmptyParameters:parameters ->
@@ -3158,7 +3179,7 @@ ReservedWord
   CoffeeForLoopsEnabled /(?:by)(?!\p{ID_Continue})/
   CoffeeOfEnabled /(?:of)(?!\p{ID_Continue})/
   # NOTE: Added `let`, Civet assumes strict mode
-  /(?:and|as|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|interface|is|let|loop|new|null|or|return|satisfies|static|super|switch|this|throw|true|try|typeof|unless|until|var|void|while|with|yield)(?!\p{ID_Continue})/
+  /(?:and|as|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|interface|is|let|loop|new|null|or|private|protected|public|return|satisfies|static|super|switch|this|throw|true|try|typeof|unless|until|var|void|while|with|yield)(?!\p{ID_Continue})/
 
 # https://262.ecma-international.org/#sec-comments
 Comment
@@ -5134,10 +5155,20 @@ Init
         indent = expressions[0][0]
       }
 
-      const [splices, thisAssignments] = gatherBindingCode(parameters)
+      const [splices, thisAssignments] = gatherBindingCode(parameters, {
+        injectParamProps: f.name === 'constructor'
+      })
 
-      const prefix = splices.map(s => ["let ", s]).concat(thisAssignments)
-      .map((s) => [indent, s, ";\n"])
+      const prefix = splices
+        .map(s => ["let ", s])
+        .concat(thisAssignments)
+        .map((s) => s.type
+          ? {
+            ...s,
+            children: [indent, ...s.children, ";\n"]
+          }
+          : [indent, s, ";\n"]
+        )
 
       expressions.unshift(...prefix)
     }
@@ -5600,17 +5631,27 @@ Init
       scopes.pop()
     }
 
-    function gatherBindingCode(statements) {
+    function gatherBindingCode(statements, opts) {
       const thisAssignments = []
       const splices = []
 
       function insertRestSplices(s, p, thisAssignments) {
-        gatherRecursiveAll(s, n => n.blockPrefix || n.type === "AtBinding")
+        gatherRecursiveAll(s, n => n.blockPrefix || (opts?.injectParamProps && n.accessModifier) || n.type === "AtBinding" )
         .forEach((n) => {
           // Insert `this` assignments
           if (n.type === "AtBinding") {
             const { ref } = n, { id } = ref
             thisAssignments.push([`this.${id} = `, ref])
+            return
+          }
+          if (opts?.injectParamProps && n.type === "Parameter" && n.accessModifier) {
+            n.names.forEach(id => {
+              thisAssignments.push({
+                type: "AssignmentExpression",
+                children: [`this.${id} = `, id],
+                js: true
+              })
+            })
             return
           }
           const { blockPrefix } = n
