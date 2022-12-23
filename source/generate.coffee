@@ -23,6 +23,8 @@ gen = (node, options) ->
   if typeof node is "object"
     if options.js and node.ts
       return ""
+    if !options.js and node.js
+      return ""
 
     if node.$loc?
       {token, $loc} = node
