@@ -15,6 +15,14 @@ TopLevelStatement
 
 # Expressions with If and Switch
 ExtendedExpression
+  NonAssignmentExtendedExpression
+  AssignmentExpression
+
+NonPipelineExtendedExpression
+  NonAssignmentExtendedExpression
+  NonPipelineAssignmentExpression
+
+NonAssignmentExtendedExpression
   # Check for nested expressionized statements first
   &EOS PushIndent ( Nested ExpressionizedStatement )?:expression PopIndent ->
     if (expression) return expression
@@ -23,7 +31,6 @@ ExtendedExpression
     return {...$2,
       children: [...$1, ...$2.children]
     }
-  AssignmentExpression
 
 ExpressionizedStatement
   DebuggerExpression
@@ -151,6 +158,12 @@ UpdateExpressionSymbol
 
 # https://262.ecma-international.org/#prod-AssignmentExpression
 AssignmentExpression
+  # It is important for pipeline to have higher precedence than
+  # usual binary operators, so that x |> & + 2 |> & * 3
+  # is equivalent to x |> (& + 2) |> (& * 3)
+  PipelineExpression
+  # TODO If NonPipelineAssignmentExpression or SingleLineAssignmentExpression is used here then behavior changes
+
   # NOTE: Try to match a single line assignment expression before matching newline then assignment expression
   TrailingComment*:ws AssignmentExpressionTail:tail ->
     if (ws.length) {
@@ -167,6 +180,27 @@ AssignmentExpression
     return tail
 
   __ AssignmentExpressionTail
+  # NonPipelineAssignmentExpression
+
+NonPipelineAssignmentExpression
+  # NOTE: Try to match a single line assignment expression before matching newline then assignment expression
+  SingleLineAssignmentExpression
+  __ AssignmentExpressionTail
+
+SingleLineAssignmentExpression
+  TrailingComment*:ws AssignmentExpressionTail:tail ->
+    if (ws.length) {
+      // Glom whitespace into identifiers and literals to ease checking of "simple" refs
+      // NOTE: This can get weird if we depend on the specific location of children
+      if (tail.children && tail.type !== "IterationExpression") {
+        return {
+          ...tail,
+          children: [...ws, ...tail.children]
+        }
+      }
+      return $0
+    }
+    return tail
 
 AssignmentExpressionTail
   YieldExpression
@@ -258,6 +292,46 @@ NestedTernaryRest
 ShortCircuitExpression
   # NOTE: We don't need to track the precedence of all the binary operators so they all collapse into this
   BinaryOpExpression
+
+PipelineExpression
+  # It is important for pipeline to evaluated left-to-right
+  #
+  ( __ PipelineItem __  Pipe )+ __ PipelineItem ->
+    let children = []
+    for (let i = 0; i < $1.length; i++) {
+      const [leadingComment, expr, trailingComment] = $1[i]
+      if (children.length > 0) {
+        children = module.constructInvocation(
+          {
+            leadingComment: module.skipIfOnlyWS(leadingComment),
+            trailingComment: module.skipIfOnlyWS(trailingComment),
+            expr
+          },
+          { expr: children }
+        )
+      } else {
+        children.push(
+          module.skipIfOnlyWS(leadingComment),
+          expr,
+          module.skipIfOnlyWS(trailingComment)
+        )
+      }
+    }
+    return {
+      children: module.constructInvocation(
+        {
+          leadingComment: module.skipIfOnlyWS($2),
+          expr: $3
+        },
+        { expr: children }
+      )
+    }
+
+PipelineItem
+  # Needed to avoid left recursion
+  NonPipelineExtendedExpression
+  # Allow a pipeline to be part of first step if within parenthesis
+  ParenthesizedExpression
 
 # https://262.ecma-international.org/#prod-PrimaryExpression
 PrimaryExpression
@@ -3470,6 +3544,10 @@ Protected
   "protected" NonIdContinue ->
     return { $loc, token: $1 }
 
+Pipe
+  "|>" ->
+    return { $loc, token: $1 }
+
 QuestionMark
   "?" ->
     return { $loc, token: $1 }
@@ -4982,6 +5060,22 @@ Init
       return node
     }
 
+    // Used to ignore the result of __ if it is only whitespace
+    // Useful to preserve spacing around comments
+    module.skipIfOnlyWS = function (target) {
+      if (!target) return target
+      if (Array.isArray(target)) {
+        if (target.length === 1) {
+          return module.skipIfOnlyWS(target[0])
+        }
+        return target
+      }
+      if (target.token && target.token.trim() === '') {
+        return undefined
+      }
+      return target
+    }
+
     // Trims the first single space from the spacing array or node's children if present
     // maintains $loc for source maps
     module.insertTrimmingSpace = function(target, c) {
@@ -5688,6 +5782,19 @@ Init
     }
 
     module.gatherBindingCode = gatherBindingCode
+
+    module.constructInvocation = function(
+      caller,
+      callee
+    ) {
+      const callerArr = [caller.leadingComment, caller.expr, caller.trailingComment]
+      const calleeArr = [callee.leadingComment, callee.expr, callee.trailingComment]
+      if (caller.expr.type === 'Identifier') {
+        return [callerArr, "(", calleeArr, ")"]
+      } else {
+        return ["(", callerArr, ")", "(", calleeArr, ")"]
+      }
+    }
 
     return $0
 
