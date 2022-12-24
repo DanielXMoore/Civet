@@ -36,3 +36,10 @@ declare module "@danielx/civet" {
 
   export default Civet;
 }
+
+declare module "@danielx/civet/esbuild-plugin" {
+  import { Plugin } from "esbuild"
+
+  const plugin: Plugin
+  export default plugin
+}

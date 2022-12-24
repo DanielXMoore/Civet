@@ -514,5 +514,7 @@ Timesheet
 2022-12-19 | 0.25  | PR
 2022-12-20 | 0.25  | autoLet PR; npm release; autoVar test;
 2022-12-21 | 0.25  | automate site build
+2022-12-22 | 0.25  | #79
+2022-12-23 | 0.75  | #80; npm release; #81 esbuild-plugin types
 
 Semantic token provider: use {token, $loc} objects annotated with a semantic tag
