@@ -72,7 +72,7 @@ makeCache = ->
           # Essentially anything that depends on mutable state in the parser like indents and the rules that depend on them
           # One day this will be better supported by Hera
           when "TrackIndented", "Samedent", "IndentedFurther", "PushIndent", "PopIndent", "Nested", "InsertIndent",\
-            "Arguments", "ImplicitArguments", "ArgumentsWithTrailingCallExpressions", "ApplicationStart",\
+            "Arguments", "ArgumentsWithTrailingCallExpressions", "ApplicationStart",\
             "CallExpression", "CallExpressionRest", "LeftHandSideExpression", "ActualAssignment", "UpdateExpression",\
             "UnaryExpression", "BinaryOpExpression", "BinaryOpRHS", "ConditionalExpression", "ShortCircuitExpression",\
             "ImplicitNestedBlock",\
