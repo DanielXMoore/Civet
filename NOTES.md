@@ -518,6 +518,6 @@ Timesheet
 2022-12-23 | 0.75  | #80; npm release; #81 esbuild-plugin types
 2022-12-24 | 0.25  | #82
 2022-12-25 | 0.25  | #83
-2022-12-26 | 0.50  | #84; spacing
+2022-12-26 | 0.75  | #84; spacing; #86; npm release
 
 Semantic token provider: use {token, $loc} objects annotated with a semantic tag
