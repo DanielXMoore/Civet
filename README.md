@@ -195,6 +195,9 @@ Things Added that CoffeeScript didn't
   - Const assignment shorthand: `a := b` → `const a = b`, `{a, b} := c` → `const {a, b} = c`
   - `@#id` → `this.#id` shorthand for private identifiers
   - `import` shorthand: `x from ./x` → `import x from "./x"`
+  - Dynamic `import` shorthand: `import './x'` not at top level
+    (e.g. `await import './x'` or inside a function) →
+    `import('./x')`
   - `export` shorthand: `export x, y` → `export {x, y}`
   - Triple backtick Template Strings remove leading indentation for clarity
   - Class constructor shorthand `@( ... )`
