@@ -3742,11 +3742,68 @@ JSXIdentifierName
 # https://facebook.github.io/jsx/#prod-JSXAttributes
 JSXAttributes
   ( Whitespace? JSXAttribute )* ->
-    // Sometimes JSXAttribute adds a leading space to separate from previous.
-    // Remove that space if there's already whitespace here.
-    return $0.map((attr) =>
-      attr[0] && attr[1][0] === " " ? [attr[0], attr[1].slice(1)] : attr
-    )
+    // Extract all .class shorthands into `classes` array
+    const classes = []
+    let attrs = $0.filter((pair) => {
+      const [, attr] = pair
+      if (attr.type === "JSXClass") {
+        classes.push(attr.class)
+        return false
+      }
+      return true
+    })
+    if (classes.length) {
+      // Check for non-shorthand class or className attribute
+      let className = module.config.react ? "className" : "class"
+      attrs = attrs.filter((pair) => {
+        const [, attr] = pair
+        if ((attr[0][0] === "class" || attr[0][0] === "className") &&
+            !attr[0][1]) {
+          className = attr[0][0]
+          classes.push(attr[1][attr[1].length-1])
+          return false
+        }
+        return true
+      })
+      let classValue
+      function braced(c) {
+        return c[0] === "{" || c[0]?.token === "{"
+      }
+      function parseClass(c) {
+        c = c.token || c
+        if (c.startsWith("'")) {
+          c = '"' +
+            c.slice(1, -1)
+            .replace(/\\*"/g, (m) => m.length % 2 == 0 ? m : "\\"+m) +
+            '"'
+        }
+        return JSON.parse(c)
+      }
+      if (classes.some(braced)) {
+        classValue = ["{`"]
+        classes.forEach((c, i) => {
+          if (i > 0) classValue.push(" ")
+          if (braced(c)) {
+            classValue.push("$", c)
+          } else {
+            classValue.push(parseClass(c))
+          }
+        })
+        classValue.push("`}")
+      } else { // all strings
+        classValue = JSON.stringify(classes.map(parseClass).join(" "))
+      }
+      attrs.splice(0, 0, [" ", [className, ["=", classValue]]])
+    }
+    return attrs.map((pair) => {
+      const [space, attr] = pair
+      // Sometimes JSXAttribute adds a leading space to separate from previous.
+      // Remove that space if there's already whitespace here.
+      if (space && attr[0] === " ") {
+        pair = [space, attr.slice(1)]
+      }
+      return pair
+    })
 
 # NOTE: Merged SpreadAttribute and Attribute
 JSXAttribute
@@ -3822,6 +3879,11 @@ JSXAttribute
   # NOTE: #id shorthand
   "#" JSXShorthandString ->
     return [ " ", "id=", $2 ]
+  Dot JSXShorthandString ->
+    return {
+      type: "JSXClass",
+      class: $2,
+    }
 
 JSXShorthandString
   /(?:[\w\-:]+|\([^()]*\)|\[[^\[\]]*\])+/ ->
@@ -4434,6 +4496,7 @@ Reset
       coffeeNot: false,
       coffeeOf: false,
       implicitReturns: true,
+      react: false,
       solid: false,
       client: false, // default behavior: client only
       server: false,
