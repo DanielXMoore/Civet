@@ -22,9 +22,14 @@ import TSService from './lib/typescript-service.mjs';
 import * as Previewer from "./lib/previewer.mjs";
 import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic } from './lib/util.mjs';
 import assert from "assert"
-
-import ts, { displayPartsToString, GetCompletionsAtPositionOptions } from 'typescript';
-import { fileURLToPath } from 'url';
+import path from "node:path"
+import ts, {
+  sys as tsSys,
+  displayPartsToString,
+  GetCompletionsAtPositionOptions,
+  findConfigFile
+} from 'typescript';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { setTimeout } from 'timers/promises';
 
 // Create a connection for the server, using Node's IPC as a transport.
@@ -38,8 +43,40 @@ let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
 let hasDiagnosticRelatedInformationCapability = false;
 
-let service: ReturnType<typeof TSService>;
+// Mapping from abs file path -> path of nearest applicable project path (tsconfig.json base)
+const sourcePathToProjectPathMap = new Map<string, string>()
+
+// Tracks pending promises for tsserver initialization to safeguard
+// against creating multiple tsserver instances for same project path
+const projectPathToPendingPromiseMap = new Map<string, Promise<void>>()
+
+// Mapping from project path -> TSService instance operating on that base directory
+const projectPathToServiceMap = new Map<string, ReturnType<typeof TSService>>()
+
 let rootDir: string;
+
+const ensureServiceForSourcePath = async (sourcePath: string) => {
+  let projPath = sourcePathToProjectPathMap.get(sourcePath)
+  if (!projPath) {
+    const tsConfigPath = findConfigFile(sourcePath, tsSys.fileExists, 'tsconfig.json')
+    if (tsConfigPath) {
+      projPath = pathToFileURL(path.dirname(tsConfigPath) + "/").toString()
+    }
+    if (!projPath) projPath = rootDir // Fallback
+    sourcePathToProjectPathMap.set(sourcePath, projPath)
+  }
+  await projectPathToPendingPromiseMap.get(projPath)
+  let service = projectPathToServiceMap.get(projPath)
+  if (service) return service
+  console.log("Spawning language server for project path: ", projPath)
+  service = TSService(projPath)
+  const initP = service.loadPlugins()
+  projectPathToPendingPromiseMap.set(projPath, initP)
+  await initP
+  projectPathToServiceMap.set(projPath, service)
+  projectPathToPendingPromiseMap.delete(projPath)
+  return service
+}
 
 // TODO Propagate this to an extension setting
 const diagnosticsPropagationDelay = 100;
@@ -95,9 +132,6 @@ connection.onInitialize(async (params: InitializeParams) => {
   rootDir = baseDir + "/"
 
   console.log("Init", rootDir)
-  service = TSService(rootDir)
-  await service.loadPlugins()
-
   return result;
 });
 
@@ -115,10 +149,13 @@ connection.onInitialized(() => {
 
 const tsSuffix = /\.[cm]?[jt]s$|\.json|\.[jt]sx/
 
-connection.onHover(({ textDocument, position }) => {
+connection.onHover(async ({ textDocument, position }) => {
   // console.log("hover", position)
   const sourcePath = documentToSourcePath(textDocument)
   assert(sourcePath)
+
+  const service = await ensureServiceForSourcePath(sourcePath)
+  if (!service) return
 
   const doc = documents.get(textDocument.uri)
   assert(doc)
@@ -169,7 +206,7 @@ connection.onHover(({ textDocument, position }) => {
 })
 
 // This handler provides the initial list of the completion items.
-connection.onCompletion(({ textDocument, position, context: _context }) => {
+connection.onCompletion(async ({ textDocument, position, context: _context }) => {
   const completionConfiguration = {
     useCodeSnippetsOnMethodSuggest: false,
     pathSuggestions: true,
@@ -191,6 +228,8 @@ connection.onCompletion(({ textDocument, position, context: _context }) => {
 
   const sourcePath = documentToSourcePath(textDocument)
   assert(sourcePath)
+  const service = await ensureServiceForSourcePath(sourcePath)
+  if (!service) return
 
   console.log("completion", sourcePath, position)
 
@@ -230,9 +269,11 @@ connection.onCompletionResolve((item) => {
   return item;
 })
 
-connection.onDefinition(({ textDocument, position }) => {
+connection.onDefinition(async ({ textDocument, position }) => {
   const sourcePath = documentToSourcePath(textDocument)
   assert(sourcePath)
+  const service = await ensureServiceForSourcePath(sourcePath)
+  if (!service) return
 
   let definitions
 
@@ -284,9 +325,12 @@ connection.onDefinition(({ textDocument, position }) => {
 
 })
 
-connection.onDocumentSymbol(({ textDocument }) => {
+connection.onDocumentSymbol(async ({ textDocument }) => {
   const sourcePath = documentToSourcePath(textDocument)
   assert(sourcePath)
+
+  const service = await ensureServiceForSourcePath(sourcePath)
+  if (!service) return
 
   let document, navTree, sourcemapLines
 
@@ -324,30 +368,44 @@ documents.onDidClose(({ document }) => {
   console.log("close", document.uri)
 });
 
-documents.onDidOpen(({ document }) => {
+documents.onDidOpen(async ({ document }) => {
   console.log("open", document.uri)
+  const sourcePath = documentToSourcePath(document)
+  assert(sourcePath)
+
+  const service = await ensureServiceForSourcePath(sourcePath)
+  if (!service) return
 
   service.host.addOrUpdateDocument(document)
 })
 
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
-documents.onDidChangeContent(({ document }) => {
+documents.onDidChangeContent(async ({ document }) => {
   console.log("onDidChangeContent", document.uri)
+  const sourcePath = documentToSourcePath(document)
+  assert(sourcePath)
+
+  const service = await ensureServiceForSourcePath(sourcePath)
+  if (!service) return
+
   service.host.addOrUpdateDocument(document)
 
-  updateDiagnostics(document)
+  await updateDiagnostics(document)
 });
 
-function updateDiagnostics(srcDoc: TextDocument) {
-  updateDiagnosticsForDoc(srcDoc)
+async function updateDiagnostics(srcDoc: TextDocument) {
+  await updateDiagnosticsForDoc(srcDoc)
   scheduleUpdateDiagnostics(srcDoc.uri)
 }
 
-function updateDiagnosticsForDoc(document: TextDocument) {
+async function updateDiagnosticsForDoc(document: TextDocument) {
   console.log("Updating diagnostics for doc:", document.uri)
   const sourcePath = documentToSourcePath(document)
   assert(sourcePath)
+
+  const service = await ensureServiceForSourcePath(sourcePath)
+  if (!service) return
 
   // Non-transpiled
   if (sourcePath.match(tsSuffix)) {
