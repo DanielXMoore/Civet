@@ -213,10 +213,14 @@ Things Added that CoffeeScript didn't
 - JSX enhancements (inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)):
   - Indentation: instead of explicitly closing `<tag>`s or `<>`s,
     you can indent the children and Civet will close your tags for you
+  - Arrow function children do not need to be wrapped in braces
+    (assuming they are not preceded by text); this is unambiguous because
+    `>` isn't valid JSX text. For example, `<For> (item) => ...`
+    (where function body can be indented).
   - Any braced object literal can be used as an attribute:
     `{foo}` → `foo={foo}`, `{foo: bar}` → `foo={bar}`,
     `{...foo}` remains as is; methods and getters/setters work too.
-  - `...foo` shorthand for `{...foo}`
+  - Attribute `...foo` shorthand for `{...foo}`
   - Attribute values without whitespace or suitably wrapped
     (parenthesized expressions, strings and template strings,
     regular expressions, array literals, braced object literals)
