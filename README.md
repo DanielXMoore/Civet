@@ -217,6 +217,8 @@ Things Added that CoffeeScript didn't
     (assuming they are not preceded by text); this is unambiguous because
     `>` isn't valid JSX text. For example, `<For> (item) => ...`
     (where function body can be indented).
+  - `#foo` shorthand for `id="foo"`;
+    also `#"foo bar"` or `` #`foo ${bar}` `` or `#{expr}`
   - Any braced object literal can be used as an attribute:
     `{foo}` → `foo={foo}`, `{foo: bar}` → `foo={bar}`,
     `{...foo}` remains as is; methods and getters/setters work too.
