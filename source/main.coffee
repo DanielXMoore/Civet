@@ -6,6 +6,31 @@
 
 defaultOptions = {}
 
+# Rules that are not cacheable
+# Essentially anything that depends on mutable state in the parser like indents and the rules that depend on them
+# One day this will be better supported by Hera
+uncacheable = new Set [
+  "TrackIndented", "Samedent", "IndentedFurther", "PushIndent", "PopIndent", "Nested", "InsertIndent",
+  "Arguments", "ArgumentsWithTrailingCallExpressions", "ApplicationStart",
+  "CallExpression", "CallExpressionRest", "LeftHandSideExpression", "ActualAssignment", "UpdateExpression",
+  "UnaryExpression", "BinaryOpExpression", "BinaryOpRHS", "ConditionalExpression", "ShortCircuitExpression",
+  "ImplicitNestedBlock",
+  "ObjectLiteral",
+  "NestedObject",
+  "NestedImplicitObjectLiteral",
+  "BracedObjectLiteralContent",
+  "NestedPropertyDefinitions",
+  "NestedImplicitPropertyDefinition", "NestedImplicitPropertyDefinitions", "NestedBlockStatement",
+  "NestedElement", "NestedElementList", "NestedBindingElement", "NestedBindingElements", "NestedInterfaceProperty",
+  "MemberExpression", "PrimaryExpression",
+  "IndentedApplicationAllowed", "ExpressionWithIndentedApplicationSuppressed", "SuppressIndentedApplication",
+  "AssignmentExpressionTail", "AssignmentExpression", "ExtendedExpression", "Expression", "MemberExpressionRest",
+  "ElseClause",
+  "CoffeeCommentEnabled", "SingleLineComment", "Debugger",
+  "JSXElement", "TypedJSXElement", "JSXFragment", "TypedJSXFragment",
+  "JSXChild", "JSXChildren", "JSXNestedChildren", "JSXMixedChildren"
+]
+
 module.exports =
   parse: parse
   compile: (src, options=defaultOptions) ->
@@ -66,35 +91,9 @@ makeCache = ->
     exit: (ruleName, state, result) ->
       cache = caches.get(ruleName)
 
-      if !cache
-        switch ruleName
-          # Rules that are not cacheable
-          # Essentially anything that depends on mutable state in the parser like indents and the rules that depend on them
-          # One day this will be better supported by Hera
-          when "TrackIndented", "Samedent", "IndentedFurther", "PushIndent", "PopIndent", "Nested", "InsertIndent",\
-            "Arguments", "ArgumentsWithTrailingCallExpressions", "ApplicationStart",\
-            "CallExpression", "CallExpressionRest", "LeftHandSideExpression", "ActualAssignment", "UpdateExpression",\
-            "UnaryExpression", "BinaryOpExpression", "BinaryOpRHS", "ConditionalExpression", "ShortCircuitExpression",\
-            "ImplicitNestedBlock",\
-            "ObjectLiteral",\
-            "NestedObject",\
-            "NestedImplicitObjectLiteral",\
-            "BracedObjectLiteralContent",\
-            "NestedPropertyDefinitions",\
-            "NestedImplicitPropertyDefinition", "NestedImplicitPropertyDefinitions", "NestedBlockStatement",\
-            "NestedElement", "NestedElementList", "NestedBindingElement", "NestedBindingElements", "NestedInterfaceProperty",\
-            "MemberExpression", "PrimaryExpression",\
-            "IndentedApplicationAllowed", "ExpressionWithIndentedApplicationSuppressed", "SuppressIndentedApplication",\
-            "AssignmentExpressionTail", "AssignmentExpression", "ExtendedExpression", "Expression", "MemberExpressionRest",\
-            "ElseClause",\
-            "CoffeeCommentEnabled", "SingleLineComment", "Debugger",\
-            "JSXElement", "TypedJSXElement", "JSXFragment", "TypedJSXFragment",\
-            "JSXChild", "JSXChildren", "JSXNestedChildren", "JSXMixedChildren"
-
-            break
-          else
-            cache = new Map
-            caches.set(ruleName, cache)
+      if !cache and !uncacheable.has(ruleName)
+        cache = new Map
+        caches.set(ruleName, cache)
 
       if cache
         if result
