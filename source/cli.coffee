@@ -140,8 +140,10 @@ cli = ->
       filenames = ['-']
 
   options.run = not (options.ast or options.compile)
-  # In run mode, compile to JS
-  options.js = true if options.run
+  # In run mode, compile to JS with source maps
+  if options.run
+    options.js = true
+    options.inlineMap = true
 
   return repl options if options.repl
 
