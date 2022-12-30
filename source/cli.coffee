@@ -3,7 +3,7 @@ if process.argv.includes "--version"
   process.exit(0)
 
 if process.argv.includes "--help"
-  process.stdout.write """
+  process.stderr.write """
            ▄▄· ▪   ▌ ▐·▄▄▄ .▄▄▄▄▄
           ▐█ ▌▪██ ▪█·█▌▀▄.▀·•██       _._     _,-'""`-._
           ██ ▄▄▐█·▐█▐█•▐▀▀▪▄ ▐█.▪    (,-.`._,'(       |\\`-/|
