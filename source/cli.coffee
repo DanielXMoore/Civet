@@ -14,13 +14,22 @@ if process.argv.includes "--help"
     Usage:
 
         civet [options] < input.civet > output.ts
+        civet [options] -c input.civet               # -> input.civet.tsx
+        civet [options] -c input.civet -o .ts        # -> input.ts
+        civet [options] -c input.civet -o dir        # -> dir/input.civet.tsx
+        civet [options] -c input.civet -o dir/.ts    # -> dir/input.ts
+        civet [options] -c input.civet -o output.ts  # -> output.ts
 
     Options:
-      --help          Show this help message
-      --version       Show the version number
-      --ast           Output the AST instead of the compiled code
-      --inline-map    Generate a sourcemap
-      --js            Strip out all type annotations
+      --help           Show this help message
+      --version        Show the version number
+      -o / --output XX Specify output directory and/or extension, or filename
+      -c / --compile   Compile input files to TypeScript (or JavaScript)
+      --js             Strip out all type annotations; default to .jsx extension
+      --ast            Print the AST instead of the compiled code
+      --inline-map     Generate a sourcemap
+
+    You can use - to read from stdin or (prefixed by -o) write to stdout.
 
 
   """
@@ -50,6 +59,8 @@ parseArgs = (args = process.argv[2..]) ->
     switch arg
       when '-c', '--compile'
         options.compile = true
+      when '-o', '--output'
+        options.output = args[++i]
       when '--ast'
         options.ast = true
       when '--no-cache'
@@ -118,14 +129,34 @@ cli = ->
     if options.ast
       process.stdout.write JSON.stringify(output, null, 2)
     else if options.compile
-      if stdin
+      if (stdin and not options.output) or options.output == '-'
         process.stdout.write output
       else
-        outputFilename = filename
+        outputPath = path.parse filename
+        delete outputPath.base  # use name and ext
         if options.js
-          outputFilename += ".jsx"
+          outputPath.ext += ".jsx"
         else
-          outputFilename += ".tsx"
+          outputPath.ext += ".tsx"
+        if options.output
+          optionsPath = path.parse options.output
+          try
+            stat = await fs.stat options.output
+          catch
+            stat = null
+          if stat?.isDirectory()
+            # -o dir writes outputs into that directory with default name
+            outputPath.dir = options.output
+          else if /^(\.[^.]+)+$/.test optionsPath.base
+            # -o .js or .ts or .civet.js or .civet.ts etc. to control extension
+            outputPath.ext = optionsPath.base
+            # Can also be prefixed by a directory name
+            outputPath.dir = optionsPath.dir if optionsPath.dir
+          else
+            # -o filename fully specifies the output filename
+            # (don't use this with multiple input files)
+            outputPath = optionsPath
+        outputFilename = path.format outputPath
         try
           await fs.writeFile outputFilename, output
         catch error
