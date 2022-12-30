@@ -117,9 +117,9 @@ repl = (options) ->
         process.exit 0
       else if input.endsWith '\n\n'  # finished input with blank line
         try
-          output = compile input, options
+          output = compile input, {...options, filename}
         catch error
-          console.error "Failed to transpile Civet:"
+          #console.error "Failed to transpile Civet:"
           return callback error
         try
           result = vm.runInContext output, context, {filename}
@@ -153,9 +153,9 @@ cli = ->
 
     # Transpile
     try
-      output = compile content, options
+      output = compile content, {...options, filename}
     catch error
-      console.error "#{filename} failed to transpile:"
+      #console.error "#{filename} failed to transpile:"
       console.error error
       continue
 
