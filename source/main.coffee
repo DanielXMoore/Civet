@@ -14,6 +14,7 @@ uncacheable = new Set [
   "Arguments", "ArgumentsWithTrailingCallExpressions", "ApplicationStart",
   "CallExpression", "CallExpressionRest", "LeftHandSideExpression", "ActualAssignment", "UpdateExpression",
   "UnaryExpression", "BinaryOpExpression", "BinaryOpRHS", "ConditionalExpression", "ShortCircuitExpression",
+  "InlineObjectLiteral", "ImplicitInlineObjectPropertyDelimiter",
   "ImplicitNestedBlock",
   "ObjectLiteral",
   "NestedObject",
