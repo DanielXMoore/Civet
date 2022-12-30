@@ -1,5 +1,6 @@
+version = -> require("../package.json").version
 if process.argv.includes "--version"
-  process.stdout.write require("../package.json").version + "\n"
+  console.log version()
   process.exit(0)
 
 if process.argv.includes "--help"
@@ -13,12 +14,13 @@ if process.argv.includes "--help"
 
     Usage:
 
-        civet [options] < input.civet > output.ts
+        civet [options]                              # REPL
         civet [options] -c input.civet               # -> input.civet.tsx
         civet [options] -c input.civet -o .ts        # -> input.ts
         civet [options] -c input.civet -o dir        # -> dir/input.civet.tsx
         civet [options] -c input.civet -o dir/.ts    # -> dir/input.ts
         civet [options] -c input.civet -o output.ts  # -> output.ts
+        civet [options] < input.civet > output.ts    # pipe form
 
     Options:
       --help           Show this help message
@@ -76,10 +78,6 @@ parseArgs = (args = process.argv[2..]) ->
         filenames.push arg
     i++
 
-  options.run = not (options.ast or options.compile)
-  # In run mode, compile to JS
-  options.js = true if options.run
-
   {filenames, options}
 
 readFiles = (filenames, options) ->
@@ -105,12 +103,47 @@ readFiles = (filenames, options) ->
     catch error
       yield {filename, error, stdin}
 
+repl = (options) ->
+  console.log "Civet #{version()} REPL.  Enter a blank line to execute code."
+  global.quit = global.exit = -> process.exit 0
+  nodeRepl = require 'repl'
+  vm = require 'vm'
+  r = nodeRepl.start
+    prompt: '🐱> '
+    eval: (input, context, filename, callback) ->
+      if input == '\n'  # blank input
+        callback null
+      else if input in ['quit\n', 'exit\n', 'quit()\n', 'exit()\n']
+        process.exit 0
+      else if input.endsWith '\n\n'  # finished input with blank line
+        try
+          output = compile input, options
+        catch error
+          console.error "Failed to transpile Civet:"
+          return callback error
+        try
+          result = vm.runInContext output, context, {filename}
+        catch error
+          return callback error
+        callback null, result
+      else  # still reading
+        callback new nodeRepl.Recoverable "Enter a blank line to execute code."
+
 cli = ->
   {filenames, options} = parseArgs()
   unless filenames.length
-    # When piped, default to old behavior of transpiling stdin to stdout
-    filenames = ['-']
     options.compile = true
+    if process.stdin.isTTY
+      options.repl = true
+    else
+      # When piped, default to old behavior of transpiling stdin to stdout
+      filenames = ['-']
+
+  options.run = not (options.ast or options.compile)
+  # In run mode, compile to JS
+  options.js = true if options.run
+
+  return repl options if options.repl
 
   for await {filename, error, content, stdin} from readFiles filenames, options
     if error
@@ -164,7 +197,6 @@ cli = ->
           console.error error
     else # run
       try
-        vm = require 'vm'
         require.main._compile output, filename
       catch error
         console.error "#{filename} crashed while running:"
