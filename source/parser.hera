@@ -3680,7 +3680,7 @@ TypedJSXElement
 # https://facebook.github.io/jsx/#prod-JSXElement
 JSXElement
   JSXSelfClosingElement
-  JSXOpeningElement JSXChildren? __ JSXClosingElement ->
+  JSXOpeningElement JSXChildren? Whitespace? JSXClosingElement ->
     // Check that tags match
     if ($1[1] !== $4[2]) return $skip
     return { type: "JSXElement", children: $0 }
@@ -3696,16 +3696,16 @@ JSXElement
 
 # https://facebook.github.io/jsx/#prod-JSXSelfClosingElement
 JSXSelfClosingElement
-  "<" $JSXElementName CompactTypeArguments? JSXAttributes? __ "/>" ->
+  "<" $JSXElementName CompactTypeArguments? JSXAttributes? Whitespace? "/>" ->
     return { type: "JSXElement", children: $0 }
 
 # https://facebook.github.io/jsx/#prod-JSXOpeningElement
 JSXOpeningElement
-  "<" $JSXElementName CompactTypeArguments? JSXAttributes? __ ">"
+  "<" $JSXElementName CompactTypeArguments? JSXAttributes? Whitespace? ">"
 
 # https://facebook.github.io/jsx/#prod-JSXClosingElement
 JSXClosingElement
-  "</" __ $JSXElementName __ ">"
+  "</" Whitespace? $JSXElementName Whitespace? ">"
 
 TypedJSXFragment
   JSXFragment ->
@@ -3718,7 +3718,7 @@ TypedJSXFragment
 
 # https://facebook.github.io/jsx/#prod-JSXFragment
 JSXFragment
-  "<>" JSXChildren? __ "</>" ->
+  "<>" JSXChildren? Whitespace? "</>" ->
     if ($2) {
       return { type: "JSXFragment", children: $0, jsxChildren: $2.jsxChildren }
     } else {
@@ -3741,7 +3741,69 @@ JSXIdentifierName
 
 # https://facebook.github.io/jsx/#prod-JSXAttributes
 JSXAttributes
-  ( __ JSXAttribute )*
+  ( Whitespace? JSXAttribute )* ->
+    // Extract all .class shorthands into `classes` array
+    const classes = []
+    let attrs = $0.filter((pair) => {
+      const [, attr] = pair
+      if (attr.type === "JSXClass") {
+        classes.push(attr.class)
+        return false
+      }
+      return true
+    })
+    if (classes.length) {
+      // Check for non-shorthand class or className attribute
+      let className = module.config.react ? "className" : "class"
+      attrs = attrs.filter((pair) => {
+        const [, attr] = pair
+        if ((attr[0][0] === "class" || attr[0][0] === "className") &&
+            !attr[0][1]) {
+          className = attr[0][0]
+          classes.push(attr[1][attr[1].length-1])
+          return false
+        }
+        return true
+      })
+      let classValue
+      function braced(c) {
+        return c[0] === "{" || c[0]?.token === "{"
+      }
+      function parseClass(c) {
+        c = c.token || c
+        if (c.startsWith("'")) {
+          c = '"' +
+            c.slice(1, -1)
+            .replace(/\\*"/g, (m) => m.length % 2 == 0 ? m : "\\"+m) +
+            '"'
+        }
+        return JSON.parse(c)
+      }
+      if (classes.some(braced)) {
+        classValue = ["{`"]
+        classes.forEach((c, i) => {
+          if (i > 0) classValue.push(" ")
+          if (braced(c)) {
+            classValue.push("$", c)
+          } else {
+            classValue.push(parseClass(c))
+          }
+        })
+        classValue.push("`}")
+      } else { // all strings
+        classValue = JSON.stringify(classes.map(parseClass).join(" "))
+      }
+      attrs.splice(0, 0, [" ", [className, ["=", classValue]]])
+    }
+    return attrs.map((pair) => {
+      const [space, attr] = pair
+      // Sometimes JSXAttribute adds a leading space to separate from previous.
+      // Remove that space if there's already whitespace here.
+      if (space && attr[0] === " ") {
+        pair = [space, attr.slice(1)]
+      }
+      return pair
+    })
 
 # NOTE: Merged SpreadAttribute and Attribute
 JSXAttribute
@@ -3814,6 +3876,28 @@ JSXAttribute
   # NOTE: Adding ...foo shorthand for {...foo}
   InsertInlineOpenBrace DotDotDot InlineJSXAttributeValue InsertCloseBrace
 
+  # NOTE: #id shorthand
+  "#" JSXShorthandString ->
+    return [ " ", "id=", $2 ]
+  Dot JSXShorthandString ->
+    return {
+      type: "JSXClass",
+      class: $2,
+    }
+
+JSXShorthandString
+  /(?:[\w\-:]+|\([^()]*\)|\[[^\[\]]*\])+/ ->
+    return module.quoteString($0)
+  StringLiteral ->
+    if (module.isTemplateLiteral($1)) {
+      return [ "{", $1, "}" ]
+    } else {
+      return $1
+    }
+  TemplateLiteral ->
+    return [ "{", $1, "}" ]
+  OpenBrace ExtendedExpression Whitespace? CloseBrace
+
 # https://facebook.github.io/jsx/#prod-JSXAttributeName
 JSXAttributeName
   # NOTE: Merged JSXIdentifier and JSXNamespacedName
@@ -3822,7 +3906,7 @@ JSXAttributeName
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeInitializer
 JSXAttributeInitializer
-  __ Equals __ JSXAttributeValue
+  Whitespace? Equals Whitespace? JSXAttributeValue
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeValue
 JSXAttributeValue
@@ -3836,7 +3920,7 @@ JSXAttributeValue
     if (module.isTemplateLiteral($1)) return $skip
     return $1
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  OpenBrace ExtendedExpression __ CloseBrace
+  OpenBrace ExtendedExpression Whitespace? CloseBrace
   JSXElement
   JSXFragment
   InsertInlineOpenBrace InlineJSXAttributeValue InsertCloseBrace
@@ -3998,7 +4082,7 @@ JSXText
 # https://facebook.github.io/jsx/#prod-JSXChildExpression
 JSXChildExpression
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  __ ( DotDotDot __ )? ExtendedExpression
+  Whitespace? ( DotDotDot Whitespace? )? ExtendedExpression
 
 ## Type Stuff
 
@@ -4412,6 +4496,7 @@ Reset
       coffeeNot: false,
       coffeeOf: false,
       implicitReturns: true,
+      react: false,
       solid: false,
       client: false, // default behavior: client only
       server: false,
@@ -4587,6 +4672,17 @@ Reset
       // Replace non-escaped newlines with escaped newlines
       // taking into account the possibility of a preceding escaped backslash
       return str.replace(/(^.?|[^\\]{2})(\\\\)*\n/g, '$1$2\\n')
+    }
+
+    // Add quotes around a string to make it a valid JavaScript string,
+    // escaping any \s
+    module.quoteString = function(str) {
+      str = str.replace(/\\/g, '\\\\')
+      if (str.includes('"') && !str.includes("'")) {
+        return "'" + str.replace(/'/g, "\\'") + "'"
+      } else {
+        return '"' + str.replace(/"/g, '\\"') + '"'
+      }
     }
 
 Init
