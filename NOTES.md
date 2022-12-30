@@ -520,6 +520,6 @@ Timesheet
 2022-12-25 | 0.25  | #83
 2022-12-26 | 0.75  | #84; spacing; #86; npm release
 2022-12-29 | 1.25  | #88; #89; npm release; #90; #91; #92; #93; #94; #95
-2022-12-30 | 1.00  | #96; #97; #98
+2022-12-30 | 1.50  | #96; #97; #98; #99; #100; npm release
 
 Semantic token provider: use {token, $loc} objects annotated with a semantic tag
