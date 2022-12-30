@@ -37,6 +37,14 @@ module.exports =
   compile: (src, options=defaultOptions) ->
     filename = options.filename or "unknown"
 
+    # TODO: This incorrectly shifts line numbers by 1
+    if filename.endsWith('.coffee') and not
+       /^(#![^\r\n]*(\r\n|\n|\r))?\s*['"]civet/.test src
+      src = """
+        "civet coffeeCompat"
+        #{src}
+      """
+
     if !options.noCache
       events = makeCache()
 
