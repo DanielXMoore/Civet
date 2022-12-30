@@ -3,7 +3,7 @@ if process.argv.includes "--version"
   process.exit(0)
 
 if process.argv.includes "--help"
-  process.stdout.write """
+  process.stderr.write """
            ▄▄· ▪   ▌ ▐·▄▄▄ .▄▄▄▄▄
           ▐█ ▌▪██ ▪█·█▌▀▄.▀·•██       _._     _,-'""`-._
           ██ ▄▄▐█·▐█▐█•▐▀▀▪▄ ▐█.▪    (,-.`._,'(       |\\`-/|
@@ -43,12 +43,11 @@ readLines = (rl) ->
     parts = []
     rl.on 'line', (buffer) -> parts.push buffer + '\n'
     rl.on 'SIGINT', ->
-      rl.write '^C\n'
-      reject()
+      reject '^C'
     rl.on 'close', ->
       resolve parts.join ''
 
-readLines readline.createInterface process.stdin
+readLines readline.createInterface process.stdin, process.stdout
 .then (input) ->
   ast =       process.argv.includes "--ast"
   noCache =   process.argv.includes "--no-cache"
