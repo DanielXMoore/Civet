@@ -21,21 +21,19 @@ for filename in process.argv[2..]
   console.log '*', filename
   input = fs.readFileSync filename, encoding: 'utf8'
 
-  if filename.endsWith('.coffee') and not input.startsWith('"civet')
-    input = """
-      "civet coffeeCompat"
-      #{input}
-    """
-
   lines = input.split '\n'
   origCount = countLines lines
 
   loop
     try
-      civet.compile input
+      civet.compile input, {filename}
       break
     catch e
-      match = e.message.match /^\s*unknown:(\d+)/
+      match = e.message.match ///
+        ^\s*
+        #{filename.replace /[\.*+?|\[\](){}\\]/g, "\\$&"}
+        :(\d+)
+      ///
       unless match?
         console.error "Unrecognized error message #{JSON.stringify e.message}; counts will be inaccurate"
         break
