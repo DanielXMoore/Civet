@@ -239,6 +239,7 @@ Things Added that CoffeeScript didn't
     `"civet solid server"` for server-only code (SSR only), or
     `"civet solid client server"` for isomorphic code that runs on
     client and server (SSR + hydration).
+  - XML comments: `<!-- ... -->` → `{/* ... */}`
 - CoffeeScript improvements
   - Postfix loop `run() loop` → `while(true) run()`
   - Character range literals `["a".."z"]`, `['f'..'a']`, `['0'..'9']`
