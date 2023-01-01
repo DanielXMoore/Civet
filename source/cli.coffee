@@ -1,4 +1,5 @@
 import {parse, compile, generate} from "./main"
+import {searchConfig, loadConfig} from "./config"
 {prune} = generate
 
 version = -> require("../package.json").version
@@ -82,6 +83,8 @@ parseArgs = (args = process.argv[2..]) ->
         options.inlineMap = true
       when '--js'
         options.js = true
+      when '--config'
+        options.configPath = args[++i]
       when '--'
         endOfArgs ++i  # remaining arguments are filename and/or arguments
       else
@@ -92,6 +95,14 @@ parseArgs = (args = process.argv[2..]) ->
     i++
 
   {filenames, scriptArgs, options}
+
+getConfig = (filenames, options) ->
+  if options.configPath
+    loadConfig options.configPath
+  else if filenames and filenames.length > 0 and filenames[0] != '-'
+    searchConfig filenames[0]
+  else
+    searchConfig path.resolve "./__NO_SENSE__"
 
 readFiles = (filenames, options) ->
   for filename in filenames
@@ -151,6 +162,9 @@ cli = ->
     else
       # When piped, default to old behavior of transpiling stdin to stdout
       filenames = ['-']
+
+  civetConfig = await getConfig filenames, options
+  options.compilerOptions = civetConfig.compilerOptions
 
   # In run mode, compile to JS with source maps
   if options.run

@@ -44,10 +44,11 @@ uncacheable = new Set [
 export compile = (src, options=defaultOptions) ->
   filename = options.filename or "unknown"
 
-  # TODO: This makes source maps slightly off in the first line.
+  parse.config = options.compilerOptions || {}
   if filename.endsWith('.coffee') and not
-     /^(#![^\r\n]*(\r\n|\n|\r))?\s*['"]civet/.test src
-    src = "\"civet coffeeCompat\"; #{src}"
+      /^(#![^\r\n]*(\r\n|\n|\r))?\s*['"]civet/.test src
+    parse.config.coffeeCompat = true
+
 
   if !options.noCache
     events = makeCache()
