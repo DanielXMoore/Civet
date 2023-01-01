@@ -112,7 +112,36 @@ connection.onInitialize(async (params: InitializeParams) => {
       definitionProvider: true,
       hoverProvider: true,
       referencesProvider: true,
-
+      // https://github.com/typescript-language-server/typescript-language-server/blob/5a39c1f801ab0cad725a2b8711c0e0d46606a08b/src/lsp-server.ts#L227
+      semanticTokensProvider: {
+        documentSelector: null,
+        legend: {
+          tokenTypes: [
+            'class',
+            'enum',
+            'interface',
+            'namespace',
+            'typeParameter',
+            'type',
+            'parameter',
+            'variable',
+            'enumMember',
+            'property',
+            'function',
+            'member',
+          ],
+          tokenModifiers: [
+            'declaration',
+            'static',
+            'async',
+            'readonly',
+            'defaultLibrary',
+            'local',
+          ],
+        },
+        full: true,
+        range: true,
+      },
     }
   };
 
@@ -564,4 +593,65 @@ function convertCompletions(completions: ts.CompletionInfo): CompletionItem[] {
   }
 
   return items
+}
+
+async function semanticTokensFull(params: lsp.SemanticTokensParams): Promise<lsp.SemanticTokens> {
+  const file = uriToPath(params.textDocument.uri);
+  this.logger.log('semanticTokensFull', params, file);
+  if (!file) {
+    return { data: [] };
+  }
+
+  const doc = this.documents.get(file);
+  if (!doc) {
+    return { data: [] };
+  }
+
+  const start = doc.offsetAt({
+    line: 0,
+    character: 0,
+  });
+  const end = doc.offsetAt({
+    line: doc.lineCount,
+    character: 0,
+  });
+
+  return this.getSemanticTokens(doc, file, start, end);
+}
+
+async function semanticTokensRange(params: lsp.SemanticTokensRangeParams): Promise<lsp.SemanticTokens> {
+  const file = uriToPath(params.textDocument.uri);
+  this.logger.log('semanticTokensRange', params, file);
+  if (!file) {
+    return { data: [] };
+  }
+
+  const doc = this.documents.get(file);
+  if (!doc) {
+    return { data: [] };
+  }
+
+  const start = doc.offsetAt(params.range.start);
+  const end = doc.offsetAt(params.range.end);
+
+  return this.getSemanticTokens(doc, file, start, end);
+}
+
+async function getSemanticTokens(doc: LspDocument, file: string, startOffset: number, endOffset: number): Promise<lsp.SemanticTokens> {
+  try {
+    const result = await this.tspClient.request(
+      CommandTypes.EncodedSemanticClassificationsFull,
+      {
+        file,
+        start: startOffset,
+        length: endOffset - startOffset,
+        format: '2020',
+      },
+    );
+
+    const spans = result.body?.spans ?? [];
+    return { data: SemanticTokens.transformSpans(doc, spans) };
+  } catch {
+    return { data: [] };
+  }
 }
