@@ -193,6 +193,9 @@ Things Added that CoffeeScript didn't
   - Private identifiers `#id`
 - Convenience for ES6+ Features
   - Const assignment shorthand: `a := b` → `const a = b`, `{a, b} := c` → `const {a, b} = c`
+  - Let assignment shorthand (experimental): `a .= b` or `a ::= b` → `let a = b`
+  - Typed versions of above: `a: number .= 5` → `let a: number = 5`
+    (but note that `a: number = 5` is the object literal `{a: (number = 5)}`).
   - `@#id` → `this.#id` shorthand for private identifiers
   - `import` shorthand: `x from ./x` → `import x from "./x"`
   - Dynamic `import` shorthand: `import './x'` not at top level
