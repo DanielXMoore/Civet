@@ -212,6 +212,13 @@ Things Added that CoffeeScript didn't
   - Function call: `x.map &.callback a, b` → `x.map($ => $.callback(a, b))`
   - Unary operators: `x.map !!&` → `x.map($ => !!$)`
   - Binary operators: `x.map &+1` → `x.map($ => $+1)`
+- Pipe operator (based on [F# pipes](https://learn.microsoft.com/en-us/dotnet/fsharp/language-reference/symbol-and-operator-reference/#function-symbols-and-operators), [Hack pipes](https://docs.hhvm.com/hack/expressions-and-operators/pipe) and the [TC39 proposal](https://github.com/tc39/proposal-pipeline-operator))
+  - `data |> Object.keys |> console.log` equivalent to
+    `console.log(Object.keys(data))`
+  - Use single-argument arrow functions or `&` shorthand
+    to specify how to use left-hand side
+  - `|> await`, `|> yield`, and `|> return` (at end)
+    for wrapping left-hand side with that operation
 - Flagging shorthand [from LiveScript](https://livescript.net/#literals) `{+debug, -live}` → `{debug: true, live: false}`
 - JSX enhancements (inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)):
   - Indentation: instead of explicitly closing `<tag>`s or `<>`s,
