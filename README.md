@@ -140,6 +140,8 @@ Things Changed from CoffeeScript
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
 - Existential `x?` → `(x != null)` no longer checks for undeclared variables.
 - `x?()` → `x?.()` instead of `if (typeof x === 'function') { x() }`
+- Functions don't implicitly return the last value if there's a semicolon
+  at the end: `-> x` returns `x` but `-> x;` does not
 - Backtick embedded JS has been replaced with JS template literals.
 - No longer allowing multiple postfix `if/unless` on the same line (use `&&` or `and` to combine conditions).
 - `#{}` interpolation in `""` strings only when `"civet coffeeCompat"` or `"civet coffeeInterpolation"`
@@ -309,6 +311,16 @@ Civet provides a compatibility prologue directive that aims to be 97+% compatibl
 You can use these with `"civet coffeeCompat"` to opt in to all or use them bit by bit with `"civet coffeeComment coffeeEq coffeeInterpolation"`.
 Another possibility is to slowly remove them to provide a way to migrate files a little at a time `"civet coffeeCompat -coffeeBooleans -coffeeComment -coffeeEq"`.
 Both camel case and hyphens work when specifying options `"civet coffee-compat"`. More options will be added over time until 97+% compatibility is achieved.
+
+ECMAScript Compatibility
+---
+
+You can also specify `"civet"` prologue directives to increase
+compatibility with ECMAScript/TypeScript:
+
+| Configuration       | What it enables |
+|---------------------|---------------------------------------|
+| -implicit-returns   | turn off implicit return of last value in functions |
 
 Other Options
 ---
