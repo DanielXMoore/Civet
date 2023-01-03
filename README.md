@@ -262,7 +262,9 @@ Things Added that CoffeeScript didn't
 Things Changed from ES6
 ---
 
-- Implicit returns
+- Implicit returns, even for multi-statement functions
+  (avoid by adding a trailing `;`, an explicit `return`, or
+  via the directive `"civet -implicitReturns"`)
 - Disallow no parens on single argument arrow function. `x => ...` must become `(x) => ...`
   The reasoning is `x -> ...` => `x(function() ...)` in CoffeeScript and having `->` and `=>`
   behave more differently than they already do is bad. Passing an anonymous function to an
