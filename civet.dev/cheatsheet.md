@@ -1,5 +1,5 @@
 ---
-title: Guide
+title: Cheatsheet
 aside: false
 ---
 
@@ -81,7 +81,6 @@ const civet = {
 
 ```coffee
 (a: number, b: number) => a + b
-
 ```
 
 ```typescript
@@ -122,6 +121,10 @@ x.map((item) => item.callback(a, b));
 x.map((item) => +item);
 ```
 
+:::
+
+::: info
+Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc), [Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax) or [Elm record access](https://elm-lang.org/docs/records#access)
 :::
 
 ## Conditions
@@ -176,6 +179,64 @@ civet.speed = 15 if civet.rested
 if (civet.rested) {
   civet.speed = 15;
 }
+```
+
+:::
+
+### Switch
+
+::: code-group
+
+```coffee
+switch dir
+  when '>' then civet.x++
+  when '<' then civet.x--
+  else civet.waiting += 5
+```
+
+```typescript
+switch (dir) {
+  case '>': {
+    civet.x++;
+    break;
+  }
+  case '<': {
+    civet.x--;
+    break;
+  }
+  default: {
+    civet.waiting += 5;
+  }
+}
+```
+
+:::
+
+With implicit `return`:
+::: code-group
+
+```coffee
+getX := (civet: Civet, dir: Dir) =>
+  switch dir
+    when '>' then civet.x + 3
+    when '<' then civet.x - 1
+    when '^' then civet.x + 0.3
+```
+
+```typescript
+const getX = (civet: Civet, dir: Dir) => {
+  switch (dir) {
+    case '>': {
+      return civet.x + 3;
+    }
+    case '<': {
+      return civet.x - 1;
+    }
+    case '^': {
+      return civet.x + 0.3;
+    }
+  }
+};
 ```
 
 :::
@@ -301,7 +362,7 @@ class B {
 
 ```coffee
 class Rectangle
-  @(@height: number, @width: number) =>
+  @(@height: number, @width: number)
 ```
 
 ```typescript
@@ -320,15 +381,18 @@ class Rectangle {
 ::: code-group
 
 ```coffee
-class Circle
+class Civet
   @
-    this.PI = 3
+    try
+      this.colors = getCivetColors()
 ```
 
 ```typescript
-class Circle {
+class Civet {
   static {
-    this.PI = 3;
+    try {
+      this.colors = getCivetColors();
+    } catch (e) {}
   }
 }
 ```
@@ -370,7 +434,7 @@ a < b && b < c;
 ::: code-group
 
 ```coffee
-x from './x'
+x from ./x
 ```
 
 ```typescript
@@ -454,14 +518,14 @@ const b = [0, 1, 2, 3, 4, 5, 6];
 ```coffee
 numbers := [1, 2, 3, 4, 5, 6]
 start := numbers[0..2]
-middle := numbers[3..-2]
+mid := numbers[3..-2]
 end := numbers[-2..]
 ```
 
 ```typescript
 const numbers = [1, 2, 3, 4, 5, 6];
 const start = numbers.slice(0, 1 + 2 || 1 / 0);
-const middle = numbers.slice(3, 1 + -2 || 1 / 0);
+const mid = numbers.slice(3, 1 + -2 || 1 / 0);
 const end = numbers.slice(-2);
 ```
 
@@ -493,6 +557,180 @@ data
 
 ```typescript
 console.log(Object.keys(data));
+```
+
+:::
+
+## JSX
+
+Enhancements, inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)
+
+### Element id
+
+::: code-group
+
+```coffee
+<div #foo> Civet
+<div #{expression}> Civet
+```
+
+```jsx
+<div id="foo">Civet</div>
+<div id={expression}>Civet</div>
+```
+
+:::
+
+### Class
+
+::: code-group
+
+```coffee
+<div .foo> Civet
+<div .foo.bar> Civet
+<div .{expression}> Civet
+```
+
+```jsx
+<div class="foo">Civet</div>
+<div class="foo bar">Civet</div>
+<div class={(expression) || ""}>Civet</div>
+```
+
+:::
+
+### Attributes
+
+::: code-group
+
+```coffee
+<div {foo}> Civet
+<div ...foo> Civet
+<div [expr]={value}> Civet
+```
+
+```jsx
+<div foo={foo}>Civet</div>
+<div {...foo}>Civet</div>
+<div {...{[expr]: value}}>Civet</div>
+```
+
+:::
+
+::: tip
+
+Attribute values without whitespace or suitably wrapped (parenthesized expressions, strings and template strings, regular expressions, array literals, braced object literals) do not need braces:
+
+:::
+
+::: code-group
+
+```coffee
+<div
+  foo=bar
+  count=count()
+  sum=x+1
+  list=[1, 2, 3]
+>
+  Civet
+```
+
+<!-- prettier-ignore -->
+```jsx
+<div
+  foo={bar}
+  count={count()}
+  sum={x + 1}
+  list={[1, 2, 3]}
+>
+  Civet
+</div>
+```
+
+:::
+
+### Comments
+
+::: code-group
+
+```coffee
+<div>
+  <!-- Comment -->
+  Civet
+```
+
+```jsx
+<div>
+  {/* Comment */}
+  Civet
+</div>
+```
+
+:::
+
+### Showcases
+
+::: code-group
+
+```coffee
+return
+  <>
+    <div>
+      Hello {name}!
+    {svg}
+```
+
+```jsx
+return (
+  <>
+    <div>Hello {name}!</div>
+    {svg}
+  </>
+);
+```
+
+:::
+
+::: code-group
+
+```coffee
+<For each=items()>
+  (item) =>
+    <li>{item}
+```
+
+```jsx
+<For each={items()}>
+  {(item) => {
+    return <li>{item}</li>;
+  }}
+</For>
+```
+
+:::
+
+## Solid JS
+
+`link` automatically typed as `HTMLAnchorElement`
+
+::: code-group
+
+```coffee
+"civet solid"
+link := <a href="https://civet.dev/">Civet
+```
+
+```jsx
+import type { JSX as JSX } from 'solid-js';
+
+type IntrinsicElements<K extends keyof JSX.IntrinsicElements> =
+  JSX.IntrinsicElements[K] extends JSX.DOMAttributes<infer T> ? T : unknown;
+
+const link = (
+  <a href="https://civet.dev/">
+    Civet
+  </a> as any as IntrinsicElements<"a">
+)
 ```
 
 :::
