@@ -524,6 +524,7 @@ Timesheet
 
 2023-01-01 | 1.00  | Semantic tokens wip
 2023-01-02 | 1.00  | Discord
-2023-01-03 | 1.00  | Review #106; #107; #108; #109; Discord; npm release
+2023-01-03 | 2.00  | Review #106; #107; #108; #109; Discord; npm release; #110
+2023-01-04 | 0.75  | Merged #105; #114 anonymous class bug + empty constructor body enhancement; Discord; npm release
 
 Semantic token provider: use {token, $loc} objects annotated with a semantic tag
