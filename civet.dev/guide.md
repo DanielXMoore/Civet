@@ -9,9 +9,7 @@ Civet on the left, compiled TypeScript output on the right.
 
 [[toc]]
 
-## Basic
-
-#### Humanize syntax:
+### Humanize syntax
 
 ::: code-group
 
@@ -29,7 +27,7 @@ a && b;
 
 :::
 
-#### Variables:
+### Variables
 
 ::: code-group
 
@@ -47,7 +45,7 @@ let c = 10;
 
 :::
 
-#### Objects:
+### Objects
 
 ::: code-group
 
@@ -58,8 +56,8 @@ civet :=
   a: 1
   b: 2
   c:
-    x: "pretty"
-    y: "cool"
+    x: 'pretty'
+    y: 'cool'
 ```
 
 ```typescript
@@ -77,7 +75,7 @@ const civet = {
 
 :::
 
-#### Functions:
+### Functions
 
 ::: code-group
 
@@ -106,7 +104,7 @@ function(a: number, b: number) {
 
 :::
 
-##### Block shorthands:
+#### Block shorthands
 
 ::: code-group
 
@@ -128,7 +126,7 @@ x.map((item) => +item);
 
 ## Conditions
 
-#### If, Else:
+### If, Else
 
 ::: code-group
 
@@ -149,7 +147,7 @@ if (coffee || relaxed) {
 
 :::
 
-#### Unless:
+### Unless
 
 ::: code-group
 
@@ -166,7 +164,7 @@ if (!tired) {
 
 :::
 
-#### Conditional Assignment:
+### Conditional Assignment
 
 ::: code-group
 
@@ -184,7 +182,7 @@ if (civet.rested) {
 
 ## Loops
 
-#### Infinite loop:
+### Infinite loop
 
 ::: code-group
 
@@ -207,7 +205,7 @@ while (true) {
 
 :::
 
-#### Until loop:
+### Until loop
 
 ::: code-group
 
@@ -226,14 +224,153 @@ while (!(i > 5)) {
 
 :::
 
-## Shorthands
+## Classes
 
-#### Import ESM:
+### Prototype
 
 ::: code-group
 
 ```coffee
-x from 'x'
+X::
+X::a
+```
+
+```typescript
+X.prototype;
+X.prototype.a;
+```
+
+:::
+
+### This
+
+::: code-group
+
+```coffee
+@
+id := @id
+obj := { @id }
+```
+
+```typescript
+this;
+const id = this.id;
+const obj = { id: this.id };
+```
+
+:::
+
+### Static fields
+
+::: code-group
+
+```coffee
+class A
+  @a = 'civet'
+```
+
+```typescript
+class A {
+  static a = 'civet';
+}
+```
+
+:::
+
+### Readonly fields
+
+::: code-group
+
+```coffee
+class B
+ b := 'civet'
+
+```
+
+```typescript
+class B {
+  readonly b = 'civet';
+}
+```
+
+:::
+
+### Class constructor
+
+::: code-group
+
+```coffee
+class Rectangle
+  @(@height: number, @width: number) =>
+```
+
+```typescript
+class Rectangle {
+  constructor(height: number, width: number) {
+    this.height = height;
+    this.width = width;
+  }
+}
+```
+
+:::
+
+### Class static block
+
+::: code-group
+
+```coffee
+class Circle
+  @
+    this.PI = 3
+```
+
+```typescript
+class Circle {
+  static {
+    this.PI = 3;
+  }
+}
+```
+
+:::
+
+### Class extending
+
+::: code-group
+
+```coffee
+class Civet < Animal
+```
+
+```typescript
+class Civet extends Animal {}
+```
+
+:::
+
+## Misc
+
+### Chained comparisons
+
+::: code-group
+
+```coffee
+a < b < c
+```
+
+```typescript
+a < b && b < c;
+```
+
+:::
+
+### Import ESM
+
+::: code-group
+
+```coffee
+x from './x'
 ```
 
 ```typescript
@@ -242,7 +379,7 @@ import x from './x';
 
 :::
 
-#### Flagging:
+### Flagging
 
 ::: code-group
 
@@ -256,7 +393,7 @@ const config = { debug: true, live: false };
 
 :::
 
-#### Optional chaining:
+### Optional chaining
 
 ::: code-group
 
@@ -272,7 +409,7 @@ fun?.(arg);
 
 :::
 
-#### Operators:
+### Operators
 
 ::: code-group
 
@@ -294,157 +431,68 @@ obj.key ??= 'civet';
 
 :::
 
-#### Character range literals:
+### Range literals
 
 ::: code-group
 
 ```coffee
-a: = ['a'..'f']
+a := ['a'..'d']
+b := [0..6]
 ```
 
 ```typescript
-const a = ['a', 'b', 'c', 'd', 'e', 'f'];
+const a = ['a', 'b', 'c', 'd'];
+const b = [0, 1, 2, 3, 4, 5, 6];
 ```
 
 :::
 
-#### Prototype:
+### Array Slicing
 
 ::: code-group
 
 ```coffee
-X::
-X::a
+numbers := [1, 2, 3, 4, 5, 6]
+start := numbers[0..2]
+middle := numbers[3..-2]
+end := numbers[-2..]
 ```
 
 ```typescript
-X.prototype;
-X.prototype.a;
+const numbers = [1, 2, 3, 4, 5, 6];
+const start = numbers.slice(0, 1 + 2 || 1 / 0);
+const middle = numbers.slice(3, 1 + -2 || 1 / 0);
+const end = numbers.slice(-2);
 ```
 
 :::
 
-#### This:
+### Late assignment
 
 ::: code-group
 
 ```coffee
-@
-id := @id
-obj := { @id }
+a + b = c
 ```
 
 ```typescript
-this;
-const id = this.id;
-const obj = { id: this.id };
+a + (b = c);
 ```
 
 :::
 
-#### Static / readonly field:
+### Pipelines
 
 ::: code-group
 
 ```coffee
-class A
-  @a = 'civet'
+data
+  |> Object.keys
+  |> console.log
 ```
 
 ```typescript
-class A {
-  static a = 'civet';
-}
-```
-
-:::
-
-#### Readonly field:
-
-::: code-group
-
-```coffee
-class B
- b := 'civet'
-
-```
-
-```typescript
-class B {
-  readonly b = 'civet';
-}
-```
-
-:::
-
-#### Class constructor:
-
-::: code-group
-
-```coffee
-class Rectangle
-  @(height, width)
-    @height = height
-    @width = width
-```
-
-```typescript
-class Rectangle {
-  constructor(height, width) {
-    this.height = height;
-    this.width = width;
-  }
-}
-```
-
-:::
-
-#### Class static block:
-
-::: code-group
-
-```coffee
-class Circle
-  @
-    this.PI = 3
-```
-
-```typescript
-class Circle {
-  static {
-    this.PI = 3;
-  }
-}
-```
-
-:::
-
-#### Class extending:
-
-::: code-group
-
-```coffee
-class Civet < Animal
-```
-
-```typescript
-class Civet extends Animal {}
-```
-
-:::
-
-## Others
-
-#### Chained comparisons:
-
-::: code-group
-
-```coffee
-a < b < c
-```
-
-```typescript
-a < b && b < c;
+console.log(Object.keys(data));
 ```
 
 :::

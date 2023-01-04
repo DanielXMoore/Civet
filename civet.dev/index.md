@@ -1,5 +1,6 @@
 ---
 layout: home
+title: Homepage
 
 hero:
   name: Civet
