@@ -522,4 +522,8 @@ Timesheet
 2022-12-29 | 1.25  | #88; #89; npm release; #90; #91; #92; #93; #94; #95
 2022-12-30 | 1.50  | #96; #97; #98; #99; #100; npm release
 
+2023-01-01 | 1.00  | Semantic tokens wip
+2023-01-02 | 1.00  | Discord
+2023-01-03 | 1.00  | Review #106; #107; #108; #109; Discord; npm release
+
 Semantic token provider: use {token, $loc} objects annotated with a semantic tag
