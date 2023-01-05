@@ -96,6 +96,24 @@ To see all command-line options:
 civet --help
 ```
 
+To transpile within an ESM NodeJS app
+(assuming `npm i -D @danielx/civet`):
+
+```js
+import {compile} from "@danielx/civet"
+const tsCode = compile(civetCode)
+const tsCodeWithSourceMap = compile(civetCode, {inlineMap: true})
+const jsCode = compile(civetCode, {js: true})
+```
+
+To transpile within a CommonJS NodeJS app
+(assuming `npm i -D @danielx/civet`):
+
+```js
+{compile} = require("@danielx/civet")
+// rest as above
+```
+
 ## Building a project
 
 We strongly recommend using [esbuild](https://esbuild.github.io/) as your project bundler:
