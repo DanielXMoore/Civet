@@ -33,6 +33,21 @@ a && b;
 
 :::
 
+::: code-group
+
+```coffee
+item is in array
+item is not in array
+```
+
+```typescript
+const indexOf: <T>(this: T[], searchElement: T) => boolean = [].indexOf as any
+indexOf.call(array, item) >= 0
+indexOf.call(array, item) < 0
+```
+
+:::
+
 ### Variables
 
 ::: code-group
