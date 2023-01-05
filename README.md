@@ -118,7 +118,6 @@ Civet.
 
 - Implicit `var` declarations (use `"civet coffeeCompat"` or `"civet autoVar"`)
 - `on/yes/off/no` (use `true/false`, `"civet coffeeCompat"`, or `"civet coffeeBooleans"` to add them back)
-- `isnt` (use `!==`, `"civet coffeeCompat"`, or `"civet coffeeIsnt"`)
 - `not` (use `!`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
   - `not instanceof` (use `!(a instanceof b)`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
   - `not of` use (`"civet coffeeCompat"`, or `"civet coffeeNot"`)
@@ -140,6 +139,8 @@ Things Changed from CoffeeScript
 
 - `==` → `==` rather than `===` (unless you specify `"civet coffeeCompat"` or `"civet coffeeEq"`)
 - `!=` → `!=` rather than `!==` (unless you specify `"civet coffeeCompat"` or `"civet coffeeEq"`)
+- `is not` → `===`, instead of `isnt` (but `isnt` is available if you specify
+  `"civet coffeeCompat"`, or `"civet coffeeIsnt"`)
 - `for in` and `for of` are no longer swapped and become their JS equivalents (unless you specify `"civet coffeeCompat"` or `"civet CoffeeOf"`)
 - `a in b` now remains `a in b` rather than becoming `b.indexOf(a) >= 0` (unless you specify `"civet coffeeCompat"` or `"coffeeOf"`)
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check

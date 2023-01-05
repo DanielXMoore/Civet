@@ -19,12 +19,14 @@ is almost always also valid Civet input.
 
 ```coffee
 a is b
+a is not b
 a or b
 a and b
 ```
 
 ```typescript
 a === b;
+a !== b;
 a || b;
 a && b;
 ```
