@@ -142,7 +142,10 @@ Things Changed from CoffeeScript
 - `is not` → `===`, instead of `isnt` (but `isnt` is available if you specify
   `"civet coffeeCompat"`, or `"civet coffeeIsnt"`)
 - `for in` and `for of` are no longer swapped and become their JS equivalents (unless you specify `"civet coffeeCompat"` or `"civet CoffeeOf"`)
-- `a in b` now remains `a in b` rather than becoming `b.indexOf(a) >= 0` (unless you specify `"civet coffeeCompat"` or `"coffeeOf"`)
+- `a is in b` → `b.indexOf(a) >= 0` and
+  `a is not in b` → `b.indexOf(a) < 0` instead of `a in b` and `a not in b`;
+  `a in b` remains `a in b` as in JS
+  (unless you specify `"civet coffeeCompat"` or `"civet coffeeOf"`)
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
 - Existential `x?` → `(x != null)` no longer checks for undeclared variables.
 - `x?()` → `x?.()` instead of `if (typeof x === 'function') { x() }`
