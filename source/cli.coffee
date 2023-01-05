@@ -144,6 +144,7 @@ cli = ->
   if options.run
     options.js = true
     options.inlineMap = true
+    require '../register.js'
 
   return repl options if options.repl
 
@@ -198,8 +199,11 @@ cli = ->
           console.error "#{outputFilename} failed to write:"
           console.error error
     else # run
+      module.filename = await fs.realpath filename
+      module.paths =
+        require('module')._nodeModulePaths path.dirname module.filename
       try
-        require.main._compile output, filename
+        module._compile output, module.filename
       catch error
         console.error "#{filename} crashed while running:"
         console.error error
