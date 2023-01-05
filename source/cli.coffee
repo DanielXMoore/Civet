@@ -47,8 +47,19 @@ path = require "path"
 
 parseArgs = (args = process.argv[2..]) ->
   options = {}
+  Object.defineProperty options, 'run',
+    get: -> not (@ast or @compile)
   filenames = []
+  scriptArgs = null
   i = 0
+  endOfArgs = (j) ->
+    i = args.length  # trigger end of loop
+    return if j >= args.length  # no more args
+    if options.run
+      filenames.push args[j]
+      scriptArgs = args[j..]
+    else
+      filenames.push ...args[j..]
   while i < args.length
     arg = args[i]
     # Split -ab into -a -b
@@ -72,13 +83,15 @@ parseArgs = (args = process.argv[2..]) ->
       when '--js'
         options.js = true
       when '--'
-        filenames.push ...args[++i..]
-        i = args.length
+        endOfArgs ++i  # remaining arguments are filename and/or arguments
       else
-        filenames.push arg
+        if options.run
+          endOfArgs i  # remaining arguments are arguments to the script
+        else
+          filenames.push arg
     i++
 
-  {filenames, options}
+  {filenames, scriptArgs, options}
 
 readFiles = (filenames, options) ->
   for filename in filenames
@@ -130,7 +143,7 @@ repl = (options) ->
         callback new nodeRepl.Recoverable "Enter a blank line to execute code."
 
 cli = ->
-  {filenames, options} = parseArgs()
+  {filenames, scriptArgs, options} = parseArgs()
   unless filenames.length
     options.compile = true
     if process.stdin.isTTY
@@ -139,7 +152,6 @@ cli = ->
       # When piped, default to old behavior of transpiling stdin to stdout
       filenames = ['-']
 
-  options.run = not (options.ast or options.compile)
   # In run mode, compile to JS with source maps
   if options.run
     options.js = true
@@ -200,6 +212,7 @@ cli = ->
           console.error error
     else # run
       module.filename = await fs.realpath filename
+      process.argv = ["civet", module.filename, ...scriptArgs]
       module.paths =
         require('module')._nodeModulePaths path.dirname module.filename
       try

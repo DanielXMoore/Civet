@@ -28,6 +28,8 @@ npm install -g @danielx/civet
 civet
 # Compile civet source file to typescript
 civet < source.civet > output.ts
+# Execute a simple civet script (no imports)
+civet source.civet ...args...
 # Execute a civet source file in node using ts-node
 node --loader ts-node/esm --loader @danielx/civet/esm source.civet
 ```
