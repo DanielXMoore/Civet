@@ -58,7 +58,13 @@ Simple execution of .civet source file without `import`s:
 civet source.civet
 ```
 
-Execute a .civet source file with `import`s in Node using ts-node:
+Directly execute a .civet source file without `import`s in Node:
+
+```sh
+node -r @danielx/civet/register.js source.civet
+```
+
+Execute an ESM .civet source file with `import`s in Node using ts-node:
 
 ```sh
 node --loader ts-node/esm --loader @danielx/civet/esm source.civet
