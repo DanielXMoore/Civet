@@ -8,6 +8,7 @@ Civet
 
 The CoffeeScript of TypeScript. Much closer to ES2015+ (for better or worse).
 
+- [Documentation](https://civet.dev/)
 - [Online Civet Playground](https://civet-web.vercel.app/)
 - [Civet VSCode Extension](https://marketplace.visualstudio.com/items?itemName=DanielX.civet)
 - [Discord Server](https://discord.gg/xkrW9GebBc)
