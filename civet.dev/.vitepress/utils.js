@@ -6,6 +6,7 @@ export function getContributors() {
   const headers = {};
 
   if (token) {
+    console.log("Using process.env.API_TOKEN");
     headers['Authorization'] = `Bearer ${token}`;
   }
 
