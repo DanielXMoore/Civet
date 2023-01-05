@@ -18,3 +18,6 @@ rm dist/cli.js
 
 # types
 cp types/types.d.ts dist/types.d.ts
+
+# create browser build for docs
+npx terser dist/browser.js --compress --mangle --ecma 2015 --output civet.dev/public/__civet.js
