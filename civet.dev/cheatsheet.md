@@ -210,8 +210,9 @@ function circle(theta: number): {x: number, y: number} {
 :::
 
 ::: info
-Implicit return of the last value in a function can be avoided by adding
-a final semicolon, or globally using the directive `"civet -implicitReturns"`.
+Implicit return of the last value in a function can be avoided by
+specifying a `void` return type, adding a final semicolon, or
+globally using the directive `"civet -implicitReturns"`.
 :::
 
 #### Block Shorthands
