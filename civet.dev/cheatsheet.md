@@ -7,6 +7,10 @@ aside: false
 
 Civet on the left, compiled TypeScript output on the right.
 
+In most cases, the Civet code on the left is optional shorthand.
+The TypeScript code on the right (and most TypeScript code)
+is almost always also valid Civet input.
+
 [[toc]]
 
 ### Humanize syntax
