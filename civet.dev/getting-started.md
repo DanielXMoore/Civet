@@ -4,18 +4,40 @@ title: 'Getting started'
 
 # {{ $frontmatter.title }}
 
-If You have now been convinced that Civet is right for your current/next project.
-Here is how to set up your environment to get productive right away and have a Good Time℠.
+If you have now been convinced that Civet is right for your current/next project,
+here is how to set up your environment to get productive right away and have a Good Time℠.
+
+## Quick start
+
+Try out the transpiler interactively in the
+[Playground](https://civet-web.vercel.app/).
+
+Or run Civet code directly in the command-line REPL:
+
+```sh
+npx @danielx/civet
+```
 
 ## Installation
 
-Install Civet package:
+To install Civet package as a dev dependency in your project:
 
 ```sh
 npm i -D @danielx/civet
 ```
 
-Create `tsconfig.json` file:
+For command-line usage outside `package.json` scripts,
+it is also helpful to install Civet globally,
+which enables a `civet` command-line interface:
+
+```sh
+npm i -g @danielx/civet
+```
+
+The instructions below assume such a global install;
+if you do not want to, use `npx @danielx/civet` in place of `civet`.
+
+To use TypeScript for type checking, create a `tsconfig.json` file. For example:
 
 ```json
 {
@@ -28,30 +50,56 @@ Create `tsconfig.json` file:
 }
 ```
 
-## Building files
+## Executing code
 
-Simple compile civet source file to TypeScript:
+Simple execution of .civet source file without `import`s:
 
 ```sh
-npx civet < source.civet > output.ts
+civet source.civet
 ```
 
-Execute a civet source file in node using ts-node:
+Execute a .civet source file with `import`s in Node using ts-node:
 
 ```sh
 node --loader ts-node/esm --loader @danielx/civet/esm source.civet
 ```
 
+## Transpilation
+
+Simple compilation of one civet source file to TypeScript:
+
+```sh
+npx @danielx/civet < source.civet > output.ts
+```
+
+Compile several .civet source files to .civet.tsx (default extension):
+
+```sh
+civet -c *.civet
+```
+
+Compile several .civet source files to .js:
+
+```sh
+civet --js -c *.civet -o .js
+```
+
+To see all command-line options:
+
+```sh
+civet --help
+```
+
 ## Building a project
 
-We strongly recommend to use [esBuild](https://esbuild.github.io/) as Your project bundler:
+We strongly recommend using [esbuild](https://esbuild.github.io/) as your project bundler:
 
 ```js
 import esbuild from 'esbuild'
 import civetPlugin from '@danielx/civet/esbuild-plugin'
 
 esbuild.build({
-  ...,
+  // ...
   plugins: [
     civetPlugin
   ]
@@ -65,4 +113,4 @@ Even `.coffee` will work if you require `coffeescript/register` or add a loader 
 
 ---
 
-If you want to use other bundlers, check out our [integrations page](/integrations) for suitable plugin.
+If you want to use other bundlers, check out our [integrations page](/integrations) for a suitable plugin.

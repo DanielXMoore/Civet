@@ -23,6 +23,8 @@ Quickstart Guide
 ```bash
 # Install
 npm install -g @danielx/civet
+# Run civet code directly in a REPL
+civet
 # Compile civet source file to typescript
 civet < source.civet > output.ts
 # Execute a civet source file in node using ts-node
