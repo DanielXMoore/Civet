@@ -357,6 +357,7 @@ for item of iterable
 ## JSX
 
 Enhancements, inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)
+and [jsx spec issues](https://github.com/facebook/jsx/issues)
 
 ### Element id
 
@@ -373,6 +374,12 @@ Enhancements, inspired by [solid-dsl discussions](https://github.com/solidjs-com
   <div .foo> Civet
   <div .foo.bar> Civet
   <div .{expression}> Civet
+</Playground>
+
+### Boolean Toggles
+
+<Playground>
+  <Component +draggable -disabled>
 </Playground>
 
 ### Attributes
