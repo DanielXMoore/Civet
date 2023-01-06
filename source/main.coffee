@@ -16,6 +16,8 @@ uncacheable = new Set [
   "UnaryExpression", "BinaryOpExpression", "BinaryOpRHS", "ConditionalExpression", "ShortCircuitExpression",
   "InlineObjectLiteral", "ImplicitInlineObjectPropertyDelimiter",
   "ImplicitNestedBlock",
+  "IndentedJSXChildExpression",
+  "NestedJSXChildExpression",
   "ObjectLiteral",
   "NestedObject",
   "NestedImplicitObjectLiteral",
