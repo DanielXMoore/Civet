@@ -1,11 +1,10 @@
 import pkg from '../../package.json';
 import { head } from './head.js';
 import { getContributors } from './utils.js';
+import { defineConfig } from 'vitepress';
+
 export default async function vitePressConfig() {
-  /**
-   * @type {import('vitepress').UserConfig}
-   */
-  const config = {
+  return defineConfig({
     lang: 'en-US',
     title: 'Civet - The Modern Way to Write TypeScript',
     titleTemplate: 'Civet',
@@ -45,9 +44,21 @@ export default async function vitePressConfig() {
       toc: {
         level: [2, 2],
       },
+      config(md) {
+        const defaultRender = md.renderer.rules.html_block;
+        md.renderer.rules.html_block = (tokens, idx, options, env, self) => {
+          const token = tokens[idx];
+
+          if (token.content.startsWith('<Playground')) {
+            const lines = token.content.trim().split('\n');
+            const code = encodeURI(lines.slice(1, -1).join('\n'));
+            return lines[0] + code + lines[lines.length - 1];
+          }
+
+          return defaultRender(tokens, idx, options, env, self);
+        };
+      },
     },
     head,
-  };
-
-  return config;
+  });
 }
