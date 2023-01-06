@@ -254,6 +254,12 @@ a < b < c
 x from ./x
 </Playground>
 
+### Dynamic import
+
+<Playground>
+{x} = await import url
+</Playground>
+
 ### Flagging ([from LiveScript](https://livescript.net/#literals))
 
 <Playground>
