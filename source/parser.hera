@@ -391,7 +391,12 @@ ExtendsToken
     return { $loc, token: $1 }
 
 ExtendsTarget
-  LeftHandSideExpression TypeArguments?
+  # NOTE: ECMA uses LeftHandSideExpression, but we allow ExtendedExpression
+  # for e.g. if expressions, and then wrap in parentheses if needed.
+  ExpressionWithIndentedApplicationSuppressed:exp TypeArguments?:ta ->
+    exp = module.makeLeftHandSideExpression(exp)
+    if (ta) return [exp, ta]
+    return exp
 
 ImplementsClause
   __ ImplementsToken ImplementsTarget ( Comma ImplementsTarget )* ->
@@ -498,9 +503,18 @@ CallExpression
   # Dynamic import(), with optional parentheses when not used at top level.
   # (At top level, ImportDeclaration will match first.)
   # NOTE: Using ExtendedExpression to allow for If/Switch expressions
-  "import" ArgumentsWithTrailingCallExpressions CallExpressionRest*
+  "import" ArgumentsWithTrailingCallExpressions CallExpressionRest* ->
+    return {
+      type: "CallExpression",
+      children: $0,
+    }
   MemberExpression CallExpressionRest* ->
-    if ($2.length) return $0
+    if ($2.length) {
+      return {
+        type: "CallExpression",
+        children: [$1].concat($2),
+      }
+    }
     return $1
 
 CallExpressionRest
@@ -526,8 +540,13 @@ AdditionalReservedWords
 MemberExpression
   # NOTE: "new" MemberExpression Arguments seems to be handled fine by other rules already
   # NOTE: Eliminated left recursion
-  PrimaryExpression MemberExpressionRest* ->
-    if ($2.length) return $0
+  PrimaryExpression MemberExpressionRest*:rest ->
+    if (rest.length) {
+      return {
+        type: "MemberExpression",
+        children: [$1].concat(rest),
+      }
+    }
     return $1
   SuperProperty
   MetaProperty
@@ -2053,7 +2072,7 @@ ElseExpressionBlock
       expressions: exps,
       children: [$1, exps, $3, $4, $5],
     }
-  !EOS ExtendedExpression -> $2
+  !EOS ExpressionWithIndentedApplicationSuppressed -> $2
 
 NestedBlockExpressions
   PushIndent NestedBlockExpression*:exps PopIndent ->
@@ -5093,6 +5112,25 @@ Init
       node.splice(1, 0, "return ")
     }
 
+    // Convert general ExtendedExpression into LeftHandSideExpression
+    // by optionally wrapping in parentheses.
+    // TODO: Avoid parentheses in more cases by adding more types.
+    module.makeLeftHandSideExpression = function(exp) {
+      switch (exp.type) {
+        case "Identifier":
+        case "Literal":
+        case "CallExpression":
+        case "MemberExpression":
+        case "ParenthesizedExpression":
+          return exp
+        default:
+          return {
+            type: "ParenthesizedExpression",
+            children: ["(", exp, ")"],
+          }
+      }
+    }
+
     module.isWhitespaceOrEmpty = function(node) {
       if (!node) return true
       if (node.token) return node.token.match(/^\s*$/)
@@ -5598,38 +5636,35 @@ Init
             const lhs = lastAssignment[1]
 
             // Splice assignment
-            if (Array.isArray(lhs) && lhs.length > 1) {
-              const props = lhs[lhs.length-1]
+            if (lhs.type === "MemberExpression") {
+              const members = lhs.children
+              const lastMember = members[members.length-1]
 
-              if (Array.isArray(props)) {
-                const lastProp = props[props.length-1]
+              // TODO: this is kind of bonkers
+              if(lastMember.type === "SliceExpression") {
+                const {start, end, children: c} = lastMember
+                // TODO: don't lose as many source mappings
+                c[0].token = ".splice("
+                c[1] = start
+                c[2] = ", "
+                if (end)
+                  c[3] = [end, " - ", start]
+                else
+                  c[3] = ["1/0"]
+                c[4] = [", ...", $2]
+                c[5] = ")"
 
-                // TODO: this is kind of bonkers
-                if(lastProp.type === "SliceExpression") {
-                  const {start, end, children: c} = lastProp
-                  // TODO: don't lose as many source mappings
-                  c[0].token = ".splice("
-                  c[1] = start
-                  c[2] = ", "
-                  if (end)
-                    c[3] = [end, " - ", start]
-                  else
-                    c[3] = ["1/0"]
-                  c[4] = [", ...", $2]
-                  c[5] = ")"
-
-                  // Remove assignment token
-                  lastAssignment./**/pop()
-                  if (module.isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment./**/pop()
-                  // TODO: this only works for the last assignment, not multiple splice assignments, or splice assignments earlier in the chain
-                  if ($1.length > 1) {
-                    throw new Error("Not implemented yet! TODO: Handle multiple splice assignments")
-                  }
-
-                  exp.children = [$1]
-                  exp.names = []
-                  return
+                // Remove assignment token
+                lastAssignment./**/pop()
+                if (module.isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment./**/pop()
+                // TODO: this only works for the last assignment, not multiple splice assignments, or splice assignments earlier in the chain
+                if ($1.length > 1) {
+                  throw new Error("Not implemented yet! TODO: Handle multiple splice assignments")
                 }
+
+                exp.children = [$1]
+                exp.names = []
+                return
               }
             } else if (lhs.type === "ObjectBindingPattern" || lhs.type === "ArrayBindingPattern") {
               processBindingPatternLHS(lhs, tail)
