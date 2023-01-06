@@ -5,7 +5,7 @@
 #   - map src string into position / line char lookup
 # construct source mapping data
 
-gen = (node, options) ->
+export default gen = (node, options) ->
   if node is null or node is undefined
     return ""
 
@@ -40,11 +40,9 @@ gen = (node, options) ->
   debugger
   throw new Error("Unknown node", JSON.stringify(node))
 
-module.exports = gen
-
 # Remove empty arrays, empty string, null, undefined from node tree
 # Useful for debugging so I don't need to step though tons of empty nodes
-prune = (node) ->
+export prune = (node) ->
   if node is null or node is undefined
     return
 
@@ -67,5 +65,3 @@ prune = (node) ->
     return node
 
   return node
-
-gen.prune = prune

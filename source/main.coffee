@@ -1,8 +1,11 @@
 "civet coffeeCompat"
 
-{ parse } = require "./parser"
-{ prune } = gen = require "./generate"
-{ SourceMap, base64Encode } = util = require "./util.coffee"
+import parser from "./parser.hera"
+{ parse } = parser
+import generate, { prune } from "./generate.coffee"
+import * as util from "./util.coffee"
+{ SourceMap, base64Encode } = util
+export { parse, generate, util }
 
 defaultOptions = {}
 
@@ -34,45 +37,41 @@ uncacheable = new Set [
   "JSXChild", "JSXChildren", "JSXNestedChildren", "JSXMixedChildren"
 ]
 
-module.exports =
-  parse: parse
-  compile: (src, options=defaultOptions) ->
-    filename = options.filename or "unknown"
+export compile = (src, options=defaultOptions) ->
+  filename = options.filename or "unknown"
 
-    # TODO: This makes source maps slightly off in the first line.
-    if filename.endsWith('.coffee') and not
-       /^(#![^\r\n]*(\r\n|\n|\r))?\s*['"]civet/.test src
-      src = "\"civet coffeeCompat\"; #{src}"
+  # TODO: This makes source maps slightly off in the first line.
+  if filename.endsWith('.coffee') and not
+     /^(#![^\r\n]*(\r\n|\n|\r))?\s*['"]civet/.test src
+    src = "\"civet coffeeCompat\"; #{src}"
 
-    if !options.noCache
-      events = makeCache()
+  if !options.noCache
+    events = makeCache()
 
-    ast = prune parse(src, {
-      filename
-      events
-    })
+  ast = prune parse(src, {
+    filename
+    events
+  })
 
-    if options.ast
-      return ast
+  if options.ast
+    return ast
 
-    if options.sourceMap or options.inlineMap
-      sm = SourceMap(src)
-      options.updateSourceMap = sm.updateSourceMap
-      code = gen ast, options
+  if options.sourceMap or options.inlineMap
+    sm = SourceMap(src)
+    options.updateSourceMap = sm.updateSourceMap
+    code = generate ast, options
 
-      if options.inlineMap
-        srcMapJSON = sm.json(filename, "")
-        # NOTE: separate comment to prevent this string getting picked up as actual sourceMappingURL in tools
-        return "#{code}\n#{"//#"} sourceMappingURL=data:application/json;base64,#{base64Encode JSON.stringify(srcMapJSON)}\n"
-      else
-        return {
-          code,
-          sourceMap: sm
-        }
+    if options.inlineMap
+      srcMapJSON = sm.json(filename, "")
+      # NOTE: separate comment to prevent this string getting picked up as actual sourceMappingURL in tools
+      return "#{code}\n#{"//#"} sourceMappingURL=data:application/json;base64,#{base64Encode JSON.stringify(srcMapJSON)}\n"
+    else
+      return {
+        code,
+        sourceMap: sm
+      }
 
-    gen ast, options
-  generate: gen
-  util: util
+  generate ast, options
 
 # logs = []
 makeCache = ->
@@ -117,3 +116,5 @@ makeCache = ->
       return
 
   return events
+
+export default { parse, generate, util, compile }
