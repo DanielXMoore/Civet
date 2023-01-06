@@ -1,5 +1,6 @@
 import fs from 'fs';
 import childProcess from 'child_process';
+import prettier from 'prettier';
 
 type CompileCivet = (code: string) => Promise<{
   code: string;
@@ -14,12 +15,15 @@ if (import.meta.env.SSR) {
   const outputPath = `${inputPath}.tsx`;
   compileCivet = (code) => {
     return new Promise((resolve) => {
+      // TODO: Import civet from dist
       fs.writeFileSync(inputPath, code);
       childProcess.execSync(`node dist/civet -c ${inputPath}`);
       const tsCode = fs.readFileSync(outputPath).toString();
-      childProcess.execSync(`npx prettier --write ${outputPath}`);
-      const prettierCode = fs.readFileSync(outputPath).toString();
-      childProcess.execSync(`rm ${inputPath} ${outputPath}`);
+
+      const prettierCode = prettier.format(tsCode, {
+        parser: 'typescript',
+        printWidth: 50,
+      });
 
       resolve({
         code: prettierCode,

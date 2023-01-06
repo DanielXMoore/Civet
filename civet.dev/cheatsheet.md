@@ -15,199 +15,89 @@ is almost always also valid Civet input.
 
 ### Humanize syntax
 
-::: code-group
-
-```coffee
+<Playground>
 a is b
 a or b
 a and b
-```
-
-```typescript
-a === b;
-a || b;
-a && b;
-```
-
-:::
+</Playground>
 
 ### Variables
 
-::: code-group
-
-```coffee
+<Playground>
 a := 10
 b ::= 10
 c .= 10
-```
-
-```typescript
-const a = 10;
-let b = 10;
-let c = 10;
-```
-
-:::
+</Playground>
 
 ### Objects
 
-::: code-group
-
-```coffee
+<Playground>
 person := name: 'Henry', age: 4
-
 obj :=
-  a: 1
-  b: 2
-  c:
-    x: 'pretty'
-    y: 'cool'
-```
-
-```typescript
-const person = { name: 'Henry', age: 4 };
-
-const obj = {
-  a: 1,
-  b: 2,
-  c: {
-    x: 'pretty',
-    y: 'cool',
-  },
-};
-```
-
-:::
+a: 1
+b: 2
+c:
+x: 'pretty'
+y: 'cool'
+</Playground>
 
 ### Arrays
 
-::: code-group
-
-```coffee
+<Playground>
 rotate := [
   c, -s
   s, c
 ]
+</Playground>
 
+<Playground>
 func.apply @, [
   arg1
   arg2
 ]
-```
-
-```typescript
-const rotate = [
-  c, -s,
-  s, c,
-]
-
-func.apply(this, [
-  arg1,
-  arg2,
-]);
-```
-
-:::
+</Playground>
 
 ### Triple-Quoted Strings
 
-::: code-group
-
-```coffee
+<Playground>
 console.log '''
   <div>
     Civet
   </div>
 '''
+</Playground>
 
+<Playground>
 console.log """
   <div>
     Civet #{version}
   </div>
 """
-```
-
-```typescript
-console.log(`<div>
-  Civet
-</div>`);
-
-console.log(`<div>
-  Civet ${version}
-</div>`);
-```
-
-:::
+</Playground>
 
 ### Functions
 
-::: code-group
-
-```coffee
+<Playground>
 (a: number, b: number) => a + b
-```
+</Playground>
 
-```typescript
-(a: number, b: number) => a + b;
-```
+<Playground>
+add := (a: number, b: number) -> a + b
+</Playground>
 
-:::
-
-::: code-group
-
-```coffee
-(a: number, b: number) -> a + b
-```
-
-```typescript
-function(a: number, b: number) {
-  return a + b
-}
-```
-
-:::
-
-::: code-group
-
-```coffee
+<Playground>
 (degrees: number): {x: number, y: number} =>
   radians := degrees * Math.PI / 180
   x: Math.cos theta
   y: Math.sin theta
-```
+</Playground>
 
-```typescript
-(degrees: number): {x: number, y: number} => {
-  const radians = degrees * Math.PI / 180;
-  return {
-    x: Math.cos(theta),
-    y: Math.sin(theta),
-  };
-}
-```
-
-:::
-
-::: code-group
-
-```coffee
+<Playground>
 function circle(theta: number): {x: number, y: number}
   radians := degrees * Math.PI / 180
   x: Math.cos theta
   y: Math.sin theta
-```
-
-```typescript
-function circle(theta: number): {x: number, y: number} {
-  const radians = degrees * Math.PI / 180;
-  return {
-    x: Math.cos(theta),
-    y: Math.sin(theta),
-  };
-}
-```
-
-:::
+</Playground>
 
 ::: info
 Implicit return of the last value in a function can be avoided by
@@ -217,23 +107,12 @@ or globally using the directive `"civet -implicitReturns"`.
 
 #### Block Shorthands
 
-::: code-group
-
-```coffee
+<Playground>
 x.map &.name
 x.map &.profile?.name[0...3]
 x.map &.callback a, b
 x.map +&
-```
-
-```typescript
-x.map((item) => item.name);
-x.map((item) => item.profile?.name.slice(0, 3));
-x.map((item) => item.callback(a, b));
-x.map((item) => +item);
-```
-
-:::
+</Playground>
 
 ::: info
 Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc), [Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax) or [Elm record access](https://elm-lang.org/docs/records#access)
@@ -243,491 +122,210 @@ Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core
 
 ### If, Else
 
-::: code-group
-
-```coffee
+<Playground>
 if coffee or relaxed
   code()
 else
   sleep()
-```
-
-```typescript
-if (coffee || relaxed) {
-  code();
-} else {
-  sleep();
-}
-```
-
-:::
+</Playground>
 
 ### Unless
 
-::: code-group
-
-```coffee
+<Playground>
 unless tired
   code()
-```
-
-```typescript
-if (!tired) {
-  code();
-}
-```
-
-:::
+</Playground>
 
 ### Conditional Assignment
 
-::: code-group
-
-```coffee
+<Playground>
 civet.speed = 15 if civet.rested
-```
-
-```typescript
-if (civet.rested) {
-  civet.speed = 15;
-}
-```
-
-:::
+</Playground>
 
 ### Switch
 
-::: code-group
-
-```coffee
+<Playground>
 switch dir
   when '>' then civet.x++
   when '<' then civet.x--
   else civet.waiting += 5
-```
-
-```typescript
-switch (dir) {
-  case '>': {
-    civet.x++;
-    break;
-  }
-  case '<': {
-    civet.x--;
-    break;
-  }
-  default: {
-    civet.waiting += 5;
-  }
-}
-```
-
-:::
+</Playground>
 
 With implicit `return`:
-::: code-group
 
-```coffee
+<Playground>
 getX := (civet: Civet, dir: Dir) =>
   switch dir
     when '>' then civet.x + 3
     when '<' then civet.x - 1
     when '^' then civet.x + 0.3
-```
-
-```typescript
-const getX = (civet: Civet, dir: Dir) => {
-  switch (dir) {
-    case '>': {
-      return civet.x + 3;
-    }
-    case '<': {
-      return civet.x - 1;
-    }
-    case '^': {
-      return civet.x + 0.3;
-    }
-  }
-};
-```
-
-:::
+</Playground>
 
 ## Loops
 
 ### Infinite loop
 
-::: code-group
-
-```coffee
+<Playground>
 i .= 0
 loop
   i++
   break if i > 5
-```
-
-```typescript
-let i = 0;
-while (true) {
-  i++;
-  if (i > 5) {
-    break;
-  }
-}
-```
-
-:::
+</Playground>
 
 ### Until loop
 
-::: code-group
-
-```coffee
+<Playground>
 i .= 0
 until i > 5
   i++
-```
-
-```typescript
-let i = 0;
-while (!(i > 5)) {
-  i++;
-}
-```
-
-:::
+</Playground>
 
 ## Classes
 
 ### Prototype
 
-::: code-group
-
-```coffee
+<Playground>
 X::
 X::a
-```
-
-```typescript
-X.prototype;
-X.prototype.a;
-```
-
-:::
+</Playground>
 
 ### This
 
-::: code-group
-
-```coffee
+<Playground>
 @
 id := @id
 obj := { @id }
-```
-
-```typescript
-this;
-const id = this.id;
-const obj = { id: this.id };
-```
-
-:::
+</Playground>
 
 ### Static fields
 
-::: code-group
-
-```coffee
+<Playground>
 class A
   @a = 'civet'
-```
-
-```typescript
-class A {
-  static a = 'civet';
-}
-```
-
-:::
+</Playground>
 
 ### Readonly fields
 
-::: code-group
-
-```coffee
+<Playground>
 class B
  b := 'civet'
-
-```
-
-```typescript
-class B {
-  readonly b = 'civet';
-}
-```
-
-:::
+</Playground>
 
 ### Class constructor
 
-::: code-group
-
-```coffee
+<Playground>
 class Rectangle
   @(@height: number, @width: number)
-```
-
-```typescript
-class Rectangle {
-  constructor(height: number, width: number) {
-    this.height = height;
-    this.width = width;
-  }
-}
-```
-
-:::
+</Playground>
 
 ### Class static block
 
-::: code-group
-
-```coffee
+<Playground>
 class Civet
   @
     try
       this.colors = getCivetColors()
-```
-
-```typescript
-class Civet {
-  static {
-    try {
-      this.colors = getCivetColors();
-    } catch (e) {}
-  }
-}
-```
-
-:::
+</Playground>
 
 ### Class extending
 
-::: code-group
-
-```coffee
+<Playground>
 class Civet < Animal
-```
-
-```typescript
-class Civet extends Animal {}
-```
-
-:::
+</Playground>
 
 ## Misc
 
 ### Chained comparisons
 
-::: code-group
-
-```coffee
+<Playground>
 a < b < c
-```
-
-```typescript
-a < b && b < c;
-```
-
-:::
+</Playground>
 
 ### Import ESM
 
-::: code-group
-
-```coffee
+<Playground>
 x from ./x
-```
-
-```typescript
-import x from './x';
-```
-
-:::
+</Playground>
 
 ### Flagging ([from LiveScript](https://livescript.net/#literals))
 
-::: code-group
-
-```coffee
+<Playground>
 config := { +debug, -live }
-```
-
-```typescript
-const config = { debug: true, live: false };
-```
-
-:::
+</Playground>
 
 ### Optional chaining
 
-::: code-group
-
-```coffee
+<Playground>
 obj?[key]
 fun?(arg)
-```
-
-```typescript
-obj?.[key];
-fun?.(arg);
-```
-
-:::
+</Playground>
 
 ### Operators
 
-::: code-group
-
-```coffee
+<Playground>
 a is b
-
 a and= b
 a or= b
 a ?= b
-
 obj.key ?= 'civet'
-```
-
-```typescript
-a === b
-
-a &&= b;
-a ||= b;
-a ??= b;
-
-obj.key ??= 'civet';
-```
-
-:::
+</Playground>
 
 ### Range literals
 
-::: code-group
-
-```coffee
+<Playground>
 a := ['a'..'d']
 b := [0..6]
-```
-
-```typescript
-const a = ['a', 'b', 'c', 'd'];
-const b = [0, 1, 2, 3, 4, 5, 6];
-```
-
-:::
+</Playground>
 
 ### Array Slicing
 
-::: code-group
-
-```coffee
+<Playground>
 numbers := [1, 2, 3, 4, 5, 6]
 start := numbers[0..2]
 mid := numbers[3..-2]
 end := numbers[-2..]
-```
-
-```typescript
-const numbers = [1, 2, 3, 4, 5, 6];
-const start = numbers.slice(0, 1 + 2 || 1 / 0);
-const mid = numbers.slice(3, 1 + -2 || 1 / 0);
-const end = numbers.slice(-2);
-```
-
-:::
+</Playground>
 
 ### Late assignment
 
-::: code-group
-
-```coffee
+<Playground>
 a + b = c
-```
-
-```typescript
-a + (b = c);
-```
-
-:::
+</Playground>
 
 ### Pipelines
 
-::: code-group
-
-```coffee
+<Playground>
 data
   |> Object.keys
   |> console.log
-```
-
-```typescript
-console.log(Object.keys(data));
-```
-
-:::
+</Playground>
 
 ## Automatic Variable Declaration
 
 By default, you are responsible for declaring your variables
-via `var`, `let`, `const`, or their shorthands.  Alternatively,
+via `var`, `let`, `const`, or their shorthands. Alternatively,
 you can use a `"civet"` directive at the beginning of your file
 to specify one of two automatic variable declaration modes.
 
 ### `autoVar`
 
-::: code-group
-
-```coffee
+<Playground>
 "civet autoVar"
 sos = 0
 for item of iterable
   square = item * item
   sos += square
-```
-
-```typescript
-var sos, square;
-sos = 0;
-for (const item of iterable) {
-  square = item * item;
-  sos += square;
-}
-```
-
-:::
+</Playground>
 
 ### `autoLet`
 
-::: code-group
-
-```coffee
+<Playground>
 "civet autoLet"
 sos = 0
 for item of iterable
   square = item * item
   sos += square
-```
-
-```typescript
-let sos = 0;
-for (const item of iterable) {
-  let square = item * item;
-  sos += square;
-}
-```
-
-:::
+</Playground>
 
 ## JSX
 
@@ -735,55 +333,29 @@ Enhancements, inspired by [solid-dsl discussions](https://github.com/solidjs-com
 
 ### Element id
 
-::: code-group
-
-```coffee
-<div #foo> Civet
-<div #{expression}> Civet
-```
-
-```jsx
-<div id="foo">Civet</div>
-<div id={expression}>Civet</div>
-```
-
-:::
+<Playground>
+<>
+  <div #foo> Civet
+  <div #{expression}> Civet
+</Playground>
 
 ### Class
 
-::: code-group
-
-```coffee
-<div .foo> Civet
-<div .foo.bar> Civet
-<div .{expression}> Civet
-```
-
-```jsx
-<div class="foo">Civet</div>
-<div class="foo bar">Civet</div>
-<div class={(expression) || ""}>Civet</div>
-```
-
-:::
+<Playground>
+ <>
+  <div .foo> Civet
+  <div .foo.bar> Civet
+  <div .{expression}> Civet
+</Playground>
 
 ### Attributes
 
-::: code-group
-
-```coffee
-<div {foo}> Civet
-<div ...foo> Civet
-<div [expr]={value}> Civet
-```
-
-```jsx
-<div foo={foo}>Civet</div>
-<div {...foo}>Civet</div>
-<div {...{[expr]: value}}>Civet</div>
-```
-
-:::
+<Playground>
+ <>
+  <div {foo}> Civet
+  <div ...foo> Civet
+  <div [expr]={value}> Civet
+</Playground>
 
 ::: tip
 
@@ -791,9 +363,7 @@ Attribute values without whitespace or suitably wrapped (parenthesized expressio
 
 :::
 
-::: code-group
-
-```coffee
+<Playground>
 <div
   foo=bar
   count=count()
@@ -801,111 +371,44 @@ Attribute values without whitespace or suitably wrapped (parenthesized expressio
   list=[1, 2, 3]
 >
   Civet
-```
-
-<!-- prettier-ignore -->
-```jsx
-<div
-  foo={bar}
-  count={count()}
-  sum={x + 1}
-  list={[1, 2, 3]}
->
-  Civet
-</div>
-```
-
-:::
+</Playground>
 
 ### Comments
 
-::: code-group
-
-```coffee
+<Playground>
 <div>
   <!-- Comment -->
   Civet
-```
-
-```jsx
-<div>
-  {/* Comment */}
-  Civet
-</div>
-```
-
-:::
+</Playground>
 
 ### Indentation
 
 Closing tags are optional if JSX uses indentation.
 
-::: code-group
-
-```coffee
+<Playground>
 return
   <>
     <div>
       Hello {name}!
     {svg}
-```
-
-```jsx
-return (
-  <>
-    <div>Hello {name}!</div>
-    {svg}
-  </>
-);
-```
-
-:::
+</Playground>
 
 ### Function Children
 
-::: code-group
-
-```coffee
+<Playground>
 <For each=items()>
   (item) =>
     <li>{item}
-```
-
-```jsx
-<For each={items()}>
-  {(item) => {
-    return <li>{item}</li>;
-  }}
-</For>
-```
-
-:::
+</Playground>
 
 ## [SolidJS](https://www.solidjs.com/)
 
 `link` automatically typed as `HTMLAnchorElement`
 
-::: code-group
-
-```coffee
+<Playground>
 "civet solid"
 link := <a href="https://civet.dev/">Civet
-```
-
-```jsx
-import type { JSX as JSX } from 'solid-js';
-
-type IntrinsicElements<K extends keyof JSX.IntrinsicElements> =
-  JSX.IntrinsicElements[K] extends JSX.DOMAttributes<infer T> ? T : unknown;
-
-const link = (
-  <a href="https://civet.dev/">
-    Civet
-  </a> as any as IntrinsicElements<"a">
-)
-```
-
-:::
+</Playground>
 
 ## [CoffeeScript](https://coffeescript.org/) Compatibility
 
@@ -917,9 +420,7 @@ You can also selectively remove features, such as
 
 ### CoffeeScript For Loops
 
-::: code-group
-
-```coffee
+<Playground>
 "civet coffeeForLoops autoVar"
 for item, index in array
   console.log item, index
@@ -929,64 +430,22 @@ for own key, value of object
   console.log key, value
 for item from iterable
   console.log item
-```
-
-```typescript
-var key, item, index
-const hasProp: <T>(this: T, prop: keyof T) => boolean = {}.hasOwnProperty as any
-
-for (let i = 0, len = array.length; i < len; i++) {
-  item = array[index=i];
-  console.log(item, index);
-}
-for (key in object) {
-  console.log(key, value);
-}
-for (key in object) {
-  if (!hasProp.call(object, key)) continue;
-  console.log(key, value);
-}
-for (item of iterable) {
-  console.log(item);
-}
-```
-
-:::
+</Playground>
 
 ### Double-Quoted Strings
 
-::: code-group
-
-```coffee
+<Playground>
 "civet coffeeInterpolation"
 console.log "Hello #{name}!"
-```
-
-```typescript
-console.log(`Hello ${name}!`)
-```
-
-:::
+</Playground>
 
 ### CoffeeScript Operators
 
-::: code-group
-
-```coffee
+<Playground>
 "civet coffeeEq coffeeIsnt coffeeNot coffeeBinaryExistential coffeeOf"
 x == y != z
 x isnt y
 not (x == y)
 x ? y
 key of object
-```
-
-```typescript
-x === y && y !== z;
-x !== y;
-!(x === y);
-x ?? y;
-key in object;
-```
-
-:::
+</Playground>

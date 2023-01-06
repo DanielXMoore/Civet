@@ -12,7 +12,7 @@ const outputHtml = ref('');
 const inputHtml = ref('');
 const inputError = ref('');
 
-// TODO: createHighlighter only once
+// TODO: createHighlighter only once (not with every instance of Playground)
 async function createHighlighter() {
   return await shiki.getHighlighter({
     // @ts-ignore
@@ -39,7 +39,8 @@ async function generateHtmlCode(highlighter: Highlighter) {
     });
   } catch (err) {
     console.error(err);
-    inputError.value = err;
+    // TODO create editable textarea on click
+    // inputError.value = err;
   }
 }
 
@@ -48,10 +49,11 @@ onServerPrefetch(async () => {
   await generateHtmlCode(highlighter);
 });
 
-onMounted(async () => {
-  const highlighter = await createHighlighter();
-  await generateHtmlCode(highlighter);
-});
+// TODO create editable textarea on click
+// onMounted(async () => {
+//   const highlighter = await createHighlighter();
+//   await generateHtmlCode(highlighter);
+// });
 </script>
 
 <template>
@@ -84,7 +86,7 @@ onMounted(async () => {
 
 .code:deep(code) {
   display: block;
-  padding: 0 24px;
+  padding: 0 18px;
   width: fit-content;
   min-width: 100%;
   line-height: var(--vp-code-line-height);
