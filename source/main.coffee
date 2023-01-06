@@ -116,3 +116,5 @@ makeCache = ->
       return
 
   return events
+
+export default { parse, generate, util, compile }
