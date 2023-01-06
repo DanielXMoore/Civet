@@ -7,6 +7,10 @@ aside: false
 
 Civet on the left, compiled TypeScript output on the right.
 
+In most cases, the Civet code on the left is optional shorthand.
+The TypeScript code on the right (and most TypeScript code)
+is almost always also valid Civet input.
+
 [[toc]]
 
 ### Humanize syntax
@@ -50,9 +54,9 @@ let c = 10;
 ::: code-group
 
 ```coffee
-civet := name: 'Henry', age: 4
+person := name: 'Henry', age: 4
 
-civet :=
+obj :=
   a: 1
   b: 2
   c:
@@ -61,9 +65,9 @@ civet :=
 ```
 
 ```typescript
-const civet = { name: 'Henry', age: 4 };
+const person = { name: 'Henry', age: 4 };
 
-const civet = {
+const obj = {
   a: 1,
   b: 2,
   c: {
@@ -71,6 +75,66 @@ const civet = {
     y: 'cool',
   },
 };
+```
+
+:::
+
+### Arrays
+
+::: code-group
+
+```coffee
+rotate := [
+  c, -s
+  s, c
+]
+
+func.apply @, [
+  arg1
+  arg2
+]
+```
+
+```typescript
+const rotate = [
+  c, -s,
+  s, c,
+]
+
+func.apply(this, [
+  arg1,
+  arg2,
+]);
+```
+
+:::
+
+### Triple-Quoted Strings
+
+::: code-group
+
+```coffee
+console.log '''
+  <div>
+    Civet
+  </div>
+'''
+
+console.log """
+  <div>
+    Civet #{version}
+  </div>
+"""
+```
+
+```typescript
+console.log(`<div>
+  Civet
+</div>`);
+
+console.log(`<div>
+  Civet ${version}
+</div>`);
 ```
 
 :::
@@ -103,7 +167,55 @@ function(a: number, b: number) {
 
 :::
 
-#### Block shorthands
+::: code-group
+
+```coffee
+(degrees: number): {x: number, y: number} =>
+  radians := degrees * Math.PI / 180
+  x: Math.cos theta
+  y: Math.sin theta
+```
+
+```typescript
+(degrees: number): {x: number, y: number} => {
+  const radians = degrees * Math.PI / 180;
+  return {
+    x: Math.cos(theta),
+    y: Math.sin(theta),
+  };
+}
+```
+
+:::
+
+::: code-group
+
+```coffee
+function circle(theta: number): {x: number, y: number}
+  radians := degrees * Math.PI / 180
+  x: Math.cos theta
+  y: Math.sin theta
+```
+
+```typescript
+function circle(theta: number): {x: number, y: number} {
+  const radians = degrees * Math.PI / 180;
+  return {
+    x: Math.cos(theta),
+    y: Math.sin(theta),
+  };
+}
+```
+
+:::
+
+::: info
+Implicit return of the last value in a function can be avoided by
+specifying a `void` return type, adding a final semicolon or explicit `return`,
+or globally using the directive `"civet -implicitReturns"`.
+:::
+
+#### Block Shorthands
 
 ::: code-group
 
@@ -443,7 +555,7 @@ import x from './x';
 
 :::
 
-### Flagging
+### Flagging ([from LiveScript](https://livescript.net/#literals))
 
 ::: code-group
 
@@ -478,6 +590,8 @@ fun?.(arg);
 ::: code-group
 
 ```coffee
+a is b
+
 a and= b
 a or= b
 a ?= b
@@ -486,6 +600,8 @@ obj.key ?= 'civet'
 ```
 
 ```typescript
+a === b
+
 a &&= b;
 a ||= b;
 a ??= b;
@@ -557,6 +673,58 @@ data
 
 ```typescript
 console.log(Object.keys(data));
+```
+
+:::
+
+## Automatic Variable Declaration
+
+By default, you are responsible for declaring your variables
+via `var`, `let`, `const`, or their shorthands.  Alternatively,
+you can use a `"civet"` directive at the beginning of your file
+to specify one of two automatic variable declaration modes.
+
+### `autoVar`
+
+::: code-group
+
+```coffee
+"civet autoVar"
+sos = 0
+for item of iterable
+  square = item * item
+  sos += square
+```
+
+```typescript
+var sos, square;
+sos = 0;
+for (const item of iterable) {
+  square = item * item;
+  sos += square;
+}
+```
+
+:::
+
+### `autoLet`
+
+::: code-group
+
+```coffee
+"civet autoLet"
+sos = 0
+for item of iterable
+  square = item * item
+  sos += square
+```
+
+```typescript
+let sos = 0;
+for (const item of iterable) {
+  let square = item * item;
+  sos += square;
+}
 ```
 
 :::
@@ -668,7 +836,9 @@ Attribute values without whitespace or suitably wrapped (parenthesized expressio
 
 :::
 
-### Showcases
+### Indentation
+
+Closing tags are optional if JSX uses indentation.
 
 ::: code-group
 
@@ -691,6 +861,8 @@ return (
 
 :::
 
+### Function Children
+
 ::: code-group
 
 ```coffee
@@ -709,7 +881,7 @@ return (
 
 :::
 
-## Solid JS
+## [SolidJS](https://www.solidjs.com/)
 
 `link` automatically typed as `HTMLAnchorElement`
 
@@ -731,6 +903,90 @@ const link = (
     Civet
   </a> as any as IntrinsicElements<"a">
 )
+```
+
+:::
+
+## [CoffeeScript](https://coffeescript.org/) Compatibility
+
+Turn on full [CoffeeScript](https://coffeescript.org/) compatibility mode
+with a `"civet coffeeCompat"` directive at the top of your file,
+or use more specific directive(s) as listed below.
+You can also selectively remove features, such as
+`"civet coffeeCompat -coffeeForLoops -autoVar"`.
+
+### CoffeeScript For Loops
+
+::: code-group
+
+```coffee
+"civet coffeeForLoops autoVar"
+for item, index in array
+  console.log item, index
+for key, value of object
+  console.log key, value
+for own key, value of object
+  console.log key, value
+for item from iterable
+  console.log item
+```
+
+```typescript
+var key, item, index
+const hasProp: <T>(this: T, prop: keyof T) => boolean = {}.hasOwnProperty as any
+
+for (let i = 0, len = array.length; i < len; i++) {
+  item = array[index=i];
+  console.log(item, index);
+}
+for (key in object) {
+  console.log(key, value);
+}
+for (key in object) {
+  if (!hasProp.call(object, key)) continue;
+  console.log(key, value);
+}
+for (item of iterable) {
+  console.log(item);
+}
+```
+
+:::
+
+### Double-Quoted Strings
+
+::: code-group
+
+```coffee
+"civet coffeeInterpolation"
+console.log "Hello #{name}!"
+```
+
+```typescript
+console.log(`Hello ${name}!`)
+```
+
+:::
+
+### CoffeeScript Operators
+
+::: code-group
+
+```coffee
+"civet coffeeEq coffeeIsnt coffeeNot coffeeBinaryExistential coffeeOf"
+x == y != z
+x isnt y
+not (x == y)
+x ? y
+key of object
+```
+
+```typescript
+x === y && y !== z;
+x !== y;
+!(x === y);
+x ?? y;
+key in object;
 ```
 
 :::

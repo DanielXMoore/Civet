@@ -55,19 +55,19 @@ To use TypeScript for type checking, create a `tsconfig.json` file. For example:
 Simple execution of .civet source file without `import`s:
 
 ```sh
-civet source.civet
+civet source.civet ...args...
 ```
 
 Directly execute a .civet source file without `import`s in Node:
 
 ```sh
-node -r @danielx/civet/register.js source.civet
+node -r @danielx/civet/register.js source.civet ...args...
 ```
 
 Execute an ESM .civet source file with `import`s in Node using ts-node:
 
 ```sh
-node --loader ts-node/esm --loader @danielx/civet/esm source.civet
+node --loader ts-node/esm --loader @danielx/civet/esm source.civet ...args...
 ```
 
 ## Transpilation
@@ -94,6 +94,24 @@ To see all command-line options:
 
 ```sh
 civet --help
+```
+
+To transpile within an ESM NodeJS app
+(assuming `npm i -D @danielx/civet`):
+
+```js
+import {compile} from "@danielx/civet"
+const tsCode = compile(civetCode)
+const tsCodeWithSourceMap = compile(civetCode, {inlineMap: true})
+const jsCode = compile(civetCode, {js: true})
+```
+
+To transpile within a CommonJS NodeJS app
+(assuming `npm i -D @danielx/civet`):
+
+```js
+{compile} = require("@danielx/civet")
+// rest as above
 ```
 
 ## Building a project

@@ -8,6 +8,7 @@ Civet
 
 The CoffeeScript of TypeScript. Much closer to ES2015+ (for better or worse).
 
+- [Documentation](https://civet.dev/)
 - [Online Civet Playground](https://civet-web.vercel.app/)
 - [Civet VSCode Extension](https://marketplace.visualstudio.com/items?itemName=DanielX.civet)
 - [Discord Server](https://discord.gg/xkrW9GebBc)
@@ -27,6 +28,8 @@ npm install -g @danielx/civet
 civet
 # Compile civet source file to typescript
 civet < source.civet > output.ts
+# Execute a simple civet script (no imports)
+civet source.civet ...args...
 # Execute a civet source file in node using ts-node
 node --loader ts-node/esm --loader @danielx/civet/esm source.civet
 ```
@@ -267,8 +270,8 @@ Things Changed from ES6
 ---
 
 - Implicit returns, even for multi-statement functions
-  (avoid by adding a trailing `;`, an explicit `return`, or
-  via the directive `"civet -implicitReturns"`)
+  (avoid by specifying a `void` return type, adding a trailing `;` or
+  explicit `return`, or via the directive `"civet -implicitReturns"`)
 - Disallow no parens on single argument arrow function. `x => ...` must become `(x) => ...`
   The reasoning is `x -> ...` => `x(function() ...)` in CoffeeScript and having `->` and `=>`
   behave more differently than they already do is bad. Passing an anonymous function to an
