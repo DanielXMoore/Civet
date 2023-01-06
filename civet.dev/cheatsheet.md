@@ -22,6 +22,7 @@ a is b
 a is not b
 a or b
 a and b
+a not in b
 ```
 
 ```typescript
@@ -29,6 +30,7 @@ a === b;
 a !== b;
 a || b;
 a && b;
+!(a in b);
 ```
 
 :::

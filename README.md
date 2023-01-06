@@ -139,14 +139,14 @@ Things Changed from CoffeeScript
 
 - `==` → `==` rather than `===` (unless you specify `"civet coffeeCompat"` or `"civet coffeeEq"`)
 - `!=` → `!=` rather than `!==` (unless you specify `"civet coffeeCompat"` or `"civet coffeeEq"`)
-- `is not` → `===`
+- `is not` → `!==`
   (unless you specify `"civet coffeeCompat"` or `"civet coffeeNot"`),
   instead of `isnt`
   (unless you specify `"civet coffeeCompat"` or `"civet coffeeIsnt"`)
 - `for in` and `for of` are no longer swapped and become their JS equivalents (unless you specify `"civet coffeeCompat"` or `"civet CoffeeOf"`)
 - `a is in b` → `b.indexOf(a) >= 0` and
   `a is not in b` → `b.indexOf(a) < 0` instead of `a in b` and `a not in b`;
-  `a in b` remains `a in b` as in JS
+  `a in b` remains `a in b` as in JS, and `a not in b` → `!(a in b)`
   (unless you specify `"civet coffeeCompat"` or `"civet coffeeOf"`)
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
 - Existential `x?` → `(x != null)` no longer checks for undeclared variables.
