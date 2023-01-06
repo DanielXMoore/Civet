@@ -1,7 +1,7 @@
 "civet coffeeCompat"
 
 # Utility function to create a line/column lookup table for an input string
-locationTable = (input) ->
+export locationTable = (input) ->
   linesRe = /([^\r\n]*)(\r\n|\r|\n|$)/y
   lines = []
   line = 0
@@ -15,7 +15,7 @@ locationTable = (input) ->
 
   return lines
 
-lookupLineColumn = (table, pos) ->
+export lookupLineColumn = (table, pos) ->
   l = 0
   prevEnd = 0
 
@@ -25,7 +25,7 @@ lookupLineColumn = (table, pos) ->
   # [line, column]; zero based
   return [l, pos - prevEnd]
 
-SourceMap = (sourceString) ->
+export SourceMap = (sourceString) ->
   srcTable = locationTable sourceString
 
   sm = {
@@ -218,15 +218,8 @@ encodeBase64 = (value) ->
   BASE64_CHARS[value] or throw new Error "Cannot Base64 encode value: #{value}"
 
 # Note: currently only works in node
-base64Encode = (src) ->
+export base64Encode = (src) ->
   return Buffer.from(src).toString('base64')
-
-module.exports = {
-  base64Encode
-  locationTable
-  lookupLineColumn
-  SourceMap
-}
 
 # Accelerate VLQ decoding with a lookup table
 vlqTable = new Uint8Array(128)

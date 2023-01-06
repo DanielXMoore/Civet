@@ -67,6 +67,7 @@ Things Kept from CoffeeScript
 - `is` → `===`
 - `or`,  `or=`  → `||`, `||=`
 - `and`, `and=` → `&&`, `&&=`
+- `a %% b` → `(a % b + b) % b`
 - `loop` → `while(true)`
 - `unless exp` → `if(!exp)`
 - `until condition` → `while(!condition)`
@@ -118,7 +119,6 @@ Civet.
 
 - Implicit `var` declarations (use `"civet coffeeCompat"` or `"civet autoVar"`)
 - `on/yes/off/no` (use `true/false`, `"civet coffeeCompat"`, or `"civet coffeeBooleans"` to add them back)
-- `isnt` (use `!==`, `"civet coffeeCompat"`, or `"civet coffeeIsnt"`)
 - `not` (use `!`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
   - `not instanceof` (use `!(a instanceof b)`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
   - `not of` use (`"civet coffeeCompat"`, or `"civet coffeeNot"`)
@@ -131,7 +131,6 @@ Civet.
 - `a of b` (use `a in b` as in JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
 - Backtick embedded JS (replaced by template literals)
 - Will add later
-  - `a %% b` → `(a % b + b) % b`
   - Conditional assignment `a?[x] = 3` → `a ? a[x] = 3 : undefined`
   - Multiple slice assignment `otherNumbers[0...] = numbers[3..6] = [-3, -4, -5, -6]`
 
@@ -140,8 +139,15 @@ Things Changed from CoffeeScript
 
 - `==` → `==` rather than `===` (unless you specify `"civet coffeeCompat"` or `"civet coffeeEq"`)
 - `!=` → `!=` rather than `!==` (unless you specify `"civet coffeeCompat"` or `"civet coffeeEq"`)
+- `is not` → `!==`
+  (unless you specify `"civet coffeeCompat"` or `"civet coffeeNot"`),
+  instead of `isnt`
+  (unless you specify `"civet coffeeCompat"` or `"civet coffeeIsnt"`)
 - `for in` and `for of` are no longer swapped and become their JS equivalents (unless you specify `"civet coffeeCompat"` or `"civet CoffeeOf"`)
-- `a in b` now remains `a in b` rather than becoming `b.indexOf(a) >= 0` (unless you specify `"civet coffeeCompat"` or `"coffeeOf"`)
+- `a is in b` → `b.indexOf(a) >= 0` and
+  `a is not in b` → `b.indexOf(a) < 0` instead of `a in b` and `a not in b`;
+  `a in b` remains `a in b` as in JS, and `a not in b` → `!(a in b)`
+  (unless you specify `"civet coffeeCompat"` or `"civet coffeeOf"`)
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
 - Existential `x?` → `(x != null)` no longer checks for undeclared variables.
 - `x?()` → `x?.()` instead of `if (typeof x === 'function') { x() }`

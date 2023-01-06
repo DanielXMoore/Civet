@@ -34,9 +34,10 @@ export async function load(url, context, next) {
       inlineMap: true,
       noHeader: true,
     })
+    const isESM = /^\s*(import(?!\()|export)\b/m.test(jsSource);
 
-    return next(url + ".cjs", {
-      format: "commonjs",
+    return next(url + (isESM ? ".mjs" : ".cjs"), {
+      format: isESM ? "module" : "commonjs",
       source: jsSource
     });
   }

@@ -1,3 +1,6 @@
+import {parse, compile, generate} from "./main"
+{prune} = generate
+
 version = -> require("../package.json").version
 if process.argv.includes "--version"
   console.log version()
@@ -36,9 +39,6 @@ if process.argv.includes "--help"
 
   """
   process.exit(0)
-
-{parse, compile, generate} = require "./main"
-{prune} = generate
 
 encoding = "utf8"
 

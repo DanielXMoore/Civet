@@ -387,11 +387,16 @@ ExtendsToken
   # NOTE: Added "<" extends shorthand
   "<" ->
     return { $loc, token: "extends" }
-  "extends" ->
+  "extends" NonIdContinue ->
     return { $loc, token: $1 }
 
 ExtendsTarget
-  LeftHandSideExpression TypeArguments?
+  # NOTE: ECMA uses LeftHandSideExpression, but we allow ExtendedExpression
+  # for e.g. if expressions, and then wrap in parentheses if needed.
+  ExpressionWithIndentedApplicationSuppressed:exp TypeArguments?:ta ->
+    exp = module.makeLeftHandSideExpression(exp)
+    if (ta) return [exp, ta]
+    return exp
 
 ImplementsClause
   __ ImplementsToken ImplementsTarget ( Comma ImplementsTarget )* ->
@@ -401,7 +406,7 @@ ImplementsClause
     }
 
 ImplementsToken
-  "implements" ->
+  "implements" NonIdContinue ->
     return { $loc, token: $1 }
 
 ImplementsTarget
@@ -498,9 +503,18 @@ CallExpression
   # Dynamic import(), with optional parentheses when not used at top level.
   # (At top level, ImportDeclaration will match first.)
   # NOTE: Using ExtendedExpression to allow for If/Switch expressions
-  "import" ArgumentsWithTrailingCallExpressions CallExpressionRest*
+  "import" ArgumentsWithTrailingCallExpressions CallExpressionRest* ->
+    return {
+      type: "CallExpression",
+      children: $0,
+    }
   MemberExpression CallExpressionRest* ->
-    if ($2.length) return $0
+    if ($2.length) {
+      return {
+        type: "CallExpression",
+        children: [$1].concat($2),
+      }
+    }
     return $1
 
 CallExpressionRest
@@ -526,8 +540,13 @@ AdditionalReservedWords
 MemberExpression
   # NOTE: "new" MemberExpression Arguments seems to be handled fine by other rules already
   # NOTE: Eliminated left recursion
-  PrimaryExpression MemberExpressionRest* ->
-    if ($2.length) return $0
+  PrimaryExpression MemberExpressionRest*:rest ->
+    if (rest.length) {
+      return {
+        type: "MemberExpression",
+        children: [$1].concat(rest),
+      }
+    }
     return $1
   SuperProperty
   MetaProperty
@@ -645,7 +664,7 @@ SuperProperty
 
 MetaProperty
   New Dot Target
-  "import.meta" ->
+  "import.meta" NonIdContinue ->
     return { $loc, token: $1 }
 
 # https://262.ecma-international.org/#prod-FormalParameters
@@ -1820,6 +1839,12 @@ BinaryOpSymbol
   "**"
   "*"
   "/"
+  "%%" ->
+    return {
+      call: module.getRef("modulo"),
+      special: true,
+    }
+  # NOTE: %% must be above %
   "%"
   "+"
   "-"
@@ -1842,7 +1867,6 @@ BinaryOpSymbol
   "isnt" NonIdContinue ->
     if(module.config.coffeeIsnt) return "!=="
     return $skip
-  "is" NonIdContinue -> "==="
   "==="
   # NOTE: CoffeeScript converts "==" -> "==="
   # Convert if CoffeeScript compat flag is set
@@ -1860,28 +1884,36 @@ BinaryOpSymbol
     return $1
   CoffeeNotEnabled "not" NonIdContinue __ "instanceof" NonIdContinue ->
     return {
-      $loc: $loc,
+      $loc,
       token: "instanceof",
       special: true,
     }
-  CoffeeNotEnabled "not" NonIdContinue __ "of" NonIdContinue ->
+  ( !CoffeeOfEnabled "not" NonIdContinue __ "in" NonIdContinue ) / ( CoffeeOfEnabled "not" NonIdContinue __ "of" NonIdContinue ) ->
     return {
-      $loc: $loc,
+      $loc,
       token: "in",
       special: true,
     }
-  CoffeeOfEnabled "in" NonIdContinue ->
+  ( "is" NonIdContinue __ "in" NonIdContinue ) / ( CoffeeOfEnabled "in" NonIdContinue ) ->
     return {
-      ref: module.getRef("indexOf"),
+      call: [module.getRef("indexOf"), ".call"],
+      relational: true,
+      reversed: true,
       suffix: " >= 0",
       special: true,
     }
-  CoffeeOfEnabled "not" NonIdContinue __ "in" NonIdContinue ->
+  ( "is" NonIdContinue __ "not" NonIdContinue __ "in" NonIdContinue ) / ( CoffeeOfEnabled "not" NonIdContinue __ "in" NonIdContinue ) ->
     return {
-      ref: module.getRef("indexOf"),
+      call: [module.getRef("indexOf"), ".call"],
+      relational: true,
+      reversed: true,
       suffix: " < 0",
       special: true,
     }
+  # NOTE: "is not" must come after "is not in"
+  !CoffeeNotEnabled "is" NonIdContinue __ "not" NonIdContinue -> "!=="
+  # NOTE: "is" must come after "is not" and "is in"
+  "is" NonIdContinue -> "==="
   "in" NonIdContinue ->
     return $1
   "&"
@@ -2040,7 +2072,7 @@ ElseExpressionBlock
       expressions: exps,
       children: [$1, exps, $3, $4, $5],
     }
-  !EOS ExtendedExpression -> $2
+  !EOS ExpressionWithIndentedApplicationSuppressed -> $2
 
 NestedBlockExpressions
   PushIndent NestedBlockExpression*:exps PopIndent ->
@@ -2374,7 +2406,7 @@ CoffeeForIndex
 
 CoffeeForDeclaration
   # NOTE: Coffee doesn't allow expression bindings like `for a.x in b`
-  ( __ "own" )?:own ForBinding:binding ->
+  ( __ "own" NonIdContinue )?:own ForBinding:binding ->
     if (own) {
       binding.own = true
     }
@@ -2616,7 +2648,7 @@ CatchBind
 
 # https://262.ecma-international.org/#prod-Finally
 Finally
-  __ "finally" BracedBlock
+  __ "finally" NonIdContinue BracedBlock
 
 # https://262.ecma-international.org/#prod-CatchParameter
 CatchParameter
@@ -3262,6 +3294,8 @@ ReservedWord
   CoffeeIsntEnabled /(?:isnt)(?!\p{ID_Continue})/
   CoffeeForLoopsEnabled /(?:by)(?!\p{ID_Continue})/
   CoffeeOfEnabled /(?:of)(?!\p{ID_Continue})/
+  CoffeeNotEnabled /(?:not)(?!\p{ID_Continue})/
+  "not" NonIdContinue __ "in" NonIdContinue
   # NOTE: Added `let`, Civet assumes strict mode
   /(?:and|as|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|interface|is|let|loop|new|null|or|private|protected|public|return|satisfies|static|super|switch|this|throw|true|try|typeof|unless|until|var|void|while|with|yield)(?!\p{ID_Continue})/
 
@@ -3383,7 +3417,7 @@ AtAt
     return { $loc, token: "@" }
 
 Async
-  "async" ->
+  "async" NonIdContinue ->
     return { $loc, token: $1, type: 'Async' }
 
 Await
@@ -3403,11 +3437,11 @@ Case
     return { $loc, token: $1 }
 
 Catch
-  "catch" ->
+  "catch" NonIdContinue ->
     return { $loc, token: $1 }
 
 Class
-  "class" ->
+  "class" NonIdContinue ->
     return { $loc, token: $1 }
 
 CloseBrace
@@ -3471,7 +3505,7 @@ DoubleQuote
     return { $loc, token: $1 }
 
 Else
-  "else" ->
+  "else" NonIdContinue ->
     return { $loc, token: $1 }
 
 Equals
@@ -3491,7 +3525,7 @@ From
     return { $loc, token: $1 }
 
 Function
-  "function" ->
+  "function" NonIdContinue ->
     return { $loc, token: $1 }
 
 GetOrSet
@@ -3501,7 +3535,7 @@ GetOrSet
 If
   # NOTE: Pull a single space into the 'if ' token so if it is replaced
   # with a ternary in expressions it doesn't add an extra space
-  $("if" " "?) ->
+  $("if" NonIdContinue " "?) ->
     return { $loc, token: $1 }
 
 Import
@@ -3510,7 +3544,7 @@ Import
     return { $loc, token: $1 }
 
 In
-  "in" ->
+  "in" NonIdContinue ->
     return { $loc, token: $1 }
 
 # https://262.ecma-international.org/#prod-LetOrConst
@@ -3533,7 +3567,7 @@ Not
     return { $loc, token: "!" }
 
 Of
-  "of" ->
+  "of" NonIdContinue ->
     return { $loc, token: $1 }
 
 OpenBrace
@@ -3593,7 +3627,7 @@ Star
     return { $loc, token: $1 }
 
 Static
-  "static" ->
+  "static" NonIdContinue ->
     return { $loc, token: $1 }
   # NOTE: In ClassElements @ is a shorthand for 'static'
   # NOTE: added negative assertion to prevent overlapping constructor shorthand and `@@` decorator syntax
@@ -4101,6 +4135,12 @@ JSXChild
   JSXFragment
   # NOTE: Adding support for XML comments
   JSXComment
+  OpenBrace IndentedJSXChildExpression:expression __ CloseBrace ->
+    return {
+      type: "JSXChildExpression",
+      children: $0,
+      expression,
+    }
   OpenBrace JSXChildExpression?:expression __ CloseBrace ->
     return {
       type: "JSXChildExpression",
@@ -4143,6 +4183,14 @@ JSXText
 JSXChildExpression
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
   Whitespace? ( DotDotDot Whitespace? )? ExtendedExpression
+
+IndentedJSXChildExpression
+  PushIndent NestedJSXChildExpression? PopIndent ->
+    if (!$2) return $skip
+    return $2
+
+NestedJSXChildExpression
+  Nested JSXChildExpression
 
 ## Type Stuff
 
@@ -4254,10 +4302,10 @@ TypeUnarySuffix
   QuestionMark
 
 TypeUnaryOp
-  "keyof"
-  "typeof"
-  "infer"
-  "readonly"
+  "keyof" NonIdContinue
+  "typeof" NonIdContinue
+  "infer" NonIdContinue
+  "readonly" NonIdContinue
 
 TypeIndexedAccess
   __ OpenBracket Type? __ CloseBracket
@@ -4287,14 +4335,14 @@ NestedType
   Nested Type ArrayElementDelimiter
 
 TypeConditional
-  TypeBinary ( __ "extends" Type ( __ QuestionMark Type __ Colon Type )? )? ->
+  TypeBinary ( __ "extends" NonIdContinue Type ( __ QuestionMark Type __ Colon Type )? )? ->
     if ($2) return $0
     return $1
 
 TypeLiteral
   Literal
   TemplateLiteral
-  "void" ->
+  "void" NonIdContinue ->
     return { $loc, token: "void" }
   "[]" ->
     return { $loc, token: "[]" }
@@ -4336,7 +4384,7 @@ TypeParameter
   __ Identifier TypeConstraint? TypeParameterDelimiter
 
 TypeConstraint
-  __ "extends" Type
+  __ "extends" NonIdContinue Type
 
 TypeParameterDelimiter
   _* Comma
@@ -4353,7 +4401,7 @@ CivetPrologue
   [\t ]* SingleQuote CivetPrologueContent:content SingleQuote $StatementDelimiter EOS? -> content
 
 CivetPrologueContent
-  "civet" CivetOption*:options [\s]* ->
+  "civet" NonIdContinue CivetOption*:options [\s]* ->
     return {
       type: "CivetPrologue",
       children: [],
@@ -4586,6 +4634,14 @@ Reset
         }
         // [indent, statement]
         module.prelude.push(["", ["const ", hasPropRef, typeSuffix, " = {}.hasOwnProperty", module.asAny, "\n"]])
+      },
+      modulo(moduloRef) {
+        const typeSuffix = {
+          ts: true,
+          children: [": (a: number, b: number) => number"]
+        }
+        // [indent, statement]
+        module.prelude.push(["", ["const ", moduloRef, typeSuffix, " = (a, b) => (a % b + b) % b", "\n"]])
       },
       JSX(jsxRef) {
         module.prelude.push({
@@ -5070,6 +5126,25 @@ Init
       node.splice(1, 0, "return ")
     }
 
+    // Convert general ExtendedExpression into LeftHandSideExpression
+    // by optionally wrapping in parentheses.
+    // TODO: Avoid parentheses in more cases by adding more types.
+    module.makeLeftHandSideExpression = function(exp) {
+      switch (exp.type) {
+        case "Identifier":
+        case "Literal":
+        case "CallExpression":
+        case "MemberExpression":
+        case "ParenthesizedExpression":
+          return exp
+        default:
+          return {
+            type: "ParenthesizedExpression",
+            children: ["(", exp, ")"],
+          }
+      }
+    }
+
     module.isWhitespaceOrEmpty = function(node) {
       if (!node) return true
       if (node.token) return node.token.match(/^\s*$/)
@@ -5095,17 +5170,23 @@ Init
       while (i < expandedOps.length) {
         const op = expandedOps[i]
         // a in b -> indexOf.call(b, a) >= 0
+        // a is in b -> indexOf.call(b, a) >= 0
         // a not in b -> indexOf.call(b, a) < 0
+        // a is not in b -> indexOf.call(b, a) < 0
         // a not instanceof b -> !(a instanceof b)
         if (op.special) {
           let [a, wsOp, op, wsB, b] = expandedOps.slice(i - 2, i + 3)
 
           let children
-          if (op.ref) {
+          if (op.call) {
             wsOp = module.insertTrimmingSpace(wsOp, "")
-            wsB = module.insertTrimmingSpace(wsB, "")
 
-            children = [wsOp, op.ref, ".call(", wsB, b, ", ", a, ")", op.suffix]
+            if (op.reversed) {
+              wsB = module.insertTrimmingSpace(wsB, "")
+              children = [wsOp, op.call, "(", wsB, b, ", ", a, ")", op.suffix]
+            } else {
+              children = [wsOp, op.call, "(", a, ",", wsB, b, ")", op.suffix]
+            }
           } else if (op.token === "instanceof" || op.token === "in") { // `not instanceof` / `not of`
             children = ["!(", a, wsOp, op, wsB, b, ")"]
           } else {
@@ -5151,8 +5232,8 @@ Init
       while (i < l) {
         const [, op] = binops[i]
 
-        // NOTE: coffee `in` and `not in` are ops that use a ref to indexOf. They are our only ref ops so far and they are both relational.
-        if (relationalOps.includes(op.token) || op.ref) {
+        // NOTE: Treat Coffee `in` and `not in` ops as relational.
+        if (relationalOps.includes(op.token) || op.relational) {
           chains.push(i)
         } else if (lowerPrecedenceOps.includes(op.token)) {
           // end of the chain
@@ -5569,38 +5650,35 @@ Init
             const lhs = lastAssignment[1]
 
             // Splice assignment
-            if (Array.isArray(lhs) && lhs.length > 1) {
-              const props = lhs[lhs.length-1]
+            if (lhs.type === "MemberExpression") {
+              const members = lhs.children
+              const lastMember = members[members.length-1]
 
-              if (Array.isArray(props)) {
-                const lastProp = props[props.length-1]
+              // TODO: this is kind of bonkers
+              if(lastMember.type === "SliceExpression") {
+                const {start, end, children: c} = lastMember
+                // TODO: don't lose as many source mappings
+                c[0].token = ".splice("
+                c[1] = start
+                c[2] = ", "
+                if (end)
+                  c[3] = [end, " - ", start]
+                else
+                  c[3] = ["1/0"]
+                c[4] = [", ...", $2]
+                c[5] = ")"
 
-                // TODO: this is kind of bonkers
-                if(lastProp.type === "SliceExpression") {
-                  const {start, end, children: c} = lastProp
-                  // TODO: don't lose as many source mappings
-                  c[0].token = ".splice("
-                  c[1] = start
-                  c[2] = ", "
-                  if (end)
-                    c[3] = [end, " - ", start]
-                  else
-                    c[3] = ["1/0"]
-                  c[4] = [", ...", $2]
-                  c[5] = ")"
-
-                  // Remove assignment token
-                  lastAssignment./**/pop()
-                  if (module.isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment./**/pop()
-                  // TODO: this only works for the last assignment, not multiple splice assignments, or splice assignments earlier in the chain
-                  if ($1.length > 1) {
-                    throw new Error("Not implemented yet! TODO: Handle multiple splice assignments")
-                  }
-
-                  exp.children = [$1]
-                  exp.names = []
-                  return
+                // Remove assignment token
+                lastAssignment./**/pop()
+                if (module.isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment./**/pop()
+                // TODO: this only works for the last assignment, not multiple splice assignments, or splice assignments earlier in the chain
+                if ($1.length > 1) {
+                  throw new Error("Not implemented yet! TODO: Handle multiple splice assignments")
                 }
+
+                exp.children = [$1]
+                exp.names = []
+                return
               }
             } else if (lhs.type === "ObjectBindingPattern" || lhs.type === "ArrayBindingPattern") {
               processBindingPatternLHS(lhs, tail)

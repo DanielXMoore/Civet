@@ -17,7 +17,7 @@ exists = (p) ->
 extensionResolverPlugin = (extensions) ->
   name: "extension-resolve"
   setup: (build) ->
-    # For relatiev requires that don't contain a '.'
+    # For relative requires that don't contain a '.'
     build.onResolve { filter: /\/[^.]*$/ }, (r) ->
       for extension in extensions
         {path: resolvePath, resolveDir} = r
@@ -39,6 +39,7 @@ esbuild.build({
   minify
   watch
   platform: 'node'
+  format: 'cjs'
   outfile: 'dist/cli.js'
   plugins: [
     resolveExtensions
@@ -49,20 +50,22 @@ esbuild.build({
   ]
 }).catch -> process.exit 1
 
-esbuild.build({
-  entryPoints: ['source/main.coffee']
-  bundle: true
-  watch
-  platform: 'node'
-  outfile: 'dist/main.js'
-  plugins: [
-    resolveExtensions
-    coffeeScriptPlugin
-      bare: true
-      inlineMap: sourcemap
-    heraPlugin
-  ]
-}).catch -> process.exit 1
+for esm in [false, true]
+  esbuild.build({
+    entryPoints: ['source/main.coffee']
+    bundle: true
+    watch
+    platform: 'node'
+    format: if esm then 'esm' else 'cjs'
+    outfile: "dist/main.#{if esm then 'mjs' else 'js'}"
+    plugins: [
+      resolveExtensions
+      coffeeScriptPlugin
+        bare: true
+        inlineMap: sourcemap
+      heraPlugin
+    ]
+  }).catch -> process.exit 1
 
 esbuild.build({
   entryPoints: ['source/main.coffee']

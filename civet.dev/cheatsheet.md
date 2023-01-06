@@ -17,8 +17,15 @@ is almost always also valid Civet input.
 
 <Playground>
 a is b
+a is not b
 a or b
 a and b
+a not in b
+</Playground>
+
+<Playground>
+item is in array
+item is not in array
 </Playground>
 
 ### Variables
@@ -269,6 +276,20 @@ a or= b
 a ?= b
 obj.key ?= 'civet'
 </Playground>
+
+::: code-group
+
+```coffee
+a %% b
+```
+
+```typescript
+const modulo: (a: number, b: number) => number = (a, b) => (a % b + b) % b;
+
+modulo(a, b);
+```
+
+:::
 
 ### Range literals
 
