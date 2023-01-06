@@ -630,6 +630,20 @@ obj.key ??= 'civet';
 
 :::
 
+::: code-group
+
+```coffee
+a %% b
+```
+
+```typescript
+const modulo: (a: number, b: number) => number = (a, b) => (a % b + b) % b;
+
+modulo(a, b);
+```
+
+:::
+
 ### Range literals
 
 ::: code-group

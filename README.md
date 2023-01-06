@@ -67,6 +67,7 @@ Things Kept from CoffeeScript
 - `is` → `===`
 - `or`,  `or=`  → `||`, `||=`
 - `and`, `and=` → `&&`, `&&=`
+- `a %% b` → `(a % b + b) % b`
 - `loop` → `while(true)`
 - `unless exp` → `if(!exp)`
 - `until condition` → `while(!condition)`
@@ -130,7 +131,6 @@ Civet.
 - `a of b` (use `a in b` as in JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
 - Backtick embedded JS (replaced by template literals)
 - Will add later
-  - `a %% b` → `(a % b + b) % b`
   - Conditional assignment `a?[x] = 3` → `a ? a[x] = 3 : undefined`
   - Multiple slice assignment `otherNumbers[0...] = numbers[3..6] = [-3, -4, -5, -6]`
 
