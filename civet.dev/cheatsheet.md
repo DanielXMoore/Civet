@@ -476,3 +476,14 @@ not (x == y)
 x ? y
 key of object
 </Playground>
+
+### CoffeeScript Comments
+
+<Playground>
+"civet coffeeComment"
+# one-line comment
+###
+block
+comment
+###
+</Playground>
