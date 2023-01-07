@@ -6,6 +6,7 @@ import { compileCivet } from './utils/compileCivet';
 import { getHighlighter } from './utils/getHighlighter';
 import civet from '../../dist/main.mjs';
 import prettier from 'prettier';
+import { getOpenCollectiveInfo } from './utils/getOpenCollectiveInfo';
 
 export default async function vitePressConfig() {
   const highlighter = await getHighlighter();
@@ -19,6 +20,7 @@ export default async function vitePressConfig() {
     appearance: 'dark',
     themeConfig: {
       contributors: await getContributors(),
+      openCollective: await getOpenCollectiveInfo(),
       logo: 'https://user-images.githubusercontent.com/13007891/210392977-03a3b140-ec63-4ce9-b6e3-0a0f7cac6cbe.png',
       siteTitle: 'Civet',
       nav: [

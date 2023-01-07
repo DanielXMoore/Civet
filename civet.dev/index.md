@@ -6,6 +6,7 @@ aside: false
 <script setup>
   import Hero from './.vitepress/components/Hero.vue'
   import Contributors from './.vitepress/components/Contributors.vue'
+  import Sponsors from './.vitepress/components/Sponsors.vue'
 </script>
 
 <Hero />
@@ -25,6 +26,8 @@ loop
 ListItem := (props: Props) =>
   <li .item>{props.value}
 </Playground>
+
+<Sponsors />
 
 ## Contributors
 
