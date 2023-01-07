@@ -47,6 +47,16 @@ obj :=
     y: 'cool'
 </Playground>
 
+Flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects):
+
+<Playground>
+config := {
+  +debug
+  -live
+  !verbose
+}
+</Playground>
+
 ### Arrays
 
 <Playground>
@@ -257,16 +267,6 @@ x from ./x
 
 <Playground>
 {x} = await import url
-</Playground>
-
-### Flagging ([from LiveScript](https://livescript.net/#literals-objects))
-
-<Playground>
-config := {
-  +debug
-  -live
-  !verbose
-}
 </Playground>
 
 ### Optional chaining

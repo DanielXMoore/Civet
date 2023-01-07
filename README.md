@@ -232,7 +232,8 @@ Things Added that CoffeeScript didn't
     to specify how to use left-hand side
   - `|> await`, `|> yield`, and `|> return` (at end)
     for wrapping left-hand side with that operation
-- Flagging shorthand [from LiveScript](https://livescript.net/#literals) `{+debug, -live}` → `{debug: true, live: false}`
+- Flagging shorthand based on [from LiveScript](https://livescript.net/#literals):
+  `{+debug, -live, !verbose}` → `{debug: true, live: false, verbose: false}`
 - JSX enhancements (inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)):
   - Indentation: instead of explicitly closing `<tag>`s or `<>`s,
     you can indent the children and Civet will close your tags for you
@@ -245,6 +246,7 @@ Things Added that CoffeeScript didn't
   - `.foo` shorthand for `class="foo"` (but must be at least one space after
     tag name); also `.foo.bar`, `."foo bar"`, `` .`foo ${bar}` ``, `.{expr}`
     - `"civet react"` flag uses `className` instead of `class`
+  - `+foo` shorthand for `foo={true}`, `-foo`/`!foo` shorthand for `foo={false}`
   - Any braced object literal can be used as an attribute:
     `{foo}` → `foo={foo}`, `{foo: bar}` → `foo={bar}`,
     `{...foo}` remains as is; methods and getters/setters work too.
