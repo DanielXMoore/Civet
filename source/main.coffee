@@ -18,7 +18,10 @@ uncacheable = new Set [
   "CallExpression", "CallExpressionRest", "LeftHandSideExpression", "ActualAssignment", "UpdateExpression",
   "UnaryExpression", "BinaryOpExpression", "BinaryOpRHS", "ConditionalExpression", "ShortCircuitExpression",
   "InlineObjectLiteral", "ImplicitInlineObjectPropertyDelimiter",
-  "ImplicitNestedBlock",
+  "FatArrowBody", "ThinArrowFunction", "ArrowFunctionTail", "ArrowFunction",
+  "ImplicitNestedBlock", "BracedBlock", "BracedOrEmptyBlock",
+  "NestedBlockExpression", "NestedBlockExpression", "NestedBlockStatements",
+  "SingleLineStatements", "ExpressionStatement", "Statement",
   "IndentedJSXChildExpression",
   "NestedJSXChildExpression",
   "ObjectLiteral",
@@ -33,8 +36,9 @@ uncacheable = new Set [
   "AssignmentExpressionTail", "AssignmentExpression", "ExtendedExpression", "Expression", "MemberExpressionRest",
   "ElseClause",
   "CoffeeCommentEnabled", "SingleLineComment", "Debugger",
-  "JSXElement", "TypedJSXElement", "JSXFragment", "TypedJSXFragment",
-  "JSXChild", "JSXChildren", "JSXNestedChildren", "JSXMixedChildren"
+  "JSXImplicitFragment",
+  "JSXTag", "JSXElement", "TypedJSXElement", "JSXFragment", "TypedJSXFragment",
+  "JSXChild", "JSXChildren", "JSXNestedChildren", "JSXMixedChildren",
 ]
 
 export compile = (src, options=defaultOptions) ->

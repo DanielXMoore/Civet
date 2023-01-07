@@ -345,8 +345,8 @@ PrimaryExpression
   TemplateLiteral
   ParenthesizedExpression
   # https://facebook.github.io/jsx/#sec-jsx-PrimaryExpression
-  TypedJSXElement
-  TypedJSXFragment
+  # NOTE: Modified to parse multiple JSXElement/JSXFragments as one fragment
+  JSXImplicitFragment
 
 # https://262.ecma-international.org/#prod-ParenthesizedExpression
 ParenthesizedExpression
@@ -1472,6 +1472,7 @@ ElementListRest
 
 # NOTE: Modified and simplified from the spec
 ArrayElementExpression
+  JSXTag
   # NOTE: Allow for postfix splat like CoffeeScript
   # NOTE: Allow empty exp spread for destructuring
   ExtendedExpression?:exp __:ws DotDotDot:dots &ArrayElementDelimiter ->
@@ -3719,14 +3720,31 @@ Yield
 
 ## JSX
 
-TypedJSXElement
-  JSXElement ->
-    const type = module.typeOfJSXElement($1)
+JSXImplicitFragment
+  JSXTag ( Samedent JSXTag )* ->
+    const jsx = $2.length === 0 ? $1 : {
+      type: "JSXFragment",
+      children: [
+        "<>\n",
+        module.currentIndent.token,
+        ...$0,
+        "\n",
+        module.currentIndent.token,
+        "</>",
+      ],
+      jsxChildren: [$1].concat($2.map(([, tag]) => tag)),
+    }
+    const type = module.typeOfJSX(jsx)
     return type ? [
       { ts: true, children: ["("] },
-      $1,
+      jsx,
       { ts: true, children: [" as any as ", type, ")"] }
-    ] : $1
+    ] : jsx
+
+JSXTag
+  JSXElement
+  JSXFragment
+  JSXComment
 
 # https://facebook.github.io/jsx/#prod-JSXElement
 JSXElement
@@ -3757,15 +3775,6 @@ JSXOpeningElement
 # https://facebook.github.io/jsx/#prod-JSXClosingElement
 JSXClosingElement
   "</" Whitespace? $JSXElementName Whitespace? ">"
-
-TypedJSXFragment
-  JSXFragment ->
-    const type = module.typeOfJSXFragment($1)
-    return type ? [
-      { ts: true, children: ["("] },
-      $1,
-      { ts: true, children: [" as any as ", type, ")"] }
-    ] : $1
 
 # https://facebook.github.io/jsx/#prod-JSXFragment
 JSXFragment
@@ -4688,12 +4697,21 @@ Reset
       return refs[base] = ref
     }
 
-    module.typeOfJSXElement = function($1) {
+    module.typeOfJSX = function(node) {
+      switch (node.type) {
+        case "JSXElement":
+          return module.typeOfJSXElement(node)
+        case "JSXFragment":
+          return module.typeOfJSXFragment(node)
+      }
+    }
+
+    module.typeOfJSXElement = function(node) {
       if (module.config.solid) {
         if (module.config.server && !module.config.client) {  // server only
           return ["string"]
         }
-        let open = $1.children
+        let open = node.children
         while (Array.isArray(open[0])) open = open[0]
         open = open[1]  // skip "<"
         // "An intrinsic element always begins with a lowercase letter,
@@ -4711,11 +4729,11 @@ Reset
       }
     }
 
-    module.typeOfJSXFragment = function($1) {
+    module.typeOfJSXFragment = function(node) {
       if (module.config.solid) {
         let type = []
         let lastType
-        for (let child of $1.jsxChildren) {
+        for (let child of node.jsxChildren) {
           switch (child.type) {
             case "JSXText":
               // Solid combines multiple consecutive texts into one string

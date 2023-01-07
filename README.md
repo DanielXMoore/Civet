@@ -237,6 +237,8 @@ Things Added that CoffeeScript didn't
 - JSX enhancements (inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)):
   - Indentation: instead of explicitly closing `<tag>`s or `<>`s,
     you can indent the children and Civet will close your tags for you
+  - Multiple adjacent elements and/or fragments get automatically
+    combined into a fragment.
   - Arrow function children do not need to be wrapped in braces
     (assuming they are not preceded by text); this is unambiguous because
     `>` isn't valid JSX text. For example, `<For> (item) => ...`
