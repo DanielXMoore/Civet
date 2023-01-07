@@ -47,6 +47,10 @@ obj :=
     y: 'cool'
 </Playground>
 
+<Playground>
+{a, ...rest, b} = {a: 11, b: 12, x: 0, y: 1}
+</Playground>
+
 Flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects):
 
 <Playground>
