@@ -13,6 +13,8 @@ is almost always also valid Civet input.
 
 [[toc]]
 
+## Basics
+
 ### Humanize syntax
 
 <Playground>
@@ -21,11 +23,13 @@ a is not b
 a or b
 a and b
 a not in b
+a?
 </Playground>
 
 <Playground>
 item is in array
 item is not in array
+substring is in string
 </Playground>
 
 ### Variables
@@ -125,7 +129,7 @@ specifying a `void` return type, adding a final semicolon or explicit `return`,
 or globally using the directive `"civet -implicitReturns"`.
 :::
 
-#### Block Shorthands
+#### Single-Argument Shorthand
 
 <Playground>
 x.map &.name
@@ -140,13 +144,23 @@ Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core
 
 ## Conditions
 
-### If, Else
+### If/Else
 
 <Playground>
 if coffee or relaxed
   code()
 else
   sleep()
+</Playground>
+
+### If/Else Expressions
+
+<Playground>
+name :=
+  if power === Infinity
+    "Saitama"
+  else if power > 9000
+    "Roku"
 </Playground>
 
 ### Unless
@@ -156,7 +170,7 @@ unless tired
   code()
 </Playground>
 
-### Conditional Assignment
+### Postfix If/Unless
 
 <Playground>
 civet.speed = 15 if civet.rested
@@ -167,7 +181,9 @@ civet.speed = 15 if civet.rested
 <Playground>
 switch dir
   when '>' then civet.x++
-  when '<' then civet.x--
+  when '<'
+    civet.x--
+    civet.x = 0 if civet.x < 0
   else civet.waiting += 5
 </Playground>
 
@@ -183,7 +199,34 @@ getX := (civet: Civet, dir: Dir) =>
 
 ## Loops
 
-### Infinite loop
+### Loop Expressions
+
+If needed, loops automatically assemble an Array of the last value
+within the body of the loop for each completed iteration.
+
+<Playground>
+squares :=
+  for item of list
+    item * item
+</Playground>
+
+<Playground>
+evenSquares :=
+  for item of list
+    continue unless item % 2 == 0
+    item * item
+</Playground>
+
+<Playground>
+function parities(list: number[]): string[]
+  for item of list
+    if item % 2 === 0
+      "even"
+    else
+      "odd"
+</Playground>
+
+### Infinite Loop
 
 <Playground>
 i .= 0
@@ -192,12 +235,23 @@ loop
   break if i > 5
 </Playground>
 
-### Until loop
+### Until Loop
 
 <Playground>
 i .= 0
 until i > 5
   i++
+</Playground>
+
+### Do...While/Until Loop
+
+<Playground>
+total .= 0
+item .= head
+do
+  total += item.value
+  item = item.next
+while item?
 </Playground>
 
 ## Classes
@@ -304,19 +358,9 @@ a ?= b
 obj.key ?= 'civet'
 </Playground>
 
-::: code-group
-
-```coffee
+<Playground>
 a %% b
-```
-
-```typescript
-const modulo: (a: number, b: number) => number = (a, b) => (a % b + b) % b;
-
-modulo(a, b);
-```
-
-:::
+</Playground>
 
 ### Range literals
 
