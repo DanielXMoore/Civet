@@ -12,6 +12,12 @@ here is how to set up your environment to get productive right away and have a G
 Try out the transpiler interactively in the
 [Playground](https://civet-web.vercel.app/).
 
+Or transpile Civet code interactively in the command-line REPL:
+
+```sh
+npx @danielx/civet -c
+```
+
 Or run Civet code directly in the command-line REPL:
 
 ```sh
