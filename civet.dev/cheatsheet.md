@@ -202,6 +202,12 @@ until i > 5
 
 ## Classes
 
+<Playground>
+class Animal
+  bark()
+    console.log 'Woof!'
+</Playground>
+
 ### Prototype
 
 <Playground>
@@ -228,7 +234,15 @@ class A
 
 <Playground>
 class B
- b := 'civet'
+  b := 'civet'
+</Playground>
+
+### Typed fields
+
+<Playground>
+class C
+  size: number | undefined
+  @root: Element = document.body
 </Playground>
 
 ### Class constructor
