@@ -422,7 +422,8 @@ return
 
 ### Implicit Fragments
 
-Adjacent elements/fragments get implicitly combined into one fragment.
+Adjacent elements/fragments get implicitly combined into one fragment,
+unless they are items in an array.
 
 <Playground>
 return
@@ -434,8 +435,6 @@ return
 [
   <h1>Hello World!
   <div>Body
-,
-  <button>
 ]
 </Playground>
 
