@@ -367,7 +367,7 @@ fun?(arg)
 
 ### Range Literals
 
-`[x..y]` includes `x` and `y`, while `[x...y]` includes `i` but not `j`.
+`[x..y]` includes `x` and `y`, while `[x...y]` includes `x` but not `y`.
 
 <Playground>
 letters := ['a'..'f']
