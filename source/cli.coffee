@@ -138,7 +138,7 @@ repl = (options) ->
         else '🐱> '
     writer:
       if options.compile and not options.ast
-        (obj) -> obj.replace /\n*$/, ''
+        (obj) -> obj?.replace /\n*$/, ''
     eval: (input, context, filename, callback) ->
       if input == '\n'  # blank input
         callback null
