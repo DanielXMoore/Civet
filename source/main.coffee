@@ -36,8 +36,7 @@ uncacheable = new Set [
   "AssignmentExpressionTail", "AssignmentExpression", "ExtendedExpression", "Expression", "MemberExpressionRest",
   "ElseClause",
   "CoffeeCommentEnabled", "SingleLineComment", "Debugger",
-  "JSXImplicitFragment", "ImplicitFragmentAllowed", "SuppressImplicitFragment",
-  "ExpressionWithImplicitFragmentSuppressed",
+  "JSXImplicitFragment",
   "JSXTag", "JSXElement", "TypedJSXElement", "JSXFragment", "TypedJSXFragment",
   "JSXChild", "JSXChildren", "JSXNestedChildren", "JSXMixedChildren",
 ]
