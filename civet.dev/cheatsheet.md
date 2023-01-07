@@ -323,31 +323,6 @@ class Civet < Animal
 
 ## Misc
 
-### Chained comparisons
-
-<Playground>
-a < b < c
-</Playground>
-
-### Import ESM
-
-<Playground>
-x from ./x
-</Playground>
-
-### Dynamic import
-
-<Playground>
-{x} = await import url
-</Playground>
-
-### Optional chaining
-
-<Playground>
-obj?[key]
-fun?(arg)
-</Playground>
-
 ### Operators
 
 <Playground>
@@ -362,23 +337,58 @@ obj.key ?= 'civet'
 a %% b
 </Playground>
 
-### Range literals
+### Chained Comparisons
 
 <Playground>
-a := ['a'..'d']
-b := [0..6]
+a < b <= c
+a is b is not c
+a instanceof b instanceof c
 </Playground>
 
-### Array Slicing
+### ESM Import
 
 <Playground>
-numbers := [1, 2, 3, 4, 5, 6]
-start := numbers[0..2]
-mid := numbers[3..-2]
+fs from fs
+{basename, dirname} from path
+</Playground>
+
+### Dynamic Import
+
+<Playground>
+{x} = await import url
+</Playground>
+
+### Optional Chaining
+
+<Playground>
+obj?[key]
+fun?(arg)
+</Playground>
+
+### Range Literals
+
+`[x..y]` includes `x` and `y`, while `[x...y]` includes `i` but not `j`.
+
+<Playground>
+letters := ['a'..'f']
+numbers := [1..10]
+reversed := [10..1]
+indices := [0...array.length]
+</Playground>
+
+### Array/String Slicing
+
+`[i..j]` includes `i` and `j`, while `[i...j]` includes `i` but not `j`.
+`i` and/or `j` can be omitted when slicing.
+
+<Playground>
+start := numbers[..2]
+mid := numbers[3...-2]
 end := numbers[-2..]
+numbers[1...-1] = []
 </Playground>
 
-### Late assignment
+### Late Assignment
 
 <Playground>
 a + b = c
