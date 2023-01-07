@@ -232,7 +232,7 @@ Things Added that CoffeeScript didn't
     to specify how to use left-hand side
   - `|> await`, `|> yield`, and `|> return` (at end)
     for wrapping left-hand side with that operation
-- Flagging shorthand based on [from LiveScript](https://livescript.net/#literals):
+- Flagging shorthand based on [from LiveScript](https://livescript.net/#literals-objects):
   `{+debug, -live, !verbose}` → `{debug: true, live: false, verbose: false}`
 - JSX enhancements (inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)):
   - Indentation: instead of explicitly closing `<tag>`s or `<>`s,
