@@ -32,8 +32,7 @@ item is not in array
 
 <Playground>
 a := 10
-b ::= 10
-c .= 10
+b .= 10
 </Playground>
 
 ### Objects
