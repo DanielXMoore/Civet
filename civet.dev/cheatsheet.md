@@ -420,6 +420,25 @@ return
     {svg}
 </Playground>
 
+### Implicit Fragments
+
+Adjacent elements/fragments get implicitly combined into one fragment.
+
+<Playground>
+return
+  <h1>Hello World!
+  <div>Body
+</Playground>
+
+<Playground>
+[
+  <h1>Hello World!
+  <div>Body
+,
+  <button>
+]
+</Playground>
+
 ### Function Children
 
 <Playground>
