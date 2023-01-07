@@ -48,16 +48,6 @@ obj :=
     y: 'cool'
 </Playground>
 
-You can use a flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects).
-
-<Playground>
-config := {
-  +debug
-  -live
-  !verbose
-}
-</Playground>
-
 ### Arrays
 
 <Playground>
@@ -270,10 +260,14 @@ x from ./x
 {x} = await import url
 </Playground>
 
-### Flagging ([from LiveScript](https://livescript.net/#literals))
+### Flagging ([from LiveScript](https://livescript.net/#literals-objects))
 
 <Playground>
-config := { +debug, -live }
+config := {
+  +debug
+  -live
+  !verbose
+}
 </Playground>
 
 ### Optional chaining
