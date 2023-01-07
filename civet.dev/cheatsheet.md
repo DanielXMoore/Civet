@@ -41,11 +41,21 @@ c .= 10
 <Playground>
 person := name: 'Henry', age: 4
 obj :=
-a: 1
-b: 2
-c:
-x: 'pretty'
-y: 'cool'
+  a: 1
+  b: 2
+  c:
+    x: 'pretty'
+    y: 'cool'
+</Playground>
+
+You can use a flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects).
+
+<Playground>
+config := {
+  +debug
+  -live
+  !verbose
+}
 </Playground>
 
 ### Arrays
@@ -379,8 +389,14 @@ and [jsx spec issues](https://github.com/facebook/jsx/issues)
 ### Boolean Toggles
 
 <Playground>
-  <Component +draggable -disabled>
+  <Component +draggable -disabled !hidden>
 </Playground>
+
+::: tip
+
+`!` is synonyous with `-` and both say "set the attribute value to false".
+
+:::
 
 ### Attributes
 
