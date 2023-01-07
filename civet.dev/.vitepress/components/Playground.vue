@@ -1,68 +1,12 @@
-<script lang="ts" setup>
-import * as shiki from 'shiki';
-import type { Highlighter } from 'shiki';
-import { compileCivet } from '../compileCivet';
-import { ref, onServerPrefetch, onMounted, useSlots } from 'vue';
-
-const inputExampleCode = decodeURI(
-  useSlots().default?.()[0].children?.toString() ?? ''
-);
-
-const outputHtml = ref('');
-const inputHtml = ref('');
-const inputError = ref('');
-
-// TODO: createHighlighter only once (not with every instance of Playground)
-async function createHighlighter() {
-  return await shiki.getHighlighter({
-    // @ts-ignore
-    ...(!import.meta.env.SSR && {
-      paths: {
-        languages: '/shiki/languages',
-        themes: '/shiki/themes',
-        wasm: '/shiki',
-      },
-    }),
-    theme: 'one-dark-pro',
-    langs: ['coffee', 'tsx'],
-  });
-}
-
-async function generateHtmlCode(highlighter: Highlighter) {
-  inputHtml.value = highlighter.codeToHtml(inputExampleCode, {
-    lang: 'coffee',
-  });
-  try {
-    const output = await compileCivet(inputExampleCode);
-    outputHtml.value = highlighter.codeToHtml(output.code, {
-      lang: 'tsx',
-    });
-  } catch (err) {
-    console.error(err);
-    // TODO create editable textarea on click
-    // inputError.value = err;
-  }
-}
-
-onServerPrefetch(async () => {
-  const highlighter = await createHighlighter();
-  await generateHtmlCode(highlighter);
-});
-
-// TODO create editable textarea on click
-// onMounted(async () => {
-//   const highlighter = await createHighlighter();
-//   await generateHtmlCode(highlighter);
-// });
-</script>
-
 <template>
   <div class="codes">
-    <div hidden><slot /></div>
-    <div class="code" v-html="inputHtml" />
-    <div class="code" v-html="outputHtml" />
+    <div class="code">
+      <slot name="input" />
+    </div>
+    <div class="code">
+      <slot name="output" />
+    </div>
   </div>
-  {{ inputError }}
 </template>
 
 <style scoped>

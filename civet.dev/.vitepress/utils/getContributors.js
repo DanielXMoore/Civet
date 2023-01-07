@@ -1,18 +1,18 @@
 import axios from 'axios';
 
-const token = process.env.API_TOKEN
+const token = process.env.API_TOKEN;
 
 export function getContributors() {
   const headers = {};
 
   if (token) {
-    console.log("Using process.env.API_TOKEN");
+    console.log('Using process.env.API_TOKEN');
     headers['Authorization'] = `Bearer ${token}`;
   }
 
   return axios
     .get('https://api.github.com/repos/DanielXMoore/Civet/contributors', {
-      headers
+      headers,
     })
     .then((res) => {
       return res.data
