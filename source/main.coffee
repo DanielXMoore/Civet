@@ -31,6 +31,7 @@ uncacheable = new Set [
   "NestedPropertyDefinitions",
   "NestedImplicitPropertyDefinition", "NestedImplicitPropertyDefinitions", "NestedBlockStatement",
   "NestedElement", "NestedElementList", "NestedBindingElement", "NestedBindingElements", "NestedInterfaceProperty",
+  "SnugNamedProperty",
   "MemberExpression", "PrimaryExpression",
   "IndentedApplicationAllowed", "ExpressionWithIndentedApplicationSuppressed", "SuppressIndentedApplication",
   "AssignmentExpressionTail", "AssignmentExpression", "ExtendedExpression", "Expression", "MemberExpressionRest",
