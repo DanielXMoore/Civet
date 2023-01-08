@@ -5,35 +5,46 @@ aside: false
 
 # {{ $frontmatter.title }}
 
-Civet on the left, compiled TypeScript output on the right.
+Civet on <span class="wide">the left</span><span class="narrow">top</span>,
+compiled TypeScript output on
+<span class="wide">the right</span><span class="narrow">bottom</span>.
 
-In most cases, the Civet code on the left is optional shorthand.
-The TypeScript code on the right (and most TypeScript code)
-is almost always also valid Civet input.
+In most cases, the Civet code on
+<span class="wide">the left</span><span class="narrow">top</span>
+is optional shorthand.
+The TypeScript code on
+<span class="wide">the right</span><span class="narrow">bottom</span>
+(and most TypeScript code) is almost always also valid Civet input.
 
 [[toc]]
 
-### Humanize syntax
+## Basics
+
+### Humanize Operators
 
 <Playground>
 a is b
 a is not b
-a or b
 a and b
+a or b
 a not in b
+a?
 </Playground>
 
 <Playground>
 item is in array
 item is not in array
+substring is in string
 </Playground>
 
-### Variables
+### Variable Declaration
 
 <Playground>
 a := 10
-b ::= 10
-c .= 10
+b .= 10
+c: number | string .= 0
+let d: boolean
+var v: any
 </Playground>
 
 ### Objects
@@ -41,14 +52,45 @@ c .= 10
 <Playground>
 person := name: 'Henry', age: 4
 obj :=
-a: 1
-b: 2
-c:
-x: 'pretty'
-y: 'cool'
+  a: 1
+  b: 2
+  c:
+    x: 'pretty'
+    y: 'cool'
+</Playground>
+
+Spreads anywhere:
+
+<Playground>
+{a, ...rest, b} = {a: 7, b: 8, x: 0, y: 1}
+</Playground>
+
+Flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects):
+
+<Playground>
+config := {
+  +debug
+  -live
+  !verbose
+}
+</Playground>
+
+Methods and getters/setters in braced objects:
+
+<Playground>
+p := {
+  name: 'Mary'
+  say(msg)
+    console.log @name, 'says', msg
+  get NAME()
+    @name.toUpperCase()
+}
+p.say p.NAME
 </Playground>
 
 ### Arrays
+
+Commas are optional at the ends of lines.
 
 <Playground>
 rotate := [
@@ -64,7 +106,19 @@ func.apply @, [
 ]
 </Playground>
 
+<Playground>
+people := [
+  name: "Alice"
+  id: 7
+,
+  name: "Bob"
+  id: 9
+]
+</Playground>
+
 ### Triple-Quoted Strings
+
+Leading indentation is removed.
 
 <Playground>
 console.log '''
@@ -82,21 +136,22 @@ console.log """
 """
 </Playground>
 
-### Functions
+## Functions
+
+### Function Calls
+
+The parentheses in a function call are usually optional.
+If present, there should be no space between the function and the open paren.
 
 <Playground>
-(a: number, b: number) => a + b
+console.log x, f(x), (f g x), g f x
 </Playground>
 
-<Playground>
-add := (a: number, b: number) -> a + b
-</Playground>
+### `function`
 
 <Playground>
-(degrees: number): {x: number, y: number} =>
-  radians := degrees * Math.PI / 180
-  x: Math.cos theta
-  y: Math.sin theta
+function abort
+  process.exit 1
 </Playground>
 
 <Playground>
@@ -112,7 +167,40 @@ specifying a `void` return type, adding a final semicolon or explicit `return`,
 or globally using the directive `"civet -implicitReturns"`.
 :::
 
-#### Block Shorthands
+<Playground>
+function abort: void
+  process.exit 1
+</Playground>
+
+### Arrow Functions
+
+Unlike ECMAScript, zero-argument arrows do not need a `()` prefix,
+but one-argument arrows do need parentheses around the argument.
+
+<Playground>
+abort := -> process.exit 1
+</Playground>
+
+<Playground>
+add := (a: number, b: number) -> a + b
+</Playground>
+
+<Playground>
+add := (a: number, b: number) => a + b
+</Playground>
+
+<Playground>
+greet := (name) => console.log "Hello", name
+</Playground>
+
+<Playground>
+circle := (degrees: number): {x: number, y: number} =>
+  radians := degrees * Math.PI / 180
+  x: Math.cos theta
+  y: Math.sin theta
+</Playground>
+
+### Single-Argument Shorthand
 
 <Playground>
 x.map &.name
@@ -127,13 +215,23 @@ Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core
 
 ## Conditions
 
-### If, Else
+### If/Else
 
 <Playground>
 if coffee or relaxed
   code()
 else
   sleep()
+</Playground>
+
+### If/Else Expressions
+
+<Playground>
+name :=
+  if power === Infinity
+    "Saitama"
+  else if power > 9000
+    "Roku"
 </Playground>
 
 ### Unless
@@ -143,7 +241,7 @@ unless tired
   code()
 </Playground>
 
-### Conditional Assignment
+### Postfix If/Unless
 
 <Playground>
 civet.speed = 15 if civet.rested
@@ -154,7 +252,9 @@ civet.speed = 15 if civet.rested
 <Playground>
 switch dir
   when '>' then civet.x++
-  when '<' then civet.x--
+  when '<'
+    civet.x--
+    civet.x = 0 if civet.x < 0
   else civet.waiting += 5
 </Playground>
 
@@ -170,7 +270,34 @@ getX := (civet: Civet, dir: Dir) =>
 
 ## Loops
 
-### Infinite loop
+### Loop Expressions
+
+If needed, loops automatically assemble an Array of the last value
+within the body of the loop for each completed iteration.
+
+<Playground>
+squares :=
+  for item of list
+    item * item
+</Playground>
+
+<Playground>
+evenSquares :=
+  for item of list
+    continue unless item % 2 == 0
+    item * item
+</Playground>
+
+<Playground>
+function parities(list: number[]): string[]
+  for item of list
+    if item % 2 === 0
+      "even"
+    else
+      "odd"
+</Playground>
+
+### Infinite Loop
 
 <Playground>
 i .= 0
@@ -179,7 +306,7 @@ loop
   break if i > 5
 </Playground>
 
-### Until loop
+### Until Loop
 
 <Playground>
 i .= 0
@@ -187,7 +314,45 @@ until i > 5
   i++
 </Playground>
 
+### Do...While/Until Loop
+
+<Playground>
+total .= 0
+item .= head
+do
+  total += item.value
+  item = item.next
+while item?
+</Playground>
+
+## Types
+
+<Playground>
+type ID = number | string
+</Playground>
+
+<Playground>
+interface Point
+  x: number
+  y: number
+</Playground>
+
+<Playground>
+interface Node<T>
+  value: T
+  next: Node<T>
+</Playground>
+
 ## Classes
+
+<Playground>
+class Animal
+  sound = "Woof!"
+  bark(): void
+    console.log @sound
+  wiki()
+    fetch 'https://en.wikipedia.org/wiki/Animal'
+</Playground>
 
 ### Prototype
 
@@ -204,28 +369,41 @@ id := @id
 obj := { @id }
 </Playground>
 
-### Static fields
+### Static Fields
 
 <Playground>
 class A
   @a = 'civet'
 </Playground>
 
-### Readonly fields
+### Readonly Fields
 
 <Playground>
 class B
- b := 'civet'
+  b := 'civet'
 </Playground>
 
-### Class constructor
+### Typed Fields
+
+<Playground>
+class C
+  size: number | undefined
+  @root: Element = document.body
+</Playground>
+
+### Constructor
 
 <Playground>
 class Rectangle
-  @(@height: number, @width: number)
+  @(@width: number, @height: number)
 </Playground>
 
-### Class static block
+<Playground>
+class Rectangle
+  @(public width: number, public height: number)
+</Playground>
+
+### Static Block
 
 <Playground>
 class Civet
@@ -234,7 +412,7 @@ class Civet
       this.colors = getCivetColors()
 </Playground>
 
-### Class extending
+### Extends
 
 <Playground>
 class Civet < Animal
@@ -242,72 +420,71 @@ class Civet < Animal
 
 ## Misc
 
-### Chained comparisons
-
-<Playground>
-a < b < c
-</Playground>
-
-### Import ESM
-
-<Playground>
-x from ./x
-</Playground>
-
-### Flagging ([from LiveScript](https://livescript.net/#literals))
-
-<Playground>
-config := { +debug, -live }
-</Playground>
-
-### Optional chaining
-
-<Playground>
-obj?[key]
-fun?(arg)
-</Playground>
-
 ### Operators
 
 <Playground>
-a is b
 a and= b
 a or= b
 a ?= b
 obj.key ?= 'civet'
 </Playground>
 
-::: code-group
-
-```coffee
+<Playground>
 a %% b
-```
-
-```typescript
-const modulo: (a: number, b: number) => number = (a, b) => (a % b + b) % b;
-
-modulo(a, b);
-```
-
-:::
-
-### Range literals
-
-<Playground>
-a := ['a'..'d']
-b := [0..6]
 </Playground>
 
-### Array Slicing
+### Chained Comparisons
 
 <Playground>
-numbers := [1, 2, 3, 4, 5, 6]
-start := numbers[0..2]
-mid := numbers[3..-2]
+a < b <= c
+a is b is not c
+a instanceof b instanceof c
+</Playground>
+
+### ESM Import
+
+<Playground>
+fs from fs
+{basename, dirname} from path
+</Playground>
+
+### Dynamic Import
+
+<Playground>
+{x} = await import url
+</Playground>
+
+### Optional Chaining
+
+<Playground>
+obj?[key]
+fun?(arg)
+</Playground>
+
+### Range Literals
+
+`[x..y]` includes `x` and `y`, while `[x...y]` includes `x` but not `y`.
+
+<Playground>
+letters := ['a'..'f']
+numbers := [1..10]
+reversed := [10..1]
+indices := [0...array.length]
+</Playground>
+
+### Array/String Slicing
+
+`[i..j]` includes `i` and `j`, while `[i...j]` includes `i` but not `j`.
+`i` and/or `j` can be omitted when slicing.
+
+<Playground>
+start := numbers[..2]
+mid := numbers[3...-2]
 end := numbers[-2..]
+numbers[1...-1] = []
 </Playground>
 
-### Late assignment
+### Late Assignment
 
 <Playground>
 a + b = c
@@ -351,6 +528,7 @@ for item of iterable
 ## JSX
 
 Enhancements, inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)
+and [jsx spec issues](https://github.com/facebook/jsx/issues)
 
 ### Element id
 
@@ -368,6 +546,18 @@ Enhancements, inspired by [solid-dsl discussions](https://github.com/solidjs-com
   <div .foo.bar> Civet
   <div .{expression}> Civet
 </Playground>
+
+### Boolean Toggles
+
+<Playground>
+  <Component +draggable -disabled !hidden>
+</Playground>
+
+::: tip
+
+`!` is synonyous with `-` and both say "set the attribute value to false".
+
+:::
 
 ### Attributes
 
@@ -412,6 +602,24 @@ return
     <div>
       Hello {name}!
     {svg}
+</Playground>
+
+### Implicit Fragments
+
+Adjacent elements/fragments get implicitly combined into one fragment,
+unless they are items in an array.
+
+<Playground>
+return
+  <h1>Hello World!
+  <div>Body
+</Playground>
+
+<Playground>
+[
+  <h1>Hello World!
+  <div>Body
+]
 </Playground>
 
 ### Function Children
@@ -469,4 +677,15 @@ x isnt y
 not (x == y)
 x ? y
 key of object
+</Playground>
+
+### CoffeeScript Comments
+
+<Playground>
+"civet coffeeComment"
+# one-line comment
+###
+block
+comment
+###
 </Playground>

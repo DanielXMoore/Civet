@@ -345,8 +345,8 @@ PrimaryExpression
   TemplateLiteral
   ParenthesizedExpression
   # https://facebook.github.io/jsx/#sec-jsx-PrimaryExpression
-  TypedJSXElement
-  TypedJSXFragment
+  # NOTE: Modified to parse multiple JSXElement/JSXFragments as one fragment
+  JSXImplicitFragment
 
 # https://262.ecma-international.org/#prod-ParenthesizedExpression
 ParenthesizedExpression
@@ -381,14 +381,26 @@ ClassHeritage
   ImplementsClause
 
 ExtendsClause
-  __ ExtendsToken __ ExtendsTarget
+  ExtendsToken __ ExtendsTarget
 
 ExtendsToken
   # NOTE: Added "<" extends shorthand
-  "<" ->
-    return { $loc, token: "extends" }
-  "extends" NonIdContinue ->
-    return { $loc, token: $1 }
+  Loc:l __:ws OpenAngleBracket:lt " "? ->
+
+    const children = [
+      ...ws,
+      { ...lt, token: "extends " },
+    ]
+
+    if (!ws.length) {
+      children.unshift({ $loc: l.$loc, token: " " })
+    }
+
+    return {
+      children,
+    }
+
+  __ Extends
 
 ExtendsTarget
   # NOTE: ECMA uses LeftHandSideExpression, but we allow ExtendedExpression
@@ -675,7 +687,8 @@ Parameters
     return {
       type: "Parameters",
       children: [{$loc, token: "()"}],
-      names: []
+      names: [],
+      implicit: true,
     }
 
 NonEmptyParameters
@@ -753,18 +766,20 @@ ParameterElementDelimiter
 BindingIdentifier
   # NOTE: Added @param for binding identifiers
   # The parser will allow them in const/let/var declarations but JS/TS doesn't allow them there
-  __:ws At AtIdentifierRef:ref ->
+  __:ws NWBindingIdentifier:identifier ->
+    return { ...identifier, children: [...ws, ...identifier.children] }
+
+# Non-whitespace version of BindingIdentifier
+NWBindingIdentifier
+  # NOTE: Added @param for binding identifiers
+  # The parser will allow them in const/let/var declarations but JS/TS doesn't allow them there
+  At AtIdentifierRef:ref ->
     return {
       type: "AtBinding",
-      children: [...ws, ref],
+      children: [ref],
       ref,
     }
-
-  __:ws Identifier:id ->
-    return {
-      ...id,
-      children: [...ws, ...id.children],
-    }
+  Identifier:id
 
 AtIdentifierRef
   ReservedWord:r ->
@@ -1025,15 +1040,17 @@ FunctionDeclaration
 
 FunctionSignature
   # NOTE: Merged in async and generator with optionals
-  ( Async __ )? Function Star? BindingIdentifier?:id __ NonEmptyParameters:parameters ReturnTypeSuffix?:suffix ->
+  ( Async _? )?:async Function:func ( _? Star )?:star ( _? NWBindingIdentifier )?:wid _?:w Parameters:parameters ReturnTypeSuffix?:suffix ->
     return {
       type: "FunctionSignature",
-      id,
+      id: wid?.[1],
       parameters,
       returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
       ts: false,
       block: null,
-      children: $0,
+      children: !parameters.implicit ? $0 :
+        [ async, func, star, wid, parameters, w, suffix ],
+        // move whitespace w to after implicit () in parameters
     }
 
 # https://262.ecma-international.org/#prod-FunctionExpression
@@ -1472,6 +1489,8 @@ ElementListRest
 
 # NOTE: Modified and simplified from the spec
 ArrayElementExpression
+  # NOTE: Prevent multiple JSX tags from combining implicitly into a fragment
+  JSXTag
   # NOTE: Allow for postfix splat like CoffeeScript
   # NOTE: Allow empty exp spread for destructuring
   ExtendedExpression?:exp __:ws DotDotDot:dots &ArrayElementDelimiter ->
@@ -1622,7 +1641,8 @@ PropertyDefinition
       value,
     }
   # NOTE: Added LiveScript flagging shorthand {+x, -y} -> {x: true, y: false}
-  __:ws $[+-]:toggle IdentifierName:id ->
+  # NOTE: extended to allow {!y} -> {y: false}
+  __:ws $[!+-]:toggle IdentifierName:id ->
     const value = toggle === "+" ? "true" : "false"
     return {
       type: "Property",
@@ -2744,7 +2764,7 @@ MaybeNestedExpression
 
 # https://262.ecma-international.org/#prod-ImportDeclaration
 ImportDeclaration
-  "import type" NonIdContinue __ ImportClause __ FromClause -> { ts: true, children: $0 }
+  Import __ TypeKeyword __ ImportClause __ FromClause -> { ts: true, children: $0 }
   Import __ ImportClause __ FromClause
   Import __ ModuleSpecifier
   # NOTE: Added import shorthand
@@ -2793,10 +2813,8 @@ NameSpaceImport
 
 # https://262.ecma-international.org/#prod-NamedImports
 NamedImports
-  OpenBrace ImportSpecifier*:specifiers ( __ Comma )? __ CloseBrace ->
-    const names = specifiers.flatMap(({binding}) => {
-      return binding.names
-    })
+  OpenBrace TypeAndImportSpecifier*:specifiers ( __ Comma )? __ CloseBrace ->
+    const names = specifiers.flatMap(({binding}) => binding.names)
 
     return {
       type: "Declaration",
@@ -2807,6 +2825,12 @@ NamedImports
 # https://262.ecma-international.org/#prod-FromClause
 FromClause
   From __ ModuleSpecifier
+
+# https://devblogs.microsoft.com/typescript/announcing-typescript-3-8-beta/#type-only-imports-exports
+TypeAndImportSpecifier
+  ( __ TypeKeyword )? ImportSpecifier ->
+    if (!$1) return $2
+    return { ts: true, children: $0, binding: $2.binding }
 
 # https://262.ecma-international.org/#prod-ImportSpecifier
 ImportSpecifier
@@ -2856,10 +2880,14 @@ ImportedBinding
 ExportDeclaration
   # NOTE: Using ExtendedExportDeclaration to allow If/Switch expressions
   Export __ "default" NonIdContinue __ ( HoistableDeclaration / ClassDeclaration / ExtendedExpression )
-  Export __ ExportFromClause __ FromClause
+  Export __ ExportFromClause __ FromClause ->
+    if (!$3.ts) return $0
+    return { ts: true, children: $0 }
   # NOTE: Declaration should come before NamedExports
   # so that NamedExports doesn't grab function, async, type, etc.
-  Export __ ( Declaration / NamedExports / VariableStatement / ExportVarDec )
+  Export __ ( Declaration / TypeAndNamedExports / VariableStatement / ExportVarDec ) ->
+    if (!$3.ts) return $0
+    return { ts: true, children: $0 }
 
 # CoffeeScript style `export x = 3` -> `export var x = 3`
 ExportVarDec
@@ -2868,7 +2896,13 @@ ExportVarDec
 # https://262.ecma-international.org/#prod-ExportFromClause
 ExportFromClause
   Star ( __ As __ ModuleExportName )?
-  NamedExports
+  TypeAndNamedExports
+
+# https://devblogs.microsoft.com/typescript/announcing-typescript-3-8-beta/#type-only-imports-exports
+TypeAndNamedExports
+  ( TypeKeyword __ )? NamedExports ->
+    if (!$1) return $2
+    return { ts: true, children: $0 }
 
 # https://262.ecma-international.org/#prod-NamedExports
 NamedExports
@@ -2879,7 +2913,9 @@ NamedExports
 
 # https://262.ecma-international.org/#prod-ExportSpecifier
 ExportSpecifier
-  __ ModuleExportName ( __ As __ ModuleExportName )? ObjectPropertyDelimiter
+  __ ( TypeKeyword __ )? ModuleExportName ( __ As __ ModuleExportName )? ObjectPropertyDelimiter ->
+    if (!$2) return $0
+    return { ts: true, children: $0 }
 
 ImplicitExportSpecifier
   !"default" ModuleExportName ( __ As __ ModuleExportName )? ( &( __ From ) / ImplicitInlineObjectPropertyDelimiter )
@@ -3516,6 +3552,10 @@ Export
   "export" NonIdContinue ->
     return { $loc, token: $1 }
 
+Extends
+  "extends" NonIdContinue ->
+    return { $loc, token: $1 }
+
 For
   "for" NonIdContinue ->
     return { $loc, token: $1 }
@@ -3568,6 +3608,10 @@ Not
 
 Of
   "of" NonIdContinue ->
+    return { $loc, token: $1 }
+
+OpenAngleBracket
+  "<" ->
     return { $loc, token: $1 }
 
 OpenBrace
@@ -3718,14 +3762,31 @@ Yield
 
 ## JSX
 
-TypedJSXElement
-  JSXElement ->
-    const type = module.typeOfJSXElement($1)
+JSXImplicitFragment
+  JSXTag ( Samedent JSXTag )* ->
+    const jsx = $2.length === 0 ? $1 : {
+      type: "JSXFragment",
+      children: [
+        "<>\n",
+        module.currentIndent.token,
+        ...$0,
+        "\n",
+        module.currentIndent.token,
+        "</>",
+      ],
+      jsxChildren: [$1].concat($2.map(([, tag]) => tag)),
+    }
+    const type = module.typeOfJSX(jsx)
     return type ? [
       { ts: true, children: ["("] },
-      $1,
+      jsx,
       { ts: true, children: [" as any as ", type, ")"] }
-    ] : $1
+    ] : jsx
+
+JSXTag
+  JSXElement
+  JSXFragment
+  JSXComment
 
 # https://facebook.github.io/jsx/#prod-JSXElement
 JSXElement
@@ -3756,15 +3817,6 @@ JSXOpeningElement
 # https://facebook.github.io/jsx/#prod-JSXClosingElement
 JSXClosingElement
   "</" Whitespace? $JSXElementName Whitespace? ">"
-
-TypedJSXFragment
-  JSXFragment ->
-    const type = module.typeOfJSXFragment($1)
-    return type ? [
-      { ts: true, children: ["("] },
-      $1,
-      { ts: true, children: [" as any as ", type, ")"] }
-    ] : $1
 
 # https://facebook.github.io/jsx/#prod-JSXFragment
 JSXFragment
@@ -3966,6 +4018,11 @@ JSXAttribute
       type: "JSXClass",
       class: $2,
     }
+
+  # NOTE: Matching LiveScript flagging shorthand in addition +x -y !z -> x={true} y={false} z={false}
+  $[!+-]:toggle JSXAttributeName:id ->
+    const value = toggle === "+" ? "true" : "false"
+    return [ " ", id, "={", value, "}" ]
 
 JSXShorthandString
   /(?:[\w\-:]+|\([^()]*\)|\[[^\[\]]*\])+/ ->
@@ -4381,10 +4438,13 @@ TypeParameters
     }
 
 TypeParameter
-  __ Identifier TypeConstraint? TypeParameterDelimiter
+  __ Identifier TypeConstraint? TypeInitializer? TypeParameterDelimiter
 
 TypeConstraint
   __ "extends" NonIdContinue Type
+
+TypeInitializer
+  __ "=" Type
 
 TypeParameterDelimiter
   _* Comma
@@ -4682,12 +4742,21 @@ Reset
       return refs[base] = ref
     }
 
-    module.typeOfJSXElement = function($1) {
+    module.typeOfJSX = function(node) {
+      switch (node.type) {
+        case "JSXElement":
+          return module.typeOfJSXElement(node)
+        case "JSXFragment":
+          return module.typeOfJSXFragment(node)
+      }
+    }
+
+    module.typeOfJSXElement = function(node) {
       if (module.config.solid) {
         if (module.config.server && !module.config.client) {  // server only
           return ["string"]
         }
-        let open = $1.children
+        let open = node.children
         while (Array.isArray(open[0])) open = open[0]
         open = open[1]  // skip "<"
         // "An intrinsic element always begins with a lowercase letter,
@@ -4705,11 +4774,11 @@ Reset
       }
     }
 
-    module.typeOfJSXFragment = function($1) {
+    module.typeOfJSXFragment = function(node) {
       if (module.config.solid) {
         let type = []
         let lastType
-        for (let child of $1.jsxChildren) {
+        for (let child of node.jsxChildren) {
           switch (child.type) {
             case "JSXText":
               // Solid combines multiple consecutive texts into one string
@@ -4739,7 +4808,7 @@ Reset
         if (type.length === 1) {
           return type[0]
         } else {
-          type = type.map((t) => [t, ", "]).flat()
+          type = type.flatMap((t) => [t, ", "])
           type.pop() // remove trailing comma
           return ["[", type, "]"]
         }

@@ -17,7 +17,9 @@ if process.argv.includes "--help"
 
     Usage:
 
-        civet [options]                              # REPL
+        civet                                        # REPL for executing code
+        civet -c                                     # REPL for transpiling code
+        civet --ast                                  # REPL for parsing code
         civet [options] -c input.civet               # -> input.civet.tsx
         civet [options] -c input.civet -o .ts        # -> input.ts
         civet [options] -c input.civet -o dir        # -> dir/input.civet.tsx
@@ -85,6 +87,8 @@ parseArgs = (args = process.argv[2..]) ->
       when '--'
         endOfArgs ++i  # remaining arguments are filename and/or arguments
       else
+        if arg.startsWith '-'
+          throw new Error "Invalid command-line argument #{arg}"
         if options.run
           endOfArgs i  # remaining arguments are arguments to the script
         else
@@ -102,6 +106,8 @@ readFiles = (filenames, options) ->
         filename = "<stdin>"
         try
           filename = await fs.realpath '/dev/stdin'
+
+      if filename is "<stdin>"
         lines = []
         rl = require('readline').createInterface process.stdin, process.stdout
         rl.on 'line', (buffer) -> lines.push buffer + '\n'
@@ -117,12 +123,24 @@ readFiles = (filenames, options) ->
       yield {filename, error, stdin}
 
 repl = (options) ->
-  console.log "Civet #{version()} REPL.  Enter a blank line to execute code."
+  console.log "Civet #{version()} REPL.  Enter a blank line to #{
+    switch
+      when options.ast then 'parse'
+      when options.compile then 'transpile'
+      else 'execute'
+  } code."
   global.quit = global.exit = -> process.exit 0
   nodeRepl = require 'repl'
   vm = require 'vm'
   r = nodeRepl.start
-    prompt: '🐱> '
+    prompt:
+      switch
+        when options.ast then '🌲> '
+        when options.compile then '🐈> '
+        else '🐱> '
+    writer:
+      if options.compile and not options.ast
+        (obj) -> obj?.replace /\n*$/, ''
     eval: (input, context, filename, callback) ->
       if input == '\n'  # blank input
         callback null
@@ -134,22 +152,25 @@ repl = (options) ->
         catch error
           #console.error "Failed to transpile Civet:"
           return callback error
-        try
-          result = vm.runInContext output, context, {filename}
-        catch error
-          return callback error
-        callback null, result
+        if options.compile or options.ast
+          callback null, output
+        else
+          try
+            result = vm.runInContext output, context, {filename}
+          catch error
+            return callback error
+          callback null, result
       else  # still reading
         callback new nodeRepl.Recoverable "Enter a blank line to execute code."
 
 cli = ->
   {filenames, scriptArgs, options} = parseArgs()
   unless filenames.length
-    options.compile = true
     if process.stdin.isTTY
       options.repl = true
     else
       # When piped, default to old behavior of transpiling stdin to stdout
+      options.compile = true
       filenames = ['-']
 
   # In run mode, compile to JS with source maps
@@ -192,7 +213,8 @@ cli = ->
             stat = await fs.stat options.output
           catch
             stat = null
-          if stat?.isDirectory()
+          if stat?.isDirectory() or options.output.endsWith(path.sep) or
+                                    options.output.endsWith('/')
             # -o dir writes outputs into that directory with default name
             outputPath.dir = options.output
           else if /^(\.[^.]+)+$/.test optionsPath.base
@@ -204,6 +226,8 @@ cli = ->
             # -o filename fully specifies the output filename
             # (don't use this with multiple input files)
             outputPath = optionsPath
+        # Make output directory in case it doesn't already exist
+        fs.mkdir outputPath.dir, recursive: true if outputPath.dir
         outputFilename = path.format outputPath
         try
           await fs.writeFile outputFilename, output

@@ -6,7 +6,7 @@ Civet
 [![NPM Downloads](https://img.shields.io/npm/dm/@danielx/civet.svg?style=for-the-badge)](https://www.npmjs.com/package/@danielx/civet)
 [![Discord](https://img.shields.io/discord/933472021310996512?style=for-the-badge)](https://discord.com/invite/xkrW9GebBc)
 
-The CoffeeScript of TypeScript. Much closer to ES2015+ (for better or worse).
+The modern way to write TypeScript.
 
 - [Documentation](https://civet.dev/)
 - [Online Civet Playground](https://civet-web.vercel.app/)
@@ -24,13 +24,15 @@ Quickstart Guide
 ```bash
 # Install
 npm install -g @danielx/civet
-# Run civet code directly in a REPL
+# Run Civet code directly in a REPL
 civet
-# Compile civet source file to typescript
+# Transpile typed Civet code into TypeScript in a REPL
+civet -c
+# Compile Civet source file to TypeScript
 civet < source.civet > output.ts
-# Execute a simple civet script (no imports)
+# Execute a simple .civet script (no imports)
 civet source.civet ...args...
-# Execute a civet source file in node using ts-node
+# Execute a .civet source file in node using ts-node
 node --loader ts-node/esm --loader @danielx/civet/esm source.civet
 ```
 
@@ -232,10 +234,13 @@ Things Added that CoffeeScript didn't
     to specify how to use left-hand side
   - `|> await`, `|> yield`, and `|> return` (at end)
     for wrapping left-hand side with that operation
-- Flagging shorthand [from LiveScript](https://livescript.net/#literals) `{+debug, -live}` → `{debug: true, live: false}`
+- Flagging shorthand based on [from LiveScript](https://livescript.net/#literals-objects):
+  `{+debug, -live, !verbose}` → `{debug: true, live: false, verbose: false}`
 - JSX enhancements (inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)):
   - Indentation: instead of explicitly closing `<tag>`s or `<>`s,
     you can indent the children and Civet will close your tags for you
+  - Multiple adjacent elements and/or fragments get automatically
+    combined into a fragment.
   - Arrow function children do not need to be wrapped in braces
     (assuming they are not preceded by text); this is unambiguous because
     `>` isn't valid JSX text. For example, `<For> (item) => ...`
@@ -245,6 +250,7 @@ Things Added that CoffeeScript didn't
   - `.foo` shorthand for `class="foo"` (but must be at least one space after
     tag name); also `.foo.bar`, `."foo bar"`, `` .`foo ${bar}` ``, `.{expr}`
     - `"civet react"` flag uses `className` instead of `class`
+  - `+foo` shorthand for `foo={true}`, `-foo`/`!foo` shorthand for `foo={false}`
   - Any braced object literal can be used as an attribute:
     `{foo}` → `foo={foo}`, `{foo: bar}` → `foo={bar}`,
     `{...foo}` remains as is; methods and getters/setters work too.
@@ -451,3 +457,39 @@ esbuild.build({
 ```
 
 It's super fast and works great!
+
+Philosophy
+---
+
+Civet is a **large language that feels small**. Civet is large because it is mostly a **superset of TypeScript**,
+an already large language. Civet feels small because of the coherent design aesthetic: related
+features look and behave similarly, so when seeing a new feature you can have a good idea what it does,
+and your existing knowledge of JavaScript and other languages leads you in the right direction.
+
+Civet works with **existing tools**. We're not trying to replace the TypeScript type checker; we want to
+amplify its power. We're not trying to change ES semantics; we want to present them in a coherent and expressive
+way.
+
+**Less syntax** is preferred.
+
+**Context matters**. The same tokens can mean different things in different contexts. This shouldn't be arbitrary
+but based on pragmatic concerns. Things should be consistent where possible, especially conceptually.
+
+Civet builds on top of **history**. We've taken inspiration from languages like CoffeeScript, Elm, LiveScript, Flow,
+Haskell, Perl, Python, Ruby, Crystal, Bash, and others.
+
+Civet is **pragmatic**. Civet design is informed by 25+ years of JavaScript development. Frontend frameworks
+have come and gone but they all addressed issues that were important for their time. We focus heavily on
+addressing concerns that real developers feel every day. A key criteria for evaluating features is "how does it
+work in practice?".
+
+Civet **evolves**. As the official JS and TS specifications evolve into the future, Civet also evolves favoring **compatibility**.
+This may lead us to difficult choices where the future spec has evolved differently than we anticipated (pipe operators,
+do expressions, pattern matching). In those cases, Civet will adapt to match the latest spec while providing configuration
+options to allow migration bit by bit while keeping existing code working.
+
+Civet is **configurable**. There is no single "right way" for everyone at all times. Some of us have older CoffeeScript
+codebases that would benefit from added types. Others have massive TypeScript applications that could benefit from
+new language features and shorthand syntax. Civet provides a way to get the benefits bit by bit without a complete
+rewrite. This same configurability lets us experiment with language features to gain experience and improve them before
+locking them in. It also allows us to adapt to a changing future.
