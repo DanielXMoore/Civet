@@ -15,13 +15,13 @@ is almost always also valid Civet input.
 
 ## Basics
 
-### Humanize syntax
+### Humanize Operators
 
 <Playground>
 a is b
 a is not b
-a or b
 a and b
+a or b
 a not in b
 a?
 </Playground>
@@ -32,11 +32,14 @@ item is not in array
 substring is in string
 </Playground>
 
-### Variables
+### Variable Declaration
 
 <Playground>
 a := 10
 b .= 10
+c: number | string .= 0
+let d: boolean
+var v: any
 </Playground>
 
 ### Objects
@@ -51,8 +54,10 @@ obj :=
     y: 'cool'
 </Playground>
 
+Spreads anywhere:
+
 <Playground>
-{a, ...rest, b} = {a: 11, b: 12, x: 0, y: 1}
+{a, ...rest, b} = {a: 7, b: 8, x: 0, y: 1}
 </Playground>
 
 Flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects):
@@ -65,7 +70,22 @@ config := {
 }
 </Playground>
 
+Methods and getters/setters:
+
+<Playground>
+p := {
+  name: 'Mary'
+  say(msg)
+    console.log @name, 'says', msg
+  get NAME()
+    @name.toUpperCase()
+}
+p.say p.NAME
+</Playground>
+
 ### Arrays
+
+Commas are optional at the ends of lines.
 
 <Playground>
 rotate := [
@@ -81,7 +101,19 @@ func.apply @, [
 ]
 </Playground>
 
+<Playground>
+people := [
+  name: "Alice"
+  id: 7
+,
+  name: "Bob"
+  id: 9
+]
+</Playground>
+
 ### Triple-Quoted Strings
+
+Leading indentation is removed.
 
 <Playground>
 console.log '''
@@ -97,6 +129,15 @@ console.log """
     Civet #{version}
   </div>
 """
+</Playground>
+
+### Function Calls
+
+The parentheses in a function call are usually optional.
+If present, there should be no space between the function and the open paren.
+
+<Playground>
+console.log x, f(x), (f g x), g f x
 </Playground>
 
 ### Functions
@@ -258,8 +299,10 @@ while item?
 
 <Playground>
 class Animal
-  bark()
+  bark(): void
     console.log 'Woof!'
+  wiki()
+    fetch 'https://en.wikipedia.org/wiki/Animal'
 </Playground>
 
 ### Prototype
@@ -326,7 +369,6 @@ class Civet < Animal
 ### Operators
 
 <Playground>
-a is b
 a and= b
 a or= b
 a ?= b
