@@ -6,7 +6,7 @@ Civet
 [![NPM Downloads](https://img.shields.io/npm/dm/@danielx/civet.svg?style=for-the-badge)](https://www.npmjs.com/package/@danielx/civet)
 [![Discord](https://img.shields.io/discord/933472021310996512?style=for-the-badge)](https://discord.com/invite/xkrW9GebBc)
 
-The CoffeeScript of TypeScript. Much closer to ES2015+ (for better or worse).
+The modern way to write TypeScript.
 
 - [Documentation](https://civet.dev/)
 - [Online Civet Playground](https://civet-web.vercel.app/)
