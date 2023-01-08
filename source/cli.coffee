@@ -211,7 +211,8 @@ cli = ->
             stat = await fs.stat options.output
           catch
             stat = null
-          if stat?.isDirectory()
+          if stat?.isDirectory() or options.output.endsWith(path.sep) or
+                                    options.output.endsWith('/')
             # -o dir writes outputs into that directory with default name
             outputPath.dir = options.output
           else if /^(\.[^.]+)+$/.test optionsPath.base
@@ -223,6 +224,8 @@ cli = ->
             # -o filename fully specifies the output filename
             # (don't use this with multiple input files)
             outputPath = optionsPath
+        # Make output directory in case it doesn't already exist
+        fs.mkdir outputPath.dir, recursive: true if outputPath.dir
         outputFilename = path.format outputPath
         try
           await fs.writeFile outputFilename, output
