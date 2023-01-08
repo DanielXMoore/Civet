@@ -180,6 +180,11 @@ specifying a `void` return type, adding a final semicolon or explicit `return`,
 or globally using the directive `"civet -implicitReturns"`.
 :::
 
+<Playground>
+function abort: void
+  process.exit 1
+</Playground>
+
 #### Single-Argument Shorthand
 
 <Playground>
