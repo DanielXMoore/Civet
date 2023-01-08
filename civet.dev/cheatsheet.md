@@ -136,6 +136,8 @@ console.log """
 """
 </Playground>
 
+## Functions
+
 ### Function Calls
 
 The parentheses in a function call are usually optional.
@@ -145,26 +147,11 @@ If present, there should be no space between the function and the open paren.
 console.log x, f(x), (f g x), g f x
 </Playground>
 
-### Functions
+### `function`
 
 <Playground>
 function abort
   process.exit 1
-</Playground>
-
-<Playground>
-(a: number, b: number) => a + b
-</Playground>
-
-<Playground>
-add := (a: number, b: number) -> a + b
-</Playground>
-
-<Playground>
-(degrees: number): {x: number, y: number} =>
-  radians := degrees * Math.PI / 180
-  x: Math.cos theta
-  y: Math.sin theta
 </Playground>
 
 <Playground>
@@ -185,7 +172,35 @@ function abort: void
   process.exit 1
 </Playground>
 
-#### Single-Argument Shorthand
+### Arrow Functions
+
+Unlike ECMAScript, zero-argument arrows do not need a `()` prefix,
+but one-argument arrows do need parentheses around the argument.
+
+<Playground>
+abort := -> process.exit 1
+</Playground>
+
+<Playground>
+add := (a: number, b: number) -> a + b
+</Playground>
+
+<Playground>
+add := (a: number, b: number) => a + b
+</Playground>
+
+<Playground>
+greet := (name) => console.log "Hello", name
+</Playground>
+
+<Playground>
+circle := (degrees: number): {x: number, y: number} =>
+  radians := degrees * Math.PI / 180
+  x: Math.cos theta
+  y: Math.sin theta
+</Playground>
+
+### Single-Argument Shorthand
 
 <Playground>
 x.map &.name
