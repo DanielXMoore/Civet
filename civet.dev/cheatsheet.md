@@ -148,6 +148,11 @@ console.log x, f(x), (f g x), g f x
 ### Functions
 
 <Playground>
+function abort
+  process.exit 1
+</Playground>
+
+<Playground>
 (a: number, b: number) => a + b
 </Playground>
 
