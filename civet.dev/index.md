@@ -11,7 +11,9 @@ aside: false
 
 <Hero />
 
-Civet on the left, compiled TypeScript output on the right:
+Civet on <span class="wide">the left</span><span class="narrow">top</span>,
+compiled TypeScript output on
+<span class="wide">the right</span><span class="narrow">bottom</span>:
 
 <Playground>
 i .= 0

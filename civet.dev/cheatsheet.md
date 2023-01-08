@@ -5,11 +5,16 @@ aside: false
 
 # {{ $frontmatter.title }}
 
-Civet on the left, compiled TypeScript output on the right.
+Civet on <span class="wide">the left</span><span class="narrow">top</span>,
+compiled TypeScript output on
+<span class="wide">the right</span><span class="narrow">bottom</span>.
 
-In most cases, the Civet code on the left is optional shorthand.
-The TypeScript code on the right (and most TypeScript code)
-is almost always also valid Civet input.
+In most cases, the Civet code on
+<span class="wide">the left</span><span class="narrow">top</span>
+is optional shorthand.
+The TypeScript code on
+<span class="wide">the right</span><span class="narrow">bottom</span>
+(and most TypeScript code) is almost always also valid Civet input.
 
 [[toc]]
 
