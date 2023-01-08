@@ -224,6 +224,7 @@ cli = ->
             # (don't use this with multiple input files)
             outputPath = optionsPath
         outputFilename = path.format outputPath
+        os.mkdir outputPath.dir { recursive: true }
         try
           await fs.writeFile outputFilename, output
         catch error
