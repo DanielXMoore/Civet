@@ -106,6 +106,8 @@ readFiles = (filenames, options) ->
         filename = "<stdin>"
         try
           filename = await fs.realpath '/dev/stdin'
+
+      if filename is "<stdin>"
         lines = []
         rl = require('readline').createInterface process.stdin, process.stdout
         rl.on 'line', (buffer) -> lines.push buffer + '\n'
