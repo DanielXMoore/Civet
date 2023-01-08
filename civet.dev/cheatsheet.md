@@ -75,7 +75,7 @@ config := {
 }
 </Playground>
 
-Methods and getters/setters:
+Methods and getters/setters in braced objects:
 
 <Playground>
 p := {
@@ -300,12 +300,31 @@ do
 while item?
 </Playground>
 
+## Types
+
+<Playground>
+type ID = number | string
+</Playground>
+
+<Playground>
+interface Point
+  x: number
+  y: number
+</Playground>
+
+<Playground>
+interface Node<T>
+  value: T
+  next: Node<T>
+</Playground>
+
 ## Classes
 
 <Playground>
 class Animal
+  sound = "Woof!"
   bark(): void
-    console.log 'Woof!'
+    console.log @sound
   wiki()
     fetch 'https://en.wikipedia.org/wiki/Animal'
 </Playground>
@@ -325,21 +344,21 @@ id := @id
 obj := { @id }
 </Playground>
 
-### Static fields
+### Static Fields
 
 <Playground>
 class A
   @a = 'civet'
 </Playground>
 
-### Readonly fields
+### Readonly Fields
 
 <Playground>
 class B
   b := 'civet'
 </Playground>
 
-### Typed fields
+### Typed Fields
 
 <Playground>
 class C
@@ -347,14 +366,19 @@ class C
   @root: Element = document.body
 </Playground>
 
-### Class constructor
+### Constructor
 
 <Playground>
 class Rectangle
-  @(@height: number, @width: number)
+  @(@width: number, @height: number)
 </Playground>
 
-### Class static block
+<Playground>
+class Rectangle
+  @(public width: number, public height: number)
+</Playground>
+
+### Static Block
 
 <Playground>
 class Civet
@@ -363,7 +387,7 @@ class Civet
       this.colors = getCivetColors()
 </Playground>
 
-### Class extending
+### Extends
 
 <Playground>
 class Civet < Animal
