@@ -63,10 +63,10 @@ export default async function vitePressConfig() {
             const inputHtml = highlighter.codeToHtml(code, { lang: 'coffee' });
             const outputHtml = highlighter.codeToHtml(tsCode, { lang: 'tsx' });
 
-            return `${lines[0]}
+            return `<Playground code="${encodeURI(code)}">
               <template #input>${inputHtml}</template>
               <template #output>${outputHtml}</template>
-            ${lines[lines.length - 1]}`;
+            </Playground>`;
           }
 
           return defaultRender(tokens, idx, options, env, self);
