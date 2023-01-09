@@ -47,6 +47,14 @@ To use TypeScript for type checking, create a `tsconfig.json` file. For example:
 
 ```json
 {
+  "compilerOptions": {
+    "strict": true,
+    "jsx": "preserve",
+    "lib": ["es2021"],
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true
+  },
   "ts-node": {
     "transpileOnly": true,
     "compilerOptions": {
