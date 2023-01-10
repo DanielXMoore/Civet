@@ -354,13 +354,6 @@ class Animal
     fetch 'https://en.wikipedia.org/wiki/Animal'
 </Playground>
 
-### Prototype
-
-<Playground>
-X::
-X::a
-</Playground>
-
 ### This
 
 <Playground>
@@ -677,12 +670,36 @@ console.log "Hello #{name}!"
 ### CoffeeScript Operators
 
 <Playground>
-"civet coffeeEq coffeeIsnt coffeeNot coffeeBinaryExistential coffeeOf"
+"civet coffeeEq"
 x == y != z
+</Playground>
+
+<Playground>
+"civet coffeeIsnt"
 x isnt y
+</Playground>
+
+<Playground>
+"civet coffeeNot"
 not (x == y)
+not x == y
+</Playground>
+
+<Playground>
+"civet coffeeBinaryExistential"
 x ? y
+</Playground>
+
+<Playground>
+"civet coffeeOf"
+item in array
 key of object
+</Playground>
+
+<Playground>
+"civet coffeePrototype"
+X::
+X::a
 </Playground>
 
 ### CoffeeScript Comments
