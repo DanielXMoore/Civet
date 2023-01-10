@@ -62,7 +62,7 @@ watch(userCode, async () => {
       </div>
     </div>
 
-    <div class="col">
+    <div class="col" :class="{ 'col--error': compileError }">
       <div class="code code--output">
         <div v-if="outputHtml" v-html="outputHtml" />
         <slot v-else name="output" />
@@ -85,8 +85,12 @@ watch(userCode, async () => {
   background: var(--vp-code-block-bg);
   border-radius: 5px;
   border: 1px solid transparent;
-  transition: border-color 0.1s;
+  transition: border-color 0.15s;
   width: calc(50% - 10px);
+}
+
+.col--error {
+  border: 1px solid var(--vp-c-red-dimm-1);
 }
 
 @media (max-width: 767px) {
