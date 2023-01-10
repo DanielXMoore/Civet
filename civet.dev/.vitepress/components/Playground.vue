@@ -43,7 +43,8 @@ watch(userCode, async () => {
     <div class="col" @click="textareaEl?.focus()">
       <div class="code code--user">
         <textarea
-          v-model="userCode"
+          :value="userCode"
+          :onInput="(e: any) => (userCode = e.target.value)"
           ref="textareaEl"
           resize="false"
           spellcheck="false"
@@ -154,18 +155,12 @@ watch(userCode, async () => {
   overflow-x: auto;
   background-color: transparent !important;
   border-radius: 5px;
-  overflow: visible;
+
   position: relative;
   z-index: 1;
 }
 
-@media (max-width: 1000px) {
-  .textarea,
-  .compilation-info {
-    display: none;
-  }
-  .code:deep(pre) {
-    overflow: auto;
-  }
+.code--input:deep(pre) {
+  overflow: visible;
 }
 </style>
