@@ -159,6 +159,10 @@ Largely inspired by [solid-dsl discussions](https://github.com/solidjs-community
       readonly x = 3
     }
   ```
+- Proposal: [Typed Destructuring](https://github.com/DanielXMoore/Civet/discussions/126)
+- Proposal: [Dot Notation for Types](https://github.com/DanielXMoore/Civet/discussions/190)
+- Proposal: [Module Interfaces](https://github.com/DanielXMoore/Civet/discussions/179) https://github.com/microsoft/TypeScript/issues/38511
+- TODO: [Type Declaration Shorthand](https://github.com/DanielXMoore/Civet/issues/176)
 
 ### Changes from ES6
 
