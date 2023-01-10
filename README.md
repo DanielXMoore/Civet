@@ -5,6 +5,7 @@ Civet
 [![NPM Version](https://img.shields.io/npm/v/@danielx/civet.svg?style=for-the-badge)](https://www.npmjs.com/package/@danielx/civet)
 [![NPM Downloads](https://img.shields.io/npm/dm/@danielx/civet.svg?style=for-the-badge)](https://www.npmjs.com/package/@danielx/civet)
 [![Discord](https://img.shields.io/discord/933472021310996512?style=for-the-badge)](https://discord.com/invite/xkrW9GebBc)
+[![Open Collective](https://img.shields.io/opencollective/all/civet?style=for-the-badge)](https://opencollective.com/civet)
 
 The modern way to write TypeScript.
 
