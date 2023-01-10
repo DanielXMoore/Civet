@@ -1,4 +1,9 @@
-const playgroundWorker = new Worker('/playground.worker.js');
+let playgroundWorker: Worker = {} as Worker;
+
+// @ts-ignore
+if (!import.meta.env.SSR) {
+  playgroundWorker = new Worker('/playground.worker.js');
+}
 
 const msgMap: Record<string, any> = {};
 playgroundWorker.onmessage = ({ data }) => {
