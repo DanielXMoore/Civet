@@ -122,4 +122,9 @@ makeCache = ->
 
   return events
 
-export default { parse, generate, util, compile }
+# TODO: Import ParseError class from Hera
+export isCompileError = (err) ->
+  err instanceof Error and
+  [err.message, err.name, err.filename, err.line, err.column, err.offset].every (value) -> value isnt undefined
+
+export default { parse, generate, util, compile, isCompileError }

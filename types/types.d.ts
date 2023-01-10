@@ -16,6 +16,17 @@ declare module "@danielx/civet" {
     }
   }
 
+  // TODO: Import ParseError class from Hera
+  export type ParseError = {
+    message: string
+    name: string
+    filename: string
+    line: number
+    column: number
+    offset: number
+  }
+  export function isCompileError(err: any): err is ParseError
+
   export function compile<T extends CompileOptions>(source: string, options?: T): T extends { sourceMap: true } ? {
     code: string,
     sourceMap: SourceMap,
@@ -25,6 +36,7 @@ declare module "@danielx/civet" {
 
   const Civet: {
     compile: typeof compile
+    isCompileError: typeof isCompileError
     parse: typeof parse
     generate: typeof generate
     util: {
