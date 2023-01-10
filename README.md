@@ -146,6 +146,20 @@ Largely inspired by [solid-dsl discussions](https://github.com/solidjs-community
   client and server (SSR + hydration).
 - XML comments: `<!-- ... -->` → `{/* ... */}`
 
+### TypeScript Enhancements
+
+- Auto-rewrite `.[mc]ts` → `.[mc]js` in imports (workaround for: https://github.com/microsoft/TypeScript/issues/37582)
+- `:=` readonly class field initializer
+  ```typescript
+    class A
+      x := 3
+  ```
+  ```typescript
+    class A {
+      readonly x = 3
+    }
+  ```
+
 ### Changes from ES6
 
 - Implicit returns, even for multi-statement functions
