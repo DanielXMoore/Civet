@@ -497,6 +497,12 @@ data
   |> Object.keys
   |> console.log
 </Playground>
+      
+Pipe expression with shorthand functions:
+      
+<Playground>
+a |> & + 1 |> bar
+</Playground>
 
 ## Automatic Variable Declaration
 
