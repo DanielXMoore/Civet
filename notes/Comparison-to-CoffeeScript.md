@@ -1,4 +1,4 @@
-Civet from CoffeeScript
+Comparison to CoffeeScript
 ===
 
 If you are coming to Civet from a CoffeeScript background this summary will be helpful.
