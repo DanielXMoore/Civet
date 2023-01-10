@@ -30,8 +30,18 @@ onmessage = async (e) => {
 
     postMessage({ uid, inputHtml, outputHtml });
   } catch (error) {
-    console.info('Snippet compilation error!', error);
-    postMessage({ uid, inputHtml, error });
+    if (Civet.isCompileError(error)) {
+      console.info('Snippet compilation error!', error);
+
+      const linesUntilError = code.split('\n').slice(0, error.line).join('\n');
+      const errorLine = `${' '.repeat(error.column - 1)}^ ${error.name}`;
+      const errorCode = `${linesUntilError}\n${errorLine}`;
+      const outputHtml = highlighter.codeToHtml(errorCode, { lang: 'coffee' });
+
+      postMessage({ uid, inputHtml, outputHtml, error });
+    } else {
+      throw err;
+    }
   }
 };
 
