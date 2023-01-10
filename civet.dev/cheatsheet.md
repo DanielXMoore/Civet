@@ -555,7 +555,7 @@ and [jsx spec issues](https://github.com/facebook/jsx/issues)
 
 ::: tip
 
-`!` is synonyous with `-` and both say "set the attribute value to false".
+`!` is synonymous with `-` and both say "set the attribute value to false".
 
 :::
 
