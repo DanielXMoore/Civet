@@ -49,7 +49,7 @@ Things Kept from CoffeeScript
 - RestElement/RestParameter in any position `(first, ...midle, last) ->` → `function(first, ...middle) { let [last] = middle.splice(-1)}`
 - `///` Heregexp
   - With some [changes](#things-changed-from-coffeescript).
-- [JSX with improved shorthands and an optional nested syntax](./README.md#jsx-enhancements).
+- [JSX with improved shorthands and an optional nested syntax](../README.md#jsx-enhancements).
 
 Things Removed from CoffeeScript
 ---

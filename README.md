@@ -69,18 +69,24 @@ Overview
 
 Civet is essentially a tasteful superset of TypeScript.
 
-### TypeScript ehnancements
-- Auto-rewrite `.[mc]ts` → `.[mc]js` in imports (workaround for: https://github.com/microsoft/TypeScript/issues/37582)
-- `:=` readonly class field initializer
-  ```typescript
-    class A
-      x := 3
-  ```
-  ```typescript
-    class A {
-      readonly x = 3
-    }
-  ```
+### Implementations of New and Proposed ES Features
+
+- Pipe operator (based on [F# pipes](https://learn.microsoft.com/en-us/dotnet/fsharp/language-reference/symbol-and-operator-reference/#function-symbols-and-operators), [Hack pipes](https://docs.hhvm.com/hack/expressions-and-operators/pipe) and the [TC39 proposal](https://github.com/tc39/proposal-pipeline-operator))
+  - `data |> Object.keys |> console.log` equivalent to
+    `console.log(Object.keys(data))`
+  - Use single-argument arrow functions or `&` shorthand
+    to specify how to use left-hand side
+  - `|> await`, `|> yield`, and `|> return` (at end)
+    for wrapping left-hand side with that operation
+- Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc), [Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax), [Elm record access](https://elm-lang.org/docs/records#access)
+  - Access: `x.map &.name` → `x.map(a => a.name)`
+  - Nested access + slices: `x.map &.profile?.name[0...3]` → `x.map(a => a.profile?.name.slice(0, 3))`
+  - Function call: `x.map &.callback a, b` → `x.map($ => $.callback(a, b))`
+  - Unary operators: `x.map !!&` → `x.map($ => !!$)`
+  - Binary operators: `x.map &+1` → `x.map($ => $+1)`
+- Flagging shorthand based on [from LiveScript](https://livescript.net/#literals-objects):
+  `{+debug, -live, !verbose}` → `{debug: true, live: false, verbose: false}`
+
 
 ### Convenience for ES6+ Features
 
@@ -102,24 +108,6 @@ Civet is essentially a tasteful superset of TypeScript.
 - ClassStaticBlock `@ { ... }`
 - `<` as `extends` shorthand
 - `///` Block RegExp [like Python re.X](https://docs.python.org/3/library/re.html#re.X)
-
-### Implementations of New and Proposed ES Features
-
-- Pipe operator (based on [F# pipes](https://learn.microsoft.com/en-us/dotnet/fsharp/language-reference/symbol-and-operator-reference/#function-symbols-and-operators), [Hack pipes](https://docs.hhvm.com/hack/expressions-and-operators/pipe) and the [TC39 proposal](https://github.com/tc39/proposal-pipeline-operator))
-  - `data |> Object.keys |> console.log` equivalent to
-    `console.log(Object.keys(data))`
-  - Use single-argument arrow functions or `&` shorthand
-    to specify how to use left-hand side
-  - `|> await`, `|> yield`, and `|> return` (at end)
-    for wrapping left-hand side with that operation
-- Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc), [Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax), [Elm record access](https://elm-lang.org/docs/records#access)
-  - Access: `x.map &.name` → `x.map(a => a.name)`
-  - Nested access + slices: `x.map &.profile?.name[0...3]` → `x.map(a => a.profile?.name.slice(0, 3))`
-  - Function call: `x.map &.callback a, b` → `x.map($ => $.callback(a, b))`
-  - Unary operators: `x.map !!&` → `x.map($ => !!$)`
-  - Binary operators: `x.map &+1` → `x.map($ => $+1)`
-- Flagging shorthand based on [from LiveScript](https://livescript.net/#literals-objects):
-  `{+debug, -live, !verbose}` → `{debug: true, live: false, verbose: false}`
 
 ### JSX Enhancements
 
@@ -194,10 +182,10 @@ could be a valid property `1.e10` → `1..e10`. The workaround is to add a trail
   console.log "hi"
   ```
 
-Are You Coming to Civet from CoffeeScript?
+Comparison to CoffeeScript
 ---
 
-Take a look at [Civet from CoffeeScript](./Civet-from-CoffeeScript.md)
+Take a look at this [detailed Civet // CoffeeScript comparision](./notes/Comparison-to-CoffeeScript.md)
 
 ECMAScript Compatibility
 ---
