@@ -231,7 +231,7 @@ name :=
   if power === Infinity
     "Saitama"
   else if power > 9000
-    "Roku"
+    "Goku"
 </Playground>
 
 ### Unless
