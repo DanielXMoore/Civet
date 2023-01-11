@@ -33,6 +33,23 @@ extensionResolverPlugin = (extensions) ->
 resolveExtensions = extensionResolverPlugin(["hera", "coffee"])
 
 esbuild.build({
+  entryPoints: ['source/config.coffee']
+  bundle: false
+  sourcemap
+  minify
+  watch
+  platform: 'node'
+  outfile: 'dist/config.js'
+  plugins: [
+    resolveExtensions
+    coffeeScriptPlugin
+      bare: true
+      inlineMap: sourcemap
+    heraPlugin
+  ]
+}).catch -> process.exit 1
+
+esbuild.build({
   entryPoints: ['source/cli.coffee']
   bundle: false
   sourcemap
