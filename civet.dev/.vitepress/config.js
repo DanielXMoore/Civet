@@ -7,6 +7,7 @@ import { getHighlighter } from './utils/getHighlighter';
 import civet from '../../dist/main.mjs';
 import prettier from 'prettier';
 import { getOpenCollectiveInfo } from './utils/getOpenCollectiveInfo';
+import { b64 } from './utils/b64';
 
 export default async function vitePressConfig() {
   const highlighter = await getHighlighter();
@@ -28,7 +29,7 @@ export default async function vitePressConfig() {
         { text: 'Cheatsheet', link: '/cheatsheet' },
         { text: 'Integrations', link: '/integrations' },
         { text: 'Config', link: '/config' },
-        { text: 'Playground', link: 'https://civet-web.vercel.app/' },
+        { text: 'Playground', link: '/playground' },
       ],
       editLink: {
         pattern:
@@ -63,7 +64,7 @@ export default async function vitePressConfig() {
             const inputHtml = highlighter.codeToHtml(code, { lang: 'coffee' });
             const outputHtml = highlighter.codeToHtml(tsCode, { lang: 'tsx' });
 
-            return `<Playground code="${encodeURI(code)}">
+            return `<Playground b64-code="${b64.encode(code)}">
               <template #input>${inputHtml}</template>
               <template #output>${outputHtml}</template>
             </Playground>`;
@@ -74,5 +75,9 @@ export default async function vitePressConfig() {
       },
     },
     head,
+    transformPageData(pageData) {
+      pageData.civetVersion = pkg.version;
+      return pageData;
+    },
   });
 }

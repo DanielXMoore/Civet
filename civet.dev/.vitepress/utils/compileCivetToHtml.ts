@@ -13,12 +13,18 @@ playgroundWorker.onmessage = ({ data }) => {
 
 let uid = 0;
 
-export function compileCivetToHtml(
-  code: string,
-  prettierOutput = true
-): Promise<{ inputHtml: string; outputHtml?: string; error?: string }> {
+export function compileCivetToHtml({
+  code = '',
+  prettierOutput = true,
+  jsOutput = false,
+}): Promise<{
+  inputHtml: string;
+  outputHtml?: string;
+  error?: string;
+  jsCode?: string;
+}> {
   uid++;
-  playgroundWorker.postMessage({ uid, code, prettierOutput });
+  playgroundWorker.postMessage({ uid, code, prettierOutput, jsOutput });
   return new Promise((resolve) => {
     msgMap[uid] = { resolve };
   });

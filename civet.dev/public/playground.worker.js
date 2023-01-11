@@ -4,12 +4,17 @@ importScripts('https://unpkg.com/shiki');
 importScripts('/__civet.js');
 
 onmessage = async (e) => {
-  const { uid, code, prettierOutput } = e.data;
+  const { uid, code, prettierOutput, jsOutput } = e.data;
   const highlighter = await getHighlighter();
   const inputHtml = highlighter.codeToHtml(code, { lang: 'coffee' });
 
   try {
     let tsCode = Civet.compile(code);
+    let jsCode = '';
+
+    if (jsOutput) {
+      jsCode = Civet.compile(code, { js: true });
+    }
 
     if (prettierOutput) {
       try {
@@ -28,7 +33,7 @@ onmessage = async (e) => {
 
     const outputHtml = highlighter.codeToHtml(tsCode, { lang: 'tsx' });
 
-    postMessage({ uid, inputHtml, outputHtml });
+    postMessage({ uid, inputHtml, outputHtml, jsCode });
   } catch (error) {
     if (Civet.isCompileError(error)) {
       console.info('Snippet compilation error!', error);
