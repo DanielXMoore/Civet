@@ -6,7 +6,7 @@ Node.js's `require`.
 
 @example
 ```bash
-node -r @danielx/civet/register.js source.civet
+node -r @danielx/civet/register source.civet
 ```
 */
 
