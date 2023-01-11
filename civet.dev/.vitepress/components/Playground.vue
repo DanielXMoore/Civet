@@ -1,30 +1,49 @@
 <script lang="ts" setup>
-import { onMounted, ref, watch, nextTick } from 'vue';
+import { onMounted, ref, watch, nextTick, computed } from 'vue';
 import { compileCivetToHtml } from '../utils/compileCivetToHtml';
+import { b64 } from '../utils/b64';
 
-const props = defineProps<{ code?: string }>();
-const exampleCode = decodeURI(props.code!);
-const userCode = ref(exampleCode);
+const emit = defineEmits(['input']);
+const props = defineProps<{
+  b64Code: string;
+  compileAtStart?: boolean;
+  emitJsOutput?: boolean;
+  clearTrigger?: boolean;
+  hideLink?: boolean;
+}>();
 
+const userCode = ref(b64.decode(props.b64Code));
 const compileError = ref<string | undefined>('');
 const inputHtml = ref('');
 const outputHtml = ref('');
 const inputHtmlEl = ref<HTMLDivElement>();
 const textareaEl = ref<HTMLTextAreaElement>();
 
-function fixTextareaHeight() {
-  if (textareaEl.value && inputHtmlEl.value) {
-    textareaEl.value.style.height = `${inputHtmlEl.value.clientHeight}px`;
-    textareaEl.value.style.width = `${
-      inputHtmlEl.value.querySelector('code')!.scrollWidth + 20
-    }px`;
-  }
+// Compile on input
+onMounted(fixTextareaSize);
+watch(userCode, compile);
+
+// Clear
+watch(
+  () => props.clearTrigger,
+  () => (userCode.value = '')
+);
+
+// Compile client side
+const loading = ref(true);
+if (props.compileAtStart) {
+  compile().then(() => {
+    loading.value = false;
+  });
 }
 
-onMounted(fixTextareaHeight);
+async function compile() {
+  const snippet = await compileCivetToHtml({
+    code: userCode.value + '\n',
+    jsOutput: props.emitJsOutput,
+  });
 
-watch(userCode, async () => {
-  const snippet = await compileCivetToHtml(userCode.value + '\n');
+  emit('input', userCode.value, snippet.jsCode);
 
   compileError.value = snippet.error;
   inputHtml.value = snippet.inputHtml;
@@ -34,12 +53,26 @@ watch(userCode, async () => {
   }
 
   await nextTick();
-  fixTextareaHeight();
+  fixTextareaSize();
+}
+
+function fixTextareaSize() {
+  if (textareaEl.value && inputHtmlEl.value) {
+    textareaEl.value.style.height = `${inputHtmlEl.value.clientHeight}px`;
+    textareaEl.value.style.width = `${
+      inputHtmlEl.value.querySelector('code')!.scrollWidth + 20
+    }px`;
+  }
+}
+
+const playgroundUrl = computed(() => {
+  return `/playground?code=${b64.encode(userCode.value)}`;
 });
 </script>
 
 <template>
-  <div class="wrapper">
+  <div v-if="props.compileAtStart && loading">Loading playground...</div>
+  <div v-else class="wrapper">
     <div class="col" @click="textareaEl?.focus()">
       <div class="code code--user">
         <textarea
@@ -55,10 +88,20 @@ watch(userCode, async () => {
       <div class="code code--input" ref="inputHtmlEl">
         <div v-if="inputHtml" v-html="inputHtml" />
         <slot v-else name="input" />
-        <div class="compilation-info">
-          <span v-if="inputHtml && compileError">❌ Compile error</span>
-          <span v-else>Edit this snippet!</span>
-        </div>
+      </div>
+
+      <div class="compilation-info" v-if="!hideLink">
+        <span>
+          Edit inline or
+          <a
+            :href="playgroundUrl"
+            @click.prevent
+            class="edit-in-the-background"
+          >
+            edit in the Playground!
+          </a>
+        </span>
+        <span v-if="inputHtml && compileError"> ❌ Compile error ❌</span>
       </div>
     </div>
 
@@ -102,6 +145,7 @@ watch(userCode, async () => {
 .code {
   width: 100%;
   cursor: text;
+  margin-bottom: 20px;
 }
 
 .code--user {
@@ -133,10 +177,17 @@ watch(userCode, async () => {
 .compilation-info {
   position: absolute;
   right: 8px;
-  bottom: 2px;
+  bottom: 3px;
   font-size: 12px;
   color: var(--vp-c-text-dark-1);
-  opacity: 0.4;
+  opacity: 0.5;
+  z-index: 4;
+}
+
+.edit-in-the-background {
+  cursor: pointer;
+  color: var(--vp-c-green-light);
+  padding: 10px 0;
 }
 
 .code:deep(code) {

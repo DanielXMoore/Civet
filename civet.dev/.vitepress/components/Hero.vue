@@ -10,7 +10,7 @@ const actions = [
   {
     theme: 'alt',
     text: 'Civet playground',
-    link: 'https://civet-web.vercel.app/',
+    link: '/playground',
   },
 ];
 </script>
