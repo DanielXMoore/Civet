@@ -8,7 +8,7 @@ const query = new URLSearchParams(location.search);
 // Try to load b64 code
 let b64Code = ref('');
 try {
-  const queryCode = query.get('code');
+  const queryCode = query.get('code')?.replace(/ /g, '+');
   if (queryCode) b64Code.value = queryCode;
 } catch (err) {}
 if (!b64Code.value) b64Code.value = window.localStorage.getItem('code') ?? '';
