@@ -33,7 +33,7 @@ export default async function vitePressConfig() {
       ],
       editLink: {
         pattern:
-          'https://github.com/DanielXMoore/Civet/edit/master/civet.dev/:path',
+          'https://github.com/DanielXMoore/Civet/edit/main/civet.dev/:path',
         text: 'Edit this page on GitHub',
       },
       socialLinks: [
