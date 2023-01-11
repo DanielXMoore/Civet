@@ -139,7 +139,9 @@ repl = (options) ->
         when options.compile then '🐈> '
         else '🐱> '
     writer:
-      if options.compile and not options.ast
+      if options.ast
+        (obj) -> JSON.stringify obj, null, 2
+      else if options.compile
         (obj) -> obj?.replace /\n*$/, ''
     eval: (input, context, filename, callback) ->
       if input == '\n'  # blank input
