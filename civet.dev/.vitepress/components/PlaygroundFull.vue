@@ -46,7 +46,13 @@ function runInBrowser() {
   const output: string[] = [];
   console.log = (...args) => {
     defaultConsoleLog(...args);
-    output.push(args.join(' '));
+    output.push(
+      args
+        .map((arg) =>
+          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : arg
+        )
+        .join(' ')
+    );
   };
 
   try {
