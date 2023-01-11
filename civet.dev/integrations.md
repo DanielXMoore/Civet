@@ -19,3 +19,7 @@ title: Integrations
 
 - [Solid](https://github.com/orenelbaum/solid-civet-template)
 - [SolidStart](https://github.com/orenelbaum/solid-start-civet-template)
+
+## Testing
+
+- [c8 + Mocha](https://github.com/DanielXMoore/Civet#c8--mocha)

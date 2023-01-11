@@ -268,7 +268,7 @@ Currently Civet's ESM loader depends on [ts-node](https://www.npmjs.com/package/
     ],
     "loader": [
       "ts-node/esm",
-      "@danielx/civet/esm.mjs"
+      "@danielx/civet/esm"
     ],
     ...
   ...
