@@ -31,11 +31,14 @@ watch(
 
 // Compile client side
 const loading = ref(true);
-if (props.compileAtStart) {
-  compile().then(() => {
+onMounted(async () => {
+  if (props.compileAtStart) {
+    await compile();
     loading.value = false;
-  });
-}
+    await nextTick();
+    fixTextareaSize();
+  }
+});
 
 async function compile() {
   const snippet = await compileCivetToHtml({
