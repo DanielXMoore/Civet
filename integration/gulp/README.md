@@ -3,6 +3,8 @@
 `gulp-civet` compiles your [Civet](https://civet.dev) code
 in a [Gulp](https://gulpjs.com/) workflow
 
+The code is based on [gulp-coffee](https://github.com/gulp-community/gulp-coffee).
+
 ## Usage
 
 ```js
