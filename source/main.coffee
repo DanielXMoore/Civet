@@ -13,33 +13,81 @@ defaultOptions = {}
 # Essentially anything that depends on mutable state in the parser like indents and the rules that depend on them
 # One day this will be better supported by Hera
 uncacheable = new Set [
-  "TrackIndented", "Samedent", "IndentedFurther", "PushIndent", "PopIndent", "Nested", "InsertIndent",
-  "Arguments", "ArgumentsWithTrailingCallExpressions", "ApplicationStart",
-  "CallExpression", "CallExpressionRest", "LeftHandSideExpression", "ActualAssignment", "UpdateExpression",
-  "UnaryExpression", "BinaryOpExpression", "BinaryOpRHS", "ConditionalExpression", "ShortCircuitExpression",
-  "InlineObjectLiteral", "ImplicitInlineObjectPropertyDelimiter",
-  "FatArrowBody", "ThinArrowFunction", "ArrowFunctionTail", "ArrowFunction",
-  "ImplicitNestedBlock", "BracedBlock", "BracedOrEmptyBlock",
-  "NestedBlockExpression", "NestedBlockExpression", "NestedBlockStatements",
-  "SingleLineStatements", "ExpressionStatement", "Statement",
-  "IndentedJSXChildExpression",
-  "NestedJSXChildExpression",
-  "ObjectLiteral",
-  "NestedObject",
-  "NestedImplicitObjectLiteral",
-  "BracedObjectLiteralContent",
-  "NestedPropertyDefinitions",
-  "NestedImplicitPropertyDefinition", "NestedImplicitPropertyDefinitions", "NestedBlockStatement",
-  "NestedElement", "NestedElementList", "NestedBindingElement", "NestedBindingElements", "NestedInterfaceProperty",
-  "SnugNamedProperty",
-  "MemberExpression", "PrimaryExpression",
-  "IndentedApplicationAllowed", "ExpressionWithIndentedApplicationSuppressed", "SuppressIndentedApplication",
-  "AssignmentExpressionTail", "AssignmentExpression", "ExtendedExpression", "Expression", "MemberExpressionRest",
-  "ElseClause",
-  "CoffeeCommentEnabled", "SingleLineComment", "Debugger",
-  "JSXImplicitFragment",
-  "JSXTag", "JSXElement", "TypedJSXElement", "JSXFragment", "TypedJSXFragment",
-  "JSXChild", "JSXChildren", "JSXNestedChildren", "JSXMixedChildren",
+  "ActualAssignment"
+  "ApplicationStart"
+  "Arguments"
+  "ArgumentsWithTrailingCallExpressions"
+  "ArrowFunction"
+  "ArrowFunctionTail"
+  "AssignmentExpression"
+  "AssignmentExpressionTail"
+  "BinaryOpExpression"
+  "BinaryOpRHS"
+  "BracedBlock"
+  "BracedObjectLiteralContent"
+  "BracedOrEmptyBlock"
+  "CallExpression"
+  "CallExpressionRest"
+  "CoffeeCommentEnabled"
+  "ConditionalExpression"
+  "Debugger"
+  "ElseClause"
+  "Expression"
+  "ExpressionStatement"
+  "ExpressionWithIndentedApplicationSuppressed"
+  "ExtendedExpression"
+  "FatArrowBody"
+  "ImplicitInlineObjectPropertyDelimiter"
+  "ImplicitNestedBlock"
+  "IndentedApplicationAllowed"
+  "IndentedFurther"
+  "IndentedJSXChildExpression"
+  "InlineObjectLiteral"
+  "InsertIndent"
+  "JSXChild"
+  "JSXChildren"
+  "JSXElement"
+  "JSXFragment"
+  "JSXImplicitFragment"
+  "JSXMixedChildren"
+  "JSXNestedChildren"
+  "JSXTag"
+  "LeftHandSideExpression"
+  "MemberExpression"
+  "MemberExpressionRest"
+  "Nested"
+  "NestedBindingElement"
+  "NestedBindingElements"
+  "NestedBlockExpression"
+  "NestedBlockExpression"
+  "NestedBlockStatement"
+  "NestedBlockStatements"
+  "NestedElement"
+  "NestedElementList"
+  "NestedImplicitObjectLiteral"
+  "NestedImplicitPropertyDefinition"
+  "NestedImplicitPropertyDefinitions"
+  "NestedInterfaceProperty"
+  "NestedJSXChildExpression"
+  "NestedObject"
+  "NestedPropertyDefinitions"
+  "ObjectLiteral"
+  "PopIndent"
+  "PrimaryExpression"
+  "PushIndent"
+  "Samedent"
+  "ShortCircuitExpression"
+  "SingleLineComment"
+  "SingleLineStatements"
+  "SnugNamedProperty"
+  "Statement"
+  "SuppressIndentedApplication"
+  "ThinArrowFunction"
+  "TrackIndented"
+  "TypedJSXElement"
+  "TypedJSXFragment"
+  "UnaryExpression"
+  "UpdateExpression"
 ]
 
 export compile = (src, options=defaultOptions) ->
