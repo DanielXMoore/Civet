@@ -16,7 +16,7 @@ uncacheable = new Set [
   "ActualAssignment"
   "ApplicationStart"
   "Arguments"
-  "ArgumentsWithTrailingCallExpressions"
+  "ArgumentsWithTrailingMemberExpressions"
   "ArrowFunction"
   "ArrowFunctionTail"
   "AssignmentExpression"
