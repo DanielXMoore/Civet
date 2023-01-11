@@ -46,7 +46,7 @@ function runInBrowser() {
   const output: string[] = [];
   console.log = (...args) => {
     defaultConsoleLog(...args);
-    output.push(args.map((arg) => JSON.stringify(arg)).join(', '));
+    output.push(args.join(' '));
   };
 
   try {
