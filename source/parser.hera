@@ -1238,17 +1238,22 @@ BracedBlock
   InsertOpenBrace:o !EOS SingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ->
     return {
       type: "BlockStatement",
-      expressions: s,
+      expressions: s.expressions,
       // Remove !EOS assertion
-      children: [o, s, ws, c],
+      children: [o, s.children, ws, c],
     }
 
 SingleLineStatements
-  ( TrailingComment* Statement ):first ( SemicolonDelimiter Statement? )*:rest ->
-    if (rest.length) {
-      return [first, ...rest]
+  ( _* Statement SemicolonDelimiter )*:stmts ( _* Statement SemicolonDelimiter? )?:last ->
+    if (!stmts.length && !last) return $skip
+
+    const children = [...stmts, last]
+
+    return {
+      type: "BlockStatement",
+      expressions: children,
+      children,
     }
-    return [first]
 
 BracedContent
   NestedBlockStatements
@@ -2642,20 +2647,18 @@ CaseClause
       children,
     }
   # NOTE: Merged in default clause
-  Default ImpliedColon ( NestedBlockStatements / NoExpressions ):expressions ->
-    if (expressions.expressions) expressions = expressions.expressions
+  Default ImpliedColon ( NestedBlockStatements / NoExpressions ):block ->
     return {
       type: "DefaultClause",
-      expressions,
+      block,
       children: $0
     }
   # NOTE: Added else from CoffeesScript
-  Else ImpliedColon InsertOpenBrace ( NestedBlockStatements / ( TrailingComment* Statement ) ):expressions InsertNewline InsertIndent InsertCloseBrace ->
+  Else ImpliedColon InsertOpenBrace ( NestedBlockStatements / SingleLineStatements ):block InsertNewline InsertIndent InsertCloseBrace ->
     $1.token = "default"
-    if (expressions.expressions) expressions = expressions.expressions
     return {
       type: "DefaultClause",
-      expressions,
+      block,
       children: $0
     }
 
@@ -4765,6 +4768,13 @@ Reset
         // [indent, statement]
         module.prelude.push(["", ["const ", moduloRef, typeSuffix, " = (a, b) => (a % b + b) % b", "\n"]])
       },
+      returnSymbol(ref) {
+        module.prelude.push({
+          children: [
+            "const ", ref, " = Symbol(\"return\")';\n",
+          ],
+        })
+      },
       JSX(jsxRef) {
         module.prelude.push({
           ts: true,
@@ -5111,7 +5121,7 @@ Init
           insertPush(node.expressions[node.expressions.length - 1], ref)
           return
         case "DefaultClause":
-          insertPush(node.expressions[node.expressions.length - 1], ref)
+          insertPush(node.block, ref)
           return
       }
       if (!Array.isArray(node)) return
@@ -5166,18 +5176,20 @@ Init
       node.push(")")
     }
 
+    function wrapWithReturn(expression) {
+      const children = expression ? ["return ", expression] : ["return"]
+
+      return {
+        type: "ReturnStatement",
+        children,
+      }
+    }
+
     // [indent, statement, semicolon]
     function insertReturn(node) {
       if (!node) return
       // TODO: unify this with the `exp` switch
       switch (node.type) {
-        case "AssignmentExpression":
-          node.children.unshift("return ")
-          return
-        case "Identifier":
-          // TODO: It may be better to wrap/insert a node
-          node.children.unshift("return ")
-          return
         case "BlockStatement":
           insertReturn(node.expressions[node.expressions.length - 1])
           return
@@ -5204,7 +5216,7 @@ Init
           insertReturn(node.expressions[node.expressions.length - 1])
           return
         case "DefaultClause":
-          insertReturn(node.expressions[node.expressions.length - 1])
+          insertReturn(node.block)
           return
       }
       if (!Array.isArray(node)) return
@@ -5237,7 +5249,7 @@ Init
           // else block
           if (exp.children[3]) insertReturn(exp.children[3][2])
           // Add explicit return after if block if no else block
-          else exp.children.push(["\n", indent, "return"])
+          else exp.children.push(["\n", indent, wrapWithReturn()])
           return
         case "SwitchStatement":
           // insert a return in each case block
@@ -5256,7 +5268,8 @@ Init
       if (node[node.length-1]?.type === "SemicolonDelimiter") return
 
       // Insert return after indentation and before expression
-      node.splice(1, 0, "return ")
+      const returnStatement = wrapWithReturn(node[1])
+      node.splice(1, 1, returnStatement)
     }
 
     // Convert general ExtendedExpression into LeftHandSideExpression
