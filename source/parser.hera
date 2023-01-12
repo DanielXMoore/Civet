@@ -1187,14 +1187,7 @@ Block
     }
 
 ThenClause
-  Then TrailingComment*:ws Statement:s  ->
-    const expressions = [[ws, s]]
-    return {
-      type: "BlockStatement",
-      expressions,
-      children: [expressions],
-      bare: true,
-    }
+  Then SingleLineStatements -> $2
 
 BracedOrEmptyBlock
   BracedBlock
@@ -1238,17 +1231,22 @@ BracedBlock
   InsertOpenBrace:o !EOS SingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ->
     return {
       type: "BlockStatement",
-      expressions: s,
+      expressions: s.expressions,
       // Remove !EOS assertion
-      children: [o, s, ws, c],
+      children: [o, s.children, ws, c],
     }
 
 SingleLineStatements
-  ( TrailingComment* Statement ):first ( SemicolonDelimiter Statement? )*:rest ->
-    if (rest.length) {
-      return [first, ...rest]
+  ( _* Statement SemicolonDelimiter )*:stmts ( _* Statement SemicolonDelimiter? )?:last ->
+    const children = [...stmts]
+    if (last) children.push(last)
+
+    return {
+      type: "BlockStatement",
+      expressions: children,
+      children,
+      bare: true,
     }
-    return [first]
 
 BracedContent
   NestedBlockStatements
@@ -2616,46 +2614,32 @@ NestedCaseClause
 
 # https://262.ecma-international.org/#prod-CaseClause
 CaseClause
-  # NOTE: This differs from ESTree significantly to be easier to work with for implicit returns
-  Case CaseExpressionList:cases ( NestedBlockStatements / NoExpressions ):expressions -> {
+  Case CaseExpressionList ( NestedBlockStatements / NoExpressions ) -> {
     type: "CaseClause",
-    cases,
-    expressions,
     children: $0
   }
   # NOTE: Added "when" from CoffeeScript. `when` always inserts `break;`.
-  When CaseExpressionList:cases InsertOpenBrace ( ThenClause / NestedBlockStatements )?:expressions InsertBreak:b InsertNewline InsertIndent InsertCloseBrace ->
-    let children = $0
-    if (!expressions) {
-      expressions = []
-      children = children.map((c, i) => i === 3 ? expressions : c)
-    }
-    // ThenClause is a BlockExpression so let's point to its expressions
-    if (expressions.expressions) {
-      expressions = expressions.expressions
-    }
+  When CaseExpressionList:cases InsertOpenBrace ( ThenClause / NestedBlockStatements / NoExpressions ):block InsertBreak:b InsertNewline InsertIndent InsertCloseBrace ->
     return {
       type: "WhenClause",
       cases,
-      expressions,
+      block,
       break: b,
-      children,
+      children: $0,
     }
   # NOTE: Merged in default clause
-  Default ImpliedColon ( NestedBlockStatements / NoExpressions ):expressions ->
-    if (expressions.expressions) expressions = expressions.expressions
+  Default ImpliedColon ( NestedBlockStatements / NoExpressions ):block ->
     return {
       type: "DefaultClause",
-      expressions,
+      block,
       children: $0
     }
   # NOTE: Added else from CoffeesScript
-  Else ImpliedColon InsertOpenBrace ( NestedBlockStatements / ( TrailingComment* Statement ) ):expressions InsertNewline InsertIndent InsertCloseBrace ->
+  Else ImpliedColon InsertOpenBrace ( NestedBlockStatements / SingleLineStatements ):block InsertNewline InsertIndent InsertCloseBrace ->
     $1.token = "default"
-    if (expressions.expressions) expressions = expressions.expressions
     return {
       type: "DefaultClause",
-      expressions,
+      block,
       children: $0
     }
 
@@ -4765,6 +4749,13 @@ Reset
         // [indent, statement]
         module.prelude.push(["", ["const ", moduloRef, typeSuffix, " = (a, b) => (a % b + b) % b", "\n"]])
       },
+      returnSymbol(ref) {
+        module.prelude.push({
+          children: [
+            "const ", ref, " = Symbol(\"return\")';\n",
+          ],
+        })
+      },
       JSX(jsxRef) {
         module.prelude.push({
           ts: true,
@@ -5082,36 +5073,20 @@ Init
       if (!node) return
       // TODO: unify this with the `exp` switch
       switch (node.type) {
-        case "AssignmentExpression":
-          node.children.unshift(ref, ".push(")
-          node.children.push(")")
-          return
-        case "Identifier":
-          node.children.unshift(ref, ".push(")
-          node.children.push(")")
-          return
         case "BlockStatement":
           insertPush(node.expressions[node.expressions.length - 1], ref)
-          return
-        case "ObjectBindingPattern":
-        case "ObjectExpression":
-          module.insertTrimmingSpace(node.children[0], "")
-          node.children.unshift(ref, ".push(")
-          node.children.push(")")
           return
         case "CaseBlock":
           node.clauses.forEach((clause) => {
             insertPush(clause, ref)
           })
           return
-        case "CaseClause":
-          // Don't adjust case clauses
-          return
+        // NOTE: "CaseClause"s don't push
         case "WhenClause":
-          insertPush(node.expressions[node.expressions.length - 1], ref)
+          insertPush(node.block, ref)
           return
         case "DefaultClause":
-          insertPush(node.expressions[node.expressions.length - 1], ref)
+          insertPush(node.block, ref)
           return
       }
       if (!Array.isArray(node)) return
@@ -5166,45 +5141,41 @@ Init
       node.push(")")
     }
 
+    function wrapWithReturn(expression) {
+      const children = expression ? ["return ", expression] : ["return"]
+
+      return {
+        type: "ReturnStatement",
+        children,
+      }
+    }
+
     // [indent, statement, semicolon]
     function insertReturn(node) {
       if (!node) return
       // TODO: unify this with the `exp` switch
       switch (node.type) {
-        case "AssignmentExpression":
-          node.children.unshift("return ")
-          return
-        case "Identifier":
-          // TODO: It may be better to wrap/insert a node
-          node.children.unshift("return ")
-          return
         case "BlockStatement":
           insertReturn(node.expressions[node.expressions.length - 1])
-          return
-        case "ObjectBindingPattern":
-        case "ObjectExpression":
-          module.insertTrimmingSpace(node.children[0], "")
-          node.children.unshift("return ")
           return
         case "CaseBlock":
           node.clauses.forEach((clause) => {
             insertReturn(clause)
           })
           return
-        case "CaseClause":
-          // Don't adjust case clauses
-          return
+        // NOTE: "CaseClause"s don't get a return statements inserted
         case "WhenClause":
           // Remove inserted `break;`
           node.children.splice(node.children.indexOf(node.break), 1)
-          if (node.expressions.length === 0) {
-            node.expressions.push("return")
+          // [] NoExpressions or a BlockStatement
+          if (node.block.length === 0) {
+            node.block.push(wrapWithReturn())
             return
           }
-          insertReturn(node.expressions[node.expressions.length - 1])
+          insertReturn(node.block)
           return
         case "DefaultClause":
-          insertReturn(node.expressions[node.expressions.length - 1])
+          insertReturn(node.block)
           return
       }
       if (!Array.isArray(node)) return
@@ -5237,7 +5208,7 @@ Init
           // else block
           if (exp.children[3]) insertReturn(exp.children[3][2])
           // Add explicit return after if block if no else block
-          else exp.children.push(["\n", indent, "return"])
+          else exp.children.push(["\n", indent, wrapWithReturn()])
           return
         case "SwitchStatement":
           // insert a return in each case block
@@ -5256,7 +5227,8 @@ Init
       if (node[node.length-1]?.type === "SemicolonDelimiter") return
 
       // Insert return after indentation and before expression
-      node.splice(1, 0, "return ")
+      const returnStatement = wrapWithReturn(node[1])
+      node.splice(1, 1, returnStatement)
     }
 
     // Convert general ExtendedExpression into LeftHandSideExpression
