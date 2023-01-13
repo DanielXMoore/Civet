@@ -53,14 +53,19 @@ Expression
 # https://262.ecma-international.org/#prod-Arguments
 Arguments
   ExplicitArguments
-  # NOTE: Added spacing based implicit function application
-  # Trailing (__ MemberExpressionRest)* is to capture trailing .someMethod and bind them at the right place
 
   # Space / indentation based function application
   # Function application:
   # a b => a(b)
   # a b, c, d => a(b, c, d)
   # x y z => x(y(z))
+  SuppressTrailingMemberProperty ImplicitArguments?:args ->
+    module.suppressTrailingMemberProperty.pop()
+
+    if (args) return args
+    return $skip
+
+ImplicitArguments
   ( TypeArguments !( __ ImplementsToken ) )?:ta ApplicationStart InsertOpenParen:open _*:ws ArgumentList:args InsertCloseParen:close ->
     return [ta?.[0], open, module.insertTrimmingSpace(ws, ""), args, close]
 
@@ -80,15 +85,17 @@ ForbiddenImplicitCalls
   "/ "
   AtAt # experimentalDecorators
 
-IndentedApplicationAllowed
-  "" ->
-    if (module.suppressIndentedApplication) return $skip
-    return
-
 ArgumentsWithTrailingMemberExpressions
-  # Since this is recursive Arguments must consume input to avoid infinite recursion
+  Arguments TrailingMemberExpressions
+
+TrailingMemberExpressions
   # NOTE: Assert "." to not match "?" or "!" as a member expression on the following line
-  Arguments ( Samedent &"." MemberExpressionRest )*
+  MemberExpressionRest* ( ( Samedent / IndentedFurther ) &( "?"? "." ) MemberExpressionRest )* ->
+    return $1.concat($2)
+
+NonSuppressedTrailingMemberExpressions
+  TrailingMemberPropertyAllowed TrailingMemberExpressions -> $2
+  MemberExpressionRest*
 
 # https://262.ecma-international.org/#prod-ArgumentList
 ArgumentList
@@ -529,14 +536,16 @@ CallExpression
       type: "CallExpression",
       children: $0,
     }
-  MemberExpression CallExpressionRest* ->
-    if ($2.length) {
+
+  MemberExpression:member NonSuppressedTrailingMemberExpressions:trailing CallExpressionRest*:rest ->
+    if (rest.length || trailing.length) {
       return {
-        type: "CallExpression",
-        children: [$1].concat($2),
+        type: rest.length ? "CallExpression" : "MemberExpression",
+        children: [member, ...trailing, ...rest]
       }
     }
-    return $1
+
+    return member
 
 CallExpressionRest
   MemberExpressionRest
@@ -579,12 +588,7 @@ MemberExpressionRest
     }
     return $2
   # NOTE: Combined Optional and Property access
-  # TODO: this doesn't yet work for arbitrarily deep nesting, only the first level
-  IndentedFurther? PropertyAccess ->
-    if ($1) return Object.assign({}, $2, {
-      children: [$1, ...$2.children]
-    })
-    return $2
+  PropertyAccess
   # NOTE: Added TypeScript '!' non-null assertion
   NonNullAssertion
 
@@ -2734,6 +2738,18 @@ SuppressIndentedApplication
   "" ->
     module.suppressIndentedApplication = true
 
+IndentedApplicationAllowed
+  "" ->
+    if (module.suppressIndentedApplication) return $skip
+    return
+
+SuppressTrailingMemberProperty
+  "" ->
+    module.suppressTrailingMemberProperty.push(true)
+
+TrailingMemberPropertyAllowed
+  "" ->
+    if (module.trailingMemberPropertySuppressed) return $skip
 
 # https://262.ecma-international.org/#prod-ExpressionStatement
 ExpressionStatement
@@ -4711,14 +4727,23 @@ Reset
       token: "",
     }]
 
+    module.suppressTrailingMemberProperty = [false]
+
     if (!module._init) {
       module._init = true
       Object.defineProperties(module, {
         currentIndent: {
           get() {
-            return module.indentLevels[module.indentLevels.length-1]
+            const {indentLevels: l} = module
+            return l[l.length-1]
           },
-        }
+        },
+        trailingMemberPropertySuppressed: {
+          get() {
+            const {suppressTrailingMemberProperty: s} = module
+            return s[s.length-1]
+          },
+        },
       })
     }
 
