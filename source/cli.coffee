@@ -87,7 +87,7 @@ parseArgs = (args = process.argv[2..]) ->
       when '--'
         endOfArgs ++i  # remaining arguments are filename and/or arguments
       else
-        if arg.startsWith '-'
+        if arg.startsWith('-') and arg != '-'
           throw new Error "Invalid command-line argument #{arg}"
         if options.run
           endOfArgs i  # remaining arguments are arguments to the script
@@ -103,19 +103,25 @@ readFiles = (filenames, options) ->
     try
       if stdin
         process.stdin.setEncoding encoding
+
+        # Try to guess filename for stdin, such as /dev/fd/filename
         filename = "<stdin>"
         try
           filename = await fs.realpath '/dev/stdin'
 
-      if filename is "<stdin>"
-        lines = []
-        rl = require('readline').createInterface process.stdin, process.stdout
-        rl.on 'line', (buffer) -> lines.push buffer + '\n'
-        content = await new Promise (resolve, reject) ->
-          rl.on 'SIGINT', ->
-            reject '^C'
-          rl.on 'close', ->
-            resolve lines.join ''
+        if process.stdin.isTTY
+          # In interactive stdin, `readline` lets user end the file via ^D.
+          lines = []
+          rl = require('readline').createInterface process.stdin, process.stdout
+          rl.on 'line', (buffer) -> lines.push buffer + '\n'
+          content = await new Promise (resolve, reject) ->
+            rl.on 'SIGINT', ->
+              reject '^C'
+            rl.on 'close', ->
+              resolve lines.join ''
+        else
+          # For piped stdin, read stdin directly to avoid potential echo.
+          content = (chunk for await chunk from process.stdin).join ''
       else
         content = await fs.readFile filename, {encoding}
       yield {filename, content, stdin}
