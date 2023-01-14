@@ -111,7 +111,8 @@ Civet is essentially a tasteful superset of TypeScript.
 
 ### JSX Enhancements
 
-Largely inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)
+Inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)
+and [jsx spec issues](https://github.com/facebook/jsx/issues)
 
 - Indentation: instead of explicitly closing `<tag>`s or `<>`s,
   you can indent the children and Civet will close your tags for you

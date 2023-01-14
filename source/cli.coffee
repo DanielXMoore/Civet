@@ -148,7 +148,11 @@ repl = (options) ->
       if options.ast
         (obj) -> JSON.stringify obj, null, 2
       else if options.compile
-        (obj) -> obj?.replace /\n*$/, ''
+        (obj) ->
+          if typeof obj == 'string'
+            obj?.replace /\n*$/, ''
+          else
+            obj
     eval: (input, context, filename, callback) ->
       if input == '\n'  # blank input
         callback null
