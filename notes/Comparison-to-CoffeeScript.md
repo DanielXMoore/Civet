@@ -47,9 +47,9 @@ Things Kept from CoffeeScript
 - Prefix or postfix rest/splats `[...a]`, `x = [a...]`
 - RestProperty in any position `{a, ...b, c} = d` → `{a, c, ...b} = d`
 - RestElement/RestParameter in any position `(first, ...midle, last) ->` → `function(first, ...middle) { let [last] = middle.splice(-1)}`
-- `///` Heregexp
-  - With some [changes](#things-changed-from-coffeescript).
-- [JSX with improved shorthands and an optional nested syntax](../README.md#jsx-enhancements).
+- `///` Heregexp (with some [changes](#things-changed-from-coffeescript))
+- JSX [with improved shorthands and an optional nested syntax](../README.md#jsx-enhancements)
+  (with some [changes](#things-changed-from-coffeescript))
 
 Things Removed from CoffeeScript
 ---
@@ -114,6 +114,9 @@ Things Changed from CoffeeScript
   `\s+#` as comment starts inside and outside of character classes).
   - Might later add a compat flag to get more CoffeeScript compatibility.
   - Might also later add a compat flag to only use ES interpolations and comments inside Heregexes.
+- JSX children need to be properly indented
+  (or use `"civet coffeeCompat"` or `"civet coffeeJSX"`,
+  but then all JSX tags must be explicitly closed)
 
 Things Added that CoffeeScript Didn't
 ---

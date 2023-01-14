@@ -3867,28 +3867,53 @@ JSXTag
 # https://facebook.github.io/jsx/#prod-JSXElement
 JSXElement
   JSXSelfClosingElement
-  JSXOpeningElement JSXChildren? Whitespace? JSXClosingElement ->
-    // Check that tags match
-    if ($1[1] !== $4[2]) return $skip
-    return { type: "JSXElement", children: $0 }
-  # NOTE: Auto-closing element with indented children
-  JSXOpeningElement:open JSXMixedChildren:children InsertNewline InsertIndent ->
-    return {
-      type: "JSXElement",
-      children: children.jsxChildren.length ? [...$0, ["</", open[1], ">"]]
-                                            : [open.slice(0, -1), " />"]
+  # NOTE: In default JSX mode, JSX children must be properly indented,
+  # and closing tags are optional (but still allowed).
+  !CoffeeJSXEnabled PushJSXOpeningElement:open JSXMixedChildren?:children JSXOptionalClosingElement:close ->
+    module.JSXTagStack.pop()
+    if (!children) return $skip
+    $0 = $0.slice(1)
+    let parts
+    if (close) {
+      parts = $0
+    } else if (children.jsxChildren.length) {
+      parts = [
+        ...$0,
+        "\n", // InsertNewline
+        module.currentIndent.token, // InsertIndent
+        ["</", open[1], ">"],
+      ]
+    } else {
+      parts = [open.slice(0, -1), " />"]
     }
-  JSXOpeningElement:elt ->
-    throw new Error(`could not parse JSX element "${elt[0]}${elt[1]}${elt[elt.length-1]}" at pos ${$loc.pos}`)
+    return { type: "JSXElement", children: parts, tag: open[1] }
+  # NOTE: In CoffeeScript JSX mode, JSX children do not need to be properly
+  # indented, but tags must be explicitly closed.
+  CoffeeJSXEnabled JSXOpeningElement:open JSXChildren? Whitespace? JSXClosingElement:close ->
+    $0 = $0.slice(1)
+    // Check that tags match
+    if (open[1] !== close[2]) return $skip
+    return { type: "JSXElement", children: $0, tag: open[1] }
 
 # https://facebook.github.io/jsx/#prod-JSXSelfClosingElement
 JSXSelfClosingElement
   "<" $JSXElementName TypeArguments? JSXAttributes? Whitespace? "/>" ->
-    return { type: "JSXElement", children: $0 }
+    return { type: "JSXElement", children: $0, tag: $2 }
+
+PushJSXOpeningElement
+  JSXOpeningElement ->
+    module.JSXTagStack.push($1[1])
+    return $1
 
 # https://facebook.github.io/jsx/#prod-JSXOpeningElement
 JSXOpeningElement
   "<" $JSXElementName TypeArguments? JSXAttributes? Whitespace? ">"
+
+JSXOptionalClosingElement
+  Whitespace? JSXClosingElement:close ->
+    if (module.currentJSXTag !== close[2]) return $skip
+    return $0
+  ""
 
 # https://facebook.github.io/jsx/#prod-JSXClosingElement
 JSXClosingElement
@@ -3896,15 +3921,43 @@ JSXClosingElement
 
 # https://facebook.github.io/jsx/#prod-JSXFragment
 JSXFragment
-  "<>" JSXChildren? Whitespace? "</>" ->
-    if ($2) {
-      return { type: "JSXFragment", children: $0, jsxChildren: $2.jsxChildren }
-    } else {
-      return { type: "JSXFragment", children: $0, jsxChildren: [] }
+  # NOTE: In default JSX mode, JSX children must be properly indented,
+  # and closing tags are optional (but still allowed).
+  !CoffeeJSXEnabled PushJSXOpeningFragment:open JSXMixedChildren?:children JSXOptionalClosingFragment:close ->
+    module.JSXTagStack.pop()
+    if (!children) return $skip
+    $0 = $0.slice(1)
+    const parts = close ? $0 :
+      [
+        ...$0,
+        "\n", // InsertNewline
+        module.currentIndent.token, // InsertIndent
+        "</>",
+      ]
+    return { type: "JSXFragment", children: parts, jsxChildren: children.jsxChildren }
+  # NOTE: In CoffeeScript JSX mode, JSX children do not need to be properly
+  # indented, but tags must be explicitly closed.
+  CoffeeJSXEnabled "<>" JSXChildren?:children Whitespace? JSXClosingFragment ->
+    $0 = $0.slice(1)
+    return {
+      type: "JSXFragment",
+      children: $0,
+      jsxChildren: children ? children.jsxChildren : []
     }
-  # NOTE: Auto-closing fragment with indented children
-  "<>" JSXMixedChildren InsertNewline InsertIndent ->
-    return { type: "JSXFragment", children: [...$0, "</>"], jsxChildren: $2.jsxChildren }
+
+PushJSXOpeningFragment
+  "<>" ->
+    module.JSXTagStack.push("")
+    return $1
+
+JSXOptionalClosingFragment
+  Whitespace? JSXClosingFragment ->
+    if (module.currentJSXTag !== "") return $skip
+    return $0
+  ""
+
+JSXClosingFragment
+  "</>"
 
 # https://facebook.github.io/jsx/#prod-JSXElementName
 JSXElementName
@@ -4249,7 +4302,7 @@ JSXChildren
     }
 
 JSXNestedChildren
-  PushIndent ( Nested JSXChild+ )* PopIndent ->
+  PushIndent ( JSXNested JSXChild+ )* PopIndent ->
     if ($2.length) {
       return {
         children: $2,
@@ -4258,9 +4311,21 @@ JSXNestedChildren
     }
     return $skip
   # NOTE: Empty JSXNestedChildren can be from newline or unmatched close brace
-  # (e.g. when used in an attribute).
-  &( EOS / "}" ) ->
+  # (e.g. when used in an attribute) or a following closing tag.
+  &( JSXEOS / "}" / JSXClosingElement / JSXClosingFragment ) ->
     return { children: [], jsxChildren: [] }
+
+# NOTE: Special variations of EOS and Nested that forbid end-of-line JS
+# comments, as JS comments are not allowed in JSX (they get treated as text).
+JSXEOS
+  ( NonNewlineWhitespace? EOL )+
+
+JSXNested
+  JSXEOS:eos Indent:indent ->
+    const { level } = indent
+    const currentIndent = module.currentIndent
+    if (level !== currentIndent.level) return $skip
+    return $0
 
 # https://facebook.github.io/jsx/#prod-JSXChild
 JSXChild
@@ -4323,7 +4388,7 @@ IndentedJSXChildExpression
     return $2
 
 NestedJSXChildExpression
-  Nested JSXChildExpression
+  JSXNested JSXChildExpression
 
 ## Type Stuff
 
@@ -4701,6 +4766,11 @@ CoffeeIsntEnabled
     if(module.config.coffeeIsnt) return
     return $skip
 
+CoffeeJSXEnabled
+  "" ->
+    if(module.config.coffeeJSX) return
+    return $skip
+
 CoffeeLineContinuationEnabled
   "" ->
     if(module.config.coffeeLineContinuation) return
@@ -4731,6 +4801,7 @@ Reset
     }]
 
     module.suppressTrailingMemberProperty = [false]
+    module.JSXTagStack = []
 
     if (!module._init) {
       module._init = true
@@ -4744,6 +4815,12 @@ Reset
         trailingMemberPropertySuppressed: {
           get() {
             const {suppressTrailingMemberProperty: s} = module
+            return s[s.length-1]
+          },
+        },
+        currentJSXTag: {
+          get() {
+            const {JSXTagStack: s} = module
             return s[s.length-1]
           },
         },
@@ -4762,6 +4839,7 @@ Reset
       coffeeForLoops: false,
       coffeeInterpolation: false,
       coffeeIsnt: false,
+      coffeeJSX: false,
       coffeeLineContinuation: false,
       coffeeNot: false,
       coffeeOf: false,
@@ -4866,16 +4944,14 @@ Reset
         if (module.config.server && !module.config.client) {  // server only
           return ["string"]
         }
-        let open = node.children
-        while (Array.isArray(open[0])) open = open[0]
-        open = open[1]  // skip "<"
+        let {tag} = node
         // "An intrinsic element always begins with a lowercase letter,
         // and a value-based element always begins with an uppercase letter."
         // [https://www.typescriptlang.org/docs/handbook/jsx.html]
         const clientType =
-          typeof open === 'string' && open[0] === open[0].toLowerCase() ?
-          [module.getRef("IntrinsicElements"), '<"', open, '">'] :
-          ['ReturnType<typeof ', open, '>']
+          tag[0] === tag[0].toLowerCase() ?
+          [module.getRef("IntrinsicElements"), '<"', tag, '">'] :
+          ['ReturnType<typeof ', tag, '>']
         if (module.config.server) {  // isomorphic code for client + server
           return ["string", " | ", clientType]
         } else {  // client only (default)
@@ -4928,36 +5004,24 @@ Reset
     // Expand setting coffeeCompat to the individual options
     Object.defineProperty(module.config, "coffeeCompat", {
       set(b) {
-        if (b) {
-          this.autoVar = true
-          this.coffeeBinaryExistential = true
-          this.coffeeBooleans = true
-          this.coffeeClasses = true
-          this.coffeeComment = true
-          this.coffeeDo = true
-          this.coffeeEq = true
-          this.coffeeForLoops = true
-          this.coffeeInterpolation = true
-          this.coffeeIsnt = true
-          this.coffeeLineContinuation = true
-          this.coffeeNot = true
-          this.coffeeOf = true
-          this.coffeePrototype = true
-        } else {
-          this.autoVar = false
-          this.coffeeBinaryExistential = false
-          this.coffeeBooleans = false
-          this.coffeeClasses = false
-          this.coffeeComment = false
-          this.coffeeDo = false
-          this.coffeeEq = false
-          this.coffeeForLoops = false
-          this.coffeeInterpolation = false
-          this.coffeeIsnt = false
-          this.coffeeLineContinuation = false
-          this.coffeeNot = false
-          this.coffeeOf = false
-          this.coffeePrototype = false
+        for (const option of [
+          "autoVar",
+          "coffeeBinaryExistential",
+          "coffeeBooleans",
+          "coffeeClasses",
+          "coffeeComment",
+          "coffeeDo",
+          "coffeeEq",
+          "coffeeForLoops",
+          "coffeeInterpolation",
+          "coffeeIsnt",
+          "coffeeJSX",
+          "coffeeLineContinuation",
+          "coffeeNot",
+          "coffeeOf",
+          "coffeePrototype",
+        ]) {
+          module.config[option] = b
         }
       }
     })
