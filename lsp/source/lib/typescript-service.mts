@@ -28,7 +28,8 @@ import { compile as coffeeCompile } from "coffeescript"
 import { convertCoffeeScriptSourceMap } from "./util.mjs"
 
 // Import version from package.json
-import { version } from "../../package.json"
+import * as pkg from "../../package.json" assert { type: 'json' }
+const { version } = pkg
 
 // HACK to get __dirname working in tests with ts-node
 // ts-node needs everything to be modules for .civet files to work
