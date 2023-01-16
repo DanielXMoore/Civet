@@ -224,6 +224,12 @@ else
   sleep()
 </Playground>
 
+### One-Line If/Else
+
+<Playground>
+if coffee or relaxed then code() else sleep()
+</Playground>
+
 ### If/Else Expressions
 
 <Playground>
@@ -232,6 +238,7 @@ name :=
     "Saitama"
   else if power > 9000
     "Goku"
+caps := if name? then name.toUpperCase() else 'ANON'
 </Playground>
 
 ### Unless
