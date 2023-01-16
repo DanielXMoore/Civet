@@ -411,7 +411,7 @@ type ID = number | string
 ### Import
 
 <Playground>
-import type { Civet, Cat } from animals
+type { Civet, Cat } from animals
 </Playground>
 
 <Playground>
