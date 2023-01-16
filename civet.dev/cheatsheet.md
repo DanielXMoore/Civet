@@ -476,6 +476,7 @@ a instanceof b instanceof c
 <Playground>
 fs from fs
 {basename, dirname} from path
+metadata from ./package.json assert type: 'json'
 </Playground>
 
 ### Dynamic Import
