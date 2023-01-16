@@ -332,24 +332,6 @@ do
 while item?
 </Playground>
 
-## Types
-
-<Playground>
-type ID = number | string
-</Playground>
-
-<Playground>
-interface Point
-  x: number
-  y: number
-</Playground>
-
-<Playground>
-interface Node<T>
-  value: T
-  next: Node<T>
-</Playground>
-
 ## Classes
 
 <Playground>
@@ -416,6 +398,54 @@ class Civet
 
 <Playground>
 class Civet < Animal
+</Playground>
+
+## Types
+
+### Aliases
+
+<Playground>
+type ID = number | string
+</Playground>
+
+### Import
+
+<Playground>
+import type { Civet, Cat } from animals
+</Playground>
+
+<Playground>
+{ type Civet, meow } from animals
+</Playground>
+
+### Interfaces
+
+<Playground>
+interface Point
+  x: number
+  y: number
+</Playground>
+
+<Playground>
+interface Point3D < Point
+  z: number
+</Playground>
+
+<Playground>
+interface Signal
+  listen(callback: =>): void
+</Playground>
+
+<Playground>
+interface Node<T>
+  value: T
+  next: Node<T>
+</Playground>
+
+### Assertions
+
+<Playground>
+elt as HTMLInputElement
 </Playground>
 
 ## Misc
