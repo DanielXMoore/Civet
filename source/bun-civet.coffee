@@ -1,15 +1,15 @@
 import { plugin } from 'bun'
 
-await plugin(
+await plugin
   name: 'Civet loader'
   setup: (builder) ->
-    { compile } = await import('@danielx/civet')
+    { compile } = await import('./main.mjs')
     { readFileSync } = await import('fs')
-    
+
     builder.onLoad filter: /\.civet$/, ({path}) ->
       source = readFileSync path, 'utf8'
       contents = compile source
 
       return
-          contents: contents
-          loader: 'js')
+        contents: contents
+        loader: 'js'
