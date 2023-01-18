@@ -92,6 +92,7 @@ esbuild.build({
   watch
   platform: 'node'
   format: 'esm'
+  target: "esNext"
   outfile: 'dist/bun-civet.mjs'
   plugins: [
     coffeeScriptPlugin
