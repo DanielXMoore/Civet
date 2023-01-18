@@ -15,6 +15,7 @@ title: Integrations
 - [Gulp plugin](https://github.com/DanielXMoore/Civet/tree/main/integration/gulp)
 - [ESM loader](https://github.com/DanielXMoore/Civet/blob/main/source/esm.civet)
 - [CJS require hook](https://github.com/DanielXMoore/Civet/blob/main/register.js)
+- [Bun plugin](https://github.com/DanielXMoore/Civet/blob/main/source/bun-civet.coffee)
 
 ## Starter Templates
 

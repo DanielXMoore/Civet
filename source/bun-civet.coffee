@@ -1,3 +1,11 @@
+###
+Bun plugin for Civet files.  Import this plugin from a .js or .ts file,
+and afterward you'll be able to import .civet files.  For example:
+
+import "@danielx/civet/bun-civet"
+import "./foo.civet"
+###
+
 import { plugin } from 'bun'
 
 await plugin
