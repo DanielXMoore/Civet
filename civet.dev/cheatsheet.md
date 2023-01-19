@@ -18,7 +18,7 @@ The TypeScript code on
 
 [[toc]]
 
-## TC39 Left a Lot on the Table
+## Beyond TC39
 
 ### Default to `const` for Iteration Items
 
