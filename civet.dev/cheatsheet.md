@@ -222,12 +222,15 @@ console.log """
 ### Humanized Operators
 
 <Playground>
-a is b
-a is not b
 a and b
 a or b
 a not in b
 a?
+</Playground>
+
+<Playground>
+a is b
+a is not b
 </Playground>
 
 <Playground>
@@ -779,6 +782,11 @@ console.log "Hello #{name}!"
 <Playground>
 "civet coffeeEq"
 x == y != z
+</Playground>
+
+<Playground>
+"civet coffeeIs"
+x is y
 </Playground>
 
 <Playground>
