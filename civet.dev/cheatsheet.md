@@ -272,26 +272,44 @@ function abort: void
   process.exit 1
 </Playground>
 
+<Playground>
+function abort
+  process.exit 1;
+</Playground>
+
 ### Arrow Functions
 
+::: info
 Unlike ECMAScript, zero-argument arrows do not need a `()` prefix,
 but one-argument arrows do need parentheses around the argument.
+:::
 
 <Playground>
-abort := -> process.exit 1
+abort := => process.exit 1
 </Playground>
 
 <Playground>
-add := (a: number, b: number) -> a + b
+createEffect => console.log data()
+greet := (name) => console.log "Hello", name
 </Playground>
+
+::: info
+`=>` makes arrow functions as usual, while
+`->` makes `function`s (which can have `this` assigned via `.call`).
+:::
 
 <Playground>
 add := (a: number, b: number) => a + b
 </Playground>
 
 <Playground>
-greet := (name) => console.log "Hello", name
+add := (a: number, b: number) -> a + b
 </Playground>
+
+::: info
+Unlike ECMAScript, even multi-line arrow functions implicitly return their
+last value.  See [above](#function) for how to avoid this behavior.
+:::
 
 <Playground>
 circle := (degrees: number): {x: number, y: number} =>
