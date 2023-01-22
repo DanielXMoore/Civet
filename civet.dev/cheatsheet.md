@@ -489,12 +489,6 @@ class Civet < Animal
 
 ## Types
 
-### Aliases
-
-<Playground>
-type ID = number | string
-</Playground>
-
 ### Import
 
 <Playground>
@@ -503,6 +497,22 @@ type { Civet, Cat } from animals
 
 <Playground>
 { type Civet, meow } from animals
+</Playground>
+
+### Aliases
+
+<Playground>
+type ID = number | string
+</Playground>
+
+<Playground>
+type Point = x: number, y: number
+</Playground>
+
+<Playground>
+type Point =
+  x: number
+  y: number
 </Playground>
 
 ### Interfaces
@@ -602,6 +612,21 @@ numbers[1...-1] = []
 
 <Playground>
 a + b = c
+</Playground>
+
+### `Object.is`
+
+The `"civet objectIs"` directive changes the behavior of the `is` operator to
+[`Object.is`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/is),
+which is a bit better behaved than `===`.
+The plan is to make this the default behavior, once TypeScript supports
+type narrowing with `Object.is` as well as it does for `===`.
+(Currently, `a is b` will not correctly narrow `b` in some edge cases.)
+
+<Playground>
+"civet objectIs"
+a is b
+a is not b
 </Playground>
 
 ## Automatic Variable Declaration

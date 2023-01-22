@@ -7,6 +7,11 @@ May require setting up credentials: https://code.visualstudio.com/api/working-wi
 yarn vsce-publish
 ```
 
+Publishing Open VSX Extension
+---
+
+https://github.com/eclipse/openvsx/wiki/Publishing-Extensions
+
 Debugging Extension
 ---
 
