@@ -21,6 +21,11 @@ export default gen = (node, options) ->
     .join('')
 
   if typeof node is "object"
+    if node.type is "Error"
+      options.errors ?= []
+      options.errors.push node
+      return ""
+
     if options.js and node.ts
       return ""
     if !options.js and node.js

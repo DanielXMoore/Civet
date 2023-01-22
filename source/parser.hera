@@ -377,8 +377,8 @@ ParenthesizedExpression
 
     return {
       type: "ParenthesizedExpression",
-      expression: exp,
       children: $0,
+      expression: exp,
     }
 
 # https://262.ecma-international.org/#prod-ClassDeclaration
@@ -1400,6 +1400,17 @@ EmptyBlock
       bare: false,
     }
 
+EmptyBareBlock
+  # Implied empty block with no braces. Used in case statements.
+  "" ->
+    const expressions = []
+    return {
+      type: "BlockStatement",
+      expressions,
+      children: [expressions],
+      bare: true,
+    }
+
 # This is a block that must include braces (function body, try/catch/finally)
 BracedBlock
   TrailingComment* OpenBrace BracedContent:block __ CloseBrace ->
@@ -2266,6 +2277,7 @@ Statement
       return {
         type: "ParenthesizedExpression",
         children: ["(", $1, ")" ],
+        expression: $1,
       }
     }
     return $1
@@ -2827,6 +2839,7 @@ SwitchStatement
     return {
       type: "SwitchStatement",
       children: $0,
+      expression: condition,
       caseBlock,
     }
 
@@ -2852,7 +2865,7 @@ SwitchExpression
 
 # https://262.ecma-international.org/#prod-CaseBlock
 CaseBlock
-  __ OpenBrace NestedCaseClauses:clauses __ CloseBrace ->
+  ( Samedent / _ )? OpenBrace NestedCaseClauses:clauses __ CloseBrace ->
     return {
       type: "CaseBlock",
       clauses: clauses,
@@ -2882,12 +2895,19 @@ NestedCaseClause
 
 # https://262.ecma-international.org/#prod-CaseClause
 CaseClause
-  Case CaseExpressionList ( NestedBlockStatements / NoExpressions ) -> {
+  MatchingPattern:pattern ( NestedBlockStatements / EmptyBareBlock ):block ->
+    return {
+      type: "PatternClause",
+      children: $0,
+      block,
+      pattern,
+    }
+  Case CaseExpressionList ( NestedBlockStatements / EmptyBareBlock ) -> {
     type: "CaseClause",
     children: $0
   }
   # NOTE: Added "when" from CoffeeScript. `when` always inserts `break;`.
-  When CaseExpressionList:cases InsertOpenBrace ( ThenClause / NestedBlockStatements / NoExpressions ):block InsertBreak:b InsertNewline InsertIndent InsertCloseBrace ->
+  When CaseExpressionList:cases InsertOpenBrace ( ThenClause / NestedBlockStatements / EmptyBareBlock ):block InsertBreak:b InsertNewline InsertIndent InsertCloseBrace ->
     return {
       type: "WhenClause",
       cases,
@@ -2896,7 +2916,7 @@ CaseClause
       children: $0,
     }
   # NOTE: Merged in default clause
-  Default ImpliedColon ( NestedBlockStatements / NoExpressions ):block ->
+  Default ImpliedColon ( NestedBlockStatements / EmptyBareBlock ):block ->
     return {
       type: "DefaultClause",
       block,
@@ -2923,9 +2943,6 @@ CaseExpressionList
     result./**/unshift($1)
 
     return result
-
-NoExpressions
-  "" -> []
 
 ImpliedColon
   __ Colon
@@ -2976,12 +2993,14 @@ CatchParameter
 # An expression with explicit or implied parentheses, for use in if/while/switch
 Condition
   ParenthesizedExpression !( TrailingComment* ( BinaryOp / AssignmentOp / Dot / QuestionMark ) ) -> $1
-  InsertOpenParen:open ExpressionWithIndentedApplicationSuppressed:exp InsertCloseParen:close ->
+  InsertOpenParen:open ExpressionWithIndentedApplicationSuppressed:expression InsertCloseParen:close ->
     // Don't double wrap parethesized expressions
-    if (exp.type === "ParenthesizedExpression") return exp
+    if (expression.type === "ParenthesizedExpression") return expression
+    expression = module.insertTrimmingSpace(expression, "")
     return {
       type: "ParenthesizedExpression",
-      children: [open, module.insertTrimmingSpace(exp, ""), close],
+      children: [open, expression, close],
+      expression,
     }
 
 ExpressionWithIndentedApplicationSuppressed
@@ -5411,6 +5430,7 @@ Init
             return {
               type: "ParenthesizedExpression",
               children: ["(", ...pre, "(", exp, ")", post, ")"]
+              // TODO: expression:
             }
         }
       }
@@ -5640,12 +5660,11 @@ Init
         case "WhenClause":
           // Remove inserted `break;`
           node.children.splice(node.children.indexOf(node.break), 1)
-          // [] NoExpressions or a BlockStatement
-          if (node.block.length === 0) {
-            node.block.push(wrapWithReturn())
-            return
+          if (node.block.expressions.length) {
+            insertReturn(node.block)
+          } else {
+            node.block.expressions.push(wrapWithReturn())
           }
-          insertReturn(node.block)
           return
         case "DefaultClause":
           insertReturn(node.block)
@@ -5706,18 +5725,19 @@ Init
     // Convert general ExtendedExpression into LeftHandSideExpression
     // by optionally wrapping in parentheses.
     // TODO: Avoid parentheses in more cases by adding more types.
-    module.makeLeftHandSideExpression = function(exp) {
-      switch (exp.type) {
+    module.makeLeftHandSideExpression = function(expression) {
+      switch (expression.type) {
         case "Identifier":
         case "Literal":
         case "CallExpression":
         case "MemberExpression":
         case "ParenthesizedExpression":
-          return exp
+          return expression
         default:
           return {
             type: "ParenthesizedExpression",
-            children: ["(", exp, ")"],
+            children: ["(", expression, ")"],
+            expression,
           }
       }
     }
@@ -6388,11 +6408,109 @@ Init
       }
     }
 
+    function processPatternMatching(statements) {
+      gatherRecursiveAll(statements, n => n.type === "SwitchStatement")
+      .forEach((s) => {
+        const { caseBlock } = s
+        const { clauses } = caseBlock
+
+        let errors = false
+        let isPattern = false
+        if (clauses.some((c) => c.type === "PatternClause")) {
+          isPattern = true
+          clauses.forEach((c) => {
+            if (c.type !== "PatternClause") {
+              errors = true
+              c.children.push({
+                type: "Error",
+                message: "Can't mix pattern matching and non-pattern matching clauses",
+              })
+            }
+          })
+        }
+
+        if (errors) return
+        if (!isPattern) return
+
+        debugger
+
+        let { expression } = s
+        if (expression.type === "ParenthesizedExpression") {
+          // Unwrap parenthesized expression
+          expression = expression.expression
+        }
+
+        let ref
+
+        switch (expression.type) {
+          case "Identifier":
+          case "Literal":
+            ref = expression
+            break
+          default:
+            // TODO: push statement assigning ref
+            ref = {
+              type: "Ref",
+              base: "m",
+              id: "m",
+            }
+        }
+
+        let prev = [],
+          root = prev
+
+        const l = clauses.length
+        clauses.forEach((c, i) => {
+          const { pattern, block } = c
+          if (pattern.type === "ParenthesizedExpression") {
+            // Unwrap parenthesized expression
+            pattern = pattern.expression
+          }
+
+          const comparison = [
+            ref,
+            " === ",
+            pattern,
+          ]
+
+          const condition = {
+            type: "ParenthesizedExpression",
+            children: ["(", comparison, ")"],
+            expression: comparison,
+          }
+
+          const next = []
+
+          // Add braces if necessary
+          if (block.bare) {
+            block.children.unshift(" {")
+            block.children.push("}")
+            block.bare = false
+          }
+
+          // Insert else if there are more conditions
+          const e = i < l - 1 ? ["\nelse "] : []
+
+          prev.push({
+            type: "IfStatement",
+            children: ["if", condition, block, ...e, next],
+          })
+          prev = next
+        })
+
+        s.type = "PatternMatchingStatement"
+        s.children = [root]
+      })
+    }
+
     module.processProgram = function(statements) {
       processAssignments(statements)
       processFunctions(statements)
       processSwitchExpressions(statements)
       processTryExpressions(statements)
+
+      // Pattern matching
+      processPatternMatching(statements)
 
       // Modify iteration expressions
       gatherRecursiveAll(statements, n => n.type === "IterationExpression")
