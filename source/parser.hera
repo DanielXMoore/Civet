@@ -86,7 +86,12 @@ ForbiddenImplicitCalls
   AtAt # experimentalDecorators
 
 ArgumentsWithTrailingMemberExpressions
-  Arguments TrailingMemberExpressions
+  Arguments:args TrailingMemberExpressions:trailing ->
+    const call = {
+      type: "Call",
+      children: args,
+    }
+    return [ call, ...trailing ]
 
 TrailingMemberExpressions
   # NOTE: Assert "." to not match "?" or "!" as a member expression on the following line
@@ -534,20 +539,26 @@ LeftHandSideExpression
 # https://262.ecma-international.org/#prod-CallExpression
 CallExpression
   # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
-  "super" ArgumentsWithTrailingMemberExpressions CallExpressionRest*
+  "super" ArgumentsWithTrailingMemberExpressions CallExpressionRest*:rest ->
+    return {
+      type: "CallExpression",
+      children: [$1, ...$2, ...rest.flat()],
+    }
   # Dynamic import(), with optional parentheses when not used at top level.
   # (At top level, ImportDeclaration will match first.)
   # NOTE: Using ExtendedExpression to allow for If/Switch expressions
-  "import" ArgumentsWithTrailingMemberExpressions CallExpressionRest* ->
+  "import" ArgumentsWithTrailingMemberExpressions CallExpressionRest*:rest ->
     return {
       type: "CallExpression",
-      children: $0,
+      children: [$1, ...$2, ...rest.flat()],
     }
 
   MemberExpression:member NonSuppressedTrailingMemberExpressions:trailing CallExpressionRest*:rest ->
     if (rest.length || trailing.length) {
+      rest = rest.flat()
       return {
-        type: rest.length ? "CallExpression" : "MemberExpression",
+        type: rest.length && rest[rest.length-1].type === "Call"
+              ? "CallExpression" : "MemberExpression",
         children: [member, ...trailing, ...rest]
       }
     }
@@ -558,14 +569,20 @@ CallExpressionRest
   MemberExpressionRest
   TemplateLiteral
   # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
-  ( OptionalShorthand / NonNullAssertion )? ArgumentsWithTrailingMemberExpressions
+  ( OptionalShorthand / NonNullAssertion )? ArgumentsWithTrailingMemberExpressions ->
+    if (!$1) return $2
+    return [ $1, ...$2 ]
 
 # NOTE: Added shorthand x?(3) -> x?.(3)
 OptionalShorthand
-  ( QuestionMark ( Dot / InsertDot ) )
+  QuestionMark ( Dot / InsertDot ) ->
+    return {
+      type: "Optional",
+      children: $0,
+    }
 
 NonNullAssertion
-  "!" -> { ts: true, children: $1 }
+  "!" -> { type: "NonNullAssertion", ts: true, children: $1 }
 
 # https://262.ecma-international.org/#prod-MemberExpression
 MemberExpression
@@ -587,9 +604,9 @@ MemberExpressionRest
   ( OptionalShorthand / NonNullAssertion )? MemberBracketContent ->
     if ($1) {
       // Optional followed by a slice expression
-      if ($1.length === 2 && $2.type === "SliceExpression") {
+      if ($1.type === "Optional" && $2.type === "SliceExpression") {
         // Remove '.' from optional since it is present in '.slice'
-        return [$1[0], $2]
+        return [$1.children[0], $2]
       }
       return $0
     }
@@ -1167,6 +1184,15 @@ Arrow
     return { $loc, token: $1}
 
 ExplicitBlock
+  __ OpenBrace __ CloseBrace ->
+    const expressions = []
+    return {
+      type: "BlockStatement",
+      expressions,
+      children: [$1, expressions, $2],
+      bare: false,
+      empty: true,
+    }
   __ OpenBrace NestedBlockStatements:block __ CloseBrace ->
     return Object.assign({}, block, {
       children: [$1, $2, ...block.children, $4, $5],
@@ -1199,6 +1225,7 @@ Block
 ThenClause
   Then SingleLineStatements -> $2
 
+# A block that must include braces (function body, try/catch/finally)
 BracedOrEmptyBlock
   BracedBlock
   EmptyBlock
@@ -1212,9 +1239,10 @@ EmptyBlock
       expressions,
       children: [$1, expressions, $2],
       bare: false,
+      empty: true,
     }
 
-# This is a block that must include braces (function body, try/catch/finally)
+# A nonempty block that must include braces
 BracedBlock
   TrailingComment* OpenBrace BracedContent:block __ CloseBrace ->
     return {
@@ -1237,8 +1265,9 @@ BracedBlock
       children: [$1, s, $3],
     }
 
-  # One liner
+  # Nonempty one liner
   InsertOpenBrace:o !EOS SingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ->
+    if (!s.children.length) return $skip
     return {
       type: "BlockStatement",
       expressions: s.expressions,
@@ -1246,6 +1275,7 @@ BracedBlock
       children: [o, s.children, ws, c],
     }
 
+# NOTE: SingleLineStatements includes the empty case
 SingleLineStatements
   ( _* Statement SemicolonDelimiter )*:stmts ( _* Statement SemicolonDelimiter? )?:last ->
     const children = [...stmts]
@@ -1706,7 +1736,10 @@ PropertyDefinition
       ...prop,
       children: [...ws, ...prop.children],
     }
+  # NOTE: Forbidding EmptyBlock in MethodDefinition to allow `foo()` shorthand
+  # for `foo: foo()`
   __:ws MethodDefinition:def ->
+    if (def.block.empty) return $skip
     return {
       ...def,
       children: [...ws, ...def.children],
@@ -1718,19 +1751,39 @@ PropertyDefinition
       names: exp.names,
       value: [dots, exp],
     }
-  # NOTE: Added {x.y.z} shorthand for {z: x.y.z}
-  __:ws IdentifierReference:id PropertyAccess+:props ->
-    const {name} = props[props.length-1]
-    const value = [id, ...props]
+  # NOTE: Added `{x.y?.z()}` shorthand for `{z: x.y?.z()}`
+  # NOTE: this needs to be at the bottom to prevent shadowing NamedProperty
+  __:ws CallExpression:value ->
+    // `{identifier}` remains `{identifier}`, the one shorthand JS supports
+    if (value.type === "Identifier") {
+      return {...value, children: [...ws, ...value.children]}
+    }
+    // More complicated expressions gains `name:` prefix
+    // Look for last PropertyAccess like `.foo` or Identifier,
+    // before any calls like `(args)`.
+    let exp = value, children, i
+    do {
+      ({children} = exp)
+      i = children.length-1
+      while (i >= 0 && (
+        children[i].type === "Call" ||
+        children[i].type === "NonNullAssertion" ||
+        children[i].type === "Optional"
+      )) i--
+      if (i < 0) return $skip
+      // Recurse into nested MemberExpression, e.g. from `x.y()`
+    } while (children[i].type === "MemberExpression" && (exp = children[i]))
+    const {name} = children[i]
+    if (!name) return $skip
     return {
       type: "Property",
-      children: [ws, name, ": ", ...value],
+      children: [ws, name, ": ", value],
       name, value,
       names: [],
     }
-  # NOTE: this needs to be at the bottom to prevent shadowing NamedProperty
-  __:ws IdentifierReference:id ->
-    return {...id, children: [...ws, ...id.children]}
+  # NOTE: basic identifiers are now part of the rule above
+  #__:ws IdentifierReference:id ->
+  #  return {...id, children: [...ws, ...id.children]}
 
 NamedProperty
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
@@ -2726,7 +2779,7 @@ CaseClause
       block,
       children: $0
     }
-  # NOTE: Added else from CoffeesScript
+  # NOTE: Added else from CoffeeScript
   Else ImpliedColon InsertOpenBrace ( NestedBlockStatements / SingleLineStatements ):block InsertNewline InsertIndent InsertCloseBrace ->
     $1.token = "default"
     return {
@@ -4345,9 +4398,9 @@ InlineJSXMemberExpressionRest
   ( OptionalShorthand / NonNullAssertion )? MemberBracketContent ->
     if ($1) {
       // Optional followed by a slice expression
-      if ($1.length === 2 && $2.type === "SliceExpression") {
+      if ($1.type === "Optional" && $2.type === "SliceExpression") {
         // Remove '.' from optional since it is present in '.slice'
-        return [$1[0], $2]
+        return [$1.children[0], $2]
       }
       return $0
     }
