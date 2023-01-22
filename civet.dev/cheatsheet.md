@@ -277,6 +277,14 @@ function abort
   process.exit 1;
 </Playground>
 
+### Function Overloading
+
+<Playground>
+function add(a: string, b: string): string
+function add(a: number, b: number): number
+  a+b
+</Playground>
+
 ### Arrow Functions
 
 ::: info
