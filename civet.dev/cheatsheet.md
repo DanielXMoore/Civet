@@ -489,12 +489,6 @@ class Civet < Animal
 
 ## Types
 
-### Aliases
-
-<Playground>
-type ID = number | string
-</Playground>
-
 ### Import
 
 <Playground>
@@ -503,6 +497,22 @@ type { Civet, Cat } from animals
 
 <Playground>
 { type Civet, meow } from animals
+</Playground>
+
+### Aliases
+
+<Playground>
+type ID = number | string
+</Playground>
+
+<Playground>
+type Point = x: number, y: number
+</Playground>
+
+<Playground>
+type Point =
+  x: number
+  y: number
 </Playground>
 
 ### Interfaces
