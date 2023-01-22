@@ -513,6 +513,13 @@ class Civet
 class Civet < Animal
 </Playground>
 
+### Implements
+
+<Playground>
+class Civet < Animal <: Named
+class Civet <: Animal, Named
+</Playground>
+
 ## Types
 
 ### Import
