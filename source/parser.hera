@@ -2006,9 +2006,28 @@ BinaryOpSymbol
       special: true,
     }
   # NOTE: "is not" must come after "is not in"
-  !CoffeeNotEnabled "is" NonIdContinue __ "not" NonIdContinue -> "!=="
+  !CoffeeNotEnabled "is" NonIdContinue __ "not" NonIdContinue ->
+    if (module.config.objectIs) {
+      return {
+        call: module.getRef("is"),
+        relational: true,
+        special: true,
+        asConst: true,
+        negated: true,
+      }
+    }
+    return "!=="
   # NOTE: "is" must come after "is not" and "is in"
-  "is" NonIdContinue -> "==="
+  "is" NonIdContinue ->
+    if (module.config.objectIs) {
+      return {
+        call: module.getRef("is"),
+        relational: true,
+        special: true,
+        asConst: true,
+      }
+    }
+    return "==="
   "in" NonIdContinue ->
     return $1
   "&"
@@ -4885,6 +4904,11 @@ CoffeePrototypeEnabled
     if(module.config.coffeePrototype) return
     return $skip
 
+ObjectIsEnabled
+  "" ->
+    if(module.config.objectIs) return
+    return $skip
+
 # Reset module level data
 Reset
   "" ->
@@ -4939,6 +4963,7 @@ Reset
       coffeeOf: false,
       coffeePrototype: false,
       implicitReturns: true,
+      objectIs: false,
       react: false,
       solid: false,
       client: false, // default behavior: client only
@@ -4950,6 +4975,10 @@ Reset
     module.asAny = {
       ts: true,
       children: [" as any"]
+    }
+    module.asConst = {
+      ts: true,
+      children: [" as const"]
     }
     module.prelude = []
 
@@ -4969,6 +4998,21 @@ Reset
         }
         // [indent, statement]
         module.prelude.push(["", ["const ", hasPropRef, typeSuffix, " = {}.hasOwnProperty", module.asAny, "\n"]])
+      },
+      is(isRef) {
+        // Thanks to @thetarnav for help with this TypeScript magic.
+        // If the second argument is more general, narrow it.
+        // Otherwise (including when the first argument is more general,
+        // or partial overlap), always narrow the first argument,
+        // as that's usually the one that matters.
+        // Waiting on https://github.com/Microsoft/TypeScript/issues/26916
+        // for proper narrowing of both arguments.
+        const typeSuffix = {
+          ts: true,
+          children: [": { <B, A extends B> (a: A, b: B): b is A, <A, B> (a: A, b: B): a is A & B }"]
+        }
+        // [indent, statement]
+        module.prelude.push(["", ["const ", isRef, typeSuffix, " = Object.is", module.asAny, "\n"]])
       },
       modulo(moduloRef) {
         const typeSuffix = {
@@ -5022,6 +5066,17 @@ Reset
       }
       if (declareRef.hasOwnProperty(base)) declareRef[base](ref)
       return refs[base] = ref
+    }
+
+    module.makeAsConst = function(node) {
+      // TS allows "as const" assertions for string, number, boolean, array,
+      // and object literals (and enum members), but not for null/undefined.
+      if ((node.type === "Literal" && node.raw !== "null") ||
+          node.type === "ArrayExpression" ||
+          node.type === "ObjectExpression") {
+        return {...node, children: [...node.children, module.asConst]}
+      }
+      return node
     }
 
     module.typeOfJSX = function(node) {
@@ -5116,6 +5171,9 @@ Reset
           "coffeePrototype",
         ]) {
           module.config[option] = b
+        }
+        if (b) {
+          module.config.objectIs = false
         }
       }
     })
@@ -5508,6 +5566,11 @@ Init
         // a not instanceof b -> !(a instanceof b)
         if (op.special) {
           let [a, wsOp, op, wsB, b] = expandedOps.slice(i - 2, i + 3)
+
+          if (op.asConst) {
+            a = module.makeAsConst(a)
+            b = module.makeAsConst(b)
+          }
 
           let children
           if (op.call) {

@@ -604,6 +604,21 @@ numbers[1...-1] = []
 a + b = c
 </Playground>
 
+### `Object.is`
+
+The `"civet objectIs"` directive changes the behavior of the `is` operator to
+[`Object.is`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/is),
+which is a bit better behaved than `===`.
+The plan is to make this the default behavior, once TypeScript supports
+type narrowing with `Object.is` as well as it does for `===`.
+(Currently, `a is b` will not correctly narrow `b` in some edge cases.)
+
+<Playground>
+"civet objectIs"
+a is b
+a is not b
+</Playground>
+
 ## Automatic Variable Declaration
 
 By default, you are responsible for declaring your variables
