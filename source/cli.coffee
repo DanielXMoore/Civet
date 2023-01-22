@@ -59,7 +59,7 @@ parseArgs = (args = process.argv[2..]) ->
     return if j >= args.length  # no more args
     if options.run
       filenames.push args[j]
-      scriptArgs = args[j..]
+      scriptArgs = args[j+1..]
     else
       filenames.push ...args[j..]
   while i < args.length

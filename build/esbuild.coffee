@@ -83,3 +83,20 @@ esbuild.build({
     heraPlugin
   ]
 }).catch -> process.exit 1
+
+esbuild.build({
+  entryPoints: ['source/bun-civet.coffee']
+  bundle: false
+  sourcemap
+  minify
+  watch
+  platform: 'node'
+  format: 'esm'
+  target: "esNext"
+  outfile: 'dist/bun-civet.mjs'
+  plugins: [
+    coffeeScriptPlugin
+      bare: true
+      inlineMap: sourcemap
+  ]
+}).catch -> process.exit 1

@@ -468,7 +468,9 @@ ClassElementDefinition
   ( MethodDefinition / FieldDefinition )
 
 AccessModifier
-  ( Public / Private / Protected ) __ ->
+  ( ( Public / Private / Protected ) __ )? ( Readonly __ )? ->
+    if (!($1 || $2)) return $skip
+
     return {
       ts: true,
       children: $0
@@ -834,20 +836,19 @@ ObjectBindingPattern
 ObjectBindingPatternContent
   # NOTE: Added indentation based binding properties
   NestedBindingProperties
-  BindingProperty*:props BindingRestProperty?:rest BindingProperty*:after ->
-    const names = props.flatMap(p => p.names)
-    const children = [...props]
+  BindingPropertyList?:props ->
+    if (!props) return { children: [], names: [] }
 
-    if (rest) {
-      [rest, after] = module.reorderBindingRestProperty(rest, after)
-      children./**/push(...after, rest)
-      names./**/push(...after.flatMap(p => p.names), ...rest.names)
-    }
+    return module.reorderBindingRestProperty(props)
 
-    return {
-      names,
-      children,
-    }
+BindingPropertyList
+  ( BindingProperty ObjectPropertyDelimiter )+:props ->
+    return props.map(([prop, delim]) => {
+      return {
+        ...prop,
+        children: [...prop.children, delim],
+      }
+    })
 
 # https://262.ecma-international.org/#prod-ArrayBindingPattern
 # NOTE: Simplified from spec
@@ -903,36 +904,36 @@ Elision
   __ Comma
 
 NestedBindingProperties
-  # NOTE: Add NestedBindingProperties after rest from CoffeeScript
-  PushIndent NestedBindingProperty*:props NestedBindingRestProperty?:rest NestedBindingProperty*:after PopIndent ->
-    if (!(props.length || rest)) return $skip
-    const names = props.flatMap(p => p.names)
-    const children = [...props]
-    if (rest) {
-      [rest, after] = module.reorderBindingRestProperty(rest, after)
-      children./**/push(...after, rest)
-      names./**/push(...after.flatMap(p => p.names), ...rest.names)
-    }
-    return {
-      children,
-      names,
-    }
+  PushIndent NestedBindingPropertyList*:props PopIndent ->
+    if (!props.length) return $skip
+    props = props.flat()
+    return module.reorderBindingRestProperty(props)
 
-NestedBindingProperty
-  Nested:indent BindingProperty:prop ->
-    return {
-      ...prop,
-      children: [...indent, ...prop.children],
-    }
+NestedBindingPropertyList
+  Nested:ws BindingPropertyList:props ->
+    // Attach whitespace to first property
+    return props.map( (prop, i) => {
+      if (i > 0) return prop
+      return {
+        ...prop,
+        children: [ws, ...prop.children],
+      }
+    })
 
 # https://262.ecma-international.org/#prod-BindingProperty
 BindingProperty
-  __ PropertyName __ Colon ( BindingIdentifier / BindingPattern ):b Initializer? ObjectPropertyDelimiter ->
+  # NOTE: Merged in BindingRestProperty
+  # TS will mark errors about invalid multiple rest properties
+  # NOTE: Must be checked first to pick up trailing "..." form
+  BindingRestProperty
+
+  _? PropertyName __ Colon ( BindingIdentifier / BindingPattern ):b Initializer? ->
     return {
       names: b.names,
       children: $0
     }
-  BindingIdentifier:b Initializer? ObjectPropertyDelimiter ->
+
+  BindingIdentifier:b Initializer? ->
     if (b.type === "AtBinding") {
       return {
         type: "AtBindingProperty",
@@ -947,24 +948,20 @@ BindingProperty
       children: $0
     }
 
-NestedBindingRestProperty
-  Nested:indent BindingRestProperty:prop ->
-    return {
-      ...prop,
-      children: [indent, ...prop.children],
-    }
-
 # https://262.ecma-international.org/#prod-BindingRestProperty
 BindingRestProperty
-  __:ws DotDotDot:dots BindingIdentifier:id ObjectPropertyDelimiter:delimiter ->
+  _?:ws DotDotDot:dots BindingIdentifier:id ->
     return {
       ...id,
-      children: [...ws, dots, ...id.children, delimiter],
+      type: "BindingRestProperty",
+      children: [...(ws || []), dots, ...id.children],
     }
-  __:ws BindingIdentifier:id DotDotDot:dots ObjectPropertyDelimiter:delimiter ->
+
+  _?:ws BindingIdentifier:id DotDotDot:dots ->
     return {
       ...id,
-      children: [...ws, dots, ...id.children, delimiter],
+      type: "BindingRestProperty",
+      children: [...(ws || []), dots, ...id.children],
     }
 
 NestedBindingElements
@@ -1837,7 +1834,10 @@ NestedPropertyDefinition
 
 InlineObjectLiteral
   InsertInlineOpenBrace:open SnugNamedProperty ImplicitInlineObjectPropertyDelimiter ( ( Samedent / _* ) NamedProperty ImplicitInlineObjectPropertyDelimiter )* InsertCloseBrace:close ->
-    return [open, $2, $3, ...$4, close]
+    return {
+      type: "ObjectExpression",
+      children: [open, $2, $3, ...$4, close],
+    }
 
 # This is different from ObjectPropertyDelimiter because the braces are implicit so we can't look ahead to find the closing one
 # Instead we see if the next line matches a NamedProperty and if so we insert a comma
@@ -2107,8 +2107,13 @@ BinaryOpSymbol
   "<="
   ">="
   # NOTE: added <? instanceof shorthand
-  "<?" " "? ->
-    return "instanceof "
+  "<?" ->
+    return {
+      $loc,
+      token: "instanceof",
+      relational: true,
+      special: true,
+    }
   "<<"
   # NOTE: Avoid matching JSX opening tag by requiring non-identifier character
   # (e.g. whitespace) after "<".  This does forbid 1<2 or x<y.
@@ -2145,15 +2150,25 @@ BinaryOpSymbol
     return {
       $loc,
       token: "instanceof",
+      relational: true,
       special: true,
+      negated: true,
     }
   ( !CoffeeOfEnabled "not" NonIdContinue __ "in" NonIdContinue ) / ( CoffeeOfEnabled "not" NonIdContinue __ "of" NonIdContinue ) ->
     return {
       $loc,
       token: "in",
       special: true,
+      negated: true,
     }
-  ( "is" NonIdContinue __ "in" NonIdContinue ) / ( CoffeeOfEnabled "in" NonIdContinue ) ->
+  "is" NonIdContinue __ "in" NonIdContinue ->
+    return {
+      method: "includes",
+      relational: true,
+      reversed: true,
+      special: true,
+    }
+  CoffeeOfEnabled "in" NonIdContinue ->
     return {
       call: [module.getRef("indexOf"), ".call"],
       relational: true,
@@ -2161,7 +2176,15 @@ BinaryOpSymbol
       suffix: " >= 0",
       special: true,
     }
-  ( "is" NonIdContinue __ "not" NonIdContinue __ "in" NonIdContinue ) / ( CoffeeOfEnabled "not" NonIdContinue __ "in" NonIdContinue ) ->
+  "is" NonIdContinue __ "not" NonIdContinue __ "in" NonIdContinue ->
+    return {
+      method: "includes",
+      relational: true,
+      reversed: true,
+      special: true,
+      negated: true,
+    }
+  CoffeeOfEnabled "not" NonIdContinue __ "in" NonIdContinue ->
     return {
       call: [module.getRef("indexOf"), ".call"],
       relational: true,
@@ -2217,8 +2240,16 @@ Statement
   TryStatement
 
   EmptyStatement
-  # TODO: wrap object literal output with parens to disambiguate from block statements in transpiled JS
-  ExpressionStatement
+
+  # Wrap object literal output with parens to disambiguate from block statements in transpiled JS
+  ExpressionStatement ->
+    if ($1.type === "ObjectExpression") {
+      return {
+        type: "ParenthesizedExpression",
+        children: ["(", $1, ")" ],
+      }
+    }
+    return $1
 
   # NOTE: Block statement is after expression statement because valid ObjectLiterals should take priority over blocks
   BlockStatement
@@ -2475,12 +2506,23 @@ CoffeeForStatementParameters
         throw new Error("Can't use 'by' with 'of' in CoffeeScript for loops")
       }
 
+      // TODO: Exp ref if exp is not a literal or identifier
+
       if (declaration.own) {
-        const indent = module.currentIndent.token + "  "
         const hasPropRef = module.getRef("hasProp")
 
         blockPrefix./**/push([indent, "if (!", hasPropRef, ".call(", exp, ", ", declaration, ")) continue\n"])
       }
+
+      // index is actually value in Coffee "for of", y = z[x]
+      if (index) {
+        blockPrefix./**/push([indent, {
+          type: "AssignmentExpression",
+          children: [index, " = ", exp, "[", declaration, "]"],
+          names: index.names,
+        }, ";\n"])
+      }
+
       kind.token = "in"
     } else if (kind.token === "in") { // CoffeeScript loop comprehensions
       const counterRef = {
@@ -2659,10 +2701,13 @@ CoffeeForStatementParameters
     }
 
 CoffeeForIndex
-  TrailingComment*:ws1 Comma TrailingComment*:ws2 BindingIdentifier:id ->
-    return Object.assign({}, id, {
-      children: [...ws1, ...ws2, ...id.children]
-    })
+  _?:ws1 Comma _?:ws2 BindingIdentifier:id ->
+    ws2 = module.insertTrimmingSpace(ws1, "")
+
+    return {
+      ...id,
+      children: [...(ws1 || []), ...(ws2 || []), ...id.children]
+    }
 
 CoffeeForDeclaration
   # NOTE: Coffee doesn't allow expression bindings like `for a.x in b`
@@ -3010,20 +3055,22 @@ MaybeNestedExpression
 
 # https://262.ecma-international.org/#prod-ImportDeclaration
 ImportDeclaration
-  Import __ TypeKeyword __ ImportClause __ FromClause -> { ts: true, children: $0 }
-  Import __ ImportClause __ FromClause
-  Import __ ModuleSpecifier
+  Import __ TypeKeyword __ ImportClause __ FromClause ImportAssertion? -> { ts: true, children: $0 }
+  Import __ ImportClause __ FromClause ImportAssertion?
+  Import __ ModuleSpecifier ImportAssertion?
   # NOTE: Added import shorthand
   # NOTE: Not adding $loc to source map here yet because it will point to the start of the identifier
   # the proper place may be to use the From location
-  ImpliedImport:i ImportClause:c __:w FromClause:f ->
+  ImpliedImport:i ( TypeKeyword __ )?:t ImportClause:c __:w FromClause:f ImportAssertion?:a ->
     // Map implied import location to `from`
     // The pos and length adjustment better match how tsc outputs to include the space before `from` with the `from` token
     i.$loc = {
       pos: f[0].$loc.pos-1,
       length: f[0].$loc.length+1,
     }
-    return [i, c, w, f]
+    const children = [i, t, c, w, f, a]
+    if (!t) return children
+    return { ts: true, children }
 
 ImpliedImport
   "" ->
@@ -3071,6 +3118,12 @@ NamedImports
 # https://262.ecma-international.org/#prod-FromClause
 FromClause
   From __ ModuleSpecifier
+
+# https://github.com/tc39/proposal-import-assertions
+# https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-5.html#import-assertions
+# NOTE: Forbid newline before `assert` which could mean a function call
+ImportAssertion
+  _? "assert" NonIdContinue _? ObjectLiteral
 
 # https://devblogs.microsoft.com/typescript/announcing-typescript-3-8-beta/#type-only-imports-exports
 TypeAndImportSpecifier
@@ -3143,7 +3196,7 @@ ImportedBinding
 # https://262.ecma-international.org/#prod-ExportDeclaration
 ExportDeclaration
   # NOTE: Using ExtendedExportDeclaration to allow If/Switch expressions
-  Export __ "default" NonIdContinue __ ( HoistableDeclaration / ClassDeclaration / ExtendedExpression )
+  Export __ Default __ ( HoistableDeclaration / ClassDeclaration / ExtendedExpression )
   Export __ ExportFromClause __ FromClause ->
     if (!$3.ts) return $0
     return { ts: true, children: $0 }
@@ -3182,7 +3235,7 @@ ExportSpecifier
     return { ts: true, children: $0 }
 
 ImplicitExportSpecifier
-  !"default" ModuleExportName ( __ As __ ModuleExportName )? ( &( __ From ) / ImplicitInlineObjectPropertyDelimiter )
+  !Default ModuleExportName ( __ As __ ModuleExportName )? ( &( __ From ) / ImplicitInlineObjectPropertyDelimiter )
 
 # https://262.ecma-international.org/#prod-Declaration
 Declaration
@@ -3773,6 +3826,10 @@ Comma
 ConstructorShorthand
   "@" ->
     return { $loc, token: "constructor" }
+
+Declare
+  "declare" NonIdContinue ->
+    return { $loc, token: $1 }
 
 Default
   "default" NonIdContinue ->
@@ -4583,17 +4640,26 @@ NestedJSXChildExpression
 ## Type Stuff
 
 TypeDeclaration
-  (TypeDeclarationModifier TrailingComment*)* TypeDeclarationRest -> { ts: true, children: $0 }
-
-TypeDeclarationModifier
-  "declare" NonIdContinue
-  Export
+  # TODO: Support `declare class`
+  # TODO: Support `declare module`
+  # TODO: Support `declare global {}`
+  # NOTE: First check for forms with a `declare` keyword present
+  ( Export _? )? ( Declare _? )  TypeLexicalDeclaration -> { ts: true, children: $0 }
+  ( Export _? )? ( Declare _? )? TypeDeclarationRest    -> { ts: true, children: $0 }
 
 TypeDeclarationRest
-  TypeKeyword TrailingComment* IdentifierName TypeParameters? __ Equals __ Type
+  # TODO: ( __ Type ) can be refined further to check for consistently nested binary ops, etc.
+  TypeKeyword TrailingComment* IdentifierName TypeParameters? __ Equals ( ( _? Type ) / ( __ Type ) )
   Interface   TrailingComment* IdentifierName TypeParameters? InterfaceExtendsClause? InterfaceBlock
   Namespace   TrailingComment* IdentifierName NamespaceBlock
   FunctionSignature
+
+TypeLexicalDeclaration
+  __ !Namespace LetOrConst TypeDeclarationBinding ( CommaDelimiter __ TypeDeclarationBinding )*
+
+TypeDeclarationBinding
+  # NOTE: This is almost the same as LexicalBinding except it cannot have an initializer
+  ( BindingPattern / BindingIdentifier ) TypeSuffix?
 
 InterfaceExtendsClause
   ExtendsToken InterfaceExtendsTarget
@@ -4625,9 +4691,12 @@ NestedInterfaceProperty
   Nested InterfaceProperty
 
 InterfaceProperty
-  ( TypeIndexSignature / PropertyName ) TypeSuffix InterfacePropertyDelimiter
+  BasicInterfaceProperty
   NonEmptyParameters TypeSuffix InterfacePropertyDelimiter
   MethodSignature InterfacePropertyDelimiter
+
+BasicInterfaceProperty
+  ( TypeIndexSignature / PropertyName ) TypeSuffix InterfacePropertyDelimiter
 
 InterfacePropertyDelimiter
   _* ( Semicolon / Comma )
@@ -4683,7 +4752,7 @@ Type
   TypeConditional
 
 TypeBinary
-  TypeUnary (__ TypeBinaryOp __ TypeUnary)* ->
+  TypeUnary ( __ TypeBinaryOp __ TypeUnary )* ->
     if ($2.length) return $0
     return $1
 
@@ -4702,16 +4771,19 @@ TypeUnaryOp
   "readonly" NonIdContinue
 
 TypeIndexedAccess
-  __ OpenBracket Type? __ CloseBracket
+  OpenBracket Type? __ CloseBracket
 
 TypePrimary
   InterfaceBlock
+  _? FunctionType
+  _? InlineInterfaceLiteral
+  _? TypeTuple
+  _? ImportType
+  _? TypeLiteral
+  _? IdentifierName (Dot IdentifierName)* TypeArguments?
+  # NOTE: Check FunctionType before parenthesized in order to distinguish between (a: T) => U and
+  # A parenthesized inline interface (a: T) ---> ({a: T})
   __ OpenParen Type __ CloseParen
-  __ TypeTuple
-  _* ImportType
-  _* FunctionType
-  _* TypeLiteral
-  _* IdentifierName (Dot IdentifierName)* TypeArguments?
 
 ImportType
   "import" OpenParen __ BasicStringLiteral __ CloseParen ( Dot IdentifierName )? TypeArguments?
@@ -4746,6 +4818,18 @@ TypeLiteral
     return { $loc, token: "void" }
   "[]" ->
     return { $loc, token: "[]" }
+
+InlineInterfaceLiteral
+  InsertInlineOpenBrace InlineBasicInterfaceProperty ( ( IndentedFurther / _? ) InlineBasicInterfaceProperty )* InsertCloseBrace
+
+InlineBasicInterfaceProperty
+  ( TypeIndexSignature / PropertyName ) QuestionMark? Colon Type InlineInterfacePropertyDelimiter
+
+InlineInterfacePropertyDelimiter
+  ( _? Semicolon ) / CommaDelimiter
+  &( ( IndentedFurther / _? ) InlineBasicInterfaceProperty ) InsertComma -> $2
+  &( __  ( ":" / ")" / "]" / "}" ) )
+  &EOS
 
 TypeBinaryOp
   "|" ->
@@ -5622,11 +5706,20 @@ Init
             } else {
               children = [wsOp, op.call, "(", a, ",", wsB, b, ")", op.suffix]
             }
-          } else if (op.token === "instanceof" || op.token === "in") { // `not instanceof` / `not of`
-            children = ["!(", a, wsOp, op, wsB, b, ")"]
+          } else if (op.method) {
+            wsOp = module.insertTrimmingSpace(wsOp, "")
+            wsB = module.insertTrimmingSpace(wsB, "")
+            if (op.reversed) {
+              children = [wsB, b, wsOp, ".", op.method, "(", a, ")"]
+            } else {
+              children = [a, wsOp, ".", op.method, "(", wsB, b, ")"]
+            }
+          } else if (op.token) {
+            children = ["(", a, wsOp, op, wsB, b, ")"]
           } else {
             throw new Error("Unknown operator: " + JSON.stringify(op))
           }
+          if (op.negated) children.unshift("!")
 
           expandedOps.splice(i - 2, 5, {
             children
@@ -5856,20 +5949,51 @@ Init
       }
     }
 
-    module.reorderBindingRestProperty = function(rest, after) {
-      // Swap delimiters of last property and rest so that an omitted trailing comma doesn't end up in the middle
-      if (after.length) {
-        const
-          [restDelim]       = rest.children.slice(-1),
-          lastAfterProp     = after[after.length - 1],
-          lastAfterChildren = lastAfterProp.children,
-          [lastDelim]       = lastAfterChildren.slice(-1)
+    module.reorderBindingRestProperty = function(props) {
+      const names = props.flatMap(p => p.names)
 
-        rest = {...rest, children: [...rest.children.slice(0, -1), lastDelim]}
-        after = [...after.slice(0, -1), {...lastAfterProp, children: [...lastAfterChildren.slice(0, -1), restDelim]}]
+      let restIndex = -1
+      let restCount = 0
+      props.forEach(({type}, i) => {
+        if (type === "BindingRestProperty") {
+          if (restIndex < 0) restIndex = i
+          restCount++
+        }
+      })
+
+      if (restCount === 0) {
+        const children = [...props]
+        return {
+          children,
+          names,
+        }
+      } else if (restCount === 1) {
+        let after = props.slice(restIndex + 1)
+        let rest = props[restIndex]
+
+        props = props.slice(0, restIndex);
+
+        // Swap delimiters of last property and rest so that an omitted trailing comma doesn't end up in the middle
+        if (after.length) {
+          const
+            [restDelim]       = rest.children.slice(-1),
+            lastAfterProp     = after[after.length - 1],
+            lastAfterChildren = lastAfterProp.children,
+            [lastDelim]       = lastAfterChildren.slice(-1)
+
+          rest = {...rest, children: [...rest.children.slice(0, -1), lastDelim]}
+          after = [...after.slice(0, -1), {...lastAfterProp, children: [...lastAfterChildren.slice(0, -1), restDelim]}]
+        }
+
+        const children = [...props, ...after, rest]
+
+        return {
+          children,
+          names,
+        }
       }
 
-      return [rest, after]
+      throw new Error("Multiple rest properties in object pattern")
     }
 
     // Gather child nodes that match a predicate

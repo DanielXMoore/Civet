@@ -18,24 +18,113 @@ The TypeScript code on
 
 [[toc]]
 
+## Beyond TC39
+
+### Default to `const` for Iteration Items
+
+<Playground>
+for (item of [1, 2, 3, 4, 5]) {
+  console.log(item * item);
+}
+</Playground>
+
+### Block Strings / Templates
+
+[TC39 Proposal: String Dedent](https://github.com/tc39/proposal-string-dedent)
+
+<Playground>
+text = """
+  This text is a string that doesn't include the leading
+  whitespace.
+"""
+</Playground>
+
+<Playground>
+text = ```
+  Also works for
+  templates!
+```
+</Playground>
+
+### Modulo Operator
+
+<Playground>
+let a = -3
+let b = 5
+let rem = a % b
+let mod = a %% b
+console.log rem, mod
+</Playground>
+
+### Spread in Any Position
+
+Spreads in first or middle position:
+
+<Playground>
+[...head, last] = [1, 2, 3, 4, 5]
+</Playground>
+
+<Playground>
+{a, ...rest, b} = {a: 7, b: 8, x: 0, y: 1}
+</Playground>
+
+<Playground>
+function justDoIt(a, ...args, cb) {
+  cb.apply(a, args)
+}
+</Playground>
+
+### Import Syntax Matches Destructuring
+
+<Playground>
+import {X: LocalX, Y: LocalY} from "./util"
+</Playground>
+
+### Single-Argument Function Shorthand
+
+<Playground>
+x.map &.name
+x.map &.profile?.name[0...3]
+x.map &.callback a, b
+x.map +&
+</Playground>
+
+::: info
+Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc),
+[Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax),
+or [Elm record access](https://elm-lang.org/docs/records#access)
+:::
+
+### Pipelines
+
+[TC39 Proposal: Pipe Operator](https://github.com/tc39/proposal-pipeline-operator)
+
+<Playground>
+data
+  |> Object.keys
+  |> console.log
+</Playground>
+
+Pipe expression with shorthand functions:
+
+<Playground>
+a |> & + 1 |> bar
+</Playground>
+
+### Export Convenience
+
+<Playground>
+export a, b, c from "./cool.js"
+export x = 3
+</Playground>
+
+### Throw Expression
+
+<Playground>
+x == null ? throw "x is null" : x.fn()
+</Playground>
+
 ## Basics
-
-### Humanize Operators
-
-<Playground>
-a is b
-a is not b
-a and b
-a or b
-a not in b
-a?
-</Playground>
-
-<Playground>
-item is in array
-item is not in array
-substring is in string
-</Playground>
 
 ### Variable Declaration
 
@@ -57,12 +146,6 @@ obj :=
   c:
     x: 'pretty'
     y: 'cool'
-</Playground>
-
-Spreads anywhere:
-
-<Playground>
-{a, ...rest, b} = {a: 7, b: 8, x: 0, y: 1}
 </Playground>
 
 Flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects):
@@ -136,6 +219,23 @@ console.log """
 """
 </Playground>
 
+### Humanized Operators
+
+<Playground>
+a is b
+a is not b
+a and b
+a or b
+a not in b
+a?
+</Playground>
+
+<Playground>
+item is in array
+item is not in array
+substring is in string
+</Playground>
+
 ## Functions
 
 ### Function Calls
@@ -200,19 +300,6 @@ circle := (degrees: number): {x: number, y: number} =>
   y: Math.sin theta
 </Playground>
 
-### Single-Argument Shorthand
-
-<Playground>
-x.map &.name
-x.map &.profile?.name[0...3]
-x.map &.callback a, b
-x.map +&
-</Playground>
-
-::: info
-Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc), [Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax) or [Elm record access](https://elm-lang.org/docs/records#access)
-:::
-
 ## Conditions
 
 ### If/Else
@@ -224,6 +311,12 @@ else
   sleep()
 </Playground>
 
+### One-Line If/Else
+
+<Playground>
+if coffee or relaxed then code() else sleep()
+</Playground>
+
 ### If/Else Expressions
 
 <Playground>
@@ -232,6 +325,7 @@ name :=
     "Saitama"
   else if power > 9000
     "Goku"
+caps := if name? then name.toUpperCase() else 'ANON'
 </Playground>
 
 ### Unless
@@ -325,24 +419,6 @@ do
 while item?
 </Playground>
 
-## Types
-
-<Playground>
-type ID = number | string
-</Playground>
-
-<Playground>
-interface Point
-  x: number
-  y: number
-</Playground>
-
-<Playground>
-interface Node<T>
-  value: T
-  next: Node<T>
-</Playground>
-
 ## Classes
 
 <Playground>
@@ -411,6 +487,54 @@ class Civet
 class Civet < Animal
 </Playground>
 
+## Types
+
+### Aliases
+
+<Playground>
+type ID = number | string
+</Playground>
+
+### Import
+
+<Playground>
+type { Civet, Cat } from animals
+</Playground>
+
+<Playground>
+{ type Civet, meow } from animals
+</Playground>
+
+### Interfaces
+
+<Playground>
+interface Point
+  x: number
+  y: number
+</Playground>
+
+<Playground>
+interface Point3D < Point
+  z: number
+</Playground>
+
+<Playground>
+interface Signal
+  listen(callback: =>): void
+</Playground>
+
+<Playground>
+interface Node<T>
+  value: T
+  next: Node<T>
+</Playground>
+
+### Assertions
+
+<Playground>
+elt as HTMLInputElement
+</Playground>
+
 ## Misc
 
 ### Operators
@@ -420,10 +544,6 @@ a and= b
 a or= b
 a ?= b
 obj.key ?= 'civet'
-</Playground>
-
-<Playground>
-a %% b
 </Playground>
 
 ### Chained Comparisons
@@ -439,6 +559,7 @@ a instanceof b instanceof c
 <Playground>
 fs from fs
 {basename, dirname} from path
+metadata from ./package.json assert type: 'json'
 </Playground>
 
 ### Dynamic Import
@@ -481,20 +602,6 @@ numbers[1...-1] = []
 
 <Playground>
 a + b = c
-</Playground>
-
-### Pipelines
-
-<Playground>
-data
-  |> Object.keys
-  |> console.log
-</Playground>
-      
-Pipe expression with shorthand functions:
-      
-<Playground>
-a |> & + 1 |> bar
 </Playground>
 
 ## Automatic Variable Declaration
