@@ -71,6 +71,39 @@ and you should end up at your breakpoint.
 Then you can step through and see what is going on in practice
 as opposed to in theory.
 
+### CLI
+
+A quick way to experiment with the parser (after building it with
+`yarn build`) is to run the CLI in compilation mode:
+
+```sh
+dist/civet -c
+```
+
+In this mode, you type a Civet snippet (terminated with a blank line)
+and see what it compiles to (or the resulting error).
+
+To see more detail into how parts of your expression get parsed,
+prefix your Civet snippet with `"civet verbose"`.
+
+You can also see what JavaScript (sans TypeScript) will be generated via
+
+```sh
+dist/civet -c --js
+```
+
+Alternatively, you can run the CLI in Abstract Syntax Tree (AST) mode to see
+what tree your code parses into before being converted into TypeScript:
+
+```sh
+dist/civet --ast
+```
+
+Bugs in the compiler can often be caused by caching (which is done in
+[`source/main.coffee`](source/main.coffee)).  You can temporarily disable
+caching to see whether that's the issue, by adding the `--no-cache`
+command-line option.
+
 ## Asking for Help
 
 Feel free to ask us questions you have!

@@ -35,6 +35,7 @@ if process.argv.includes "--help"
       --js             Strip out all type annotations; default to .jsx extension
       --ast            Print the AST instead of the compiled code
       --inline-map     Generate a sourcemap
+      --no-cache       Disable compiler caching (slow, for debugging)
 
     You can use - to read from stdin or (prefixed by -o) write to stdout.
 
