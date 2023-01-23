@@ -181,10 +181,17 @@ p.say p.NAME
 
 ::: tip
 
-Methods need a body, or they get treated like literal shorthand.
+Methods need a body, or they get treated as literal shorthand.
 To keep the body blank, use `{}`.
 
 :::
+
+Property access shorthand:
+
+<Playground>
+json.'long property'
+json.`${movie} name`
+</Playground>
 
 ### Arrays
 
