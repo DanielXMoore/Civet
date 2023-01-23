@@ -172,11 +172,19 @@ p := {
   name: 'Mary'
   say(msg)
     console.log @name, 'says', msg
+  setName(@name) {}
   get NAME()
     @name.toUpperCase()
 }
 p.say p.NAME
 </Playground>
+
+::: tip
+
+Methods need a body, or they get treated like literal shorthand.
+To keep the body blank, use `{}`.
+
+:::
 
 ### Arrays
 
