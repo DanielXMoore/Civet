@@ -148,6 +148,13 @@ obj :=
     y: 'cool'
 </Playground>
 
+Literal shorthand beyond `{x}`:
+
+<Playground>
+another := {person.name, obj?.c?.x}
+computed := {foo(), bar()}
+</Playground>
+
 Flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects):
 
 <Playground>
@@ -165,11 +172,19 @@ p := {
   name: 'Mary'
   say(msg)
     console.log @name, 'says', msg
+  setName(@name) {}
   get NAME()
     @name.toUpperCase()
 }
 p.say p.NAME
 </Playground>
+
+::: tip
+
+Methods need a body, or they get treated like literal shorthand.
+To keep the body blank, use `{}`.
+
+:::
 
 ### Arrays
 
@@ -697,24 +712,23 @@ and [jsx spec issues](https://github.com/facebook/jsx/issues)
 ### Element id
 
 <Playground>
-<>
-  <div #foo> Civet
-  <div #{expression}> Civet
+<div #foo>Civet
+<div #{expression}>Civet
 </Playground>
 
 ### Class
 
 <Playground>
- <>
-  <div .foo> Civet
-  <div .foo.bar> Civet
-  <div .{expression}> Civet
+<div .foo>Civet
+<div .foo.bar>Civet
+<div .{expression}>Civet
+<div .button.{size()}>
 </Playground>
 
 ### Boolean Toggles
 
 <Playground>
-  <Component +draggable -disabled !hidden>
+<Component +draggable -disabled !hidden>
 </Playground>
 
 ::: tip
@@ -726,10 +740,11 @@ and [jsx spec issues](https://github.com/facebook/jsx/issues)
 ### Attributes
 
 <Playground>
- <>
-  <div {foo}> Civet
-  <div ...foo> Civet
-  <div [expr]={value}> Civet
+<div {foo}>Civet
+<div {props.name}>Civet
+<div {data()}>Civet
+<div ...foo>Civet
+<div [expr]={value}>Civet
 </Playground>
 
 ::: tip
