@@ -172,7 +172,7 @@ p := {
   name: 'Mary'
   say(msg)
     console.log @name, 'says', msg
-  setName(@name) {}
+  setName(@name);
   get NAME()
     @name.toUpperCase()
 }
@@ -182,7 +182,7 @@ p.say p.NAME
 ::: tip
 
 Methods need a body, or they get treated as literal shorthand.
-To keep the body blank, use `{}`.
+To specify a blank body, use `;` or `{}`.
 
 :::
 
