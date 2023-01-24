@@ -3118,7 +3118,11 @@ ExportDeclaration
 
 # CoffeeScript style `export x = 3` -> `export var x = 3`
 ExportVarDec
-  InsertVar VariableDeclarationList
+  InsertVar VariableDeclarationList ->
+    return {
+      ...$2,
+      children: [$1, ...$2.children]
+    }
 
 # https://262.ecma-international.org/#prod-ExportFromClause
 ExportFromClause
@@ -6458,10 +6462,6 @@ Init
     }
 
     function createLetDecs(statements, scopes) {
-      function hasDec(name) {
-        return scopes.some((s) => s.has(name))
-      }
-
       function findVarDecs(statements, decs) {
         const declarationNames = gatherRecursive(statements,
           (node) =>
@@ -6477,60 +6477,85 @@ Init
         return new Set(declarationNames)
       }
 
-      function insertBeforeAssignment(assignment, content) {
-        if (assignment.children && assignment.children.length) {
-          let indent = assignment.children[0][0][0]
-          if (Array.isArray(indent)) indent = indent[indent.length - 1]
-          assignment.children.unshift([indent, ...content])
-        }
+      let declaredIdentifiers = findVarDecs(statements)
+      
+      function hasDec(name) {
+        return declaredIdentifiers.has(name) || scopes.some((s) => s.has(name))
+      }
+
+      function gatherBlockOrOther(statement) {
+        return gatherNodes(statement, (s) => s.type === "BlockStatement" || s.type === "AssignmentExpression" || s.type === "Declaration").flatMap((node) => {
+          if (node.type == "BlockStatement")
+            // bare blocks is not a safe position to insert let declaration
+            return node.bare ? gatherBlockOrOther(node.expressions) : node
+          else if (node.children && node.children.length)
+            return [...gatherBlockOrOther(node.children), node]
+          else
+            return []
+        })
       }
 
       let currentScope = new Set()
       scopes.push(currentScope)
 
-
       const fnNodes  = gatherNodes(statements, (s) => s.type === "FunctionExpression")
       const forNodes = gatherNodes(statements, (s) => s.type === "ForStatement")
-      const nodes = gatherNodes(statements, (s) => s.type === "BlockStatement" || s.type === "AssignmentExpression" || s.type === "Declaration")
+      
+      let targetStatements = []
+      for (const statement of statements) {
+        const nodes = gatherBlockOrOther(statement)
+        let undeclaredIdentifiers = []
+        for (const node of nodes) {
+          if (node.type == "BlockStatement") {          
+            let block = node
+            let fnNode  =  fnNodes.find((fnNode)  =>  fnNode.block === block)
+            let forNode = forNodes.find((forNode) => forNode.block === block)
+            if (fnNode != null) {
+              scopes.push(new Set(fnNode.parameters.names))
+              createLetDecs(block.expressions, scopes)
+              scopes.pop()
+            }
+            else if (forNode != null) {
+              scopes.push(new Set(forNode.declaration.names))
+              createLetDecs(block.expressions, scopes)
+              scopes.pop()
+            }
+            else
+              createLetDecs(block.expressions, scopes)
+            continue
+          }
+          // Assignment and Declaration all use 'names'.
+          if (node.names == null) continue
+          let names = node.names.filter(name => !hasDec(name))
+          if (node.type == "AssignmentExpression")
+            undeclaredIdentifiers.push(...names)
+          names.forEach((name) => currentScope.add(name)) 
+        }
 
-      let declaredIdentifiers = findVarDecs(statements)
-
-      for (const node of nodes) {
-        if (node.type == "AssignmentExpression") {
-          let undeclaredIdentifiers = node.names.filter(name => !(hasDec(name) || declaredIdentifiers.has(name)))
-          if (node.children.length) createLetDecs(node.children, scopes)
-          undeclaredIdentifiers.forEach((name) => currentScope.add(name))
-          if (node.names.length === undeclaredIdentifiers.length) {
-            insertBeforeAssignment(node, ["let "])
-          }
-          else if (undeclaredIdentifiers.length > 0) {
-            insertBeforeAssignment(node, ["let ", undeclaredIdentifiers.join(", "), "\n"])
+        if (undeclaredIdentifiers.length > 0) {
+          let indent = statement[0]
+          // Is this statement a simple assingment like 'a = 1'?
+          let firstIdentifier = gatherNodes(statement[1], (node) => node.type == "Identifier")[0]
+          if (undeclaredIdentifiers.length == 1
+          && statement[1].type == 'AssignmentExpression'
+          && statement[1].names.length == 1
+          && statement[1].names[0] == undeclaredIdentifiers[0]
+          && firstIdentifier && firstIdentifier.names == undeclaredIdentifiers[0]
+          && gatherNodes(statement[1], (node) => node.type === "ObjectBindingPattern").length == 0)
+            statement[1].children.unshift(["let "])
+          else {
+            let tail = "\n"
+            // Is this statement start with a new Line?
+            if (gatherNodes(indent, (node) => node.token && node.token.endsWith("\n")).length > 0)
+              tail = undefined
+            targetStatements.push([indent, "let ", undeclaredIdentifiers.join(", "), tail])
           }
         }
-        else if (node.type == "Declaration") {
-            if (node.children && node.children.length) createLetDecs(node.children, scopes)
-            node.names.forEach((name) => currentScope.add(name))
-        }
-        else {
-          let block = node
-          let fnNode  = fnNodes .find((fnNode)  => fnNode.block  === block)
-          let forNode = forNodes.find((forNode) => forNode.block === block)
-          if (fnNode != null) {
-            scopes.push(new Set(fnNode.parameters.names))
-            createLetDecs(block.expressions, scopes)
-            scopes.pop()
-          }
-          else if (forNode != null) {
-            scopes.push(new Set(forNode.declaration.names))
-            createLetDecs(block.expressions, scopes)
-            scopes.pop()
-          }
-          else
-            createLetDecs(block.expressions, scopes)
-        }
+        targetStatements.push(statement)
       }
 
       scopes.pop()
+      statements.splice(0, statements.length, targetStatements)
     }
 
     function gatherBindingCode(statements, opts) {
