@@ -123,9 +123,14 @@ export a, b, c from "./cool.js"
 export x = 3
 </Playground>
 
-### Throw Expression
+### Everything is an Expression
 
 <Playground>
+items = for item of items
+  if item.length
+    item.toUpperCase()
+  else
+    "<empty>"
 x == null ? throw "x is null" : x.fn()
 </Playground>
 
