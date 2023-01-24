@@ -18,6 +18,10 @@ ExtendedExpression
   NonAssignmentExtendedExpression
   AssignmentExpression
 
+SingleLineExtendedExpression
+  NonAssignmentExtendedExpression
+  SingleLineAssignmentExpression
+
 NonPipelineExtendedExpression
   NonAssignmentExtendedExpression
   NonPipelineAssignmentExpression
@@ -66,7 +70,7 @@ Arguments
     return $skip
 
 ImplicitArguments
-  ( TypeArguments !( __ ImplementsToken ) )?:ta ApplicationStart InsertOpenParen:open _*:ws ArgumentList:args InsertCloseParen:close ->
+  ( TypeArguments !ImplementsToken )?:ta ApplicationStart InsertOpenParen:open _*:ws ArgumentList:args InsertCloseParen:close ->
     return [ta?.[0], open, module.insertTrimmingSpace(ws, ""), args, close]
 
 ExplicitArguments
@@ -86,7 +90,12 @@ ForbiddenImplicitCalls
   AtAt # experimentalDecorators
 
 ArgumentsWithTrailingMemberExpressions
-  Arguments TrailingMemberExpressions
+  Arguments:args TrailingMemberExpressions:trailing ->
+    const call = {
+      type: "Call",
+      children: args,
+    }
+    return [ call, ...trailing ]
 
 TrailingMemberExpressions
   # NOTE: Assert "." to not match "?" or "!" as a member expression on the following line
@@ -186,20 +195,8 @@ AssignmentExpression
   # TODO If NonPipelineAssignmentExpression or SingleLineAssignmentExpression is used here then behavior changes
 
   # NOTE: Try to match a single line assignment expression before matching newline then assignment expression
-  TrailingComment*:ws AssignmentExpressionTail:tail ->
-    if (ws.length) {
-      // Glom whitespace into identifiers and literals to ease checking of "simple" refs
-      // NOTE: This can get weird if we depend on the specific location of children
-      if (tail.children && tail.type !== "IterationExpression") {
-        return {
-          ...tail,
-          children: [...ws, ...tail.children]
-        }
-      }
-      return $0
-    }
-    return tail
-
+  SingleLineAssignmentExpression
+  # TODO: Ideally this wouldn't be needed.
   __ AssignmentExpressionTail
   # NonPipelineAssignmentExpression
 
@@ -405,7 +402,6 @@ ExtendsClause
 ExtendsToken
   # NOTE: Added "<" extends shorthand
   Loc:l __:ws OpenAngleBracket:lt " "? ->
-
     const children = [
       ...ws,
       { ...lt, token: "extends " },
@@ -415,9 +411,7 @@ ExtendsToken
       children.unshift({ $loc: l.$loc, token: " " })
     }
 
-    return {
-      children,
-    }
+    return { children }
 
   __ Extends
 
@@ -430,15 +424,30 @@ ExtendsTarget
     return exp
 
 ImplementsClause
-  __ ImplementsToken ImplementsTarget ( Comma ImplementsTarget )* ->
+  ImplementsToken ImplementsTarget ( Comma ImplementsTarget )* ->
     return {
       ts: true,
       children: $0,
     }
 
 ImplementsToken
-  "implements" NonIdContinue ->
-    return { $loc, token: $1 }
+  # NOTE: Added "<:" implements shorthand
+  Loc:l __:ws ImplementsShorthand:token " "? ->
+    const children = [ ...ws, token ]
+
+    if (!ws.length) {
+      children.unshift({ $loc: l.$loc, token: " " })
+    }
+
+    return { children }
+
+  __ "implements" NonIdContinue ->
+    $2 = { $loc, token: $2 }
+    return [$1, $2]
+
+ImplementsShorthand
+  "<:" ->
+    return { $loc, token: "implements " }
 
 ImplementsTarget
   __ IdentifierName (Dot IdentifierName)* TypeArguments?
@@ -534,20 +543,26 @@ LeftHandSideExpression
 # https://262.ecma-international.org/#prod-CallExpression
 CallExpression
   # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
-  "super" ArgumentsWithTrailingMemberExpressions CallExpressionRest*
+  "super" ArgumentsWithTrailingMemberExpressions CallExpressionRest*:rest ->
+    return {
+      type: "CallExpression",
+      children: [$1, ...$2, ...rest.flat()],
+    }
   # Dynamic import(), with optional parentheses when not used at top level.
   # (At top level, ImportDeclaration will match first.)
   # NOTE: Using ExtendedExpression to allow for If/Switch expressions
-  "import" ArgumentsWithTrailingMemberExpressions CallExpressionRest* ->
+  "import" ArgumentsWithTrailingMemberExpressions CallExpressionRest*:rest ->
     return {
       type: "CallExpression",
-      children: $0,
+      children: [$1, ...$2, ...rest.flat()],
     }
 
   MemberExpression:member NonSuppressedTrailingMemberExpressions:trailing CallExpressionRest*:rest ->
     if (rest.length || trailing.length) {
+      rest = rest.flat()
       return {
-        type: rest.length ? "CallExpression" : "MemberExpression",
+        type: rest.length && rest[rest.length-1].type === "Call"
+              ? "CallExpression" : "MemberExpression",
         children: [member, ...trailing, ...rest]
       }
     }
@@ -558,14 +573,20 @@ CallExpressionRest
   MemberExpressionRest
   TemplateLiteral
   # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
-  ( OptionalShorthand / NonNullAssertion )? ArgumentsWithTrailingMemberExpressions
+  ( OptionalShorthand / NonNullAssertion )? ArgumentsWithTrailingMemberExpressions ->
+    if (!$1) return $2
+    return [ $1, ...$2 ]
 
 # NOTE: Added shorthand x?(3) -> x?.(3)
 OptionalShorthand
-  ( QuestionMark ( Dot / InsertDot ) )
+  QuestionMark ( Dot / InsertDot ) ->
+    return {
+      type: "Optional",
+      children: $0,
+    }
 
 NonNullAssertion
-  "!" -> { ts: true, children: $1 }
+  "!" -> { type: "NonNullAssertion", ts: true, children: $1 }
 
 # https://262.ecma-international.org/#prod-MemberExpression
 MemberExpression
@@ -587,9 +608,9 @@ MemberExpressionRest
   ( OptionalShorthand / NonNullAssertion )? MemberBracketContent ->
     if ($1) {
       // Optional followed by a slice expression
-      if ($1.length === 2 && $2.type === "SliceExpression") {
+      if ($1.type === "Optional" && $2.type === "SliceExpression") {
         // Remove '.' from optional since it is present in '.slice'
-        return [$1[0], $2]
+        return [$1.children[0], $2]
       }
       return $0
     }
@@ -620,6 +641,14 @@ MemberBracketContent
 
     // Regular index `[exp]`
     return $0
+
+  # NOTE: Added shorthand x."string" -> x["string"]
+  Dot:dot ( StringLiteral / TemplateLiteral ):str ->
+    return [
+      { token: "[", $loc: dot.$loc },
+      str,
+      "]",
+    ]
 
 SliceParameters
   ExtendedExpression:start __:ws ( DotDotDot / DotDot ):sep ExtendedExpression?:end ->
@@ -672,6 +701,7 @@ PropertyAccess
 
     return {
       type: "PropertyAccess",
+      name: id.name,
       children,
     }
 
@@ -1353,6 +1383,15 @@ Arrow
     return { $loc, token: $1}
 
 ExplicitBlock
+  __ OpenBrace __ CloseBrace ->
+    const expressions = []
+    return {
+      type: "BlockStatement",
+      expressions,
+      children: [$1, expressions, $2],
+      bare: false,
+      empty: true,
+    }
   __ OpenBrace NestedBlockStatements:block __ CloseBrace ->
     return Object.assign({}, block, {
       children: [$1, $2, ...block.children, $4, $5],
@@ -1385,6 +1424,7 @@ Block
 ThenClause
   Then SingleLineStatements -> $2
 
+# A block that must include braces (function body, try/catch/finally)
 BracedOrEmptyBlock
   BracedBlock
   EmptyBlock
@@ -1398,6 +1438,7 @@ EmptyBlock
       expressions,
       children: [$1, expressions, $2],
       bare: false,
+      empty: true,
     }
 
 EmptyBareBlock
@@ -1411,7 +1452,7 @@ EmptyBareBlock
       bare: true,
     }
 
-# This is a block that must include braces (function body, try/catch/finally)
+# A nonempty block that must include braces
 BracedBlock
   TrailingComment* OpenBrace BracedContent:block __ CloseBrace ->
     return {
@@ -1434,8 +1475,9 @@ BracedBlock
       children: [$1, s, $3],
     }
 
-  # One liner
+  # Nonempty one liner
   InsertOpenBrace:o !EOS SingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ->
+    if (!s.children.length) return $skip
     return {
       type: "BlockStatement",
       expressions: s.expressions,
@@ -1443,8 +1485,11 @@ BracedBlock
       children: [o, s.children, ws, c],
     }
 
+# NOTE: SingleLineStatements includes the empty case
 SingleLineStatements
-  ( _* Statement SemicolonDelimiter )*:stmts ( _* Statement SemicolonDelimiter? )?:last ->
+  # NOTE: Statement can start with __ via AssignmentExpression.
+  # Force staying on the same line via !/\n/ assertion.
+  ( ( _? !EOS ) Statement SemicolonDelimiter )*:stmts ( ( _? !EOS ) Statement SemicolonDelimiter? )?:last ->
     const children = [...stmts]
     if (last) children.push(last)
 
@@ -1903,7 +1948,10 @@ PropertyDefinition
       ...prop,
       children: [...ws, ...prop.children],
     }
+  # NOTE: Forbidding EmptyBlock in MethodDefinition to allow `foo()` shorthand
+  # for `foo: foo()`
   __:ws MethodDefinition:def ->
+    if (def.block.empty) return $skip
     return {
       ...def,
       children: [...ws, ...def.children],
@@ -1915,9 +1963,39 @@ PropertyDefinition
       names: exp.names,
       value: [dots, exp],
     }
-  # NOTE: this needs to be at the bottom to prevent shadowing PropertyName
-  __:ws IdentifierReference:id  ->
-    return {...id, children: [...ws, ...id.children]}
+  # NOTE: Added `{x.y?.z()}` shorthand for `{z: x.y?.z()}`
+  # NOTE: this needs to be at the bottom to prevent shadowing NamedProperty
+  __:ws CallExpression:value ->
+    // `{identifier}` remains `{identifier}`, the one shorthand JS supports
+    if (value.type === "Identifier") {
+      return {...value, children: [...ws, ...value.children]}
+    }
+    // More complicated expressions gains `name:` prefix
+    // Look for last PropertyAccess like `.foo` or Identifier,
+    // before any calls like `(args)`.
+    let exp = value, children, i
+    do {
+      ({children} = exp)
+      i = children.length-1
+      while (i >= 0 && (
+        children[i].type === "Call" ||
+        children[i].type === "NonNullAssertion" ||
+        children[i].type === "Optional"
+      )) i--
+      if (i < 0) return $skip
+      // Recurse into nested MemberExpression, e.g. from `x.y()`
+    } while (children[i].type === "MemberExpression" && (exp = children[i]))
+    const {name} = children[i]
+    if (!name) return $skip
+    return {
+      type: "Property",
+      children: [ws, name, ": ", value],
+      name, value,
+      names: [],
+    }
+  # NOTE: basic identifiers are now part of the rule above
+  #__:ws IdentifierReference:id ->
+  #  return {...id, children: [...ws, ...id.children]}
 
 NamedProperty
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
@@ -2922,7 +3000,7 @@ CaseClause
       block,
       children: $0
     }
-  # NOTE: Added else from CoffeesScript
+  # NOTE: Added else from CoffeeScript
   Else ImpliedColon InsertOpenBrace ( NestedBlockStatements / SingleLineStatements ):block InsertNewline InsertIndent InsertCloseBrace ->
     $1.token = "default"
     return {
@@ -3246,7 +3324,11 @@ ExportDeclaration
 
 # CoffeeScript style `export x = 3` -> `export var x = 3`
 ExportVarDec
-  InsertVar VariableDeclarationList
+  InsertVar VariableDeclarationList ->
+    return {
+      ...$2,
+      children: [$1, ...$2.children]
+    }
 
 # https://262.ecma-international.org/#prod-ExportFromClause
 ExportFromClause
@@ -3767,8 +3849,19 @@ ExpressionDelimiter
     return [$1, $3, $4]
   &EOS InsertComma -> $2
 
+SimpleStatementDelimiter
+  SemicolonDelimiter
+  &EOS
+
 StatementDelimiter
   SemicolonDelimiter
+  # NOTE: Avoid automatic continuation onto lines that start with
+  # certain characters by adding an explicit semicolon.  See
+  # https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Lexical_grammar#automatic_semicolon_insertion
+  # TODO: Would be better to do this in a `processBlocks` postprocessing step,
+  # to avoid adding semicolons when they're not needed (e.g. `return` inserted
+  # before value, or parens not actually added around ObjectLiteral).
+  &( Samedent ( "(" / "[" / "`" / "+" / "-" / "*" / "/" / ObjectLiteral ) ) InsertSemicolon
   &EOS
 
 SemicolonDelimiter
@@ -4484,11 +4577,12 @@ InlineJSXAttributeValue
     if ($2.length) return module.processBinaryOpExpression($0)
     return $1
 
-# BinaryOpRHS without whitespace and without ExpressionizedStatement
+# BinaryOpRHS without whitespace and without ExpressionizedStatement,
+# and forbidding operators starting with < or > (possible JSX tags).
 InlineJSXBinaryOpRHS
-  BinaryOp ( ParenthesizedAssignment / InlineJSXUnaryExpression ) ->
+  ![<>] BinaryOp:op ( ParenthesizedAssignment / InlineJSXUnaryExpression ):rhs ->
     // NOTE: Inserting empty whitespace arrays to be compatible with BinaryOpRHS and `processBinaryOpExpression`
-    return [[], $1, [], $2]
+    return [[], op, [], rhs]
 
 # JSXUnaryExpression, with InlineJSX prefixes and no Do (which has whitespace)
 InlineJSXUnaryExpression
@@ -4540,9 +4634,9 @@ InlineJSXMemberExpressionRest
   ( OptionalShorthand / NonNullAssertion )? MemberBracketContent ->
     if ($1) {
       // Optional followed by a slice expression
-      if ($1.length === 2 && $2.type === "SliceExpression") {
+      if ($1.type === "Optional" && $2.type === "SliceExpression") {
         // Remove '.' from optional since it is present in '.slice'
-        return [$1[0], $2]
+        return [$1.children[0], $2]
       }
       return $0
     }
@@ -4929,8 +5023,8 @@ Shebang
   /#![^\r\n]*/ EOL
 
 CivetPrologue
-  [\t ]* DoubleQuote CivetPrologueContent:content DoubleQuote $StatementDelimiter EOS? -> content
-  [\t ]* SingleQuote CivetPrologueContent:content SingleQuote $StatementDelimiter EOS? -> content
+  [\t ]* DoubleQuote CivetPrologueContent:content DoubleQuote $SimpleStatementDelimiter EOS? -> content
+  [\t ]* SingleQuote CivetPrologueContent:content SingleQuote $SimpleStatementDelimiter EOS? -> content
 
 CivetPrologueContent
   "civet" NonIdContinue CivetOption*:options [\s]* ->
@@ -4962,7 +5056,7 @@ CivetOption
 UnknownPrologue
   # NOTE: $ is to keep source verbatim and not insert a semicolon if one was omitted
   # Can't use $EOS because it will prevent re-writing of coffee style comments
-  [\t ]* BasicStringLiteral:s $StatementDelimiter EOS
+  [\t ]* BasicStringLiteral:s $SimpleStatementDelimiter EOS
 
 DirectivePrologue
   CivetPrologue
@@ -4981,6 +5075,10 @@ Debugger
     debugger
 
 # Insertions
+
+InsertSemicolon
+  "" ->
+    return { $loc, token: ";" }
 
 InsertOpenParen
   "" ->
@@ -6669,10 +6767,6 @@ Init
     }
 
     function createLetDecs(statements, scopes) {
-      function hasDec(name) {
-        return scopes.some((s) => s.has(name))
-      }
-
       function findVarDecs(statements, decs) {
         const declarationNames = gatherRecursive(statements,
           (node) =>
@@ -6688,60 +6782,85 @@ Init
         return new Set(declarationNames)
       }
 
-      function insertBeforeAssignment(assignment, content) {
-        if (assignment.children && assignment.children.length) {
-          let indent = assignment.children[0][0][0]
-          if (Array.isArray(indent)) indent = indent[indent.length - 1]
-          assignment.children.unshift([indent, ...content])
-        }
+      let declaredIdentifiers = findVarDecs(statements)
+
+      function hasDec(name) {
+        return declaredIdentifiers.has(name) || scopes.some((s) => s.has(name))
+      }
+
+      function gatherBlockOrOther(statement) {
+        return gatherNodes(statement, (s) => s.type === "BlockStatement" || s.type === "AssignmentExpression" || s.type === "Declaration").flatMap((node) => {
+          if (node.type == "BlockStatement")
+            // bare blocks is not a safe position to insert let declaration
+            return node.bare ? gatherBlockOrOther(node.expressions) : node
+          else if (node.children && node.children.length)
+            return [...gatherBlockOrOther(node.children), node]
+          else
+            return []
+        })
       }
 
       let currentScope = new Set()
       scopes.push(currentScope)
 
-
       const fnNodes  = gatherNodes(statements, (s) => s.type === "FunctionExpression")
       const forNodes = gatherNodes(statements, (s) => s.type === "ForStatement")
-      const nodes = gatherNodes(statements, (s) => s.type === "BlockStatement" || s.type === "AssignmentExpression" || s.type === "Declaration")
 
-      let declaredIdentifiers = findVarDecs(statements)
+      let targetStatements = []
+      for (const statement of statements) {
+        const nodes = gatherBlockOrOther(statement)
+        let undeclaredIdentifiers = []
+        for (const node of nodes) {
+          if (node.type == "BlockStatement") {
+            let block = node
+            let fnNode  =  fnNodes.find((fnNode)  =>  fnNode.block === block)
+            let forNode = forNodes.find((forNode) => forNode.block === block)
+            if (fnNode != null) {
+              scopes.push(new Set(fnNode.parameters.names))
+              createLetDecs(block.expressions, scopes)
+              scopes.pop()
+            }
+            else if (forNode != null) {
+              scopes.push(new Set(forNode.declaration.names))
+              createLetDecs(block.expressions, scopes)
+              scopes.pop()
+            }
+            else
+              createLetDecs(block.expressions, scopes)
+            continue
+          }
+          // Assignment and Declaration all use 'names'.
+          if (node.names == null) continue
+          let names = node.names.filter(name => !hasDec(name))
+          if (node.type == "AssignmentExpression")
+            undeclaredIdentifiers.push(...names)
+          names.forEach((name) => currentScope.add(name))
+        }
 
-      for (const node of nodes) {
-        if (node.type == "AssignmentExpression") {
-          let undeclaredIdentifiers = node.names.filter(name => !(hasDec(name) || declaredIdentifiers.has(name)))
-          if (node.children.length) createLetDecs(node.children, scopes)
-          undeclaredIdentifiers.forEach((name) => currentScope.add(name))
-          if (node.names.length === undeclaredIdentifiers.length) {
-            insertBeforeAssignment(node, ["let "])
-          }
-          else if (undeclaredIdentifiers.length > 0) {
-            insertBeforeAssignment(node, ["let ", undeclaredIdentifiers.join(", "), "\n"])
+        if (undeclaredIdentifiers.length > 0) {
+          let indent = statement[0]
+          // Is this statement a simple assingment like 'a = 1'?
+          let firstIdentifier = gatherNodes(statement[1], (node) => node.type == "Identifier")[0]
+          if (undeclaredIdentifiers.length == 1
+          && statement[1].type == 'AssignmentExpression'
+          && statement[1].names.length == 1
+          && statement[1].names[0] == undeclaredIdentifiers[0]
+          && firstIdentifier && firstIdentifier.names == undeclaredIdentifiers[0]
+          && gatherNodes(statement[1], (node) => node.type === "ObjectBindingPattern").length == 0)
+            statement[1].children.unshift(["let "])
+          else {
+            let tail = "\n"
+            // Is this statement start with a new Line?
+            if (gatherNodes(indent, (node) => node.token && node.token.endsWith("\n")).length > 0)
+              tail = undefined
+            targetStatements.push([indent, "let ", undeclaredIdentifiers.join(", "), tail])
           }
         }
-        else if (node.type == "Declaration") {
-            if (node.children && node.children.length) createLetDecs(node.children, scopes)
-            node.names.forEach((name) => currentScope.add(name))
-        }
-        else {
-          let block = node
-          let fnNode  = fnNodes .find((fnNode)  => fnNode.block  === block)
-          let forNode = forNodes.find((forNode) => forNode.block === block)
-          if (fnNode != null) {
-            scopes.push(new Set(fnNode.parameters.names))
-            createLetDecs(block.expressions, scopes)
-            scopes.pop()
-          }
-          else if (forNode != null) {
-            scopes.push(new Set(forNode.declaration.names))
-            createLetDecs(block.expressions, scopes)
-            scopes.pop()
-          }
-          else
-            createLetDecs(block.expressions, scopes)
-        }
+        targetStatements.push(statement)
       }
 
       scopes.pop()
+      statements.splice(0, statements.length, targetStatements)
     }
 
     function gatherBindingCode(statements, opts) {

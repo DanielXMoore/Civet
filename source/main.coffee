@@ -87,6 +87,7 @@ uncacheable = new Set [
   "PushJSXOpeningFragment"
   "Samedent"
   "ShortCircuitExpression"
+  "SingleLineAssignmentExpression"
   "SingleLineComment"
   "SingleLineStatements"
   "SnugNamedProperty"
