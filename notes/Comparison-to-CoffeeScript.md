@@ -47,7 +47,8 @@ Things Kept from CoffeeScript
 - Prefix or postfix rest/splats `[...a]`, `x = [a...]`
 - RestProperty in any position `{a, ...b, c} = d` → `{a, c, ...b} = d`
 - RestElement/RestParameter in any position `(first, ...midle, last) ->` → `function(first, ...middle) { let [last] = middle.splice(-1)}`
-- `///` Heregexp (with some [changes](#things-changed-from-coffeescript))
+- `///` heregexp (with some [changes](#things-changed-from-coffeescript))
+- `###` block comments (but allowing nested `*/`)
 - JSX [with improved shorthands and an optional nested syntax](../README.md#jsx-enhancements)
   (with some [changes](#things-changed-from-coffeescript))
 
