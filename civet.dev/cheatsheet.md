@@ -594,6 +594,15 @@ numbers[1...-1] = []
 a + b = c
 </Playground>
 
+### Block Comments
+
+<Playground>
+###
+block comment
+/* nested comment */
+###
+</Playground>
+
 ### `Object.is`
 
 The `"civet objectIs"` directive changes the behavior of the `is` operator to
@@ -814,13 +823,23 @@ X::
 X::a
 </Playground>
 
+### CoffeeScript Booleans
+
+<Playground>
+"civet coffeeBooleans"
+on
+off
+yes
+no
+</Playground>
+
 ### CoffeeScript Comments
+
+If you don't need private fields, you can enable `#` for single-line comments:
 
 <Playground>
 "civet coffeeComment"
 # one-line comment
-###
-block
-comment
-###
 </Playground>
+
+[`###...###` block comments](#block-comments) are always available.
