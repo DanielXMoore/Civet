@@ -56,7 +56,7 @@ text = ```
 <Playground>
 a < b <= c
 a is b is not c
-a instanceof b instanceof c
+a instanceof b not instanceof c
 </Playground>
 
 ### Default to `const` for Iteration Items

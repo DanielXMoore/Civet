@@ -146,6 +146,7 @@ a is not b
 a and b
 a or b
 a not in b
+a not instanceof b
 a?
 </Playground>
 
@@ -513,13 +514,21 @@ obj.key ?= 'civet'
 <Playground>
 a < b <= c
 a is b is not c
-a instanceof b instanceof c
+a instanceof b not instanceof c
+</Playground>
+
+### `instanceof` shorthand
+
+<Playground>
+a <? b
+a !<? b
+a <? b !<? c
 </Playground>
 
 ### Rest
 
 Rest properties/parameters/elements are no longer limited to the final position.
-You may use them in ther first or middle positions as well.
+You may use them in their first or middle positions as well.
 
 <Playground>
 [...head, last] = [1, 2, 3, 4, 5]
