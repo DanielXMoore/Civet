@@ -47,6 +47,7 @@ Literal shorthand beyond `{x}`:
 <Playground>
 another := {person.name, obj?.c?.x}
 computed := {foo(), bar()}
+named := {lookup[x+y]}
 </Playground>
 
 Flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects):
