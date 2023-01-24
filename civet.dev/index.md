@@ -129,7 +129,16 @@ export x = 3
 x == null ? throw "x is null" : x.fn()
 </Playground>
 
-[JSX](/cheatsheet#jsx)? No problem!
+### [JSX](/cheatsheet#jsx)
+
+<Playground>
+function Listing(props)
+  <h1 #heading>Hello Civet!
+  <ul .items>
+    <For each=props.items>
+      (item) =>
+        <li .item {props.style}><Item {item}>
+</Playground>
 
 <Sponsors />
 
