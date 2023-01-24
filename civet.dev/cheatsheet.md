@@ -85,6 +85,8 @@ Property access shorthand:
 <Playground>
 json.'long property'
 json.`${movie} name`
+matrix.0.0
+array.-1
 </Playground>
 
 ### Arrays
