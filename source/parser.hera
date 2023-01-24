@@ -18,6 +18,10 @@ ExtendedExpression
   NonAssignmentExtendedExpression
   AssignmentExpression
 
+SingleLineExtendedExpression
+  NonAssignmentExtendedExpression
+  SingleLineAssignmentExpression
+
 NonPipelineExtendedExpression
   NonAssignmentExtendedExpression
   NonPipelineAssignmentExpression
@@ -46,22 +50,27 @@ Expression
   # CommaOperator
   # https://262.ecma-international.org/#sec-comma-operator
   # NOTE: Eliminated left recursion
-  AssignmentExpression (__ Comma AssignmentExpression)* ->
+  AssignmentExpression ( CommaDelimiter AssignmentExpression )* ->
     if($2.length == 0) return $1
     return $0
 
 # https://262.ecma-international.org/#prod-Arguments
 Arguments
   ExplicitArguments
-  # NOTE: Added spacing based implicit function application
-  # Trailing (__ MemberExpressionRest)* is to capture trailing .someMethod and bind them at the right place
 
   # Space / indentation based function application
   # Function application:
   # a b => a(b)
   # a b, c, d => a(b, c, d)
   # x y z => x(y(z))
-  ( TypeArguments !( __ ImplementsToken ) )?:ta ApplicationStart InsertOpenParen:open _*:ws ArgumentList:args InsertCloseParen:close ->
+  SuppressTrailingMemberProperty ImplicitArguments?:args ->
+    module.suppressTrailingMemberProperty.pop()
+
+    if (args) return args
+    return $skip
+
+ImplicitArguments
+  ( TypeArguments !ImplementsToken )?:ta ApplicationStart InsertOpenParen:open _*:ws ArgumentList:args InsertCloseParen:close ->
     return [ta?.[0], open, module.insertTrimmingSpace(ws, ""), args, close]
 
 ExplicitArguments
@@ -75,24 +84,34 @@ ApplicationStart
 ForbiddenImplicitCalls
   # Reserved words that prevent spaced implicit function application
   # ie: the 'of' in 'for x of ...'
-  /(as|for|of|satisfies|then|when)(?!\p{ID_Continue}|[\u200C\u200D$])/
+  /(as|for|of|satisfies|then|when|implements)(?!\p{ID_Continue}|[\u200C\u200D$])/
   # NOTE: Don't allow non-heregex regexes that begin with a space as first argument without parens
   "/ "
   AtAt # experimentalDecorators
 
-IndentedApplicationAllowed
-  "" ->
-    if (module.suppressIndentedApplication) return $skip
-    return
-
 ArgumentsWithTrailingMemberExpressions
-  # Since this is recursive Arguments must consume input to avoid infinite recursion
+  Arguments:args TrailingMemberExpressions:trailing ->
+    const call = {
+      type: "Call",
+      children: args,
+    }
+    return [ call, ...trailing ]
+
+TrailingMemberExpressions
   # NOTE: Assert "." to not match "?" or "!" as a member expression on the following line
-  Arguments ( Samedent &"." MemberExpressionRest )*
+  MemberExpressionRest* ( ( Samedent / IndentedFurther ) &( "?"? "." ) MemberExpressionRest )* ->
+    return $1.concat($2)
+
+NonSuppressedTrailingMemberExpressions
+  TrailingMemberPropertyAllowed TrailingMemberExpressions -> $2
+  MemberExpressionRest*
+
+CommaDelimiter
+  ( Samedent / IndentedFurther )? _* Comma
 
 # https://262.ecma-international.org/#prod-ArgumentList
 ArgumentList
-  ArgumentPart ( __ Comma ( NestedImplicitObjectLiteral / NestedArgumentList ) )+
+  ArgumentPart ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+
   # NOTE: Added nested arguments on separate new lines
   NestedImplicitObjectLiteral ->
     return module.insertTrimmingSpace($1, '')
@@ -109,7 +128,7 @@ NestedArgument
 
 InlineArgumentExpressions
   # NOTE: Eliminated left recursion
-  TrailingComment* ArgumentPart ( __ Comma TrailingComment* ArgumentPart )* ->
+  TrailingComment* ArgumentPart ( CommaDelimiter TrailingComment* ArgumentPart )* ->
     return [...$1, $2, ...$3]
 
 SingleLineArgumentExpressions
@@ -176,20 +195,8 @@ AssignmentExpression
   # TODO If NonPipelineAssignmentExpression or SingleLineAssignmentExpression is used here then behavior changes
 
   # NOTE: Try to match a single line assignment expression before matching newline then assignment expression
-  TrailingComment*:ws AssignmentExpressionTail:tail ->
-    if (ws.length) {
-      // Glom whitespace into identifiers and literals to ease checking of "simple" refs
-      // NOTE: This can get weird if we depend on the specific location of children
-      if (tail.children && tail.type !== "IterationExpression") {
-        return {
-          ...tail,
-          children: [...ws, ...tail.children]
-        }
-      }
-      return $0
-    }
-    return tail
-
+  SingleLineAssignmentExpression
+  # TODO: Ideally this wouldn't be needed.
   __ AssignmentExpressionTail
   # NonPipelineAssignmentExpression
 
@@ -395,7 +402,6 @@ ExtendsClause
 ExtendsToken
   # NOTE: Added "<" extends shorthand
   Loc:l __:ws OpenAngleBracket:lt " "? ->
-
     const children = [
       ...ws,
       { ...lt, token: "extends " },
@@ -405,9 +411,7 @@ ExtendsToken
       children.unshift({ $loc: l.$loc, token: " " })
     }
 
-    return {
-      children,
-    }
+    return { children }
 
   __ Extends
 
@@ -420,15 +424,30 @@ ExtendsTarget
     return exp
 
 ImplementsClause
-  __ ImplementsToken ImplementsTarget ( Comma ImplementsTarget )* ->
+  ImplementsToken ImplementsTarget ( Comma ImplementsTarget )* ->
     return {
       ts: true,
       children: $0,
     }
 
 ImplementsToken
-  "implements" NonIdContinue ->
-    return { $loc, token: $1 }
+  # NOTE: Added "<:" implements shorthand
+  Loc:l __:ws ImplementsShorthand:token " "? ->
+    const children = [ ...ws, token ]
+
+    if (!ws.length) {
+      children.unshift({ $loc: l.$loc, token: " " })
+    }
+
+    return { children }
+
+  __ "implements" NonIdContinue ->
+    $2 = { $loc, token: $2 }
+    return [$1, $2]
+
+ImplementsShorthand
+  "<:" ->
+    return { $loc, token: "implements " }
 
 ImplementsTarget
   __ IdentifierName (Dot IdentifierName)* TypeArguments?
@@ -458,7 +477,9 @@ ClassElementDefinition
   ( MethodDefinition / FieldDefinition )
 
 AccessModifier
-  ( Public / Private / Protected ) __ ->
+  ( ( Public / Private / Protected ) __ )? ( Readonly __ )? ->
+    if (!($1 || $2)) return $skip
+
     return {
       ts: true,
       children: $0
@@ -498,13 +519,15 @@ FieldDefinition
 ThisLiteral
   This
   # NOTE: Added @identifier shorthand, also works for private identifiers
-  At:t $( "#"? IdentifierName ):id ->
-    // Extract children from 'Identifier' node because this won't interfere with refs
-    return [{...t, token: "this."}, id]
-  # NOTE: Added '@' as a 'this' shorthand from CoffeeScript
-  At ->
-    $1.token = "this"
-    return $1
+  # Converts 'IdentifierName' node to string so this won't interfere with refs
+  AtThis:at $( "#"? IdentifierName ):id ->
+    return [at, ".", id]
+  AtThis
+
+# NOTE: Added '@' as a 'this' shorthand from CoffeeScript
+AtThis
+  At:at ->
+    return { ...at, token: "this" }
 
 # https://262.ecma-international.org/#prod-LeftHandSideExpression
 LeftHandSideExpression
@@ -520,36 +543,50 @@ LeftHandSideExpression
 # https://262.ecma-international.org/#prod-CallExpression
 CallExpression
   # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
-  "super" ArgumentsWithTrailingMemberExpressions CallExpressionRest*
+  "super" ArgumentsWithTrailingMemberExpressions CallExpressionRest*:rest ->
+    return {
+      type: "CallExpression",
+      children: [$1, ...$2, ...rest.flat()],
+    }
   # Dynamic import(), with optional parentheses when not used at top level.
   # (At top level, ImportDeclaration will match first.)
   # NOTE: Using ExtendedExpression to allow for If/Switch expressions
-  "import" ArgumentsWithTrailingMemberExpressions CallExpressionRest* ->
+  "import" ArgumentsWithTrailingMemberExpressions CallExpressionRest*:rest ->
     return {
       type: "CallExpression",
-      children: $0,
+      children: [$1, ...$2, ...rest.flat()],
     }
-  MemberExpression CallExpressionRest* ->
-    if ($2.length) {
+
+  MemberExpression:member NonSuppressedTrailingMemberExpressions:trailing CallExpressionRest*:rest ->
+    if (rest.length || trailing.length) {
+      rest = rest.flat()
       return {
-        type: "CallExpression",
-        children: [$1].concat($2),
+        type: rest.length && rest[rest.length-1].type === "Call"
+              ? "CallExpression" : "MemberExpression",
+        children: [member, ...trailing, ...rest]
       }
     }
-    return $1
+
+    return member
 
 CallExpressionRest
   MemberExpressionRest
   TemplateLiteral
   # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
-  ( OptionalShorthand / NonNullAssertion )? ArgumentsWithTrailingMemberExpressions
+  ( OptionalShorthand / NonNullAssertion )? ArgumentsWithTrailingMemberExpressions ->
+    if (!$1) return $2
+    return [ $1, ...$2 ]
 
 # NOTE: Added shorthand x?(3) -> x?.(3)
 OptionalShorthand
-  ( QuestionMark ( Dot / InsertDot ) )
+  QuestionMark ( Dot / InsertDot ) ->
+    return {
+      type: "Optional",
+      children: $0,
+    }
 
 NonNullAssertion
-  "!" -> { ts: true, children: $1 }
+  "!" -> { type: "NonNullAssertion", ts: true, children: $1 }
 
 # https://262.ecma-international.org/#prod-MemberExpression
 MemberExpression
@@ -571,20 +608,15 @@ MemberExpressionRest
   ( OptionalShorthand / NonNullAssertion )? MemberBracketContent ->
     if ($1) {
       // Optional followed by a slice expression
-      if ($1.length === 2 && $2.type === "SliceExpression") {
+      if ($1.type === "Optional" && $2.type === "SliceExpression") {
         // Remove '.' from optional since it is present in '.slice'
-        return [$1[0], $2]
+        return [$1.children[0], $2]
       }
       return $0
     }
     return $2
   # NOTE: Combined Optional and Property access
-  # TODO: this doesn't yet work for arbitrarily deep nesting, only the first level
-  IndentedFurther? PropertyAccess ->
-    if ($1) return Object.assign({}, $2, {
-      children: [$1, ...$2.children]
-    })
-    return $2
+  PropertyAccess
   # NOTE: Added TypeScript '!' non-null assertion
   NonNullAssertion
 
@@ -609,6 +641,14 @@ MemberBracketContent
 
     // Regular index `[exp]`
     return $0
+
+  # NOTE: Added shorthand x."string" -> x["string"]
+  Dot:dot ( StringLiteral / TemplateLiteral ):str ->
+    return [
+      { token: "[", $loc: dot.$loc },
+      str,
+      "]",
+    ]
 
 SliceParameters
   ExtendedExpression:start __:ws ( DotDotDot / DotDot ):sep ExtendedExpression?:end ->
@@ -661,6 +701,7 @@ PropertyAccess
 
     return {
       type: "PropertyAccess",
+      name: id.name,
       children,
     }
 
@@ -696,7 +737,7 @@ Parameters
 
 NonEmptyParameters
   # NOTE: BindingElement -> ParameterElement
-  TypeParameters?:tp OpenParen:open ParameterElement*:pes FunctionRestParameter?:rest ParameterElement*:after ( __ CloseParen ):close ->
+  TypeParameters?:tp OpenParen:open ThisType?:tt ParameterElement*:pes FunctionRestParameter?:rest ParameterElement*:after ( __ CloseParen ):close ->
     const names = pes.flatMap(p => p.names)
     if (rest) {
       let restIdentifier
@@ -722,6 +763,7 @@ NonEmptyParameters
         children: [
           tp,
           open,
+          tt,
           ...pes,
           // Remove delimiter
           {...rest, children: rest.children.slice(0, -1)},
@@ -735,7 +777,7 @@ NonEmptyParameters
 
     return {
       type: "Parameters",
-      children: [tp, open, ...pes, close],
+      children: [tp, open, tt, ...pes, close],
       names: pes.flatMap((p) => p.names),
       tp,
     }
@@ -824,20 +866,19 @@ ObjectBindingPattern
 ObjectBindingPatternContent
   # NOTE: Added indentation based binding properties
   NestedBindingProperties
-  BindingProperty*:props BindingRestProperty?:rest BindingProperty*:after ->
-    const names = props.flatMap(p => p.names)
-    const children = [...props]
+  BindingPropertyList?:props ->
+    if (!props) return { children: [], names: [] }
 
-    if (rest) {
-      [rest, after] = module.reorderBindingRestProperty(rest, after)
-      children./**/push(...after, rest)
-      names./**/push(...after.flatMap(p => p.names), ...rest.names)
-    }
+    return module.reorderBindingRestProperty(props)
 
-    return {
-      names,
-      children,
-    }
+BindingPropertyList
+  ( BindingProperty ObjectPropertyDelimiter )+:props ->
+    return props.map(([prop, delim]) => {
+      return {
+        ...prop,
+        children: [...prop.children, delim],
+      }
+    })
 
 # https://262.ecma-international.org/#prod-ArrayBindingPattern
 # NOTE: Simplified from spec
@@ -893,36 +934,36 @@ Elision
   __ Comma
 
 NestedBindingProperties
-  # NOTE: Add NestedBindingProperties after rest from CoffeeScript
-  PushIndent NestedBindingProperty*:props NestedBindingRestProperty?:rest NestedBindingProperty*:after PopIndent ->
-    if (!(props.length || rest)) return $skip
-    const names = props.flatMap(p => p.names)
-    const children = [...props]
-    if (rest) {
-      [rest, after] = module.reorderBindingRestProperty(rest, after)
-      children./**/push(...after, rest)
-      names./**/push(...after.flatMap(p => p.names), ...rest.names)
-    }
-    return {
-      children,
-      names,
-    }
+  PushIndent NestedBindingPropertyList*:props PopIndent ->
+    if (!props.length) return $skip
+    props = props.flat()
+    return module.reorderBindingRestProperty(props)
 
-NestedBindingProperty
-  Nested:indent BindingProperty:prop ->
-    return {
-      ...prop,
-      children: [...indent, ...prop.children],
-    }
+NestedBindingPropertyList
+  Nested:ws BindingPropertyList:props ->
+    // Attach whitespace to first property
+    return props.map( (prop, i) => {
+      if (i > 0) return prop
+      return {
+        ...prop,
+        children: [ws, ...prop.children],
+      }
+    })
 
 # https://262.ecma-international.org/#prod-BindingProperty
 BindingProperty
-  __ PropertyName __ Colon ( BindingIdentifier / BindingPattern ):b Initializer? ObjectPropertyDelimiter ->
+  # NOTE: Merged in BindingRestProperty
+  # TS will mark errors about invalid multiple rest properties
+  # NOTE: Must be checked first to pick up trailing "..." form
+  BindingRestProperty
+
+  _? PropertyName __ Colon ( BindingIdentifier / BindingPattern ):b Initializer? ->
     return {
       names: b.names,
       children: $0
     }
-  BindingIdentifier:b Initializer? ObjectPropertyDelimiter ->
+
+  BindingIdentifier:b Initializer? ->
     if (b.type === "AtBinding") {
       return {
         type: "AtBindingProperty",
@@ -937,24 +978,20 @@ BindingProperty
       children: $0
     }
 
-NestedBindingRestProperty
-  Nested:indent BindingRestProperty:prop ->
-    return {
-      ...prop,
-      children: [indent, ...prop.children],
-    }
-
 # https://262.ecma-international.org/#prod-BindingRestProperty
 BindingRestProperty
-  __:ws DotDotDot:dots BindingIdentifier:id ObjectPropertyDelimiter:delimiter ->
+  _?:ws DotDotDot:dots BindingIdentifier:id ->
     return {
       ...id,
-      children: [...ws, dots, ...id.children, delimiter],
+      type: "BindingRestProperty",
+      children: [...(ws || []), dots, ...id.children],
     }
-  __:ws BindingIdentifier:id DotDotDot:dots ObjectPropertyDelimiter:delimiter ->
+
+  _?:ws BindingIdentifier:id DotDotDot:dots ->
     return {
       ...id,
-      children: [...ws, dots, ...id.children, delimiter],
+      type: "BindingRestProperty",
+      children: [...(ws || []), dots, ...id.children],
     }
 
 NestedBindingElements
@@ -1159,6 +1196,15 @@ Arrow
     return { $loc, token: $1}
 
 ExplicitBlock
+  __ OpenBrace __ CloseBrace ->
+    const expressions = []
+    return {
+      type: "BlockStatement",
+      expressions,
+      children: [$1, expressions, $2],
+      bare: false,
+      empty: true,
+    }
   __ OpenBrace NestedBlockStatements:block __ CloseBrace ->
     return Object.assign({}, block, {
       children: [$1, $2, ...block.children, $4, $5],
@@ -1191,6 +1237,7 @@ Block
 ThenClause
   Then SingleLineStatements -> $2
 
+# A block that must include braces (function body, try/catch/finally)
 BracedOrEmptyBlock
   BracedBlock
   EmptyBlock
@@ -1204,9 +1251,10 @@ EmptyBlock
       expressions,
       children: [$1, expressions, $2],
       bare: false,
+      empty: true,
     }
 
-# This is a block that must include braces (function body, try/catch/finally)
+# A nonempty block that must include braces
 BracedBlock
   TrailingComment* OpenBrace BracedContent:block __ CloseBrace ->
     return {
@@ -1229,8 +1277,9 @@ BracedBlock
       children: [$1, s, $3],
     }
 
-  # One liner
+  # Nonempty one liner
   InsertOpenBrace:o !EOS SingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ->
+    if (!s.children.length) return $skip
     return {
       type: "BlockStatement",
       expressions: s.expressions,
@@ -1238,8 +1287,11 @@ BracedBlock
       children: [o, s.children, ws, c],
     }
 
+# NOTE: SingleLineStatements includes the empty case
 SingleLineStatements
-  ( _* Statement SemicolonDelimiter )*:stmts ( _* Statement SemicolonDelimiter? )?:last ->
+  # NOTE: Statement can start with __ via AssignmentExpression.
+  # Force staying on the same line via !/\n/ assertion.
+  ( ( _? !EOS ) Statement SemicolonDelimiter )*:stmts ( ( _? !EOS ) Statement SemicolonDelimiter? )?:last ->
     const children = [...stmts]
     if (last) children.push(last)
 
@@ -1640,7 +1692,10 @@ NestedPropertyDefinition
 
 InlineObjectLiteral
   InsertInlineOpenBrace:open SnugNamedProperty ImplicitInlineObjectPropertyDelimiter ( ( Samedent / _* ) NamedProperty ImplicitInlineObjectPropertyDelimiter )* InsertCloseBrace:close ->
-    return [open, $2, $3, ...$4, close]
+    return {
+      type: "ObjectExpression",
+      children: [open, $2, $3, ...$4, close],
+    }
 
 # This is different from ObjectPropertyDelimiter because the braces are implicit so we can't look ahead to find the closing one
 # Instead we see if the next line matches a NamedProperty and if so we insert a comma
@@ -1695,7 +1750,10 @@ PropertyDefinition
       ...prop,
       children: [...ws, ...prop.children],
     }
+  # NOTE: Forbidding EmptyBlock in MethodDefinition to allow `foo()` shorthand
+  # for `foo: foo()`
   __:ws MethodDefinition:def ->
+    if (def.block.empty) return $skip
     return {
       ...def,
       children: [...ws, ...def.children],
@@ -1707,9 +1765,39 @@ PropertyDefinition
       names: exp.names,
       value: [dots, exp],
     }
-  # NOTE: this needs to be at the bottom to prevent shadowing PropertyName
-  __:ws IdentifierReference:id  ->
-    return {...id, children: [...ws, ...id.children]}
+  # NOTE: Added `{x.y?.z()}` shorthand for `{z: x.y?.z()}`
+  # NOTE: this needs to be at the bottom to prevent shadowing NamedProperty
+  __:ws CallExpression:value ->
+    // `{identifier}` remains `{identifier}`, the one shorthand JS supports
+    if (value.type === "Identifier") {
+      return {...value, children: [...ws, ...value.children]}
+    }
+    // More complicated expressions gains `name:` prefix
+    // Look for last PropertyAccess like `.foo` or Identifier,
+    // before any calls like `(args)`.
+    let exp = value, children, i
+    do {
+      ({children} = exp)
+      i = children.length-1
+      while (i >= 0 && (
+        children[i].type === "Call" ||
+        children[i].type === "NonNullAssertion" ||
+        children[i].type === "Optional"
+      )) i--
+      if (i < 0) return $skip
+      // Recurse into nested MemberExpression, e.g. from `x.y()`
+    } while (children[i].type === "MemberExpression" && (exp = children[i]))
+    const {name} = children[i]
+    if (!name) return $skip
+    return {
+      type: "Property",
+      children: [ws, name, ": ", value],
+      name, value,
+      names: [],
+    }
+  # NOTE: basic identifiers are now part of the rule above
+  #__:ws IdentifierReference:id ->
+  #  return {...id, children: [...ws, ...id.children]}
 
 NamedProperty
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
@@ -1910,8 +1998,13 @@ BinaryOpSymbol
   "<="
   ">="
   # NOTE: added <? instanceof shorthand
-  "<?" " "? ->
-    return "instanceof "
+  "<?" ->
+    return {
+      $loc,
+      token: "instanceof",
+      relational: true,
+      special: true,
+    }
   "<<"
   # NOTE: Avoid matching JSX opening tag by requiring non-identifier character
   # (e.g. whitespace) after "<".  This does forbid 1<2 or x<y.
@@ -1948,15 +2041,25 @@ BinaryOpSymbol
     return {
       $loc,
       token: "instanceof",
+      relational: true,
       special: true,
+      negated: true,
     }
   ( !CoffeeOfEnabled "not" NonIdContinue __ "in" NonIdContinue ) / ( CoffeeOfEnabled "not" NonIdContinue __ "of" NonIdContinue ) ->
     return {
       $loc,
       token: "in",
       special: true,
+      negated: true,
     }
-  ( "is" NonIdContinue __ "in" NonIdContinue ) / ( CoffeeOfEnabled "in" NonIdContinue ) ->
+  "is" NonIdContinue __ "in" NonIdContinue ->
+    return {
+      method: "includes",
+      relational: true,
+      reversed: true,
+      special: true,
+    }
+  CoffeeOfEnabled "in" NonIdContinue ->
     return {
       call: [module.getRef("indexOf"), ".call"],
       relational: true,
@@ -1964,7 +2067,15 @@ BinaryOpSymbol
       suffix: " >= 0",
       special: true,
     }
-  ( "is" NonIdContinue __ "not" NonIdContinue __ "in" NonIdContinue ) / ( CoffeeOfEnabled "not" NonIdContinue __ "in" NonIdContinue ) ->
+  "is" NonIdContinue __ "not" NonIdContinue __ "in" NonIdContinue ->
+    return {
+      method: "includes",
+      relational: true,
+      reversed: true,
+      special: true,
+      negated: true,
+    }
+  CoffeeOfEnabled "not" NonIdContinue __ "in" NonIdContinue ->
     return {
       call: [module.getRef("indexOf"), ".call"],
       relational: true,
@@ -1973,9 +2084,28 @@ BinaryOpSymbol
       special: true,
     }
   # NOTE: "is not" must come after "is not in"
-  !CoffeeNotEnabled "is" NonIdContinue __ "not" NonIdContinue -> "!=="
+  !CoffeeNotEnabled "is" NonIdContinue __ "not" NonIdContinue ->
+    if (module.config.objectIs) {
+      return {
+        call: module.getRef("is"),
+        relational: true,
+        special: true,
+        asConst: true,
+        negated: true,
+      }
+    }
+    return "!=="
   # NOTE: "is" must come after "is not" and "is in"
-  "is" NonIdContinue -> "==="
+  "is" NonIdContinue ->
+    if (module.config.objectIs) {
+      return {
+        call: module.getRef("is"),
+        relational: true,
+        special: true,
+        asConst: true,
+      }
+    }
+    return "==="
   "in" NonIdContinue ->
     return $1
   "&"
@@ -2020,8 +2150,16 @@ Statement
   TryStatement
 
   EmptyStatement
-  # TODO: wrap object literal output with parens to disambiguate from block statements in transpiled JS
-  ExpressionStatement
+
+  # Wrap object literal output with parens to disambiguate from block statements in transpiled JS
+  ExpressionStatement ->
+    if ($1.type === "ObjectExpression") {
+      return {
+        type: "ParenthesizedExpression",
+        children: ["(", $1, ")" ],
+      }
+    }
+    return $1
 
   # NOTE: Block statement is after expression statement because valid ObjectLiterals should take priority over blocks
   BlockStatement
@@ -2278,12 +2416,23 @@ CoffeeForStatementParameters
         throw new Error("Can't use 'by' with 'of' in CoffeeScript for loops")
       }
 
+      // TODO: Exp ref if exp is not a literal or identifier
+
       if (declaration.own) {
-        const indent = module.currentIndent.token + "  "
         const hasPropRef = module.getRef("hasProp")
 
         blockPrefix./**/push([indent, "if (!", hasPropRef, ".call(", exp, ", ", declaration, ")) continue\n"])
       }
+
+      // index is actually value in Coffee "for of", y = z[x]
+      if (index) {
+        blockPrefix./**/push([indent, {
+          type: "AssignmentExpression",
+          children: [index, " = ", exp, "[", declaration, "]"],
+          names: index.names,
+        }, ";\n"])
+      }
+
       kind.token = "in"
     } else if (kind.token === "in") { // CoffeeScript loop comprehensions
       const counterRef = {
@@ -2462,10 +2611,13 @@ CoffeeForStatementParameters
     }
 
 CoffeeForIndex
-  TrailingComment*:ws1 Comma TrailingComment*:ws2 BindingIdentifier:id ->
-    return Object.assign({}, id, {
-      children: [...ws1, ...ws2, ...id.children]
-    })
+  _?:ws1 Comma _?:ws2 BindingIdentifier:id ->
+    ws2 = module.insertTrimmingSpace(ws1, "")
+
+    return {
+      ...id,
+      children: [...(ws1 || []), ...(ws2 || []), ...id.children]
+    }
 
 CoffeeForDeclaration
   # NOTE: Coffee doesn't allow expression bindings like `for a.x in b`
@@ -2641,7 +2793,7 @@ CaseClause
       block,
       children: $0
     }
-  # NOTE: Added else from CoffeesScript
+  # NOTE: Added else from CoffeeScript
   Else ImpliedColon InsertOpenBrace ( NestedBlockStatements / SingleLineStatements ):block InsertNewline InsertIndent InsertCloseBrace ->
     $1.token = "default"
     return {
@@ -2734,6 +2886,18 @@ SuppressIndentedApplication
   "" ->
     module.suppressIndentedApplication = true
 
+IndentedApplicationAllowed
+  "" ->
+    if (module.suppressIndentedApplication) return $skip
+    return
+
+SuppressTrailingMemberProperty
+  "" ->
+    module.suppressTrailingMemberProperty.push(true)
+
+TrailingMemberPropertyAllowed
+  "" ->
+    if (module.trailingMemberPropertySuppressed) return $skip
 
 # https://262.ecma-international.org/#prod-ExpressionStatement
 ExpressionStatement
@@ -2801,20 +2965,22 @@ MaybeNestedExpression
 
 # https://262.ecma-international.org/#prod-ImportDeclaration
 ImportDeclaration
-  Import __ TypeKeyword __ ImportClause __ FromClause -> { ts: true, children: $0 }
-  Import __ ImportClause __ FromClause
-  Import __ ModuleSpecifier
+  Import __ TypeKeyword __ ImportClause __ FromClause ImportAssertion? -> { ts: true, children: $0 }
+  Import __ ImportClause __ FromClause ImportAssertion?
+  Import __ ModuleSpecifier ImportAssertion?
   # NOTE: Added import shorthand
   # NOTE: Not adding $loc to source map here yet because it will point to the start of the identifier
   # the proper place may be to use the From location
-  ImpliedImport:i ImportClause:c __:w FromClause:f ->
+  ImpliedImport:i ( TypeKeyword __ )?:t ImportClause:c __:w FromClause:f ImportAssertion?:a ->
     // Map implied import location to `from`
     // The pos and length adjustment better match how tsc outputs to include the space before `from` with the `from` token
     i.$loc = {
       pos: f[0].$loc.pos-1,
       length: f[0].$loc.length+1,
     }
-    return [i, c, w, f]
+    const children = [i, t, c, w, f, a]
+    if (!t) return children
+    return { ts: true, children }
 
 ImpliedImport
   "" ->
@@ -2862,6 +3028,12 @@ NamedImports
 # https://262.ecma-international.org/#prod-FromClause
 FromClause
   From __ ModuleSpecifier
+
+# https://github.com/tc39/proposal-import-assertions
+# https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-5.html#import-assertions
+# NOTE: Forbid newline before `assert` which could mean a function call
+ImportAssertion
+  _? "assert" NonIdContinue _? ObjectLiteral
 
 # https://devblogs.microsoft.com/typescript/announcing-typescript-3-8-beta/#type-only-imports-exports
 TypeAndImportSpecifier
@@ -2934,7 +3106,7 @@ ImportedBinding
 # https://262.ecma-international.org/#prod-ExportDeclaration
 ExportDeclaration
   # NOTE: Using ExtendedExportDeclaration to allow If/Switch expressions
-  Export __ "default" NonIdContinue __ ( HoistableDeclaration / ClassDeclaration / ExtendedExpression )
+  Export __ Default __ ( HoistableDeclaration / ClassDeclaration / ExtendedExpression )
   Export __ ExportFromClause __ FromClause ->
     if (!$3.ts) return $0
     return { ts: true, children: $0 }
@@ -2977,7 +3149,7 @@ ExportSpecifier
     return { ts: true, children: $0 }
 
 ImplicitExportSpecifier
-  !"default" ModuleExportName ( __ As __ ModuleExportName )? ( &( __ From ) / ImplicitInlineObjectPropertyDelimiter )
+  !Default ModuleExportName ( __ As __ ModuleExportName )? ( &( __ From ) / ImplicitInlineObjectPropertyDelimiter )
 
 # https://262.ecma-international.org/#prod-Declaration
 Declaration
@@ -3471,8 +3643,19 @@ ExpressionDelimiter
     return [$1, $3, $4]
   &EOS InsertComma -> $2
 
+SimpleStatementDelimiter
+  SemicolonDelimiter
+  &EOS
+
 StatementDelimiter
   SemicolonDelimiter
+  # NOTE: Avoid automatic continuation onto lines that start with
+  # certain characters by adding an explicit semicolon.  See
+  # https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Lexical_grammar#automatic_semicolon_insertion
+  # TODO: Would be better to do this in a `processBlocks` postprocessing step,
+  # to avoid adding semicolons when they're not needed (e.g. `return` inserted
+  # before value, or parens not actually added around ObjectLiteral).
+  &( Samedent ( "(" / "[" / "`" / "+" / "-" / "*" / "/" / ObjectLiteral ) ) InsertSemicolon
   &EOS
 
 SemicolonDelimiter
@@ -3568,6 +3751,10 @@ Comma
 ConstructorShorthand
   "@" ->
     return { $loc, token: "constructor" }
+
+Declare
+  "declare" NonIdContinue ->
+    return { $loc, token: $1 }
 
 Default
   "default" NonIdContinue ->
@@ -3852,28 +4039,53 @@ JSXTag
 # https://facebook.github.io/jsx/#prod-JSXElement
 JSXElement
   JSXSelfClosingElement
-  JSXOpeningElement JSXChildren? Whitespace? JSXClosingElement ->
-    // Check that tags match
-    if ($1[1] !== $4[2]) return $skip
-    return { type: "JSXElement", children: $0 }
-  # NOTE: Auto-closing element with indented children
-  JSXOpeningElement:open JSXMixedChildren:children InsertNewline InsertIndent ->
-    return {
-      type: "JSXElement",
-      children: children.jsxChildren.length ? [...$0, ["</", open[1], ">"]]
-                                            : [open.slice(0, -1), " />"]
+  # NOTE: In default JSX mode, JSX children must be properly indented,
+  # and closing tags are optional (but still allowed).
+  !CoffeeJSXEnabled PushJSXOpeningElement:open JSXMixedChildren?:children JSXOptionalClosingElement:close ->
+    module.JSXTagStack.pop()
+    if (!children) return $skip
+    $0 = $0.slice(1)
+    let parts
+    if (close) {
+      parts = $0
+    } else if (children.jsxChildren.length) {
+      parts = [
+        ...$0,
+        "\n", // InsertNewline
+        module.currentIndent.token, // InsertIndent
+        ["</", open[1], ">"],
+      ]
+    } else {
+      parts = [open.slice(0, -1), " />"]
     }
-  JSXOpeningElement:elt ->
-    throw new Error(`could not parse JSX element "${elt[0]}${elt[1]}${elt[elt.length-1]}" at pos ${$loc.pos}`)
+    return { type: "JSXElement", children: parts, tag: open[1] }
+  # NOTE: In CoffeeScript JSX mode, JSX children do not need to be properly
+  # indented, but tags must be explicitly closed.
+  CoffeeJSXEnabled JSXOpeningElement:open JSXChildren? Whitespace? JSXClosingElement:close ->
+    $0 = $0.slice(1)
+    // Check that tags match
+    if (open[1] !== close[2]) return $skip
+    return { type: "JSXElement", children: $0, tag: open[1] }
 
 # https://facebook.github.io/jsx/#prod-JSXSelfClosingElement
 JSXSelfClosingElement
   "<" $JSXElementName TypeArguments? JSXAttributes? Whitespace? "/>" ->
-    return { type: "JSXElement", children: $0 }
+    return { type: "JSXElement", children: $0, tag: $2 }
+
+PushJSXOpeningElement
+  JSXOpeningElement ->
+    module.JSXTagStack.push($1[1])
+    return $1
 
 # https://facebook.github.io/jsx/#prod-JSXOpeningElement
 JSXOpeningElement
   "<" $JSXElementName TypeArguments? JSXAttributes? Whitespace? ">"
+
+JSXOptionalClosingElement
+  Whitespace? JSXClosingElement:close ->
+    if (module.currentJSXTag !== close[2]) return $skip
+    return $0
+  ""
 
 # https://facebook.github.io/jsx/#prod-JSXClosingElement
 JSXClosingElement
@@ -3881,15 +4093,43 @@ JSXClosingElement
 
 # https://facebook.github.io/jsx/#prod-JSXFragment
 JSXFragment
-  "<>" JSXChildren? Whitespace? "</>" ->
-    if ($2) {
-      return { type: "JSXFragment", children: $0, jsxChildren: $2.jsxChildren }
-    } else {
-      return { type: "JSXFragment", children: $0, jsxChildren: [] }
+  # NOTE: In default JSX mode, JSX children must be properly indented,
+  # and closing tags are optional (but still allowed).
+  !CoffeeJSXEnabled PushJSXOpeningFragment:open JSXMixedChildren?:children JSXOptionalClosingFragment:close ->
+    module.JSXTagStack.pop()
+    if (!children) return $skip
+    $0 = $0.slice(1)
+    const parts = close ? $0 :
+      [
+        ...$0,
+        "\n", // InsertNewline
+        module.currentIndent.token, // InsertIndent
+        "</>",
+      ]
+    return { type: "JSXFragment", children: parts, jsxChildren: children.jsxChildren }
+  # NOTE: In CoffeeScript JSX mode, JSX children do not need to be properly
+  # indented, but tags must be explicitly closed.
+  CoffeeJSXEnabled "<>" JSXChildren?:children Whitespace? JSXClosingFragment ->
+    $0 = $0.slice(1)
+    return {
+      type: "JSXFragment",
+      children: $0,
+      jsxChildren: children ? children.jsxChildren : []
     }
-  # NOTE: Auto-closing fragment with indented children
-  "<>" JSXMixedChildren InsertNewline InsertIndent ->
-    return { type: "JSXFragment", children: [...$0, "</>"], jsxChildren: $2.jsxChildren }
+
+PushJSXOpeningFragment
+  "<>" ->
+    module.JSXTagStack.push("")
+    return $1
+
+JSXOptionalClosingFragment
+  Whitespace? JSXClosingFragment ->
+    if (module.currentJSXTag !== "") return $skip
+    return $0
+  ""
+
+JSXClosingFragment
+  "</>"
 
 # https://facebook.github.io/jsx/#prod-JSXElementName
 JSXElementName
@@ -4131,11 +4371,12 @@ InlineJSXAttributeValue
     if ($2.length) return module.processBinaryOpExpression($0)
     return $1
 
-# BinaryOpRHS without whitespace and without ExpressionizedStatement
+# BinaryOpRHS without whitespace and without ExpressionizedStatement,
+# and forbidding operators starting with < or > (possible JSX tags).
 InlineJSXBinaryOpRHS
-  BinaryOp ( ParenthesizedAssignment / InlineJSXUnaryExpression ) ->
+  ![<>] BinaryOp:op ( ParenthesizedAssignment / InlineJSXUnaryExpression ):rhs ->
     // NOTE: Inserting empty whitespace arrays to be compatible with BinaryOpRHS and `processBinaryOpExpression`
-    return [[], $1, [], $2]
+    return [[], op, [], rhs]
 
 # JSXUnaryExpression, with InlineJSX prefixes and no Do (which has whitespace)
 InlineJSXUnaryExpression
@@ -4187,9 +4428,9 @@ InlineJSXMemberExpressionRest
   ( OptionalShorthand / NonNullAssertion )? MemberBracketContent ->
     if ($1) {
       // Optional followed by a slice expression
-      if ($1.length === 2 && $2.type === "SliceExpression") {
+      if ($1.type === "Optional" && $2.type === "SliceExpression") {
         // Remove '.' from optional since it is present in '.slice'
-        return [$1[0], $2]
+        return [$1.children[0], $2]
       }
       return $0
     }
@@ -4234,7 +4475,7 @@ JSXChildren
     }
 
 JSXNestedChildren
-  PushIndent ( Nested JSXChild+ )* PopIndent ->
+  PushIndent ( JSXNested JSXChild+ )* PopIndent ->
     if ($2.length) {
       return {
         children: $2,
@@ -4243,9 +4484,21 @@ JSXNestedChildren
     }
     return $skip
   # NOTE: Empty JSXNestedChildren can be from newline or unmatched close brace
-  # (e.g. when used in an attribute).
-  &( EOS / "}" ) ->
+  # (e.g. when used in an attribute) or a following closing tag.
+  &( JSXEOS / "}" / JSXClosingElement / JSXClosingFragment ) ->
     return { children: [], jsxChildren: [] }
+
+# NOTE: Special variations of EOS and Nested that forbid end-of-line JS
+# comments, as JS comments are not allowed in JSX (they get treated as text).
+JSXEOS
+  ( NonNewlineWhitespace? EOL )+
+
+JSXNested
+  JSXEOS:eos Indent:indent ->
+    const { level } = indent
+    const currentIndent = module.currentIndent
+    if (level !== currentIndent.level) return $skip
+    return $0
 
 # https://facebook.github.io/jsx/#prod-JSXChild
 JSXChild
@@ -4308,25 +4561,34 @@ IndentedJSXChildExpression
     return $2
 
 NestedJSXChildExpression
-  Nested JSXChildExpression
+  JSXNested JSXChildExpression
 
 ## Type Stuff
 
 TypeDeclaration
-  (TypeDeclarationModifier TrailingComment*)* TypeDeclarationRest -> { ts: true, children: $0 }
-
-TypeDeclarationModifier
-  "declare" NonIdContinue
-  Export
+  # TODO: Support `declare class`
+  # TODO: Support `declare module`
+  # TODO: Support `declare global {}`
+  # NOTE: First check for forms with a `declare` keyword present
+  ( Export _? )? ( Declare _? )  TypeLexicalDeclaration -> { ts: true, children: $0 }
+  ( Export _? )? ( Declare _? )? TypeDeclarationRest    -> { ts: true, children: $0 }
 
 TypeDeclarationRest
-  TypeKeyword TrailingComment* IdentifierName TypeParameters? __ Equals __ Type
+  # TODO: ( __ Type ) can be refined further to check for consistently nested binary ops, etc.
+  TypeKeyword TrailingComment* IdentifierName TypeParameters? __ Equals ( ( _? Type ) / ( __ Type ) )
   Interface   TrailingComment* IdentifierName TypeParameters? InterfaceExtendsClause? InterfaceBlock
   Namespace   TrailingComment* IdentifierName NamespaceBlock
   FunctionSignature
 
+TypeLexicalDeclaration
+  __ !Namespace LetOrConst TypeDeclarationBinding ( CommaDelimiter __ TypeDeclarationBinding )*
+
+TypeDeclarationBinding
+  # NOTE: This is almost the same as LexicalBinding except it cannot have an initializer
+  ( BindingPattern / BindingIdentifier ) TypeSuffix?
+
 InterfaceExtendsClause
-  ExtendsToken InterfaceExtendsTarget
+  ExtendsToken InterfaceExtendsTarget ( Comma InterfaceExtendsTarget )*
 
 InterfaceExtendsTarget
   ImplementsTarget
@@ -4355,9 +4617,12 @@ NestedInterfaceProperty
   Nested InterfaceProperty
 
 InterfaceProperty
-  ( TypeIndexSignature / PropertyName ) TypeSuffix InterfacePropertyDelimiter
+  BasicInterfaceProperty
   NonEmptyParameters TypeSuffix InterfacePropertyDelimiter
   MethodSignature InterfacePropertyDelimiter
+
+BasicInterfaceProperty
+  ( TypeIndexSignature / PropertyName ) TypeSuffix InterfacePropertyDelimiter
 
 InterfacePropertyDelimiter
   _* ( Semicolon / Comma )
@@ -4413,7 +4678,7 @@ Type
   TypeConditional
 
 TypeBinary
-  TypeUnary (__ TypeBinaryOp __ TypeUnary)* ->
+  TypeUnary ( __ TypeBinaryOp __ TypeUnary )* ->
     if ($2.length) return $0
     return $1
 
@@ -4432,16 +4697,19 @@ TypeUnaryOp
   "readonly" NonIdContinue
 
 TypeIndexedAccess
-  __ OpenBracket Type? __ CloseBracket
+  OpenBracket Type? __ CloseBracket
 
 TypePrimary
   InterfaceBlock
+  _? FunctionType
+  _? InlineInterfaceLiteral
+  _? TypeTuple
+  _? ImportType
+  _? TypeLiteral
+  _? IdentifierName (Dot IdentifierName)* TypeArguments?
+  # NOTE: Check FunctionType before parenthesized in order to distinguish between (a: T) => U and
+  # A parenthesized inline interface (a: T) ---> ({a: T})
   __ OpenParen Type __ CloseParen
-  __ TypeTuple
-  _* ImportType
-  _* FunctionType
-  _* TypeLiteral
-  _* IdentifierName (Dot IdentifierName)* TypeArguments?
 
 ImportType
   "import" OpenParen __ BasicStringLiteral __ CloseParen ( Dot IdentifierName )? TypeArguments?
@@ -4476,6 +4744,18 @@ TypeLiteral
     return { $loc, token: "void" }
   "[]" ->
     return { $loc, token: "[]" }
+
+InlineInterfaceLiteral
+  InsertInlineOpenBrace InlineBasicInterfaceProperty ( ( IndentedFurther / _? ) InlineBasicInterfaceProperty )* InsertCloseBrace
+
+InlineBasicInterfaceProperty
+  ( TypeIndexSignature / PropertyName ) QuestionMark? Colon Type InlineInterfacePropertyDelimiter
+
+InlineInterfacePropertyDelimiter
+  ( _? Semicolon ) / CommaDelimiter
+  &( ( IndentedFurther / _? ) InlineBasicInterfaceProperty ) InsertComma -> $2
+  &( __  ( ":" / ")" / "]" / "}" ) )
+  &EOS
 
 TypeBinaryOp
   "|" ->
@@ -4524,14 +4804,21 @@ TypeParameterDelimiter
   &( __ ">" )
   &EOS InsertComma -> $2
 
+ThisType
+  ( This / AtThis ) Colon Type -> {
+    type: "ThisType",
+    ts: true,
+    children: $0
+  }
+
 ## Utility
 
 Shebang
   /#![^\r\n]*/ EOL
 
 CivetPrologue
-  [\t ]* DoubleQuote CivetPrologueContent:content DoubleQuote $StatementDelimiter EOS? -> content
-  [\t ]* SingleQuote CivetPrologueContent:content SingleQuote $StatementDelimiter EOS? -> content
+  [\t ]* DoubleQuote CivetPrologueContent:content DoubleQuote $SimpleStatementDelimiter EOS? -> content
+  [\t ]* SingleQuote CivetPrologueContent:content SingleQuote $SimpleStatementDelimiter EOS? -> content
 
 CivetPrologueContent
   "civet" NonIdContinue CivetOption*:options [\s]* ->
@@ -4563,7 +4850,7 @@ CivetOption
 UnknownPrologue
   # NOTE: $ is to keep source verbatim and not insert a semicolon if one was omitted
   # Can't use $EOS because it will prevent re-writing of coffee style comments
-  [\t ]* BasicStringLiteral:s $StatementDelimiter EOS
+  [\t ]* BasicStringLiteral:s $SimpleStatementDelimiter EOS
 
 DirectivePrologue
   CivetPrologue
@@ -4582,6 +4869,10 @@ Debugger
     debugger
 
 # Insertions
+
+InsertSemicolon
+  "" ->
+    return { $loc, token: ";" }
 
 InsertOpenParen
   "" ->
@@ -4686,6 +4977,11 @@ CoffeeIsntEnabled
     if(module.config.coffeeIsnt) return
     return $skip
 
+CoffeeJSXEnabled
+  "" ->
+    if(module.config.coffeeJSX) return
+    return $skip
+
 CoffeeLineContinuationEnabled
   "" ->
     if(module.config.coffeeLineContinuation) return
@@ -4706,6 +5002,11 @@ CoffeePrototypeEnabled
     if(module.config.coffeePrototype) return
     return $skip
 
+ObjectIsEnabled
+  "" ->
+    if(module.config.objectIs) return
+    return $skip
+
 # Reset module level data
 Reset
   "" ->
@@ -4715,14 +5016,30 @@ Reset
       token: "",
     }]
 
+    module.suppressTrailingMemberProperty = [false]
+    module.JSXTagStack = []
+
     if (!module._init) {
       module._init = true
       Object.defineProperties(module, {
         currentIndent: {
           get() {
-            return module.indentLevels[module.indentLevels.length-1]
+            const {indentLevels: l} = module
+            return l[l.length-1]
           },
-        }
+        },
+        trailingMemberPropertySuppressed: {
+          get() {
+            const {suppressTrailingMemberProperty: s} = module
+            return s[s.length-1]
+          },
+        },
+        currentJSXTag: {
+          get() {
+            const {JSXTagStack: s} = module
+            return s[s.length-1]
+          },
+        },
       })
     }
 
@@ -4738,11 +5055,13 @@ Reset
       coffeeForLoops: false,
       coffeeInterpolation: false,
       coffeeIsnt: false,
+      coffeeJSX: false,
       coffeeLineContinuation: false,
       coffeeNot: false,
       coffeeOf: false,
       coffeePrototype: false,
       implicitReturns: true,
+      objectIs: false,
       react: false,
       solid: false,
       client: false, // default behavior: client only
@@ -4754,6 +5073,10 @@ Reset
     module.asAny = {
       ts: true,
       children: [" as any"]
+    }
+    module.asConst = {
+      ts: true,
+      children: [" as const"]
     }
     module.prelude = []
 
@@ -4773,6 +5096,21 @@ Reset
         }
         // [indent, statement]
         module.prelude.push(["", ["const ", hasPropRef, typeSuffix, " = {}.hasOwnProperty", module.asAny, "\n"]])
+      },
+      is(isRef) {
+        // Thanks to @thetarnav for help with this TypeScript magic.
+        // If the second argument is more general, narrow it.
+        // Otherwise (including when the first argument is more general,
+        // or partial overlap), always narrow the first argument,
+        // as that's usually the one that matters.
+        // Waiting on https://github.com/Microsoft/TypeScript/issues/26916
+        // for proper narrowing of both arguments.
+        const typeSuffix = {
+          ts: true,
+          children: [": { <B, A extends B> (a: A, b: B): b is A, <A, B> (a: A, b: B): a is A & B }"]
+        }
+        // [indent, statement]
+        module.prelude.push(["", ["const ", isRef, typeSuffix, " = Object.is", module.asAny, "\n"]])
       },
       modulo(moduloRef) {
         const typeSuffix = {
@@ -4828,6 +5166,17 @@ Reset
       return refs[base] = ref
     }
 
+    module.makeAsConst = function(node) {
+      // TS allows "as const" assertions for string, number, boolean, array,
+      // and object literals (and enum members), but not for null/undefined.
+      if ((node.type === "Literal" && node.raw !== "null") ||
+          node.type === "ArrayExpression" ||
+          node.type === "ObjectExpression") {
+        return {...node, children: [...node.children, module.asConst]}
+      }
+      return node
+    }
+
     module.typeOfJSX = function(node) {
       switch (node.type) {
         case "JSXElement":
@@ -4842,16 +5191,14 @@ Reset
         if (module.config.server && !module.config.client) {  // server only
           return ["string"]
         }
-        let open = node.children
-        while (Array.isArray(open[0])) open = open[0]
-        open = open[1]  // skip "<"
+        let {tag} = node
         // "An intrinsic element always begins with a lowercase letter,
         // and a value-based element always begins with an uppercase letter."
         // [https://www.typescriptlang.org/docs/handbook/jsx.html]
         const clientType =
-          typeof open === 'string' && open[0] === open[0].toLowerCase() ?
-          [module.getRef("IntrinsicElements"), '<"', open, '">'] :
-          ['ReturnType<typeof ', open, '>']
+          tag[0] === tag[0].toLowerCase() ?
+          [module.getRef("IntrinsicElements"), '<"', tag, '">'] :
+          ['ReturnType<typeof ', tag, '>']
         if (module.config.server) {  // isomorphic code for client + server
           return ["string", " | ", clientType]
         } else {  // client only (default)
@@ -4904,36 +5251,27 @@ Reset
     // Expand setting coffeeCompat to the individual options
     Object.defineProperty(module.config, "coffeeCompat", {
       set(b) {
+        for (const option of [
+          "autoVar",
+          "coffeeBinaryExistential",
+          "coffeeBooleans",
+          "coffeeClasses",
+          "coffeeComment",
+          "coffeeDo",
+          "coffeeEq",
+          "coffeeForLoops",
+          "coffeeInterpolation",
+          "coffeeIsnt",
+          "coffeeJSX",
+          "coffeeLineContinuation",
+          "coffeeNot",
+          "coffeeOf",
+          "coffeePrototype",
+        ]) {
+          module.config[option] = b
+        }
         if (b) {
-          this.autoVar = true
-          this.coffeeBinaryExistential = true
-          this.coffeeBooleans = true
-          this.coffeeClasses = true
-          this.coffeeComment = true
-          this.coffeeDo = true
-          this.coffeeEq = true
-          this.coffeeForLoops = true
-          this.coffeeInterpolation = true
-          this.coffeeIsnt = true
-          this.coffeeLineContinuation = true
-          this.coffeeNot = true
-          this.coffeeOf = true
-          this.coffeePrototype = true
-        } else {
-          this.autoVar = false
-          this.coffeeBinaryExistential = false
-          this.coffeeBooleans = false
-          this.coffeeClasses = false
-          this.coffeeComment = false
-          this.coffeeDo = false
-          this.coffeeEq = false
-          this.coffeeForLoops = false
-          this.coffeeInterpolation = false
-          this.coffeeIsnt = false
-          this.coffeeLineContinuation = false
-          this.coffeeNot = false
-          this.coffeeOf = false
-          this.coffeePrototype = false
+          module.config.objectIs = false
         }
       }
     })
@@ -5327,6 +5665,11 @@ Init
         if (op.special) {
           let [a, wsOp, op, wsB, b] = expandedOps.slice(i - 2, i + 3)
 
+          if (op.asConst) {
+            a = module.makeAsConst(a)
+            b = module.makeAsConst(b)
+          }
+
           let children
           if (op.call) {
             wsOp = module.insertTrimmingSpace(wsOp, "")
@@ -5337,11 +5680,20 @@ Init
             } else {
               children = [wsOp, op.call, "(", a, ",", wsB, b, ")", op.suffix]
             }
-          } else if (op.token === "instanceof" || op.token === "in") { // `not instanceof` / `not of`
-            children = ["!(", a, wsOp, op, wsB, b, ")"]
+          } else if (op.method) {
+            wsOp = module.insertTrimmingSpace(wsOp, "")
+            wsB = module.insertTrimmingSpace(wsB, "")
+            if (op.reversed) {
+              children = [wsB, b, wsOp, ".", op.method, "(", a, ")"]
+            } else {
+              children = [a, wsOp, ".", op.method, "(", wsB, b, ")"]
+            }
+          } else if (op.token) {
+            children = ["(", a, wsOp, op, wsB, b, ")"]
           } else {
             throw new Error("Unknown operator: " + JSON.stringify(op))
           }
+          if (op.negated) children.unshift("!")
 
           expandedOps.splice(i - 2, 5, {
             children
@@ -5571,20 +5923,51 @@ Init
       }
     }
 
-    module.reorderBindingRestProperty = function(rest, after) {
-      // Swap delimiters of last property and rest so that an omitted trailing comma doesn't end up in the middle
-      if (after.length) {
-        const
-          [restDelim]       = rest.children.slice(-1),
-          lastAfterProp     = after[after.length - 1],
-          lastAfterChildren = lastAfterProp.children,
-          [lastDelim]       = lastAfterChildren.slice(-1)
+    module.reorderBindingRestProperty = function(props) {
+      const names = props.flatMap(p => p.names)
 
-        rest = {...rest, children: [...rest.children.slice(0, -1), lastDelim]}
-        after = [...after.slice(0, -1), {...lastAfterProp, children: [...lastAfterChildren.slice(0, -1), restDelim]}]
+      let restIndex = -1
+      let restCount = 0
+      props.forEach(({type}, i) => {
+        if (type === "BindingRestProperty") {
+          if (restIndex < 0) restIndex = i
+          restCount++
+        }
+      })
+
+      if (restCount === 0) {
+        const children = [...props]
+        return {
+          children,
+          names,
+        }
+      } else if (restCount === 1) {
+        let after = props.slice(restIndex + 1)
+        let rest = props[restIndex]
+
+        props = props.slice(0, restIndex);
+
+        // Swap delimiters of last property and rest so that an omitted trailing comma doesn't end up in the middle
+        if (after.length) {
+          const
+            [restDelim]       = rest.children.slice(-1),
+            lastAfterProp     = after[after.length - 1],
+            lastAfterChildren = lastAfterProp.children,
+            [lastDelim]       = lastAfterChildren.slice(-1)
+
+          rest = {...rest, children: [...rest.children.slice(0, -1), lastDelim]}
+          after = [...after.slice(0, -1), {...lastAfterProp, children: [...lastAfterChildren.slice(0, -1), restDelim]}]
+        }
+
+        const children = [...props, ...after, rest]
+
+        return {
+          children,
+          names,
+        }
       }
 
-      return [rest, after]
+      throw new Error("Multiple rest properties in object pattern")
     }
 
     // Gather child nodes that match a predicate

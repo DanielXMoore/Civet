@@ -18,24 +18,113 @@ The TypeScript code on
 
 [[toc]]
 
+## Beyond TC39
+
+### Default to `const` for Iteration Items
+
+<Playground>
+for (item of [1, 2, 3, 4, 5]) {
+  console.log(item * item);
+}
+</Playground>
+
+### Block Strings / Templates
+
+[TC39 Proposal: String Dedent](https://github.com/tc39/proposal-string-dedent)
+
+<Playground>
+text = """
+  This text is a string that doesn't include the leading
+  whitespace.
+"""
+</Playground>
+
+<Playground>
+text = ```
+  Also works for
+  templates!
+```
+</Playground>
+
+### Modulo Operator
+
+<Playground>
+let a = -3
+let b = 5
+let rem = a % b
+let mod = a %% b
+console.log rem, mod
+</Playground>
+
+### Spread in Any Position
+
+Spreads in first or middle position:
+
+<Playground>
+[...head, last] = [1, 2, 3, 4, 5]
+</Playground>
+
+<Playground>
+{a, ...rest, b} = {a: 7, b: 8, x: 0, y: 1}
+</Playground>
+
+<Playground>
+function justDoIt(a, ...args, cb) {
+  cb.apply(a, args)
+}
+</Playground>
+
+### Import Syntax Matches Destructuring
+
+<Playground>
+import {X: LocalX, Y: LocalY} from "./util"
+</Playground>
+
+### Single-Argument Function Shorthand
+
+<Playground>
+x.map &.name
+x.map &.profile?.name[0...3]
+x.map &.callback a, b
+x.map +&
+</Playground>
+
+::: info
+Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc),
+[Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax),
+or [Elm record access](https://elm-lang.org/docs/records#access)
+:::
+
+### Pipelines
+
+[TC39 Proposal: Pipe Operator](https://github.com/tc39/proposal-pipeline-operator)
+
+<Playground>
+data
+  |> Object.keys
+  |> console.log
+</Playground>
+
+Pipe expression with shorthand functions:
+
+<Playground>
+a |> & + 1 |> bar
+</Playground>
+
+### Export Convenience
+
+<Playground>
+export a, b, c from "./cool.js"
+export x = 3
+</Playground>
+
+### Throw Expression
+
+<Playground>
+x == null ? throw "x is null" : x.fn()
+</Playground>
+
 ## Basics
-
-### Humanize Operators
-
-<Playground>
-a is b
-a is not b
-a and b
-a or b
-a not in b
-a?
-</Playground>
-
-<Playground>
-item is in array
-item is not in array
-substring is in string
-</Playground>
 
 ### Variable Declaration
 
@@ -59,10 +148,11 @@ obj :=
     y: 'cool'
 </Playground>
 
-Spreads anywhere:
+Literal shorthand beyond `{x}`:
 
 <Playground>
-{a, ...rest, b} = {a: 7, b: 8, x: 0, y: 1}
+another := {person.name, obj?.c?.x}
+computed := {foo(), bar()}
 </Playground>
 
 Flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects):
@@ -82,10 +172,25 @@ p := {
   name: 'Mary'
   say(msg)
     console.log @name, 'says', msg
+  setName(@name);
   get NAME()
     @name.toUpperCase()
 }
 p.say p.NAME
+</Playground>
+
+::: tip
+
+Methods need a body, or they get treated as literal shorthand.
+To specify a blank body, use `;` or `{}`.
+
+:::
+
+Property access shorthand:
+
+<Playground>
+json.'long property'
+json.`${movie} name`
 </Playground>
 
 ### Arrays
@@ -136,6 +241,23 @@ console.log """
 """
 </Playground>
 
+### Humanized Operators
+
+<Playground>
+a is b
+a is not b
+a and b
+a or b
+a not in b
+a?
+</Playground>
+
+<Playground>
+item is in array
+item is not in array
+substring is in string
+</Playground>
+
 ## Functions
 
 ### Function Calls
@@ -172,26 +294,52 @@ function abort: void
   process.exit 1
 </Playground>
 
+<Playground>
+function abort
+  process.exit 1;
+</Playground>
+
+### Function Overloading
+
+<Playground>
+function add(a: string, b: string): string
+function add(a: number, b: number): number
+  a+b
+</Playground>
+
 ### Arrow Functions
 
+::: info
 Unlike ECMAScript, zero-argument arrows do not need a `()` prefix,
 but one-argument arrows do need parentheses around the argument.
+:::
 
 <Playground>
-abort := -> process.exit 1
+abort := => process.exit 1
 </Playground>
 
 <Playground>
-add := (a: number, b: number) -> a + b
+createEffect => console.log data()
+greet := (name) => console.log "Hello", name
 </Playground>
+
+::: info
+`=>` makes arrow functions as usual, while
+`->` makes `function`s (which can have `this` assigned via `.call`).
+:::
 
 <Playground>
 add := (a: number, b: number) => a + b
 </Playground>
 
 <Playground>
-greet := (name) => console.log "Hello", name
+add := (a: number, b: number) -> a + b
 </Playground>
+
+::: info
+Unlike ECMAScript, even multi-line arrow functions implicitly return their
+last value.  See [above](#function) for how to avoid this behavior.
+:::
 
 <Playground>
 circle := (degrees: number): {x: number, y: number} =>
@@ -199,19 +347,6 @@ circle := (degrees: number): {x: number, y: number} =>
   x: Math.cos theta
   y: Math.sin theta
 </Playground>
-
-### Single-Argument Shorthand
-
-<Playground>
-x.map &.name
-x.map &.profile?.name[0...3]
-x.map &.callback a, b
-x.map +&
-</Playground>
-
-::: info
-Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc), [Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax) or [Elm record access](https://elm-lang.org/docs/records#access)
-:::
 
 ## Conditions
 
@@ -224,6 +359,12 @@ else
   sleep()
 </Playground>
 
+### One-Line If/Else
+
+<Playground>
+if coffee or relaxed then code() else sleep()
+</Playground>
+
 ### If/Else Expressions
 
 <Playground>
@@ -232,6 +373,7 @@ name :=
     "Saitama"
   else if power > 9000
     "Goku"
+caps := if name? then name.toUpperCase() else 'ANON'
 </Playground>
 
 ### Unless
@@ -325,24 +467,6 @@ do
 while item?
 </Playground>
 
-## Types
-
-<Playground>
-type ID = number | string
-</Playground>
-
-<Playground>
-interface Point
-  x: number
-  y: number
-</Playground>
-
-<Playground>
-interface Node<T>
-  value: T
-  next: Node<T>
-</Playground>
-
 ## Classes
 
 <Playground>
@@ -411,6 +535,71 @@ class Civet
 class Civet < Animal
 </Playground>
 
+### Implements
+
+<Playground>
+class Civet < Animal <: Named
+class Civet <: Animal, Named
+</Playground>
+
+## Types
+
+### Import
+
+<Playground>
+type { Civet, Cat } from animals
+</Playground>
+
+<Playground>
+{ type Civet, meow } from animals
+</Playground>
+
+### Aliases
+
+<Playground>
+type ID = number | string
+</Playground>
+
+<Playground>
+type Point = x: number, y: number
+</Playground>
+
+<Playground>
+type Point =
+  x: number
+  y: number
+</Playground>
+
+### Interfaces
+
+<Playground>
+interface Point
+  x: number
+  y: number
+</Playground>
+
+<Playground>
+interface Point3D < Point
+  z: number
+</Playground>
+
+<Playground>
+interface Signal
+  listen(callback: =>): void
+</Playground>
+
+<Playground>
+interface Node<T>
+  value: T
+  next: Node<T>
+</Playground>
+
+### Assertions
+
+<Playground>
+elt as HTMLInputElement
+</Playground>
+
 ## Misc
 
 ### Operators
@@ -420,10 +609,6 @@ a and= b
 a or= b
 a ?= b
 obj.key ?= 'civet'
-</Playground>
-
-<Playground>
-a %% b
 </Playground>
 
 ### Chained Comparisons
@@ -439,6 +624,7 @@ a instanceof b instanceof c
 <Playground>
 fs from fs
 {basename, dirname} from path
+metadata from ./package.json assert type: 'json'
 </Playground>
 
 ### Dynamic Import
@@ -483,18 +669,19 @@ numbers[1...-1] = []
 a + b = c
 </Playground>
 
-### Pipelines
+### `Object.is`
+
+The `"civet objectIs"` directive changes the behavior of the `is` operator to
+[`Object.is`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/is),
+which is a bit better behaved than `===`.
+The plan is to make this the default behavior, once TypeScript supports
+type narrowing with `Object.is` as well as it does for `===`.
+(Currently, `a is b` will not correctly narrow `b` in some edge cases.)
 
 <Playground>
-data
-  |> Object.keys
-  |> console.log
-</Playground>
-      
-Pipe expression with shorthand functions:
-      
-<Playground>
-a |> & + 1 |> bar
+"civet objectIs"
+a is b
+a is not b
 </Playground>
 
 ## Automatic Variable Declaration
@@ -532,24 +719,23 @@ and [jsx spec issues](https://github.com/facebook/jsx/issues)
 ### Element id
 
 <Playground>
-<>
-  <div #foo> Civet
-  <div #{expression}> Civet
+<div #foo>Civet
+<div #{expression}>Civet
 </Playground>
 
 ### Class
 
 <Playground>
- <>
-  <div .foo> Civet
-  <div .foo.bar> Civet
-  <div .{expression}> Civet
+<div .foo>Civet
+<div .foo.bar>Civet
+<div .{expression}>Civet
+<div .button.{size()}>
 </Playground>
 
 ### Boolean Toggles
 
 <Playground>
-  <Component +draggable -disabled !hidden>
+<Component +draggable -disabled !hidden>
 </Playground>
 
 ::: tip
@@ -561,10 +747,11 @@ and [jsx spec issues](https://github.com/facebook/jsx/issues)
 ### Attributes
 
 <Playground>
- <>
-  <div {foo}> Civet
-  <div ...foo> Civet
-  <div [expr]={value}> Civet
+<div {foo}>Civet
+<div {props.name}>Civet
+<div {data()}>Civet
+<div ...foo>Civet
+<div [expr]={value}>Civet
 </Playground>
 
 ::: tip
