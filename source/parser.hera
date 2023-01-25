@@ -352,13 +352,15 @@ PipelineTailItem
 PrimaryExpression
   ObjectLiteral
   ThisLiteral
+  TemplateLiteral
+  # NOTE: TemplateLiteral must be before Literal, so that CoffeeScript
+  # interpolated strings get checked first before StringLiteral.
   Literal
   ArrayLiteral
   IdentifierReference # NOTE: Must be below ObjectLiteral for inline objects `a: 1, b: 2` to not be shadowed by matching the first identifier
   FunctionExpression
   ClassExpression
   RegularExpressionLiteral
-  TemplateLiteral
   ParenthesizedExpression
   # https://facebook.github.io/jsx/#sec-jsx-PrimaryExpression
   # NOTE: Modified to parse multiple JSXElement/JSXFragments as one fragment
@@ -646,7 +648,7 @@ MemberBracketContent
     }
 
   # NOTE: Added shorthand x."string" -> x["string"]
-  Dot:dot ( StringLiteral / TemplateLiteral ):str ->
+  Dot:dot ( TemplateLiteral / StringLiteral ):str ->
     return {
       type: "Index",
       children: [
@@ -1861,14 +1863,22 @@ SnugNamedProperty
 PropertyName
   # https://262.ecma-international.org/#prod-LiteralPropertyName
   NumericLiteral
+  ComputedPropertyName
+  # NOTE: ComputedPropertyName must be before StringLiteral,
+  # so that CoffeeScript interpolated strings get checked first.
   StringLiteral
   IdentifierName
-  ComputedPropertyName
 
 ComputedPropertyName
   # https://262.ecma-international.org/#prod-ComputedPropertyName
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
   OpenBracket ExtendedExpression __ CloseBracket ->
+    return {
+      type: "ComputedPropertyName",
+      children: $0,
+    }
+  # NOTE: Extending to allow template literals without brackets
+  InsertOpenBracket TemplateLiteral InsertCloseBracket ->
     return {
       type: "ComputedPropertyName",
       children: $0,
@@ -3134,7 +3144,7 @@ ModuleSpecifier
     return { $loc, token: token.replace(/\.([mc])?ts(['"])$/, ".$1js$2") }
 
 UnprocessedModuleSpecifier
-  BasicStringLiteral
+  StringLiteral
   UnquotedSpecifier
 
 UnquotedSpecifier
@@ -3425,19 +3435,10 @@ DecimalIntegerLiteral
   /(?:0|[1-9](?:_[0-9]|[0-9])*)/
 
 # https://262.ecma-international.org/#prod-StringLiteral
+# NOTE: This includes unprocessed double-quoted strings.  If you might want to
+# accept a template literal in the form of a CoffeeScript double-quoted string
+# interpolation, be sure to check TemplateLiteral before StringLiteral.
 StringLiteral
-  # NOTE: actual CoffeeScript """ string behaviors are pretty weird, this is simplifed
-  TripleDoubleQuote ( TripleDoubleStringCharacters / CoffeeStringSubstitution )* TripleDoubleQuote ->
-    return module.dedentBlockSubstitutions($0)
-
-  TripleSingleQuote:s TripleSingleStringCharacters:str TripleSingleQuote:e ->
-    return [s, module.dedentBlockString(str), e]
-
-  # CoffeeScript Interpolation is enabled when "civet coffee-compat" or "civet coffee-interpolation" directive is present
-  CoffeeInterpolatedDoubleQuotedString
-  BasicStringLiteral
-
-BasicStringLiteral
   DoubleQuote DoubleStringCharacters:str DoubleQuote ->
     return {
       token: `"${module.modifyString(str.token)}"`,
@@ -3474,6 +3475,7 @@ CoffeeInterpolatedDoubleQuotedString
     // Check for no interpolations
     if (parts.length === 0 || (parts.length === 1 && parts[0].token != null)) {
       return {
+        type: "StringLiteral",
         token: parts.length ? `"${module.modifyString(parts[0].token)}"` : '""',
         $loc,
       }
@@ -3492,7 +3494,10 @@ CoffeeInterpolatedDoubleQuotedString
     // Convert to backtick enclosed string
     s.token = e.token = "`"
 
-    return [s, parts, e]
+    return {
+      type: "TemplateLiteral",
+      children: [s, parts, e],
+    }
 
 CoffeeDoubleQuotedStringCharacters
   /(?:\\.|#(?!\{)|[^"#])+/ ->
@@ -3598,7 +3603,28 @@ TemplateLiteral
   TripleTick ( TemplateBlockCharacters / TemplateSubstitution )* TripleTick ->
     return module.dedentBlockSubstitutions($0)
 
-  Backtick ( TemplateCharacters / TemplateSubstitution )* Backtick
+  Backtick ( TemplateCharacters / TemplateSubstitution )* Backtick ->
+    return {
+      type: "TemplateLiteral",
+      children: $0,
+    }
+
+  # NOTE: actual CoffeeScript """ string behaviors are pretty weird, this is simplifed
+  TripleDoubleQuote ( TripleDoubleStringCharacters / CoffeeStringSubstitution )* TripleDoubleQuote ->
+    return module.dedentBlockSubstitutions($0)
+
+  # NOTE: ''' don't have interpolation so could be converted into a regular
+  # String, but currently we use `template`s so the output looks similar to
+  # the input.  Also, this enables tagged template literals such as tag'''x''',
+  # which CoffeeScript also allows.
+  TripleSingleQuote:s TripleSingleStringCharacters:str TripleSingleQuote:e ->
+    return {
+      type: "TemplateLiteral",
+      children: [s, module.dedentBlockString(str), e]
+    }
+
+  # CoffeeScript Interpolation is enabled when "civet coffee-compat" or "civet coffee-interpolation" directive is present
+  CoffeeInterpolatedDoubleQuotedString
 
 # NOTE: Simplified grammar
 TemplateSubstitution
@@ -4391,14 +4417,11 @@ JSXAttributeSpace
 JSXShorthandString
   /(?:[\w\-:]+|\([^()]*\)|\[[^\[\]]*\])+/ ->
     return module.quoteString($0)
-  StringLiteral ->
-    if (module.isTemplateLiteral($1)) {
-      return [ "{", $1, "}" ]
-    } else {
-      return $1
-    }
   TemplateLiteral ->
     return [ "{", $1, "}" ]
+  # NOTE: TemplateLiteral must be before StringLiteral,
+  # so that CoffeeScript interpolated strings get checked first.
+  StringLiteral
   OpenBrace ExtendedExpression Whitespace? CloseBrace
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeName
@@ -4415,18 +4438,20 @@ JSXAttributeInitializer
 JSXAttributeValue
   # https://facebook.github.io/jsx/#prod-JSXDoubleStringCharacters
   # https://facebook.github.io/jsx/#prod-JSXSingleStringCharacters
-  # But double-quoted strings may turn into interpolation,
-  # and some triple-quoted strings may not use interpolation.
-  # So try to match but skip here if we find interpolation,
-  # and add parens in InlineJSXAttributeValue otherwise.
-  StringLiteral ->
-    if (module.isTemplateLiteral($1)) return $skip
-    return $1
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
   OpenBrace ExtendedExpression Whitespace? CloseBrace
   JSXElement
   JSXFragment
-  InsertInlineOpenBrace InlineJSXAttributeValue InsertCloseBrace
+  InsertInlineOpenBrace InlineJSXAttributeValue InsertCloseBrace ->
+    // Check for string literal resulting from CoffeeScript interpolated
+    // double-quoted string that didn't end up actually interpolating.
+    if ($2.children?.length === 1 && $2.children[0].type === "StringLiteral") {
+      return $2.children[0]
+    }
+    return $0
+  # NOTE: InlineJSXAttributeValue which contains TemplateLiteral must be before
+  # StringLiteral, so that CoffeeScript interpolated strings get checked first.
+  StringLiteral
 
 # JSX shorthand to avoid explicit braces when unnecessary (no whitespace)
 InlineJSXAttributeValue
@@ -4506,8 +4531,8 @@ InlineJSXPrimaryExpression
   NullLiteral
   BooleanLiteral
   NumericLiteral
-  # StringLiteral that doesn't need braces already matched in JSXAttributeValue
-  StringLiteral
+  TemplateLiteral
+  # Omitting StringLiteral already matched in JSXAttributeValue
   ThisLiteral
   ArrayLiteral
   # Requiring braces on ObjectLiteral; this allows {a, b} even though `a, b` doesn't work as an inline object
@@ -4515,7 +4540,6 @@ InlineJSXPrimaryExpression
   IdentifierReference
   # Omitting FunctionExpression and ClassExpression which have whitespace
   RegularExpressionLiteral
-  TemplateLiteral
   ParenthesizedExpression
   # Omitting JSXElement and JSXFragment which don't need braces
 
@@ -4775,9 +4799,9 @@ TypePrimary
   __ OpenParen Type __ CloseParen
 
 ImportType
-  "import" OpenParen __ BasicStringLiteral __ CloseParen ( Dot IdentifierName )? TypeArguments?
+  "import" OpenParen __ StringLiteral __ CloseParen ( Dot IdentifierName )? TypeArguments?
   # NOTE: Added implicit import without parens
-  "import" InsertOpenParen Trimmed_ BasicStringLiteral InsertCloseParen
+  "import" InsertOpenParen Trimmed_ StringLiteral InsertCloseParen
 
 TypeTuple
   OpenBracket NestedTypeList __ CloseBracket
@@ -4801,8 +4825,10 @@ TypeConditional
     return $1
 
 TypeLiteral
-  Literal
   TemplateLiteral
+  # NOTE: TemplateLiteral must be before Literal, so that CoffeeScript
+  # interpolated strings get checked first before StringLiteral.
+  Literal
   "void" NonIdContinue ->
     return { $loc, token: "void" }
   "[]" ->
@@ -4913,7 +4939,7 @@ CivetOption
 UnknownPrologue
   # NOTE: $ is to keep source verbatim and not insert a semicolon if one was omitted
   # Can't use $EOS because it will prevent re-writing of coffee style comments
-  [\t ]* BasicStringLiteral:s $SimpleStatementDelimiter EOS
+  [\t ]* StringLiteral:s $SimpleStatementDelimiter EOS
 
 DirectivePrologue
   CivetPrologue
@@ -4957,6 +4983,14 @@ InsertInlineOpenBrace
 InsertCloseBrace
   "" ->
     return { $loc, token: "}" }
+
+InsertOpenBracket
+  "" ->
+    return { $loc, token: "[" }
+
+InsertCloseBracket
+  "" ->
+    return { $loc, token: "]" }
 
 InsertComma
   "" ->
@@ -5957,7 +5991,10 @@ Init
       }
 
       results.push(e)
-      return results
+      return {
+        type: "TemplateLiteral",
+        children: results,
+      }
     }
 
     module.dedentBlockString = function({$loc, token: str}, spacing, trim=true) {
