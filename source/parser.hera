@@ -88,6 +88,9 @@ ForbiddenImplicitCalls
   # NOTE: Don't allow non-heregex regexes that begin with a space as first argument without parens
   "/ "
   AtAt # experimentalDecorators
+  Identifier ->
+    if (module.operators.has($1.name)) return $1
+    return $skip
 
 ArgumentsWithTrailingMemberExpressions
   Arguments:args TrailingMemberExpressions:trailing ->
@@ -1287,6 +1290,39 @@ FunctionExpression
       children: [ref, " => ", prefix, rhs],
     }
 
+# NOTE: Dynamic infix operators, like FunctionExpression:
+# `operator id(a, b) {...}`
+OperatorDeclaration
+  # `operator id` alone blesses `id` as an operator
+  Operator:op _:w1 Identifier:id &StatementDelimiter ->
+    module.operators.add(id.name)
+    return []
+  OperatorSignature:signature BracedBlock:block ->
+    module.operators.add(signature.id.name)
+    // Otherwise translate into a function definition
+    return {
+      ...signature,
+      type: "FunctionExpression",
+      children: [...signature.children, block],
+      block,
+      operator: true,
+    }
+
+# NOTE: Like FunctionSignature, but no async or star or @,
+# and parameters are required (to be useful).
+OperatorSignature
+  Operator:op _:w1 Identifier:id _?:w2 NonEmptyParameters:parameters ReturnTypeSuffix?:suffix ->
+    op = { $loc: op.$loc, token: "function" }
+    return {
+      type: "FunctionSignature",
+      id,
+      parameters,
+      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
+      ts: false,
+      block: null,
+      children: [ op, w1, id, w2, parameters, suffix ],
+    }
+
 AmpersandBlockRHS
   (!_ CallExpressionRest+ )?:callExpRest ( ![&] BinaryOpRHS+ )?:binopRHS ->
     if (!callExpRest && !binopRHS) return $skip
@@ -2156,6 +2192,12 @@ BinaryOp
   BinaryOpSymbol ->
     if (typeof $1 === "string") return { $loc, token: $1 }
     return $1
+  Identifier ->
+    if (!module.operators.has($1.name)) return $skip
+    return {
+      call: $1,
+      special: true,
+    }
 
 # NOTE: Condensed binary operator symbols into one rule
 BinaryOpSymbol
@@ -3349,6 +3391,7 @@ Declaration
   ClassDeclaration
   LexicalDeclaration
   TypeDeclaration
+  OperatorDeclaration
 
 # https://262.ecma-international.org/#prod-HoistableDeclaration
 HoistableDeclaration
@@ -4095,6 +4138,10 @@ OpenBracket
 
 OpenParen
   "(" ->
+    return { $loc, token: $1 }
+
+Operator
+  "operator" NonIdContinue ->
     return { $loc, token: $1 }
 
 Public
@@ -5252,6 +5299,8 @@ Reset
 
     module.suppressTrailingMemberProperty = [false]
     module.JSXTagStack = []
+
+    module.operators = new Set
 
     if (!module._init) {
       module._init = true
