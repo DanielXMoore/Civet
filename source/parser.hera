@@ -79,7 +79,7 @@ ExplicitArguments
 # Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
 ApplicationStart
   IndentedApplicationAllowed &NestedImplicitObjectLiteral
-  !EOS &( _+ !ForbiddenImplicitCalls )
+  !EOS &( _ !ForbiddenImplicitCalls )
 
 ForbiddenImplicitCalls
   # Reserved words that prevent spaced implicit function application
@@ -99,7 +99,7 @@ ArgumentsWithTrailingMemberExpressions
 
 TrailingMemberExpressions
   # NOTE: Assert "." to not match "?" or "!" as a member expression on the following line
-  MemberExpressionRest* ( ( Samedent / IndentedFurther ) &( "?"? "." ) MemberExpressionRest )* ->
+  MemberExpressionRest* ( ( Samedent / IndentedFurther ) &( "?"? "." ![0-9] ) MemberExpressionRest )* ->
     return $1.concat($2)
 
 NonSuppressedTrailingMemberExpressions
@@ -596,7 +596,7 @@ MemberExpression
     if (rest.length) {
       return {
         type: "MemberExpression",
-        children: [$1].concat(rest),
+        children: [$1].concat(rest.flat()),
       }
     }
     return $1
@@ -612,7 +612,7 @@ MemberExpressionRest
         // Remove '.' from optional since it is present in '.slice'
         return [$1.children[0], $2]
       }
-      return $0
+      return $0.flat()
     }
     return $2
   # NOTE: Combined Optional and Property access
@@ -640,14 +640,39 @@ MemberBracketContent
     }
 
     // Regular index `[exp]`
-    return $0
+    return {
+      type: "Index",
+      children: $0
+    }
 
   # NOTE: Added shorthand x."string" -> x["string"]
   Dot:dot ( StringLiteral / TemplateLiteral ):str ->
+    return {
+      type: "Index",
+      children: [
+        { token: "[", $loc: dot.$loc },
+        str,
+        "]",
+      ]
+    }
+
+  # NOTE: Added shorthand x.3 -> x[3]
+  Dot:dot IntegerLiteral:num ->
+    return {
+      type: "Index",
+      children: [
+        { token: "[", $loc: dot.$loc },
+        num,
+        "]",
+      ]
+    }
+
+  # NOTE: Added shorthand x.-1 -> x.at(-1)
+  Dot:dot "-":neg IntegerLiteral:num ->
     return [
-      { token: "[", $loc: dot.$loc },
-      str,
-      "]",
+      { type: "PropertyAccess", children: [dot, "at"] },
+        // not including `name` so that `{x.-1}` doesn't use it
+      { type: "Call", children: [ "(", neg, num, ")" ] },
     ]
 
 SliceParameters
@@ -1985,8 +2010,20 @@ PropertyDefinition
       if (i < 0) return $skip
       // Recurse into nested MemberExpression, e.g. from `x.y()`
     } while (children[i].type === "MemberExpression" && (exp = children[i]))
-    const {name} = children[i]
-    if (!name) return $skip
+    const last = children[i]
+    let name
+    if (last.name) {
+      ({name} = last)
+    } else if (last.type === "Index") {
+      // TODO: If `last` is a suitable string literal, could use it for `name`.
+      // TODO: Should use a ref instead of duplicating the expression.
+      name = {
+        type: "ComputedPropertyName",
+        children: last.children,
+      }
+    } else {
+      return $skip
+    }
     return {
       type: "Property",
       children: [ws, name, ": ", value],
@@ -2203,6 +2240,14 @@ BinaryOpSymbol
       relational: true,
       special: true,
     }
+  "!<?" ->
+    return {
+      $loc,
+      token: "instanceof",
+      relational: true,
+      special: true,
+      negated: true,
+    }
   "<<"
   # NOTE: Avoid matching JSX opening tag by requiring non-identifier character
   # (e.g. whitespace) after "<".  This does forbid 1<2 or x<y.
@@ -2235,7 +2280,7 @@ BinaryOpSymbol
   CoffeeBinaryExistentialEnabled "?" -> "??"
   "instanceof" NonIdContinue ->
     return $1
-  CoffeeNotEnabled "not" NonIdContinue __ "instanceof" NonIdContinue ->
+  "not" NonIdContinue __ "instanceof" NonIdContinue ->
     return {
       $loc,
       token: "instanceof",
@@ -3529,6 +3574,7 @@ VariableDeclaration
     }
 
 # https://262.ecma-international.org/#prod-NumericLiteral
+# NOTE: No leading minus sign
 NumericLiteral
   NumericLiteralKind ->
     return { $loc, token: $1 }
@@ -3537,7 +3583,7 @@ NumericLiteralKind
   DecimalBigIntegerLiteral
   BinaryIntegerLiteral
   OctalIntegerLiteral
-  HexLiteral
+  HexIntegerLiteral
   DecimalLiteral
 
 # https://262.ecma-international.org/#prod-DecimalBigIntegerLiteral
@@ -3566,8 +3612,23 @@ OctalIntegerLiteral
   /0[oO][0-7](?:[0-7]|_[0-7])*n?/
 
 # https://262.ecma-international.org/#prod-HexIntegerLiteral
-HexLiteral
+HexIntegerLiteral
   /0[xX][0-9a-fA-F](?:[0-9a-fA-F]|_[0-9a-fA-F])*n?/
+
+# NOTE: Integer variation of NumericLiteral
+IntegerLiteral
+  IntegerLiteralKind ->
+    return { $loc, token: $1 }
+
+IntegerLiteralKind
+  DecimalBigIntegerLiteral
+  BinaryIntegerLiteral
+  OctalIntegerLiteral
+  HexIntegerLiteral
+  DecimalIntegerLiteral
+
+DecimalIntegerLiteral
+  /(?:0|[1-9](?:_[0-9]|[0-9])*)/
 
 # https://262.ecma-international.org/#prod-StringLiteral
 StringLiteral
@@ -3764,10 +3825,8 @@ ReservedWord
   CoffeeIsntEnabled /(?:isnt)(?!\p{ID_Continue})/
   CoffeeForLoopsEnabled /(?:by)(?!\p{ID_Continue})/
   CoffeeOfEnabled /(?:of)(?!\p{ID_Continue})/
-  CoffeeNotEnabled /(?:not)(?!\p{ID_Continue})/
-  "not" NonIdContinue __ "in" NonIdContinue
   # NOTE: Added `let`, Civet assumes strict mode
-  /(?:and|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|interface|is|let|loop|new|null|or|private|protected|public|return|static|super|switch|this|throw|true|try|typeof|unless|until|var|void|while|with|yield)(?!\p{ID_Continue})/
+  /(?:and|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|interface|is|let|loop|new|not|null|or|private|protected|public|return|static|super|switch|this|throw|true|try|typeof|unless|until|var|void|while|with|yield)(?!\p{ID_Continue})/
 
 # https://262.ecma-international.org/#sec-comments
 Comment
@@ -3799,7 +3858,8 @@ CoffeeSingleLineComment
     return { $loc, token: `//${$1}` }
 
 CoffeeMultiLineComment
-  CoffeeHereCommentStart $( !(CoffeeHereCommentStart / "*/") . )* CoffeeHereCommentStart ->
+  CoffeeHereCommentStart $/[^]*?###/ ->
+    $2 = $2.slice(0, $2.length-3).replace(/\*\//g, "* /")
     return { $loc, token: `/*${$2}*/` }
 
 CoffeeHereCommentStart
@@ -4494,7 +4554,7 @@ JSXAttribute
     return parts
 
   # https://facebook.github.io/jsx/#prod-JSXAttribute
-  JSXAttributeName:name JSXAttributeInitializer?:value ->
+  JSXAttributeName:name ( JSXAttributeInitializer / &JSXAttributeSpace ):value ->
     if (name.type === "ComputedPropertyName") {
       if (value) {
         // Strip off equals sign and whitespace from JSXAttributeInitializer
@@ -4515,7 +4575,7 @@ JSXAttribute
     }
 
   # NOTE: Adding ...foo shorthand for {...foo}
-  InsertInlineOpenBrace DotDotDot InlineJSXAttributeValue InsertCloseBrace
+  InsertInlineOpenBrace DotDotDot InlineJSXAttributeValue InsertCloseBrace &JSXAttributeSpace
 
   # NOTE: #id shorthand
   "#" JSXShorthandString ->
@@ -4530,6 +4590,9 @@ JSXAttribute
   $[!+-]:toggle JSXAttributeName:id ->
     const value = toggle === "+" ? "true" : "false"
     return [ " ", id, "={", value, "}" ]
+
+JSXAttributeSpace
+  /[\s>]/
 
 JSXShorthandString
   /(?:[\w\-:]+|\([^()]*\)|\[[^\[\]]*\])+/ ->
@@ -5896,7 +5959,8 @@ Init
               children = [a, wsOp, ".", op.method, "(", wsB, b, ")"]
             }
           } else if (op.token) {
-            children = ["(", a, wsOp, op, wsB, b, ")"]
+            children = [a, wsOp, op, wsB, b]
+            if (op.negated) children = ["(", ...children, ")"]
           } else {
             throw new Error("Unknown operator: " + JSON.stringify(op))
           }

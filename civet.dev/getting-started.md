@@ -10,7 +10,7 @@ here is how to set up your environment to get productive right away and have a G
 ## Quick start
 
 Try out the transpiler interactively in the
-[Playground](https://civet-web.vercel.app/).
+[Playground](/playground).
 
 Or transpile Civet code interactively in the command-line REPL:
 

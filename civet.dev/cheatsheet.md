@@ -18,112 +18,6 @@ The TypeScript code on
 
 [[toc]]
 
-## Beyond TC39
-
-### Default to `const` for Iteration Items
-
-<Playground>
-for (item of [1, 2, 3, 4, 5]) {
-  console.log(item * item);
-}
-</Playground>
-
-### Block Strings / Templates
-
-[TC39 Proposal: String Dedent](https://github.com/tc39/proposal-string-dedent)
-
-<Playground>
-text = """
-  This text is a string that doesn't include the leading
-  whitespace.
-"""
-</Playground>
-
-<Playground>
-text = ```
-  Also works for
-  templates!
-```
-</Playground>
-
-### Modulo Operator
-
-<Playground>
-let a = -3
-let b = 5
-let rem = a % b
-let mod = a %% b
-console.log rem, mod
-</Playground>
-
-### Spread in Any Position
-
-Spreads in first or middle position:
-
-<Playground>
-[...head, last] = [1, 2, 3, 4, 5]
-</Playground>
-
-<Playground>
-{a, ...rest, b} = {a: 7, b: 8, x: 0, y: 1}
-</Playground>
-
-<Playground>
-function justDoIt(a, ...args, cb) {
-  cb.apply(a, args)
-}
-</Playground>
-
-### Import Syntax Matches Destructuring
-
-<Playground>
-import {X: LocalX, Y: LocalY} from "./util"
-</Playground>
-
-### Single-Argument Function Shorthand
-
-<Playground>
-x.map &.name
-x.map &.profile?.name[0...3]
-x.map &.callback a, b
-x.map +&
-</Playground>
-
-::: info
-Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc),
-[Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax),
-or [Elm record access](https://elm-lang.org/docs/records#access)
-:::
-
-### Pipelines
-
-[TC39 Proposal: Pipe Operator](https://github.com/tc39/proposal-pipeline-operator)
-
-<Playground>
-data
-  |> Object.keys
-  |> console.log
-</Playground>
-
-Pipe expression with shorthand functions:
-
-<Playground>
-a |> & + 1 |> bar
-</Playground>
-
-### Export Convenience
-
-<Playground>
-export a, b, c from "./cool.js"
-export x = 3
-</Playground>
-
-### Throw Expression
-
-<Playground>
-x == null ? throw "x is null" : x.fn()
-</Playground>
-
 ## Basics
 
 ### Variable Declaration
@@ -153,6 +47,7 @@ Literal shorthand beyond `{x}`:
 <Playground>
 another := {person.name, obj?.c?.x}
 computed := {foo(), bar()}
+named := {lookup[x+y]}
 </Playground>
 
 Flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects):
@@ -191,6 +86,8 @@ Property access shorthand:
 <Playground>
 json.'long property'
 json.`${movie} name`
+matrix.0.0
+array.-1
 </Playground>
 
 ### Arrays
@@ -249,6 +146,7 @@ a is not b
 a and b
 a or b
 a not in b
+a not instanceof b
 a?
 </Playground>
 
@@ -616,7 +514,34 @@ obj.key ?= 'civet'
 <Playground>
 a < b <= c
 a is b is not c
-a instanceof b instanceof c
+a instanceof b not instanceof c
+</Playground>
+
+### `instanceof` shorthand
+
+<Playground>
+a <? b
+a !<? b
+a <? b !<? c
+</Playground>
+
+### Rest
+
+Rest properties/parameters/elements are no longer limited to the final position.
+You may use them in their first or middle positions as well.
+
+<Playground>
+[...head, last] = [1, 2, 3, 4, 5]
+</Playground>
+
+<Playground>
+{a, ...rest, b} = {a: 7, b: 8, x: 0, y: 1}
+</Playground>
+
+<Playground>
+function justDoIt(a, ...args, cb) {
+  cb.apply(a, args)
+}
 </Playground>
 
 ### ESM Import
@@ -667,6 +592,15 @@ numbers[1...-1] = []
 
 <Playground>
 a + b = c
+</Playground>
+
+### Block Comments
+
+<Playground>
+###
+block comment
+/* nested comment */
+###
 </Playground>
 
 ### `Object.is`
@@ -889,13 +823,23 @@ X::
 X::a
 </Playground>
 
+### CoffeeScript Booleans
+
+<Playground>
+"civet coffeeBooleans"
+on
+off
+yes
+no
+</Playground>
+
 ### CoffeeScript Comments
+
+If you don't need private fields, you can enable `#` for single-line comments:
 
 <Playground>
 "civet coffeeComment"
 # one-line comment
-###
-block
-comment
-###
 </Playground>
+
+[`###...###` block comments](#block-comments) are always available.

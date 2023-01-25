@@ -47,7 +47,8 @@ Things Kept from CoffeeScript
 - Prefix or postfix rest/splats `[...a]`, `x = [a...]`
 - RestProperty in any position `{a, ...b, c} = d` → `{a, c, ...b} = d`
 - RestElement/RestParameter in any position `(first, ...midle, last) ->` → `function(first, ...middle) { let [last] = middle.splice(-1)}`
-- `///` Heregexp (with some [changes](#things-changed-from-coffeescript))
+- `///` heregexp (with some [changes](#things-changed-from-coffeescript))
+- `###` block comments (but allowing nested `*/`)
 - JSX [with improved shorthands and an optional nested syntax](../README.md#jsx-enhancements)
   (with some [changes](#things-changed-from-coffeescript))
 
@@ -159,8 +160,8 @@ Civet provides a compatibility prologue directive that aims to be 97+% compatibl
 | coffeeForLoops      | for in, of, from loops behave like they do in CoffeeScript |
 | coffeeInterpolation | `"a string with #{myVar}"` |
 | coffeeIsnt          | `isnt` → `!==` |
-| coffeeNot           | `not` → `!`, `a not instanceof b` → `!(a instanceof b)`, `a not of b` → `!(a in b)`    |
-| coffeeOf            | `a of b` → `a in b`, `a in b` → `b.indexOf(a) >= 0`, `a not in b` → `b.indexOf(a) < 0` |
+| coffeeNot           | `not` → `!`    |
+| coffeeOf            | `a of b` → `a in b`, `a not of b` → `!(a in b)`, `a in b` → `b.indexOf(a) >= 0`, `a not in b` → `b.indexOf(a) < 0` |
 | coffeePrototype     | enables `x::` -> `x.prototype` and `x::y` -> `x.prototype.y` shorthand.
 
 You can use these with `"civet coffeeCompat"` to opt in to all or use them bit by bit with `"civet coffeeComment coffeeEq coffeeInterpolation"`.
