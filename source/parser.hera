@@ -88,6 +88,7 @@ ForbiddenImplicitCalls
   # NOTE: Don't allow non-heregex regexes that begin with a space as first argument without parens
   "/ "
   AtAt # experimentalDecorators
+  Identifier "=" Whitespace
   Identifier !"(" ->
     if (module.operators.has($1.name)) return $1
     return $skip
@@ -233,7 +234,9 @@ AssignmentExpressionTail
 ActualAssignment
   # NOTE: Eliminated left recursion
   # NOTE: Consolidated assignment ops
-  ( __ LeftHandSideExpression __ AssignmentOp )+ ExtendedExpression ->
+  ( __ LeftHandSideExpression WAssignmentOp )+ ExtendedExpression ->
+    $1 = $1.map((x) => [x[0], x[1], ...x[2]])
+    $0 = [$1, $2]
     return {
       type: "AssignmentExpression",
       children: $0,
@@ -2188,6 +2191,12 @@ PrivateIdentifier
 # https://262.ecma-international.org/#prod-GeneratorBody
 # NOTE: Merged into MethodDefinition
 
+# NOTE: Allow arbitrary whitespace before regular assignment,
+# but require nonnewline whitespace before operator assignment.
+WAssignmentOp
+  __ AssignmentOp
+  _ OperatorAssignmentOp
+
 # https://262.ecma-international.org/#prod-AssignmentOperator
 AssignmentOp
   AssignmentOpSymbol TrailingComment* ->
@@ -2199,6 +2208,17 @@ AssignmentOp
     }
 
     return { $loc, token: $1 }
+
+# NOTE: x foo= y expands to x = foo(x, y)
+# This is separate from AssignmentOp because it only works in certain contexts
+# (in particular, not at the beginning of a line).
+OperatorAssignmentOp
+  Identifier "=" &Whitespace TrailingComment* ->
+    return {
+      special: true,
+      call: $1,
+      children: [$2, ...$4]
+    }
 
 AssignmentOpSymbol
   "**="
@@ -3142,7 +3162,7 @@ CatchParameter
 
 # An expression with explicit or implied parentheses, for use in if/while/switch
 Condition
-  ParenthesizedExpression !( TrailingComment* ( BinaryOp / AssignmentOp / Dot / QuestionMark ) ) -> $1
+  ParenthesizedExpression !( TrailingComment* ( BinaryOp / AssignmentOp / Dot / QuestionMark ) ) !( _ OperatorAssignmentOp ) -> $1
   InsertOpenParen:open ExpressionWithIndentedApplicationSuppressed:expression InsertCloseParen:close ->
     // Don't double wrap parethesized expressions
     if (expression.type === "ParenthesizedExpression") return expression
@@ -4704,9 +4724,10 @@ InlineJSXAttributeValue
     return $1
 
 # BinaryOpRHS without whitespace and without ExpressionizedStatement,
-# and forbidding operators starting with < or > (possible JSX tags).
+# forbidding operators starting with < or > (possible JSX tags),
+# and forbidding implicitly parenthesized assignments.
 InlineJSXBinaryOpRHS
-  ![<>] BinaryOp:op ( ParenthesizedAssignment / InlineJSXUnaryExpression ):rhs ->
+  ![<>] BinaryOp:op InlineJSXUnaryExpression:rhs ->
     // NOTE: Inserting empty whitespace arrays to be compatible with BinaryOpRHS and `processBinaryOpExpression`
     return [[], op, [], rhs]
 
@@ -6575,6 +6596,19 @@ Init
       gatherRecursiveAll(statements, n => n.type === "AssignmentExpression" && n.names === null)
       .forEach(exp => {
         let {lhs: $1, exp: $2} = exp, tail = [], i = 0, len = $1.length
+
+        // identifier=
+        if ($1.some((left) => left[left.length-1].special)) {
+          if ($1.length !== 1) {
+            throw new Error("Only one assignment with id= is allowed")
+          }
+          const [, lhs, , op] = $1[0]
+          const {call} = op
+          // Replace id= with =
+          op[op.length-1] = "="
+          // Wrap right-hand side with call
+          $2 = [ call, "(", lhs, ", ", $2, ")" ]
+        }
 
         // Force parens around destructuring object assignments
         // Walk from left to right the minimal number of parens are added and enclose all destructured assignments
