@@ -1083,87 +1083,81 @@ MatchingPattern
   # TODO: Relational RHS
 
 ObjectMatchingPattern
-  OpenBrace:open ObjectMatchingPatternContent:content __:ws CloseBrace:close ->
+  _?:ws OpenBrace:open ObjectMatchingPatternContent:properties __:ws CloseBrace:close ->
     return {
       type: "ObjectMatchingPattern",
-      children: [open, ...content.children, ...ws, close],
+      children: [ws, open, ...properties.children, ...ws, close],
+      properties: properties.children
     }
 
 ObjectMatchingPatternContent
   # NOTE: Added indentation based binding properties
   NestedMatchingProperties
-  MatchingProperty*:props MatchingRestProperty?:rest MatchingProperty*:after ->
-    const names = props.flatMap(p => p.names)
-    const children = [...props]
+  MatchingPropertyList?:properties ->
+    if (!properties) return { children: [], names: [], }
 
-    if (rest) {
-      [rest, after] = module.reorderBindingRestProperty(rest, after)
-      children.push(...after, rest)
-      names.push(...after.flatMap(p => p.names), ...rest.names)
-    }
-
-    return {
-      names,
-      children,
-    }
+    return module.reorderBindingRestProperty(properties)
 
 NestedMatchingProperties
   # NOTE: Add NestedBindingProperties after rest from CoffeeScript
-  PushIndent NestedMatchingProperty*:props NestedMatchingRestProperty?:rest NestedMatchingProperty*:after PopIndent ->
-    if (!(props.length || rest)) return $skip
-    const names = props.flatMap(p => p.names)
-    const children = [...props]
-    if (rest) {
-      [rest, after] = module.reorderBindingRestProperty(rest, after)
-      children./**/push(...after, rest)
-      names./**/push(...after.flatMap(p => p.names), ...rest.names)
-    }
-    return {
-      children,
-      names,
-    }
+  PushIndent NestedMatchingPropertyList*:properties PopIndent ->
+    if (!props.length) return $skip
 
-NestedMatchingProperty
-  Nested:indent MatchingProperty:prop ->
-    return {
-      ...prop,
-      children: [...indent, ...prop.children],
-    }
+    return module.reorderBindingRestProperty(props.flat())
+
+MatchingPropertyList
+  ( MatchingProperty ObjectPropertyDelimiter )+:props ->
+    return props.map(([prop, delim]) => {
+      return {
+        ...prop,
+        children: [...prop.children, delim],
+      }
+    })
+
+NestedMatchingPropertyList
+  Nested:ws MatchingPropertyList:props ->
+    // Attach whitespace to first property
+    return props.map( (prop, i) => {
+      if (i > 0) return prop
+      return {
+        ...prop,
+        children: [ws, ...prop.children],
+      }
+    })
 
 MatchingProperty
-  __ PropertyName __ Colon ( BindingIdentifier / MatchingPattern ):m ObjectPropertyDelimiter ->
+  MatchingRestProperty
+
+  _? PropertyName:name __ Colon ( BindingIdentifier / MatchingPattern ):match ->
     return {
-      names: m.names,
+      type: "BindingMatchProperty",
+      name,
+      match,
       children: $0,
     }
 
-  BindingIdentifier:b ObjectPropertyDelimiter ->
+  _?:ws BindingIdentifier:b ->
     if (b.type === "AtBinding") {
       return {
         type: "AtBindingProperty",
         ref: b.ref,
         names: [],
-        children: $0
+        children: [ws, b]
       }
     }
 
     return {
+      type: "BindingProperty",
       names: b.names,
-      children: $0
-    }
-
-NestedMatchingRestProperty
-  Nested:indent MatchingRestProperty:prop ->
-    return {
-      ...prop,
-      children: [indent, ...prop.children],
+      children: [ws, b],
+      identifier: b,
     }
 
 MatchingRestProperty
   BindingRestProperty
 
 ArrayMatchingPattern
-  OpenBracket ArrayMatchingPatternContent:elements __ CloseBracket ->
+  _?:ws OpenBracket ArrayMatchingPatternContent:elements __ CloseBracket ->
     return {
       type: "ArrayMatchingPattern",
       children: $0,
@@ -3007,7 +3001,7 @@ NestedCaseClause
 
 # https://262.ecma-international.org/#prod-CaseClause
 CaseClause
-  MatchingPattern:pattern ( NestedBlockStatements / EmptyBareBlock ):block ->
+  MatchingPattern:pattern ( ThenClause / NestedBlockStatements / EmptyBareBlock ):block ->
     return {
       type: "PatternClause",
       children: $0,
@@ -3706,7 +3700,7 @@ CoffeeDoubleQuotedStringCharacters
 RegularExpressionLiteral
   HeregexLiteral
   $("/" RegularExpressionBody "/" RegularExpressionFlags) ->
-    return { $loc, token: $1 }
+    return { type: "RegularExpressionLiteral", $loc, token: $1 }
 
 RegularExpressionClass
   $(OpenBracket RegularExpressionClassCharacters CloseBracket) ->
@@ -3744,7 +3738,10 @@ HeregexLiteral
       return result
     }
 
-    return $0
+    return {
+      type: "RegularExpressionLiteral",
+      children: $0,
+    }
 
 HeregexBody
   !TripleSlash HeregexPart* -> $2
@@ -6310,9 +6307,8 @@ Init
       })
 
       if (restCount === 0) {
-        const children = [...props]
         return {
-          children,
+          children: props,
           names,
         }
       } else if (restCount === 1) {
@@ -6673,6 +6669,74 @@ Init
       }
     }
 
+    function getPatternConditions(pattern, ref, conditions) {
+      switch (pattern.type) {
+        case "ArrayMatchingPattern": {
+          const elements = pattern.elements.children,
+            hasRest = elements.some(e => e.rest),
+            comparator = hasRest ? " >= " : " === ",
+            // NOTE: length is different from elements.length because items after rest are not included in children.length
+            // but they are included in elements.length
+            length = pattern.elements.length,
+            l = [comparator, (length - hasRest).toString()]
+
+          conditions.push(
+            ["Array.isArray(", ref, ")"],
+            [ref, ".length", l],
+          )
+
+          // recursively collect nested conditions
+          elements.forEach(({children: [,e]}, i) => {
+            switch (e.type) {
+              case "ArrayMatchingPattern":
+              case "ObjectMatchingPattern":
+                getPatternConditions(e, [ref, "[", i.toString(), "]"], conditions)
+                break
+            }
+          })
+
+          break
+        }
+        case "ObjectMatchingPattern": {
+          conditions.push(
+            ["typeof ", ref, " === 'object'"],
+            [ref, " != null"],
+          )
+
+          pattern.properties.forEach((p) => {
+            switch(p.type) {
+              case "BindingMatchProperty": {
+                const {name, match} = p
+                conditions.push(["'", name ,"' in ", ref])
+                getPatternConditions(p.match, [ref, ".", name], conditions)
+
+                break
+              } case "BindingProperty":
+                conditions.push(["'", p.identifier ,"' in ", ref])
+                break
+            }
+          })
+
+          break
+        }
+        case "RegularExpressionLiteral": {
+          conditions.push(
+            ["typeof ", ref, " === 'string'"],
+            [pattern, ".test(", ref, ")"],
+          )
+
+          break
+        }
+        default: {
+          conditions.push([
+            ref,
+            " === ",
+            pattern,
+          ])
+        }
+      }
+    }
+
     function processPatternMatching(statements) {
       gatherRecursiveAll(statements, n => n.type === "SwitchStatement")
       .forEach((s) => {
@@ -6724,55 +6788,41 @@ Init
 
         const l = clauses.length
         clauses.forEach((c, i) => {
-          let { pattern, block } = c,
-            condition
+          let { pattern, block } = c
 
           // TODO: else default clause
 
-          const prefix = []
           const indent = block.expressions[0][0]
 
+          // TODO: intermediate refs and ref decs
+
+          const conditions = []
+          getPatternConditions(pattern, ref, conditions)
+
+          const condition = {
+            type: "ParenthesizedExpression",
+            children: ["(", conditions.map((c, i) => {
+              if (i === 0) return c
+              return [" && ", ...c]
+            }), ")"],
+            expression: conditions,
+          }
+
+          const prefix = []
+
           switch (pattern.type) {
-            case "ArrayMatchingPattern": {
-              const elements = pattern.elements.children,
-                hasRest = elements.some(e => e.rest),
-                comparator = hasRest ? " >= " : " === ",
-                // NOTE: length is different from elements.length because items after rest are not included in children.length
-                // but they are included in elements.length
-                length = pattern.elements.length,
-                l = [comparator, (length - hasRest).toString()],
-                comparison = ["Array.isArray(", ref, ") && ", ref, ".length", l]
-
-              // TODO: recursively collect nested conditions
-
-              condition = {
-                type: "ParenthesizedExpression",
-                children: ["(", comparison, ")"],
-                expression: pattern,
-              }
-
-              // TODO: filter out non-binding elements
-
+            case "ArrayMatchingPattern":
+            case "ObjectMatchingPattern": {
+              // Gather bindings
               let [splices, thisAssignments] = module.gatherBindingCode(pattern)
+
               splices = splices.map(s => [", ", s])
               thisAssignments = thisAssignments.map(a => [indent, a, ";\n"])
 
               prefix.push([indent, "const ", pattern, " = ", ref, splices, ";\n"])
               prefix.push(...thisAssignments)
 
-              break;
-            } default: {
-              const comparison = [
-                ref,
-                " === ",
-                pattern,
-              ]
-
-              condition = {
-                type: "ParenthesizedExpression",
-                children: ["(", comparison, ")"],
-                expression: comparison,
-              }
+              break
             }
           }
 
@@ -6787,7 +6837,7 @@ Init
             block.bare = false
           }
 
-          // Insert else if there are more conditions
+          // Insert else if there are more branches
           const e = i < l - 1 ? ["\nelse "] : []
 
           prev.push({
@@ -7077,6 +7127,7 @@ Init
             thisAssignments.push([`this.${id} = `, ref])
             return
           }
+
           if (opts?.injectParamProps && n.type === "Parameter" && n.accessModifier) {
             n.names.forEach(id => {
               thisAssignments.push({
@@ -7087,6 +7138,7 @@ Init
             })
             return
           }
+
           const { blockPrefix } = n
           p.push(blockPrefix)
 
