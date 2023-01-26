@@ -88,6 +88,9 @@ ForbiddenImplicitCalls
   # NOTE: Don't allow non-heregex regexes that begin with a space as first argument without parens
   "/ "
   AtAt # experimentalDecorators
+  Identifier !"(" ->
+    if (module.operators.has($1.name)) return $1
+    return $skip
 
 ArgumentsWithTrailingMemberExpressions
   Arguments:args TrailingMemberExpressions:trailing ->
@@ -1287,6 +1290,48 @@ FunctionExpression
       children: [ref, " => ", prefix, rhs],
     }
 
+# NOTE: Dynamic infix operators
+OperatorDeclaration
+  # `operator {x, y} := ...` declaration while blessing
+  Operator:op _:w LexicalDeclaration:decl ->
+    decl.names.forEach((name) => module.operators.add(name))
+    return [module.insertTrimmingSpace(w, ""), decl]
+  # `operator id(a, b) {...}` defines a function
+  OperatorSignature:signature BracedBlock:block ->
+    module.operators.add(signature.id.name)
+    return {
+      ...signature,
+      type: "FunctionExpression",
+      children: [...signature.children, block],
+      block,
+      operator: true,
+    }
+  # `operator id` alone blesses `id` as an operator
+  Operator:op _:w1 Identifier:id ( CommaDelimiter _? Identifier )*:ids ->
+    module.operators.add(id.name)
+    ids.forEach(([, , id2]) => module.operators.add(id2.name))
+    return []
+
+# NOTE: Like FunctionSignature, but no async or star or @,
+# and parameters are required (to be useful).
+OperatorSignature
+  Operator:op ( _ Function )?:func _:w1 Identifier:id _?:w2 NonEmptyParameters:parameters ReturnTypeSuffix?:suffix ->
+    // Add "function" (if not already one) to replace "operator"
+    if (!func) {
+      func = { $loc: op.$loc, token: "function" }
+    } else {
+      func = [ module.insertTrimmingSpace(func[0], ""), func[1] ]
+    }
+    return {
+      type: "FunctionSignature",
+      id,
+      parameters,
+      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
+      ts: false,
+      block: null,
+      children: [ func, w1, id, w2, parameters, suffix ],
+    }
+
 AmpersandBlockRHS
   (!_ CallExpressionRest+ )?:callExpRest ( ![&] BinaryOpRHS+ )?:binopRHS ->
     if (!callExpRest && !binopRHS) return $skip
@@ -1527,9 +1572,6 @@ CoffeeScriptBooleanLiteral
     return { $loc, token: "true" }
   ( "no" / "off" ) NonIdContinue ->
     return { $loc, token: "false" }
-
-Comma
-  _* Comma _*
 
 # https://262.ecma-international.org/#prod-Identifier
 Identifier
@@ -2156,6 +2198,12 @@ BinaryOp
   BinaryOpSymbol ->
     if (typeof $1 === "string") return { $loc, token: $1 }
     return $1
+  Identifier ->
+    if (!module.operators.has($1.name)) return $skip
+    return {
+      call: $1,
+      special: true,
+    }
 
 # NOTE: Condensed binary operator symbols into one rule
 BinaryOpSymbol
@@ -3232,6 +3280,19 @@ TypeAndImportSpecifier
   ( __ TypeKeyword )? ImportSpecifier ->
     if (!$1) return $2
     return { ts: true, children: $0, binding: $2.binding }
+  # `operator id` blesses `id` as operator; doesn't make sense with `type`
+  __:ws Operator ImportSpecifier:spec ->
+    if (spec.binding.type !== "Identifier") {
+      throw new Error("Expected identifier after `operator`")
+    }
+    module.operators.add(spec.binding.name)
+    return {
+      ...spec,
+      children: [
+        ws, module.insertTrimmingSpace(spec[0], ""),
+        spec.children.slice(1),
+      ],
+    }
 
 # https://262.ecma-international.org/#prod-ImportSpecifier
 ImportSpecifier
@@ -3349,6 +3410,7 @@ Declaration
   ClassDeclaration
   LexicalDeclaration
   TypeDeclaration
+  OperatorDeclaration
 
 # https://262.ecma-international.org/#prod-HoistableDeclaration
 HoistableDeclaration
@@ -4095,6 +4157,10 @@ OpenBracket
 
 OpenParen
   "(" ->
+    return { $loc, token: $1 }
+
+Operator
+  "operator" NonIdContinue ->
     return { $loc, token: $1 }
 
 Public
@@ -5252,6 +5318,8 @@ Reset
 
     module.suppressTrailingMemberProperty = [false]
     module.JSXTagStack = []
+
+    module.operators = new Set
 
     if (!module._init) {
       module._init = true
