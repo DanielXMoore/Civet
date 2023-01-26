@@ -21,6 +21,11 @@ export default gen = (node, options) ->
     .join('')
 
   if typeof node is "object"
+    if node.type is "Error"
+      options.errors ?= []
+      options.errors.push node
+      return ""
+
     if options.js and node.ts
       return ""
     if !options.js and node.js
@@ -32,13 +37,17 @@ export default gen = (node, options) ->
       return token
 
     if !node.children
+      switch node.type
+        when "Ref"
+          throw new Error("Unpopulated ref #{JSON.stringify(node)}")
+
       debugger
-      throw new Error("Unknown node", JSON.stringify(node))
+      throw new Error("Unknown node #{JSON.stringify(node)}")
 
     return gen node.children, options
 
   debugger
-  throw new Error("Unknown node", JSON.stringify(node))
+  throw new Error("Unknown node #{JSON.stringify(node)}")
 
 # Remove empty arrays, empty string, null, undefined from node tree
 # Useful for debugging so I don't need to step though tons of empty nodes

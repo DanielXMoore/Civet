@@ -7,8 +7,6 @@ import * as util from "./util.coffee"
 { SourceMap, base64Encode } = util
 export { parse, generate, util }
 
-defaultOptions = {}
-
 # Rules that are not cacheable
 # Essentially anything that depends on mutable state in the parser like indents and the rules that depend on them
 # One day this will be better supported by Hera
@@ -107,7 +105,12 @@ uncacheable = new Set [
   "UpdateExpression"
 ]
 
-export compile = (src, options=defaultOptions) ->
+export compile = (src, options) ->
+  if (!options)
+    options = {}
+  else
+    options = {...options}
+
   filename = options.filename or "unknown"
 
   # TODO: This makes source maps slightly off in the first line.
@@ -141,7 +144,13 @@ export compile = (src, options=defaultOptions) ->
         sourceMap: sm
       }
 
-  generate ast, options
+  result = generate ast, options
+
+  if options.errors?.length
+    #TODO: Better error display
+    throw new Error "Parse errors: #{options.errors.join("\n")} "
+
+  return result
 
 # logs = []
 makeCache = ->

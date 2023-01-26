@@ -376,8 +376,8 @@ ParenthesizedExpression
 
     return {
       type: "ParenthesizedExpression",
-      expression: exp,
       children: $0,
+      expression: exp,
     }
 
 # https://262.ecma-international.org/#prod-ClassDeclaration
@@ -920,40 +920,30 @@ ArrayBindingPattern
 ArrayBindingPatternContent
   # NOTE: Added indentation based binding elements
   NestedBindingElements
-  ( BindingElement / Elision )*:props ( BindingRestElement ArrayElementDelimiter )?:rest ( BindingElement / Elision )*:after ->
-    const names = props.flatMap((p) => p.names || [])
-    const children = [...props]
+  BindingElementList?:elements ->
+    if (!elements) return { children: [], names: [] }
 
-    let blockPrefix
+    return module.adjustBindingElements(elements)
 
-    if (rest) {
-      const [ restBinding ] = rest
-      // Drop delimiter
-      children./**/push(restBinding)
-
-      let restIdentifier
-      if (restBinding.ref) {
-        restIdentifier = restBinding.ref
-      } else {
-        restIdentifier = restBinding.names[0]
-        names./**/push(...restBinding.names)
+BindingElementList
+  ( BindingElement ArrayElementDelimiter )+:elements ->
+    return elements.map(([element, delim]) => {
+      return {
+        ...element,
+        children: [...element.children, delim],
       }
+    })
 
-      if (after.length) {
-        const spliceRef = module.getRef("splice")
-
-        blockPrefix = {
-          children: ["[", module.insertTrimmingSpace(after, ""), "] = ", spliceRef, ".call(", restIdentifier, ", -", after.length.toString(), ")"],
-          names: after.flatMap(p => p.names),
-        }
+NestedBindingElementList
+  Nested:ws BindingElementList:elements ->
+    // Attach whitespace to first element
+    return elements.map( (element, i) => {
+      if (i > 0) return element
+      return {
+        ...element,
+        children: [ws, ...element.children],
       }
-    }
-
-    return {
-      names,
-      children,
-      blockPrefix,
-    }
+    })
 
 # https://262.ecma-international.org/#prod-Elision
 Elision
@@ -963,8 +953,8 @@ Elision
 NestedBindingProperties
   PushIndent NestedBindingPropertyList*:props PopIndent ->
     if (!props.length) return $skip
-    props = props.flat()
-    return module.reorderBindingRestProperty(props)
+
+    return module.reorderBindingRestProperty(props.flat())
 
 NestedBindingPropertyList
   Nested:ws BindingPropertyList:props ->
@@ -1022,40 +1012,10 @@ BindingRestProperty
     }
 
 NestedBindingElements
-  PushIndent NestedBindingElement*:props ( Nested BindingRestElement ArrayElementDelimiter )?:rest NestedBindingElement*:after PopIndent ->
-    if (!(props.length || rest)) return $skip
-    const names = props.flatMap(p => p.names),
-      children = [...props]
+  PushIndent NestedBindingElementList*:elements PopIndent ->
+    if (!elements.length) return $skip
 
-    let blockPrefix
-
-    if (rest) {
-      const [ , restBinding ] = rest
-      let restIdentifier
-      if (restBinding.ref) {
-        restIdentifier = restBinding.binding.ref
-      } else {
-        restIdentifier = restBinding.names[0]
-      }
-
-      if (after.length) {
-        const spliceRef = module.getRef("splice")
-
-        blockPrefix = {
-          children: ["[", module.insertTrimmingSpace(after, ""), "] = ", spliceRef, ".call(", restIdentifier, ", -", after.length.toString(), ")"],
-          names: after.flatMap(p => p.names),
-        }
-      }
-
-      children./**/push(...rest)
-      names./**/push(...restBinding.names)
-    }
-
-    return {
-      children,
-      names,
-      blockPrefix,
-    }
+    return module.adjustBindingElements(elements.flat())
 
 NestedBindingElement
   Nested:indent BindingElement:element ->
@@ -1066,24 +1026,34 @@ NestedBindingElement
 
 # https://262.ecma-international.org/#prod-BindingElement
 BindingElement
+  BindingRestElement
   # NOTE: Merged in SingleNameBinding
-  ( BindingIdentifier / BindingPattern ):binding Initializer? ArrayElementDelimiter ->
+  ( BindingIdentifier / BindingPattern ):binding Initializer? ->
     return {
       names: binding.names,
       children: $0
     }
+  # NOTE: Merged in ElisionElement
+  "" ->
+    return {
+      type: "ElisionElement",
+      children: [],
+      names: [],
+    }
 
 # https://262.ecma-international.org/#prod-BindingRestElement
 BindingRestElement
-  __:ws DotDotDot:dots ( BindingIdentifier / BindingPattern / EmptyBindingPattern ):binding ->
+  _?:ws DotDotDot:dots ( BindingIdentifier / BindingPattern / EmptyBindingPattern ):binding ->
     return {
       ...binding,
-      children: [...ws, dots, ...binding.children],
+      children: [...(ws || []), dots, ...binding.children],
+      rest: true,
     }
-  __:ws ( BindingIdentifier / BindingPattern ):binding DotDotDot:dots ->
+  _?:ws ( BindingIdentifier / BindingPattern ):binding DotDotDot:dots ->
     return {
       ...binding,
-      children: [...ws, dots, ...binding.children],
+      children: [...(ws || []), dots, ...binding.children],
+      rest: true,
     }
 
 # NOTE: Allows for empty binding rest pattern like in CoffeeScript
@@ -1100,6 +1070,154 @@ EmptyBindingPattern
       names: [],
       ref,
     }
+
+# Pattern matching
+MatchingPattern
+  ObjectMatchingPattern
+  ArrayMatchingPattern
+  Literal
+  RegularExpressionLiteral
+  # TODO: Relational RHS
+
+ObjectMatchingPattern
+  OpenBrace:open ObjectMatchingPatternContent:content __:ws CloseBrace:close ->
+    return {
+      type: "ObjectMatchingPattern",
+      children: [open, ...content.children, ...ws, close],
+    }
+
+ObjectMatchingPatternContent
+  # NOTE: Added indentation based binding properties
+  NestedMatchingProperties
+  MatchingProperty*:props MatchingRestProperty?:rest MatchingProperty*:after ->
+    const names = props.flatMap(p => p.names)
+    const children = [...props]
+
+    if (rest) {
+      [rest, after] = module.reorderBindingRestProperty(rest, after)
+      children.push(...after, rest)
+      names.push(...after.flatMap(p => p.names), ...rest.names)
+    }
+
+    return {
+      names,
+      children,
+    }
+
+NestedMatchingProperties
+  # NOTE: Add NestedBindingProperties after rest from CoffeeScript
+  PushIndent NestedMatchingProperty*:props NestedMatchingRestProperty?:rest NestedMatchingProperty*:after PopIndent ->
+    if (!(props.length || rest)) return $skip
+    const names = props.flatMap(p => p.names)
+    const children = [...props]
+    if (rest) {
+      [rest, after] = module.reorderBindingRestProperty(rest, after)
+      children./**/push(...after, rest)
+      names./**/push(...after.flatMap(p => p.names), ...rest.names)
+    }
+    return {
+      children,
+      names,
+    }
+
+NestedMatchingProperty
+  Nested:indent MatchingProperty:prop ->
+    return {
+      ...prop,
+      children: [...indent, ...prop.children],
+    }
+
+MatchingProperty
+  __ PropertyName __ Colon ( BindingIdentifier / MatchingPattern ):m ObjectPropertyDelimiter ->
+    return {
+      names: m.names,
+      children: $0,
+    }
+
+  BindingIdentifier:b ObjectPropertyDelimiter ->
+    if (b.type === "AtBinding") {
+      return {
+        type: "AtBindingProperty",
+        ref: b.ref,
+        names: [],
+        children: $0
+      }
+    }
+
+    return {
+      names: b.names,
+      children: $0
+    }
+
+NestedMatchingRestProperty
+  Nested:indent MatchingRestProperty:prop ->
+    return {
+      ...prop,
+      children: [indent, ...prop.children],
+    }
+
+MatchingRestProperty
+  BindingRestProperty
+
+ArrayMatchingPattern
+  OpenBracket ArrayMatchingPatternContent:elements __ CloseBracket ->
+    return {
+      type: "ArrayMatchingPattern",
+      children: $0,
+      elements,
+    }
+
+ArrayMatchingPatternContent
+  # NOTE: Added indentation based binding elements
+  NestedMatchingElements
+  MatchingElementList?:elements ->
+    if (!elements) return { children: [], names: [], length: 0 }
+
+    return module.adjustBindingElements(elements)
+
+NestedMatchingElements
+  PushIndent NestedMatchingElementList*:elements PopIndent ->
+    return module.adjustBindingElements(elements.flat())
+
+MatchingElementList
+  ( MatchingElement ArrayElementDelimiter )+:elements ->
+
+    return elements.map(([element, delim]) => {
+      return {
+        ...element,
+        children: [...element.children, delim],
+      }
+    })
+
+NestedMatchingElementList
+  Nested:ws MatchingElementList:elements ->
+
+    // Attach whitespace to first element
+    return elements.map( (element, i) => {
+      if (i > 0) return element
+      return {
+        ...element,
+        children: [ws, ...element.children],
+      }
+    })
+
+MatchingElement
+  MatchingRestElement
+  # NOTE: Merged in SingleNameBinding
+  _?:ws ( BindingIdentifier / MatchingPattern ):binding ->
+    return {
+      names: binding.names,
+      children: [ws, binding ]
+    }
+  "" ->
+    return {
+      type: "ElisionElement",
+      children: [],
+      names: [],
+    }
+
+MatchingRestElement
+  BindingRestElement
 
 # https://262.ecma-international.org/#prod-FunctionDeclaration
 FunctionDeclaration
@@ -1279,6 +1397,17 @@ EmptyBlock
       children: [$1, expressions, $2],
       bare: false,
       empty: true,
+    }
+
+EmptyBareBlock
+  # Implied empty block with no braces. Used in case statements.
+  "" ->
+    const expressions = []
+    return {
+      type: "BlockStatement",
+      expressions,
+      children: [expressions],
+      bare: true,
     }
 
 # A nonempty block that must include braces
@@ -2212,6 +2341,7 @@ Statement
       return {
         type: "ParenthesizedExpression",
         children: ["(", $1, ")" ],
+        expression: $1,
       }
     }
     return $1
@@ -2773,6 +2903,7 @@ SwitchStatement
     return {
       type: "SwitchStatement",
       children: $0,
+      expression: condition,
       caseBlock,
     }
 
@@ -2798,7 +2929,7 @@ SwitchExpression
 
 # https://262.ecma-international.org/#prod-CaseBlock
 CaseBlock
-  __ OpenBrace NestedCaseClauses:clauses __ CloseBrace ->
+  ( Samedent / _ )? OpenBrace NestedCaseClauses:clauses __ CloseBrace ->
     return {
       type: "CaseBlock",
       clauses: clauses,
@@ -2828,12 +2959,19 @@ NestedCaseClause
 
 # https://262.ecma-international.org/#prod-CaseClause
 CaseClause
-  Case CaseExpressionList ( NestedBlockStatements / NoExpressions ) -> {
+  MatchingPattern:pattern ( NestedBlockStatements / EmptyBareBlock ):block ->
+    return {
+      type: "PatternClause",
+      children: $0,
+      block,
+      pattern,
+    }
+  Case CaseExpressionList ( NestedBlockStatements / EmptyBareBlock ) -> {
     type: "CaseClause",
     children: $0
   }
   # NOTE: Added "when" from CoffeeScript. `when` always inserts `break;`.
-  When CaseExpressionList:cases InsertOpenBrace ( ThenClause / NestedBlockStatements / NoExpressions ):block InsertBreak:b InsertNewline InsertIndent InsertCloseBrace ->
+  When CaseExpressionList:cases InsertOpenBrace ( ThenClause / NestedBlockStatements / EmptyBareBlock ):block InsertBreak:b InsertNewline InsertIndent InsertCloseBrace ->
     return {
       type: "WhenClause",
       cases,
@@ -2842,7 +2980,7 @@ CaseClause
       children: $0,
     }
   # NOTE: Merged in default clause
-  Default ImpliedColon ( NestedBlockStatements / NoExpressions ):block ->
+  Default ImpliedColon ( NestedBlockStatements / EmptyBareBlock ):block ->
     return {
       type: "DefaultClause",
       block,
@@ -2869,9 +3007,6 @@ CaseExpressionList
     result./**/unshift($1)
 
     return result
-
-NoExpressions
-  "" -> []
 
 ImpliedColon
   __ Colon
@@ -2922,12 +3057,14 @@ CatchParameter
 # An expression with explicit or implied parentheses, for use in if/while/switch
 Condition
   ParenthesizedExpression !( TrailingComment* ( BinaryOp / AssignmentOp / Dot / QuestionMark ) ) -> $1
-  InsertOpenParen:open ExpressionWithIndentedApplicationSuppressed:exp InsertCloseParen:close ->
+  InsertOpenParen:open ExpressionWithIndentedApplicationSuppressed:expression InsertCloseParen:close ->
     // Don't double wrap parethesized expressions
-    if (exp.type === "ParenthesizedExpression") return exp
+    if (expression.type === "ParenthesizedExpression") return expression
+    expression = module.insertTrimmingSpace(expression, "")
     return {
       type: "ParenthesizedExpression",
-      children: [open, module.insertTrimmingSpace(exp, ""), close],
+      children: [open, expression, close],
+      expression,
     }
 
 ExpressionWithIndentedApplicationSuppressed
@@ -5419,6 +5556,7 @@ Init
             return {
               type: "ParenthesizedExpression",
               children: ["(", ...pre, "(", exp, ")", post, ")"]
+              // TODO: expression:
             }
         }
       }
@@ -5648,12 +5786,11 @@ Init
         case "WhenClause":
           // Remove inserted `break;`
           node.children.splice(node.children.indexOf(node.break), 1)
-          // [] NoExpressions or a BlockStatement
-          if (node.block.length === 0) {
-            node.block.push(wrapWithReturn())
-            return
+          if (node.block.expressions.length) {
+            insertReturn(node.block)
+          } else {
+            node.block.expressions.push(wrapWithReturn())
           }
-          insertReturn(node.block)
           return
         case "DefaultClause":
           insertReturn(node.block)
@@ -5714,18 +5851,19 @@ Init
     // Convert general ExtendedExpression into LeftHandSideExpression
     // by optionally wrapping in parentheses.
     // TODO: Avoid parentheses in more cases by adding more types.
-    module.makeLeftHandSideExpression = function(exp) {
-      switch (exp.type) {
+    module.makeLeftHandSideExpression = function(expression) {
+      switch (expression.type) {
         case "Identifier":
         case "Literal":
         case "CallExpression":
         case "MemberExpression":
         case "ParenthesizedExpression":
-          return exp
+          return expression
         default:
           return {
             type: "ParenthesizedExpression",
-            children: ["(", exp, ")"],
+            children: ["(", expression, ")"],
+            expression,
           }
       }
     }
@@ -6021,6 +6159,73 @@ Init
       return {
         $loc,
         token: str,
+      }
+    }
+
+    module.adjustBindingElements = function(elements) {
+      const names = elements.flatMap((p) => p.names || []),
+        { length } = elements
+
+      let blockPrefix,
+        restIndex = -1,
+        restCount = 0
+
+      elements.forEach(({rest}, i) => {
+        if (rest) {
+          if (restIndex < 0) restIndex = i
+          restCount++
+        }
+      })
+
+      if (restCount === 0) {
+        return {
+          children: elements,
+          names,
+          blockPrefix,
+          length,
+        }
+      } else if (restCount === 1) {
+        const rest = elements[restIndex]
+        const after = elements.slice(restIndex + 1)
+
+        let restIdentifier
+        if (rest.ref) {
+          restIdentifier = rest.ref
+        } else {
+          restIdentifier = rest.names[0]
+          names./**/push(...rest.names)
+        }
+
+        if (after.length) {
+          const spliceRef = module.getRef("splice")
+
+          blockPrefix = {
+            children: ["[", module.insertTrimmingSpace(after, ""), "] = ", spliceRef, ".call(", restIdentifier, ", -", after.length.toString(), ")"],
+            names: after.flatMap(p => p.names),
+          }
+        }
+
+        return {
+          names,
+          children: [...elements.slice(0, restIndex), {
+            ...rest,
+            children: rest.children.slice(0, -1) // remove trailing comma
+          }],
+          blockPrefix,
+          length,
+        }
+      }
+
+      const err = {
+        type: "Error",
+        children: ["Multiple rest elements in array pattern"],
+      }
+
+      return {
+        names,
+        children: [...elements, err],
+        blockPrefix,
+        length,
       }
     }
 
@@ -6400,11 +6605,143 @@ Init
       }
     }
 
+    function processPatternMatching(statements) {
+      gatherRecursiveAll(statements, n => n.type === "SwitchStatement")
+      .forEach((s) => {
+        const { caseBlock } = s
+        const { clauses } = caseBlock
+
+        let errors = false
+        let isPattern = false
+        if (clauses.some((c) => c.type === "PatternClause")) {
+          isPattern = true
+          clauses.forEach((c) => {
+            // else/default clause is ok
+            if (!(c.type === "PatternClause" || c.type === "DefaultClause")) {
+              errors = true
+              c.children.push({
+                type: "Error",
+                message: "Can't mix pattern matching and non-pattern matching clauses",
+              })
+            }
+          })
+        }
+
+        if (errors || !isPattern) return
+
+        let { expression } = s
+        if (expression.type === "ParenthesizedExpression") {
+          // Unwrap parenthesized expression
+          expression = expression.expression
+        }
+
+        let ref
+
+        switch (expression.type) {
+          case "Identifier":
+          case "Literal":
+            ref = expression
+            break
+          default:
+            // TODO: push statement assigning ref
+            ref = {
+              type: "Ref",
+              base: "m",
+              id: "m",
+            }
+        }
+
+        let prev = [],
+          root = prev
+
+        const l = clauses.length
+        clauses.forEach((c, i) => {
+          let { pattern, block } = c,
+            condition
+
+          // TODO: else default clause
+
+          const prefix = []
+          const indent = block.expressions[0][0]
+
+          switch (pattern.type) {
+            case "ArrayMatchingPattern": {
+              const elements = pattern.elements.children,
+                hasRest = elements.some(e => e.rest),
+                comparator = hasRest ? " >= " : " === ",
+                // NOTE: length is different from elements.length because items after rest are not included in children.length
+                // but they are included in elements.length
+                length = pattern.elements.length,
+                l = [comparator, (length - hasRest).toString()],
+                comparison = ["Array.isArray(", ref, ") && ", ref, ".length", l]
+
+              // TODO: recursively collect nested conditions
+
+              condition = {
+                type: "ParenthesizedExpression",
+                children: ["(", comparison, ")"],
+                expression: pattern,
+              }
+
+              // TODO: filter out non-binding elements
+
+              let [splices, thisAssignments] = module.gatherBindingCode(pattern)
+              splices = splices.map(s => [", ", s])
+              thisAssignments = thisAssignments.map(a => [indent, a, ";\n"])
+
+              prefix.push([indent, "const ", pattern, " = ", ref, splices, ";\n"])
+              prefix.push(...thisAssignments)
+
+              break;
+            } default: {
+              const comparison = [
+                ref,
+                " === ",
+                pattern,
+              ]
+
+              condition = {
+                type: "ParenthesizedExpression",
+                children: ["(", comparison, ")"],
+                expression: comparison,
+              }
+            }
+          }
+
+          block.expressions.unshift(...prefix)
+
+          const next = []
+
+          // Add braces if necessary
+          if (block.bare) {
+            block.children.unshift(" {")
+            block.children.push("}")
+            block.bare = false
+          }
+
+          // Insert else if there are more conditions
+          const e = i < l - 1 ? ["\nelse "] : []
+
+          prev.push({
+            type: "IfStatement",
+            children: ["if", condition, block, ...e, next],
+          })
+          prev = next
+        })
+
+        s.type = "PatternMatchingStatement"
+        s.children = [root]
+      })
+    }
+
     module.processProgram = function(statements) {
       processAssignments(statements)
       processFunctions(statements)
       processSwitchExpressions(statements)
       processTryExpressions(statements)
+
+      // Pattern matching
+      processPatternMatching(statements)
 
       // Modify iteration expressions
       gatherRecursiveAll(statements, n => n.type === "IterationExpression")
@@ -6579,7 +6916,7 @@ Init
       }
 
       let declaredIdentifiers = findVarDecs(statements)
-      
+
       function hasDec(name) {
         return declaredIdentifiers.has(name) || scopes.some((s) => s.has(name))
       }
@@ -6601,13 +6938,13 @@ Init
 
       const fnNodes  = gatherNodes(statements, (s) => s.type === "FunctionExpression")
       const forNodes = gatherNodes(statements, (s) => s.type === "ForStatement")
-      
+
       let targetStatements = []
       for (const statement of statements) {
         const nodes = gatherBlockOrOther(statement)
         let undeclaredIdentifiers = []
         for (const node of nodes) {
-          if (node.type == "BlockStatement") {          
+          if (node.type == "BlockStatement") {
             let block = node
             let fnNode  =  fnNodes.find((fnNode)  =>  fnNode.block === block)
             let forNode = forNodes.find((forNode) => forNode.block === block)
@@ -6630,7 +6967,7 @@ Init
           let names = node.names.filter(name => !hasDec(name))
           if (node.type == "AssignmentExpression")
             undeclaredIdentifiers.push(...names)
-          names.forEach((name) => currentScope.add(name)) 
+          names.forEach((name) => currentScope.add(name))
         }
 
         if (undeclaredIdentifiers.length > 0) {
