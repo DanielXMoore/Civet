@@ -1161,7 +1161,8 @@ ArrayMatchingPattern
     return {
       type: "ArrayMatchingPattern",
       children: $0,
-      elements,
+      elements: elements.children,
+      length: elements.length,
     }
 
 ArrayMatchingPatternContent
@@ -6674,12 +6675,9 @@ Init
     function getPatternConditions(pattern, ref, conditions) {
       switch (pattern.type) {
         case "ArrayMatchingPattern": {
-          const elements = pattern.elements.children,
+          const { elements, length } = pattern,
             hasRest = elements.some(e => e.rest),
             comparator = hasRest ? " >= " : " === ",
-            // NOTE: length is different from elements.length because items after rest are not included in children.length
-            // but they are included in elements.length
-            length = pattern.elements.length,
             l = [comparator, (length - hasRest).toString()]
 
           conditions.push(
@@ -6689,10 +6687,13 @@ Init
 
           // recursively collect nested conditions
           elements.forEach(({children: [,e]}, i) => {
+            const subRef = [ref, "[", i.toString(), "]"]
+
             switch (e.type) {
               case "ArrayMatchingPattern":
               case "ObjectMatchingPattern":
-                getPatternConditions(e, [ref, "[", i.toString(), "]"], conditions)
+              case "RegularExpressionLiteral":
+                getPatternConditions(e, subRef, conditions)
                 break
             }
           })
@@ -6714,6 +6715,12 @@ Init
                   case "ComputedPropertyName":
                     conditions.push([name.expression, " in ", ref])
                     subRef = [ref, name]
+                    break
+                  case "Literal":
+                  case "StringLiteral":
+                  case undefined: // NumericLiteral property name has type undefined right now
+                    conditions.push([name, " in ", ref])
+                    subRef = [ref, "[", name, "]"]
                     break
                   default:
                     conditions.push(["'", name ,"' in ", ref])
@@ -6746,6 +6753,24 @@ Init
             pattern,
           ])
         }
+      }
+    }
+
+    function nonMatcherBindings(pattern) {
+      switch (pattern.type) {
+        case "ArrayMatchingPattern":
+          return ["[", pattern.elements.map(({ children: [ws, e, s] }) => {
+            switch (e.type) {
+              case "Literal":
+              case "RegularExpressionLiteral":
+              case "StringLiteral":
+                return s
+              default:
+                return [ ws, nonMatcherBindings(e), s ]
+            }
+          }), "]"]
+        default:
+          return pattern
       }
     }
 
@@ -6831,7 +6856,7 @@ Init
               splices = splices.map(s => [", ", s])
               thisAssignments = thisAssignments.map(a => [indent, a, ";\n"])
 
-              prefix.push([indent, "const ", pattern, " = ", ref, splices, ";\n"])
+              prefix.push([indent, "const ", nonMatcherBindings(pattern), " = ", ref, splices, ";\n"])
               prefix.push(...thisAssignments)
 
               break
