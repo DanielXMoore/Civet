@@ -249,11 +249,13 @@ circle := (degrees: number): {x: number, y: number} =>
 
 ### Functions as Infix Operations
 
-You can "bless" an existing function to behave as an infix operator like so:
+You can "bless" an existing function to behave as an infix operator
+(and a negated form) like so:
 
 <Playground>
-operator foo
-x foo y
+operator contains
+x contains y
+x not contains y
 </Playground>
 
 You can combine this with a [variable declaration](#variable-declaration):
@@ -284,10 +286,10 @@ You can also `import` functions from another module as operators
 (independent of whether they are declared as operators in the other module):
 
 <Playground>
-import { operator foo } from 'bar'
-x foo y
-export operator rfoo(x, y)
-  y foo x
+import { operator contains } from 'bar'
+x contains y
+export operator has(x, y)
+  y contains x
 </Playground>
 
 ## Conditions
