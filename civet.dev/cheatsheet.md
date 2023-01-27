@@ -267,13 +267,13 @@ value min ceiling max floor
 You can also define an operator with a function body:
 
 <Playground>
-operator calls(that, func)
-  func.call(that)
+operator calls<T,R>(t: T, f: (this: T) => R): R
+  f.call(t)
 this calls callback
 </Playground>
 
 Operators are just functions in the end, and behave as such when used
-unambiguously.
+unambiguously:
 
 <Playground>
 operator foo
@@ -287,6 +287,8 @@ You can also `import` functions from another module as operators
 <Playground>
 import { operator foo } from 'bar'
 x foo y
+export operator rfoo(x, y)
+  y foo x
 </Playground>
 
 ## Conditions
