@@ -116,6 +116,13 @@ Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core
 or [Elm record access](https://elm-lang.org/docs/records#access)
 :::
 
+### Custom Infix Operators
+
+<Playground>
+operator {min, max} := Math
+value min ceiling max floor
+</Playground>
+
 ### Export Convenience
 
 <Playground>
