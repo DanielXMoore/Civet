@@ -247,6 +247,49 @@ circle := (degrees: number): {x: number, y: number} =>
   y: Math.sin theta
 </Playground>
 
+### Functions as Infix Operations
+
+You can "bless" an existing function to behave as an infix operator like so:
+
+<Playground>
+operator foo
+x foo y
+</Playground>
+
+You can combine this with a [variable declaration](#variable-declaration):
+
+<Playground>
+operator {min, max} := Math
+value min ceiling max floor
+</Playground>
+
+You can also define an operator with a function body:
+
+<Playground>
+operator calls<T,R>(t: T, f: (this: T) => R): R
+  f.call(t)
+this calls callback
+</Playground>
+
+Operators are just functions in the end, and behave as such when used
+unambiguously:
+
+<Playground>
+operator foo
+x foo foo(y, z)
+x (foo) y
+</Playground>
+
+You can also `import` functions from another module as operators
+(independent of whether they are declared as operators in the other module):
+
+<Playground>
+import { operator foo } from 'bar'
+x foo y
+export operator rfoo(x, y)
+  y foo x
+</Playground>
+
 ## Conditions
 
 ### If/Else
