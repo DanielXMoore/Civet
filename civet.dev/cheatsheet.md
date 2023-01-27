@@ -256,8 +256,7 @@ operator foo
 x foo y
 </Playground>
 
-You can combine this with a
-[variable declaration](http://localhost:5173/cheatsheet#variable-declaration):
+You can combine this with a [variable declaration](#variable-declaration):
 
 <Playground>
 operator {min, max} := Math
