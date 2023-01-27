@@ -45,7 +45,8 @@ onmessage = async (e) => {
 
       postMessage({ uid, inputHtml, outputHtml, error });
     } else {
-      throw err;
+      console.error(error)
+      postMessage({ uid, inputHtml, outputHtml: error.message, error });
     }
   }
 };
