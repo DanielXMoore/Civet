@@ -15,7 +15,7 @@ Civet on <span class="wide">the left</span><span class="narrow">top</span>,
 compiled TypeScript output on
 <span class="wide">the right</span><span class="narrow">bottom</span>:
 
-## Beyond TC39
+## Highlights: Beyond TC39
 
 ### Pipelines
 
@@ -101,6 +101,13 @@ function justDoIt(a, ...args, cb) {
 import {X: LocalX, Y: LocalY} from "./util"
 </Playground>
 
+### Export Convenience
+
+<Playground>
+export a, b, c from "./cool.js"
+export x = 3
+</Playground>
+
 ### Single-Argument Function Shorthand
 
 <Playground>
@@ -121,13 +128,6 @@ or [Elm record access](https://elm-lang.org/docs/records#access)
 <Playground>
 operator {min, max} := Math
 value min ceiling max floor
-</Playground>
-
-### Export Convenience
-
-<Playground>
-export a, b, c from "./cool.js"
-export x = 3
 </Playground>
 
 ### Everything is an Expression
