@@ -20,4 +20,4 @@ await plugin
 
       return
         contents: contents
-        loader: 'js'
+        loader: 'tsx'
