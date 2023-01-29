@@ -370,28 +370,23 @@ documents.onDidClose(({ document }) => {
 
 documents.onDidOpen(async ({ document }) => {
   console.log("open", document.uri)
-  const sourcePath = documentToSourcePath(document)
-  assert(sourcePath)
-
-  const service = await ensureServiceForSourcePath(sourcePath)
-  if (!service) return
-
-  service.host.addOrUpdateDocument(document)
 })
+
+// Buffer up changes to documents so we don't stack transpilations and become unresponsive
+const changeQueue = new Set<TextDocument>()
+setInterval(() => {
+  if (changeQueue.size === 0) return
+  Array.from(changeQueue).forEach((document) => {
+    updateDiagnostics(document)
+  })
+  changeQueue.clear()
+}, 50)
 
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent(async ({ document }) => {
   console.log("onDidChangeContent", document.uri)
-  const sourcePath = documentToSourcePath(document)
-  assert(sourcePath)
-
-  const service = await ensureServiceForSourcePath(sourcePath)
-  if (!service) return
-
-  service.host.addOrUpdateDocument(document)
-
-  await updateDiagnostics(document)
+  changeQueue.add(document)
 });
 
 async function updateDiagnostics(srcDoc: TextDocument) {
@@ -406,6 +401,8 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
 
   const service = await ensureServiceForSourcePath(sourcePath)
   if (!service) return
+
+  service.host.addOrUpdateDocument(document)
 
   // Non-transpiled
   if (sourcePath.match(tsSuffix)) {
