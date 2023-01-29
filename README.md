@@ -381,3 +381,7 @@ codebases that would benefit from added types. Others have massive TypeScript ap
 new language features and shorthand syntax. Civet provides a way to get the benefits bit by bit without a complete
 rewrite. This same configurability lets us experiment with language features to gain experience and improve them before
 locking them in. It also allows us to adapt to a changing future.
+
+Sponsorship
+---
+If you are so inclined, you can sponsor Civet on [Open Collective](https://opencollective.com/civet).
