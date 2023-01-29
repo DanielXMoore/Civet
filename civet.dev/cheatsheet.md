@@ -299,8 +299,8 @@ an assignment form:
 
 <Playground>
 {min, max} := Math
-smallest = Infinity
-largest = -Infinity
+smallest .= Infinity
+largest .= -Infinity
 for item in items
   smallest min= item
   largest max= item

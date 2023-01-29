@@ -11,7 +11,7 @@ const { sponsors, backers } = useData().theme.value
     <h2>Sponsors</h2>
     <p>
       Thank you to all of our sponsors for your invaluable support and
-      contribution to the Civet lang!
+      contribution to the Civet language!
     </p>
     <ul class="sponsors">
       <li v-for="sponsor in sponsors" class="item">
@@ -34,7 +34,7 @@ const { sponsors, backers } = useData().theme.value
         target="_blank"
         rel="noopener noreferrer"
       >
-        Support the future development of the Civet!
+        Support the future development of Civet!
       </a>
     </p>
   </section>
