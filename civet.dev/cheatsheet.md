@@ -292,6 +292,20 @@ export operator has(x, y)
   y contains x
 </Playground>
 
+### Operator Assignment
+
+Even without blessing a function as an `operator`, you can use it in
+an assignment form:
+
+<Playground>
+{min, max} := Math
+smallest = Infinity
+largest = -Infinity
+for item in items
+  smallest min= item
+  largest max= item
+</Playground>
+
 ## Conditions
 
 ### If/Else
