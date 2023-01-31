@@ -227,6 +227,21 @@ Put them at the top of your file:
 
 Your can separate multiple options with spaces.
 
+Deno Compatibility
+---
+
+TypeScript only allows importing `.ts` files as `.js`. Deno follows ESM and requires importing files with the correct extension.
+
+Civet automatically rewrites imports to work around [this issue](https://github.com/microsoft/TypeScript/issues/42151) in TS.
+
+When Civet detects it is running in Deno rewriting imports is turned off. If for some reason Civet fails to detect running in Deno
+you can turn off rewriting imports manually with these configuration options:
+
+| Configuration         | What it enables |
+|-----------------------|------------------------------------------|
+| -rewrite-ts-imports   | disable rewriting .ts -> .js in imports  |
+| deno                  | currently just disables rewriting imports but could add more deno specific options in the future |
+
 Other Options
 ---
 
