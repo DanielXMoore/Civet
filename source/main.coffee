@@ -85,6 +85,7 @@ uncacheable = new Set [
   "PushIndent"
   "PushJSXOpeningElement"
   "PushJSXOpeningFragment"
+  "RHS"
   "Samedent"
   "ShortCircuitExpression"
   "SingleLineAssignmentExpression"
