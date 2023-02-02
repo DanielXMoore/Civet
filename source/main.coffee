@@ -82,6 +82,8 @@ uncacheable = new Set [
   "NonSuppressedTrailingMemberExpressions"
   "ObjectLiteral"
   "PopIndent"
+  "PostfixedExpression"
+  "PostfixedStatement"
   "PrimaryExpression"
   "PushIndent"
   "PushJSXOpeningElement"
