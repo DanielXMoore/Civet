@@ -79,7 +79,8 @@ const ensureServiceForSourcePath = async (sourcePath: string) => {
 }
 
 // TODO Propagate this to an extension setting
-const diagnosticsPropagationDelay = 100;
+const diagnosticsDelay = 16;  // ms delay for primary updated file
+const diagnosticsPropagationDelay = 100;  // ms delay for other files
 
 connection.onInitialize(async (params: InitializeParams) => {
   const capabilities = params.capabilities;
@@ -373,26 +374,45 @@ documents.onDidOpen(async ({ document }) => {
 })
 
 // Buffer up changes to documents so we don't stack transpilations and become unresponsive
-const changeQueue = new Set<TextDocument>()
-setInterval(() => {
-  if (changeQueue.size === 0) return
-  Array.from(changeQueue).forEach((document) => {
-    updateDiagnostics(document)
-  })
-  changeQueue.clear()
-}, 50)
+let changeQueue = new Set<TextDocument>()
+let executeTimeout: Promise<void> | undefined
+async function executeQueue() {
+  // Cancel updating any other documents while running queue of primary changes
+  if (runningDiagnosticsUpdate) {
+    runningDiagnosticsUpdate.isCanceled = true
+  }
+  // Reset queue to allow accumulating jobs while this queue runs
+  const changed = changeQueue
+  changeQueue = new Set
+  console.log("executeQueue", changed.size)
+  // Run all jobs in queue (preventing livelock).
+  for (const document of changed) {
+    await updateDiagnosticsForDoc(document)
+  }
+  // Allow executeQueue() again, and run again if there are new jobs now.
+  // Otherwise, schedule update of all other documents.
+  executeTimeout = undefined
+  if (changeQueue.size) {
+    scheduleExecuteQueue()
+  } else {
+    scheduleUpdateDiagnostics(changed)
+  }
+}
+async function scheduleExecuteQueue() {
+  // Schedule executeQueue() if there isn't one already running or scheduled
+  if (executeTimeout) return
+  if (!changeQueue.size) return
+  await (executeTimeout = setTimeout(diagnosticsDelay))
+  await executeQueue()
+}
 
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent(async ({ document }) => {
   console.log("onDidChangeContent", document.uri)
   changeQueue.add(document)
+  scheduleExecuteQueue()
 });
-
-async function updateDiagnostics(srcDoc: TextDocument) {
-  await updateDiagnosticsForDoc(srcDoc)
-  scheduleUpdateDiagnostics(srcDoc.uri)
-}
 
 async function updateDiagnosticsForDoc(document: TextDocument) {
   console.log("Updating diagnostics for doc:", document.uri)
@@ -491,12 +511,12 @@ let runningDiagnosticsUpdate: { isCanceled: boolean } | undefined
 // other than the ones in skip list
 const updatePendingDiagnostics = async (
   status: { isCanceled: boolean },
-  skippedUris: Set<string>
+  skipDocs: Set<TextDocument>
 ) => {
   await setTimeout(diagnosticsPropagationDelay)
   if (status?.isCanceled) return
   for (let doc of documents.all()) {
-    if (skippedUris.has(doc.uri)) {
+    if (skipDocs.has(doc)) {
       // We can skip this document because it was updated
       // right after the content update
       continue
@@ -507,18 +527,17 @@ const updatePendingDiagnostics = async (
   }
 }
 
-function scheduleUpdateDiagnostics(srcDocUri?: string) {
+// Schedule an update of diagnostics for all *other* documents
+// that weren't directly changed, but might depend on changed documents.
+// Skip documents passed in as a set (the already updated changed documents).
+function scheduleUpdateDiagnostics(skipDocs: Set<TextDocument>) {
   if (runningDiagnosticsUpdate) {
     runningDiagnosticsUpdate.isCanceled = true
   }
   runningDiagnosticsUpdate = {
     isCanceled: false
   }
-  const skippedUris = new Set<string>()
-  if (srcDocUri) {
-    skippedUris.add(srcDocUri)
-  }
-  updatePendingDiagnostics(runningDiagnosticsUpdate, skippedUris)
+  updatePendingDiagnostics(runningDiagnosticsUpdate, skipDocs)
 }
 
 // NOTE: this is a bit of a hack, Hera should provide enhanced error objects with line and column info
