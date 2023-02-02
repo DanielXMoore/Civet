@@ -79,7 +79,8 @@ const ensureServiceForSourcePath = async (sourcePath: string) => {
 }
 
 // TODO Propagate this to an extension setting
-const diagnosticsPropagationDelay = 100;
+const diagnosticsDelay = 16;  // ms delay for primary updated file
+const diagnosticsPropagationDelay = 100;  // ms delay for other files
 
 connection.onInitialize(async (params: InitializeParams) => {
   const capabilities = params.capabilities;
@@ -401,7 +402,7 @@ async function scheduleExecuteQueue() {
   // Schedule executeQueue() if there isn't one already running or scheduled
   if (executeTimeout) return
   if (!changeQueue.size) return
-  await (executeTimeout = setTimeout(50))
+  await (executeTimeout = setTimeout(diagnosticsDelay))
   await executeQueue()
 }
 
