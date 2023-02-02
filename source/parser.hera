@@ -304,7 +304,7 @@ FatArrowBody
   ExplicitBlock
   # NOTE: Added indentation based implied braces
   ImplicitNestedBlock
-  AssignmentExpression
+  PostfixedExpression
   EmptyBlock
 
 # https://262.ecma-international.org/#prod-ConditionalExpression
@@ -390,11 +390,12 @@ PrimaryExpression
 # https://262.ecma-international.org/#prod-ParenthesizedExpression
 ParenthesizedExpression
   # NOTE: Currently ignoring early error checking in https://262.ecma-international.org/#prod-CoverParenthesizedExpressionAndArrowParameterList
-  OpenParen ExtendedExpression:exp ( TrailingComment* PostfixStatement )?:post __ CloseParen ->
-    if (post) {
-      return module.attachPostfixStatementAsExpression(exp, post)
+  OpenParen PostfixedExpression:exp __ CloseParen ->
+    // Avoid extra parenthetical wrapping in `(for x in y ...)`
+    switch (exp.type) {
+      case "IterationExpression":
+        return $2
     }
-
     return {
       type: "ParenthesizedExpression",
       children: $0,
@@ -649,7 +650,7 @@ MemberExpressionRest
 
 # Handles indexing and slicing
 MemberBracketContent
-  OpenBracket:open ( SliceParameters / ExtendedExpression ):exp __:ws CloseBracket:close ->
+  OpenBracket:open ( SliceParameters / PostfixedExpression ):exp __:ws CloseBracket:close ->
     // Some kind of slice
     if (exp.type === "SliceParameters") {
       const {start, end, children} = exp
@@ -767,7 +768,7 @@ PropertyAccess
     return p
 
 SuperProperty
-  "super[" ExtendedExpression __ CloseBracket
+  "super[" PostfixedExpression __ CloseBracket
   "super" !( QuestionMark / NonNullAssertion ) PropertyAccess
 
 MetaProperty
@@ -1474,6 +1475,10 @@ BracedOrEmptyBlock
   BracedBlock
   EmptyBlock
 
+NoPostfixBracedOrEmptyBlock
+  NoPostfixBracedBlock
+  EmptyBlock
+
 EmptyBlock
   # Implied empty block
   InsertOpenBrace InsertCloseBrace ->
@@ -1498,7 +1503,33 @@ EmptyBareBlock
     }
 
 # A nonempty block that must include braces
+# This version allows same-line postfixes like `while cond`.
 BracedBlock
+  NonSingleBracedBlock
+  # Nonempty one liner
+  InsertOpenBrace:o !EOS PostfixedSingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ->
+    if (!s.children.length) return $skip
+    return {
+      type: "BlockStatement",
+      expressions: s.expressions,
+      // Remove !EOS assertion
+      children: [o, s.children, ws, c],
+    }
+
+# This version forbids same-line postfixes like `while cond`, e.g., in do/try.
+NoPostfixBracedBlock
+  NonSingleBracedBlock
+  # Nonempty one liner
+  InsertOpenBrace:o !EOS SingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ->
+    if (!s.children.length) return $skip
+    return {
+      type: "BlockStatement",
+      expressions: s.expressions,
+      // Remove !EOS assertion
+      children: [o, s.children, ws, c],
+    }
+
+NonSingleBracedBlock
   TrailingComment* OpenBrace BracedContent:block __ CloseBrace ->
     return {
       type: "BlockStatement",
@@ -1520,21 +1551,23 @@ BracedBlock
       children: [$1, s, $3],
     }
 
-  # Nonempty one liner
-  InsertOpenBrace:o !EOS SingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ->
-    if (!s.children.length) return $skip
-    return {
-      type: "BlockStatement",
-      expressions: s.expressions,
-      // Remove !EOS assertion
-      children: [o, s.children, ws, c],
-    }
-
 # NOTE: SingleLineStatements includes the empty case
 SingleLineStatements
   # NOTE: Statement can start with __ via AssignmentExpression.
   # Force staying on the same line via !/\n/ assertion.
   ( ( _? !EOS ) Statement SemicolonDelimiter )*:stmts ( ( _? !EOS ) Statement SemicolonDelimiter? )?:last ->
+    const children = [...stmts]
+    if (last) children.push(last)
+
+    return {
+      type: "BlockStatement",
+      expressions: children,
+      children,
+      bare: true,
+    }
+
+PostfixedSingleLineStatements
+  ( ( _? !EOS ) PostfixedStatement SemicolonDelimiter )*:stmts ( ( _? !EOS ) PostfixedStatement SemicolonDelimiter? )?:last ->
     const children = [...stmts]
     if (last) children.push(last)
 
@@ -2054,7 +2087,7 @@ PropertyDefinition
 
 NamedProperty
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
-  # NOTE: Using ExtendedExpression to allow If/Switch expressions
+  # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
   PropertyName:name __ Colon ExtendedExpression:exp ->
     return {
       type: "Property",
@@ -2085,8 +2118,8 @@ PropertyName
 
 ComputedPropertyName
   # https://262.ecma-international.org/#prod-ComputedPropertyName
-  # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  OpenBracket ExtendedExpression:expression __ CloseBracket ->
+  # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
+  OpenBracket PostfixedExpression:expression __ CloseBracket ->
     return {
       type: "ComputedPropertyName",
       children: $0,
@@ -2438,9 +2471,17 @@ ModuleItem
 StatementListItem
   Declaration
   # NOTE: Added postfix conditionals/loops
+  PostfixedStatement
+
+PostfixedStatement
   Statement:statement ( TrailingComment* PostfixStatement )?:post ->
     if (post) return module.addPostfixStatement(statement, ...post)
     return statement
+
+PostfixedExpression
+  ExtendedExpression:expression ( TrailingComment* PostfixStatement )?:post ->
+    if (post) return module.attachPostfixStatementAsExpression(expression, post)
+    return expression
 
 PostfixStatement
   ForClause
@@ -2591,12 +2632,7 @@ NestedBlockExpressions
     return exps
 
 NestedBlockExpression
-  Nested:ws ExtendedExpression:exp ( TrailingComment* PostfixStatement )?:post ExpressionDelimiter:d ->
-    if (post) {
-      return [ws, module.attachPostfixStatementAsExpression(exp, post), d]
-    }
-
-    return [ws, exp, d]
+  Nested:ws PostfixedExpression:exp ExpressionDelimiter:d
 
 # https://262.ecma-international.org/#prod-IterationStatement
 IterationStatement
@@ -2632,7 +2668,7 @@ LoopClause
 # https://262.ecma-international.org/#prod-DoWhileStatement
 DoWhileStatement
   # NOTE: Condition provides optional parens
-  Do BracedBlock:block __ WhileClause -> {
+  Do NoPostfixBracedBlock:block __ WhileClause -> {
     type: "IterationStatement",
     children: $0,
     block: block
@@ -3140,7 +3176,7 @@ ImpliedColon
 
 # https://262.ecma-international.org/#prod-TryStatement
 TryStatement
-  Try:t BracedOrEmptyBlock:b CatchClause?:c FinallyClause?:f ->
+  Try:t NoPostfixBracedOrEmptyBlock:b CatchClause?:c FinallyClause?:f ->
     if (!c && !f) {
       return {
         type: "TryStatement",
@@ -3748,7 +3784,7 @@ TripleSingleStringCharacters
     return { $loc, token: $0 }
 
 CoffeeStringSubstitution
-  CoffeeSubstitutionStart ExtendedExpression __ CloseBrace
+  CoffeeSubstitutionStart PostfixedExpression __ CloseBrace
 
 CoffeeInterpolatedDoubleQuotedString
   CoffeeInterpolationEnabled DoubleQuote:s ( CoffeeDoubleQuotedStringCharacters / CoffeeStringSubstitution )*:parts DoubleQuote:e ->
@@ -3911,7 +3947,7 @@ TemplateLiteral
 
 # NOTE: Simplified grammar
 TemplateSubstitution
-  SubstitutionStart ExtendedExpression __ CloseBrace
+  SubstitutionStart PostfixedExpression __ CloseBrace
 
 # https://262.ecma-international.org/#prod-TemplateCharacter
 TemplateCharacters
@@ -4713,7 +4749,7 @@ JSXShorthandString
   # NOTE: TemplateLiteral must be before StringLiteral,
   # so that CoffeeScript interpolated strings get checked first.
   StringLiteral
-  OpenBrace ExtendedExpression Whitespace? CloseBrace
+  OpenBrace PostfixedExpression Whitespace? CloseBrace
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeName
 JSXAttributeName
@@ -4729,8 +4765,8 @@ JSXAttributeInitializer
 JSXAttributeValue
   # https://facebook.github.io/jsx/#prod-JSXDoubleStringCharacters
   # https://facebook.github.io/jsx/#prod-JSXSingleStringCharacters
-  # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  OpenBrace ExtendedExpression Whitespace? CloseBrace
+  # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
+  OpenBrace PostfixedExpression Whitespace? CloseBrace
   JSXElement
   JSXFragment
   InsertInlineOpenBrace InlineJSXAttributeValue InsertCloseBrace ->
@@ -4784,7 +4820,7 @@ InlineJSXUpdateExpression
 # (we don't allow New because that has whitespace).
 InlineJSXCallExpression
   "super" ExplicitArguments
-  "import" OpenParen ExtendedExpression __ CloseParen
+  "import" OpenParen PostfixedExpression __ CloseParen
   InlineJSXMemberExpression InlineJSXCallExpressionRest* ->
     if ($2.length) return $0
     return $1
@@ -4931,8 +4967,8 @@ JSXText
 
 # https://facebook.github.io/jsx/#prod-JSXChildExpression
 JSXChildExpression
-  # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  Whitespace? ( DotDotDot Whitespace? )? ExtendedExpression
+  # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
+  Whitespace? ( DotDotDot Whitespace? )? PostfixedExpression
 
 IndentedJSXChildExpression
   PushIndent NestedJSXChildExpression? PopIndent ->
