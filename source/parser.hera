@@ -84,7 +84,7 @@ ApplicationStart
 ForbiddenImplicitCalls
   # Reserved words that prevent spaced implicit function application
   # ie: the 'of' in 'for x of ...'
-  /(as|for|of|satisfies|then|when|implements)(?!\p{ID_Continue}|[\u200C\u200D$])/
+  /(as|for|while|until|of|satisfies|then|when|implements)(?!\p{ID_Continue}|[\u200C\u200D$])/
   # NOTE: Don't allow non-heregex regexes that begin with a space as first argument without parens
   "/ "
   AtAt # experimentalDecorators
@@ -301,11 +301,10 @@ FatArrow
 # NOTE Different from
 # https://262.ecma-international.org/#prod-ConciseBody
 FatArrowBody
-  ExplicitBlock
-  # NOTE: Added indentation based implied braces
-  ImplicitNestedBlock
-  AssignmentExpression
-  EmptyBlock
+  # If same-line single expression, avoid wrapping in braces
+  !EOS PostfixedExpression:exp !SemicolonDelimiter -> exp
+  # Otherwise, wrap block body in braces and insert returns
+  BracedOrEmptyBlock
 
 # https://262.ecma-international.org/#prod-ConditionalExpression
 ConditionalExpression
@@ -390,11 +389,12 @@ PrimaryExpression
 # https://262.ecma-international.org/#prod-ParenthesizedExpression
 ParenthesizedExpression
   # NOTE: Currently ignoring early error checking in https://262.ecma-international.org/#prod-CoverParenthesizedExpressionAndArrowParameterList
-  OpenParen ExtendedExpression:exp ( TrailingComment* PostfixStatement )?:post __ CloseParen ->
-    if (post) {
-      return module.attachPostfixStatementAsExpression(exp, post)
+  OpenParen PostfixedExpression:exp __ CloseParen ->
+    // Avoid extra parenthetical wrapping in `(for x in y ...)`
+    switch (exp.type) {
+      case "IterationExpression":
+        return $2
     }
-
     return {
       type: "ParenthesizedExpression",
       children: $0,
@@ -649,7 +649,7 @@ MemberExpressionRest
 
 # Handles indexing and slicing
 MemberBracketContent
-  OpenBracket:open ( SliceParameters / ExtendedExpression ):exp __:ws CloseBracket:close ->
+  OpenBracket:open ( SliceParameters / PostfixedExpression ):exp __:ws CloseBracket:close ->
     // Some kind of slice
     if (exp.type === "SliceParameters") {
       const {start, end, children} = exp
@@ -767,7 +767,7 @@ PropertyAccess
     return p
 
 SuperProperty
-  "super[" ExtendedExpression __ CloseBracket
+  "super[" PostfixedExpression __ CloseBracket
   "super" !( QuestionMark / NonNullAssertion ) PropertyAccess
 
 MetaProperty
@@ -1266,7 +1266,10 @@ MatchingRestElement
 
 # https://262.ecma-international.org/#prod-FunctionDeclaration
 FunctionDeclaration
-  FunctionExpression
+  # Wrap nameless function declarations with parens, as needed in JS.
+  FunctionExpression ->
+    if ($1.id) return $1
+    return module.makeLeftHandSideExpression($1)
 
 FunctionSignature
   # NOTE: Merged in async and generator with optionals
@@ -1474,6 +1477,10 @@ BracedOrEmptyBlock
   BracedBlock
   EmptyBlock
 
+NoPostfixBracedOrEmptyBlock
+  NoPostfixBracedBlock
+  EmptyBlock
+
 EmptyBlock
   # Implied empty block
   InsertOpenBrace InsertCloseBrace ->
@@ -1498,7 +1505,33 @@ EmptyBareBlock
     }
 
 # A nonempty block that must include braces
+# This version allows same-line postfixes like `while cond`.
 BracedBlock
+  NonSingleBracedBlock
+  # Nonempty one liner
+  InsertOpenBrace:o !EOS PostfixedSingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ->
+    if (!s.children.length) return $skip
+    return {
+      type: "BlockStatement",
+      expressions: s.expressions,
+      // Remove !EOS assertion
+      children: [o, s.children, ws, c],
+    }
+
+# This version forbids same-line postfixes like `while cond`, e.g., in do/try.
+NoPostfixBracedBlock
+  NonSingleBracedBlock
+  # Nonempty one liner
+  InsertOpenBrace:o !EOS SingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ->
+    if (!s.children.length) return $skip
+    return {
+      type: "BlockStatement",
+      expressions: s.expressions,
+      // Remove !EOS assertion
+      children: [o, s.children, ws, c],
+    }
+
+NonSingleBracedBlock
   TrailingComment* OpenBrace BracedContent:block __ CloseBrace ->
     return {
       type: "BlockStatement",
@@ -1520,21 +1553,23 @@ BracedBlock
       children: [$1, s, $3],
     }
 
-  # Nonempty one liner
-  InsertOpenBrace:o !EOS SingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ->
-    if (!s.children.length) return $skip
-    return {
-      type: "BlockStatement",
-      expressions: s.expressions,
-      // Remove !EOS assertion
-      children: [o, s.children, ws, c],
-    }
-
 # NOTE: SingleLineStatements includes the empty case
 SingleLineStatements
   # NOTE: Statement can start with __ via AssignmentExpression.
   # Force staying on the same line via !/\n/ assertion.
   ( ( _? !EOS ) Statement SemicolonDelimiter )*:stmts ( ( _? !EOS ) Statement SemicolonDelimiter? )?:last ->
+    const children = [...stmts]
+    if (last) children.push(last)
+
+    return {
+      type: "BlockStatement",
+      expressions: children,
+      children,
+      bare: true,
+    }
+
+PostfixedSingleLineStatements
+  ( ( _? !EOS ) PostfixedStatement SemicolonDelimiter )*:stmts ( ( _? !EOS ) PostfixedStatement SemicolonDelimiter? )?:last ->
     const children = [...stmts]
     if (last) children.push(last)
 
@@ -2054,7 +2089,7 @@ PropertyDefinition
 
 NamedProperty
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
-  # NOTE: Using ExtendedExpression to allow If/Switch expressions
+  # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
   PropertyName:name __ Colon ExtendedExpression:exp ->
     return {
       type: "Property",
@@ -2085,8 +2120,8 @@ PropertyName
 
 ComputedPropertyName
   # https://262.ecma-international.org/#prod-ComputedPropertyName
-  # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  OpenBracket ExtendedExpression:expression __ CloseBracket ->
+  # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
+  OpenBracket PostfixedExpression:expression __ CloseBracket ->
     return {
       type: "ComputedPropertyName",
       children: $0,
@@ -2438,9 +2473,17 @@ ModuleItem
 StatementListItem
   Declaration
   # NOTE: Added postfix conditionals/loops
+  PostfixedStatement
+
+PostfixedStatement
   Statement:statement ( TrailingComment* PostfixStatement )?:post ->
     if (post) return module.addPostfixStatement(statement, ...post)
     return statement
+
+PostfixedExpression
+  ExtendedExpression:expression ( TrailingComment* PostfixStatement )?:post ->
+    if (post) return module.attachPostfixStatementAsExpression(expression, post)
+    return expression
 
 PostfixStatement
   ForClause
@@ -2460,14 +2503,13 @@ Statement
 
   EmptyStatement
 
-  # Wrap object literal output with parens to disambiguate from block statements in transpiled JS
+  # Wrap object literal with parens to disambiguate from block statements.
+  # Also wrap nameless functions from `->` expressions with parens
+  # as needed in JS.
   ExpressionStatement ->
-    if ($1.type === "ObjectExpression") {
-      return {
-        type: "ParenthesizedExpression",
-        children: ["(", $1, ")" ],
-        expression: $1,
-      }
+    if ($1.type === "ObjectExpression" ||
+        ($1.type === "FunctionExpression" && !$1.id)) {
+      return module.makeLeftHandSideExpression($1)
     }
     return $1
 
@@ -2496,6 +2538,8 @@ IfStatement
     if (e) children./**/push(e)
     return {
       type: "IfStatement",
+      then: block,
+      else: e,
       children,
     }
 
@@ -2509,7 +2553,7 @@ IfClause
 UnlessClause
   Unless:kind Condition:condition ->
     // Rewrite unless to if
-    kind.token = "if"
+    kind = { ...kind, token: "if" }
 
     return {
       type: "IfStatement",
@@ -2591,12 +2635,7 @@ NestedBlockExpressions
     return exps
 
 NestedBlockExpression
-  Nested:ws ExtendedExpression:exp ( TrailingComment* PostfixStatement )?:post ExpressionDelimiter:d ->
-    if (post) {
-      return [ws, module.attachPostfixStatementAsExpression(exp, post), d]
-    }
-
-    return [ws, exp, d]
+  Nested:ws PostfixedExpression:exp ExpressionDelimiter:d
 
 # https://262.ecma-international.org/#prod-IterationStatement
 IterationStatement
@@ -2632,7 +2671,7 @@ LoopClause
 # https://262.ecma-international.org/#prod-DoWhileStatement
 DoWhileStatement
   # NOTE: Condition provides optional parens
-  Do BracedBlock:block __ WhileClause -> {
+  Do NoPostfixBracedBlock:block __ WhileClause -> {
     type: "IterationStatement",
     children: $0,
     block: block
@@ -2697,9 +2736,11 @@ ForStatementControl
   CoffeeForLoopsEnabled CoffeeForStatementParameters WhenCondition? ->
     if ($3) {
       const indent = module.currentIndent.token + "  "
+      const block = "continue\n"
       $2.blockPrefix.push([indent, {
         type: "IfStatement",
-        children: ["if (!(", module.insertTrimmingSpace($3, ""), ")) continue\n"],
+        then: block,
+        children: ["if (!(", module.insertTrimmingSpace($3, ""), ")) ", block],
       }])
     }
 
@@ -3140,7 +3181,7 @@ ImpliedColon
 
 # https://262.ecma-international.org/#prod-TryStatement
 TryStatement
-  Try:t BracedOrEmptyBlock:b CatchClause?:c FinallyClause?:f ->
+  Try:t NoPostfixBracedOrEmptyBlock:b CatchClause?:c FinallyClause?:f ->
     if (!c && !f) {
       return {
         type: "TryStatement",
@@ -3748,7 +3789,7 @@ TripleSingleStringCharacters
     return { $loc, token: $0 }
 
 CoffeeStringSubstitution
-  CoffeeSubstitutionStart ExtendedExpression __ CloseBrace
+  CoffeeSubstitutionStart PostfixedExpression __ CloseBrace
 
 CoffeeInterpolatedDoubleQuotedString
   CoffeeInterpolationEnabled DoubleQuote:s ( CoffeeDoubleQuotedStringCharacters / CoffeeStringSubstitution )*:parts DoubleQuote:e ->
@@ -3911,7 +3952,7 @@ TemplateLiteral
 
 # NOTE: Simplified grammar
 TemplateSubstitution
-  SubstitutionStart ExtendedExpression __ CloseBrace
+  SubstitutionStart PostfixedExpression __ CloseBrace
 
 # https://262.ecma-international.org/#prod-TemplateCharacter
 TemplateCharacters
@@ -4024,7 +4065,7 @@ StatementDelimiter
   # TODO: Would be better to do this in a `processBlocks` postprocessing step,
   # to avoid adding semicolons when they're not needed (e.g. `return` inserted
   # before value, or parens not actually added around ObjectLiteral).
-  &( Samedent ( "(" / "[" / "`" / "+" / "-" / "*" / "/" / ObjectLiteral ) ) InsertSemicolon
+  &( Samedent ( "(" / "[" / "`" / "+" / "-" / "*" / "/" / ObjectLiteral / Arrow / ( Function ( _? Star )? _? "(" ) ) ) InsertSemicolon
   &EOS
 
 SemicolonDelimiter
@@ -4713,7 +4754,7 @@ JSXShorthandString
   # NOTE: TemplateLiteral must be before StringLiteral,
   # so that CoffeeScript interpolated strings get checked first.
   StringLiteral
-  OpenBrace ExtendedExpression Whitespace? CloseBrace
+  OpenBrace PostfixedExpression Whitespace? CloseBrace
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeName
 JSXAttributeName
@@ -4729,8 +4770,8 @@ JSXAttributeInitializer
 JSXAttributeValue
   # https://facebook.github.io/jsx/#prod-JSXDoubleStringCharacters
   # https://facebook.github.io/jsx/#prod-JSXSingleStringCharacters
-  # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  OpenBrace ExtendedExpression Whitespace? CloseBrace
+  # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
+  OpenBrace PostfixedExpression Whitespace? CloseBrace
   JSXElement
   JSXFragment
   InsertInlineOpenBrace InlineJSXAttributeValue InsertCloseBrace ->
@@ -4784,7 +4825,7 @@ InlineJSXUpdateExpression
 # (we don't allow New because that has whitespace).
 InlineJSXCallExpression
   "super" ExplicitArguments
-  "import" OpenParen ExtendedExpression __ CloseParen
+  "import" OpenParen PostfixedExpression __ CloseParen
   InlineJSXMemberExpression InlineJSXCallExpressionRest* ->
     if ($2.length) return $0
     return $1
@@ -4931,8 +4972,8 @@ JSXText
 
 # https://facebook.github.io/jsx/#prod-JSXChildExpression
 JSXChildExpression
-  # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  Whitespace? ( DotDotDot Whitespace? )? ExtendedExpression
+  # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
+  Whitespace? ( DotDotDot Whitespace? )? PostfixedExpression
 
 IndentedJSXChildExpression
   PushIndent NestedJSXChildExpression? PopIndent ->
@@ -5803,10 +5844,11 @@ Init
       // This removes trailing whitespace for easier testing
       if (!module.isWhitespaceOrEmpty(ws)) children./**/push(ws)
 
-      return Object.assign({}, post, {
-        children,
-        block
-      })
+      post = {...post, children, block }
+      if (post.type === "IfStatement") {
+        post.then = block
+      }
+      return post
     }
 
     function expressionizeIteration(exp) {
@@ -5895,9 +5937,9 @@ Init
           return
         case "IfStatement":
           // if block
-          insertPush(exp.children[2], ref)
+          insertPush(exp.then, ref)
           // else block
-          if (exp.children[3]) insertPush(exp.children[3][2], ref)
+          if (exp.else) insertPush(exp.else[2], ref)
           // Add else block pushing undefined if no else block
           else exp.children.push([" else {\n", indent, ref, ".push(undefined)\n", indent, "}"])
           return
@@ -5971,7 +6013,8 @@ Init
       }
       if (!Array.isArray(node)) return
 
-      const [, exp] = node
+      const [, exp, semi] = node
+      if (semi?.type === "SemicolonDelimiter") return
       let indent = node[0]
       // Hacky way to get the indent of the last expression
       if (Array.isArray(indent)) indent = indent[indent.length - 1]
@@ -5995,9 +6038,9 @@ Init
           return
         case "IfStatement":
           // if block
-          insertReturn(exp.children[2])
+          insertReturn(exp.then)
           // else block
-          if (exp.children[3]) insertReturn(exp.children[3][2])
+          if (exp.else) insertReturn(exp.else[2])
           // Add explicit return after if block if no else block
           else exp.children.push(["\n", indent, wrapWithReturn()])
           return
@@ -7091,6 +7134,8 @@ Init
           prev.push({
             type: "IfStatement",
             children: ["if", condition, block, ...e, next],
+            then: block,
+            else: e,
           })
           prev = next
         })
