@@ -585,6 +585,15 @@ a !<? b
 a <? b !<? c
 </Playground>
 
+### `typeof` shorthand
+
+<Playground>
+a <? "string"
+a !<? "string"
+a instanceof "number"
+a not instanceof "number"
+</Playground>
+
 ### Rest
 
 Rest properties/parameters/elements are no longer limited to the final position.
