@@ -222,7 +222,7 @@ AssignmentExpression
 NonPipelineAssignmentExpression
   # NOTE: Try to match a single line assignment expression before matching newline then assignment expression
   SingleLineAssignmentExpression
-  __ AssignmentExpressionTail
+  # __ AssignmentExpressionTail
 
 SingleLineAssignmentExpression
   TrailingComment*:ws AssignmentExpressionTail:tail ->
@@ -334,29 +334,10 @@ ShortCircuitExpression
 PipelineExpression
   # It is important for pipeline to evaluated left-to-right
   #
-  ( __ PipelineHeadItem __  Pipe ):head ( __ PipelineTailItem __  Pipe )*:body __:preTailWS PipelineTailItem:tail ->
-    let children = head.slice(0, -1).map(module.skipIfOnlyWS)
-
-    for (const [leadingComment, expr, trailingComment, pipe] of body) {
-      children = module.constructPipeStep(
-        {
-          leadingComment: module.skipIfOnlyWS(leadingComment),
-          trailingComment: module.skipIfOnlyWS(trailingComment),
-          expr
-        },
-        { expr: children },
-        pipe.token === "||>"
-      )
-    }
+  ( __ PipelineHeadItem __  ( Pipe / PipeAssignment ) ):head ( __ PipelineTailItem __  Pipe )*:body __:preTailWS PipelineTailItem:tail ->
     return {
-      children: module.constructPipeStep(
-        {
-          leadingComment: module.skipIfOnlyWS(preTailWS),
-          expr: tail
-        },
-        { expr: children },
-        head[3].token === "||>"
-      )
+      type: "PipelineExpression",
+      children: [head, body, preTailWS, tail]
     }
 
 PipelineHeadItem
@@ -4317,6 +4298,10 @@ Pipe
   "|>" ->
     return { $loc, token: $1 }
 
+PipeAssignment
+  "|>=" ->
+    return { $loc, token: $1 }
+
 QuestionMark
   "?" ->
     return { $loc, token: $1 }
@@ -7165,7 +7150,36 @@ Init
       })
     }
 
+    function processPipelineExpressions(statements) {
+      gatherRecursiveAll(statements, n => n.type === "PipelineExpression")
+      .forEach((s) => {
+        const [head, body, preTailWS, tail] = s.children
+
+        let children = head.slice(0, -1).map(module.skipIfOnlyWS)
+
+        for (const [leadingComment, expr, trailingComment, pipe] of body) {
+          children = module.constructPipeStep(
+            {
+              leadingComment: module.skipIfOnlyWS(leadingComment),
+              trailingComment: module.skipIfOnlyWS(trailingComment),
+              expr
+            },
+            { expr: children },
+          )
+        }
+
+        s.children = module.constructPipeStep(
+          {
+            leadingComment: module.skipIfOnlyWS(preTailWS),
+            expr: tail
+          },
+          { expr: children },
+        )
+      })
+    }
+
     module.processProgram = function(statements) {
+      processPipelineExpressions(statements)
       processAssignments(statements)
       processFunctions(statements)
       processSwitchExpressions(statements)
@@ -7468,31 +7482,37 @@ Init
     module.gatherBindingCode = gatherBindingCode
 
     module.constructInvocation = function(
-      caller,
-      callee,
-      returning=false,
+      fn,
+      arg,
     ) {
-      const callerArr = [caller.leadingComment, caller.expr, caller.trailingComment]
-      const calleeArr = [callee.leadingComment, callee.expr, callee.trailingComment]
+      const fnArr = [fn.leadingComment, fn.expr, fn.trailingComment]
+      const argArr = [arg.leadingComment, arg.expr, arg.trailingComment]
 
-      const val = returning ? [",", callee.expr] : []
+      const lhs = module.makeLeftHandSideExpression(fn.expr)
+      lhs.children.splice(2, 0, fn.trailingComment)
+      lhs.children.splice(1, 0, fn.leadingComment)
 
-      if (caller.expr.type === 'Identifier') {
-        return [callerArr, "(", calleeArr, ")", ...val]
-      } else {
-        return ["(", callerArr, ")", "(", calleeArr, ")", ...val]
+      return {
+        type: "CallExpression",
+        children: [ lhs, "(", ...argArr, ")" ],
       }
     }
 
     module.constructPipeStep = function(
-      caller,
-      callee,
-      returning,
+      fn,
+      arg,
     ) {
-      if (caller.expr.token === "yield" || caller.expr.token === "await" || caller.expr.token === "return") {
-        return [caller.leadingComment, caller.expr, caller.trailingComment, " ", callee.leadingComment, callee.expr, callee.trailingComment]
+      switch (fn.expr.token) {
+        case "yield":
+        case "await":
+        case "return":
+          return {
+            type: "ReturnStatement",
+            children: [fn.leadingComment, fn.expr, fn.trailingComment, " ", arg.leadingComment, arg.expr, arg.trailingComment]
+          }
       }
-      return module.constructInvocation(caller, callee, returning)
+
+      return module.constructInvocation(fn, arg)
     }
 
     return $0
