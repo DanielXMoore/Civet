@@ -567,27 +567,26 @@ LeftHandSideExpression
 CallExpression
   # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
   "super" ArgumentsWithTrailingMemberExpressions CallExpressionRest*:rest ->
-    return {
+    return module.processGlob({
       type: "CallExpression",
       children: [$1, ...$2, ...rest.flat()],
-    }
+    })
   # Dynamic import(), with optional parentheses when not used at top level.
   # (At top level, ImportDeclaration will match first.)
   # NOTE: Using ExtendedExpression to allow for If/Switch expressions
   "import" ArgumentsWithTrailingMemberExpressions CallExpressionRest*:rest ->
-    return {
+    return module.processGlob({
       type: "CallExpression",
       children: [$1, ...$2, ...rest.flat()],
-    }
+    })
 
   MemberExpression:member NonSuppressedTrailingMemberExpressions:trailing CallExpressionRest*:rest ->
     if (rest.length || trailing.length) {
       rest = rest.flat()
-      return {
-        type: rest.length && rest[rest.length-1].type === "Call"
-              ? "CallExpression" : "MemberExpression",
+      return module.processGlob({
+        type: "CallExpression",
         children: [member, ...trailing, ...rest]
-      }
+      })
     }
 
     return member
@@ -621,10 +620,10 @@ MemberExpression
   # NOTE: Eliminated left recursion
   ( PrimaryExpression / SuperProperty / MetaProperty ) MemberExpressionRest*:rest ->
     if (rest.length || Array.isArray($1)) {
-      return {
+      return module.processGlob({
         type: "MemberExpression",
         children: [$1, ...rest].flat(),
-      }
+      })
     }
     return $1
 
@@ -642,6 +641,7 @@ MemberExpressionRest
     return $2
   # NOTE: Combined Optional and Property access
   PropertyAccess
+  PropertyGlob
   # NOTE: Added TypeScript '!' non-null assertion
   NonNullAssertion
 
@@ -763,6 +763,15 @@ PropertyAccess
     }
     p.token = ".prototype"
     return p
+
+PropertyGlob
+  # NOTE: Added shorthand obj.{a,b:c} -> {a: obj.a, c: obj.b}
+  Dot ObjectBindingPattern:pattern ->
+    return {
+      type: "PropertyGlob",
+      pattern,
+      children: $0
+    }
 
 SuperProperty
   "super" MemberBracketContent
@@ -909,7 +918,8 @@ ObjectBindingPattern
   OpenBrace ObjectBindingPatternContent:c __ CloseBrace ->
     return {
       type: "ObjectBindingPattern",
-      children: [$1, ...c.children, ...$3, $4],
+      children: [$1, ...c.children, $3, $4],
+      content: c.children,
       names: c.names,
     }
 
@@ -997,23 +1007,29 @@ BindingProperty
   # NOTE: Must be checked first to pick up trailing "..." form
   BindingRestProperty
 
-  _? PropertyName __ Colon ( BindingIdentifier / BindingPattern ):b Initializer? ->
+  _? PropertyName:name __ Colon ( BindingIdentifier / BindingPattern ):b Initializer?:init ->
     return {
+      name,
+      value: b,
+      init,
       names: b.names,
       children: $0
     }
 
-  BindingIdentifier:b Initializer? ->
+  BindingIdentifier:b Initializer?:init ->
     if (b.type === "AtBinding") {
       return {
         type: "AtBindingProperty",
         ref: b.ref,
+        init,
         names: [],
         children: $0
       }
     }
 
     return {
+      name: b,
+      init,
       names: b.names,
       children: $0
     }
@@ -5755,6 +5771,63 @@ Init
       }
     })
 
+    module.processGlob = (node) => {
+      const {children} = node
+      for (let i = 0; i < children.length; i++) {
+        const glob = children[i]
+        if (glob?.type === "PropertyGlob") {
+          // TODO: add ref to ensure object base evaluated only once
+          const prefix = children.slice(0, i)
+          .concat(glob.children[0]) // dot
+          const parts = []
+          for (const part of glob.pattern.content) {
+            if (part.init) {
+              throw new Error("Glob pattern cannot have initializers")
+            }
+            if (part.type === "AtBindingProperty") {
+              throw new Error("Glob pattern cannot have @property")
+            }
+            // TODO: could maybe support ...rest via ref assignment
+            if (part.type === "BindingRestProperty") {
+              throw new Error("Glob pattern cannot have ...rest property")
+            }
+            const name = part.value ? module.insertTrimmingSpace(part.value, "") : part.name
+            const value = prefix.concat(module.insertTrimmingSpace(part.name, ""))
+            const wValue = part.value && module.getTrimmingSpace(part.value)
+            if (wValue) value.unshift(wValue)
+            parts.push({
+              type: "Property",
+              name,
+              value,
+              names: part.names,
+              children: [
+                module.isWhitespaceOrEmpty(part.children[0]) && part.children[0],
+                name,
+                module.isWhitespaceOrEmpty(part.children[2]) && part.children[2],
+                part.children[3]?.token === ":" ? part.children[3] : ":",
+                value,
+                part.children[part.children.length-1], // comma delimiter
+              ]
+            })
+          }
+          const object = {
+            type: "ObjectExpression",
+            children: [
+              glob.pattern.children[0], // {
+              ...parts,
+              glob.pattern.children.at(-2), // whitespace
+              glob.pattern.children.at(-1), // }
+            ],
+          }
+          if (i === children.length-1) return object
+          return module.processGlob({  // in case there are more globs
+            ...node,
+            children: [ object, ...children.slice(i+1) ]
+          })
+        }
+      }
+      return node
+    }
     module.processUnaryExpression = (pre, exp, post) => {
       // Handle "?" postfix
       if (post?.token === "?") {
@@ -6089,6 +6162,7 @@ Init
 
     module.isWhitespaceOrEmpty = function(node) {
       if (!node) return true
+      if (node.type === "Ref") return false
       if (node.token) return node.token.match(/^\s*$/)
       if (node.children) node = node.children
       if (!node.length) return true
@@ -6315,6 +6389,14 @@ Init
       })
 
       return target
+    }
+
+    // Returns leading space as a string, or undefined if none
+    module.getTrimmingSpace = function(target) {
+      if (!target) return
+      if (Array.isArray(target)) return module.getTrimmingSpace(target[0])
+      if (target.children) return module.getTrimmingSpace(target.children[0])
+      if (target.token) return target.token.match(/^ ?/)[0]
     }
 
     // Split out leading newlines from the first indented line

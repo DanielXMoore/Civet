@@ -51,6 +51,13 @@ named := {lookup[x+y]}
 templated := {`${prefix}${suffix}`: result}
 </Playground>
 
+Object globs:
+
+<Playground>
+obj.{a,b};
+obj.{a:x, b:y}
+</Playground>
+
 Flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects):
 
 <Playground>
