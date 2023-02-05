@@ -17,6 +17,20 @@ compiled TypeScript output on
 
 ## Highlights: Beyond TC39
 
+### Pattern Matching
+
+[TC39 Proposal: Pattern Matching](https://github.com/tc39/proposal-pattern-matching)
+
+<Playground>
+switch x
+  0
+    console.log("zero")
+  /^\s+$/
+    console.log("whitespace")
+  [{type: "text", content}, ...rest]
+    console.log("leading text", content)
+</Playground>
+
 ### Pipelines
 
 [TC39 Proposal: Pipe Operator](https://github.com/tc39/proposal-pipeline-operator)
@@ -33,21 +47,48 @@ Pipe expression with shorthand functions:
 a |> & + 1 |> bar
 </Playground>
 
+### Single-Argument Function Shorthand
+
+<Playground>
+x.map .name
+x.map &.profile?.name[0...3]
+x.map &.callback a, b
+x.map +&
+</Playground>
+
+### Custom Infix Operators
+
+<Playground>
+operator {min, max} := Math
+value min ceiling max floor
+</Playground>
+
+### Everything is an Expression
+
+<Playground>
+items = for item of items
+  if item.length
+    item.toUpperCase()
+  else
+    "<empty>"
+x == null ? throw "x is null" : x.fn()
+</Playground>
+
 ### Dedented Strings and Templates
 
 [TC39 Proposal: String Dedent](https://github.com/tc39/proposal-string-dedent)
 
 <Playground>
 text = """
-  This text is a string that doesn't include the leading
-  whitespace.
+  This text is a string that doesn't include
+  the leading whitespace.
 """
 </Playground>
 
 <Playground>
 text = ```
   Also works for
-  templates!
+  ${templates}!
 ```
 </Playground>
 
@@ -65,16 +106,6 @@ a instanceof b not instanceof c
 for (item of [1, 2, 3, 4, 5]) {
   console.log(item * item);
 }
-</Playground>
-
-### Modulo Operator
-
-<Playground>
-let a = -3
-let b = 5
-let rem = a % b
-let mod = a %% b
-console.log rem, mod
 </Playground>
 
 ### Spread in Any Position
@@ -106,39 +137,6 @@ import {X: LocalX, Y: LocalY} from "./util"
 <Playground>
 export a, b, c from "./cool.js"
 export x = 3
-</Playground>
-
-### Single-Argument Function Shorthand
-
-<Playground>
-x.map &.name
-x.map &.profile?.name[0...3]
-x.map &.callback a, b
-x.map +&
-</Playground>
-
-::: info
-Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc),
-[Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax),
-or [Elm record access](https://elm-lang.org/docs/records#access)
-:::
-
-### Custom Infix Operators
-
-<Playground>
-operator {min, max} := Math
-value min ceiling max floor
-</Playground>
-
-### Everything is an Expression
-
-<Playground>
-items = for item of items
-  if item.length
-    item.toUpperCase()
-  else
-    "<empty>"
-x == null ? throw "x is null" : x.fn()
 </Playground>
 
 ### [JSX](/cheatsheet#jsx)
