@@ -54,6 +54,7 @@ templated := {`${prefix}${suffix}`: result}
 Object globs:
 
 <Playground>
+obj{a,b};
 obj.{a,b};
 obj.{a:x, b:y}
 </Playground>
@@ -252,6 +253,28 @@ circle := (degrees: number): {x: number, y: number} =>
   radians := degrees * Math.PI / 180
   x: Math.cos theta
   y: Math.sin theta
+</Playground>
+
+### Single-Argument Function Shorthand
+
+<Playground>
+x.map &.name
+x.map &.profile?.name[0...3]
+x.map &.callback a, b
+x.map +&
+</Playground>
+
+::: info
+Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc),
+[Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax),
+or [Elm record access](https://elm-lang.org/docs/records#access).
+:::
+
+You can also omit `&` when starting with a `.` or `?.` property access:
+
+<Playground>
+x.map .name
+x.map ?.profile?.name[0...3]
 </Playground>
 
 ### Functions as Infix Operations
