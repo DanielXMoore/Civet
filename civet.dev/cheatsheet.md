@@ -398,6 +398,55 @@ getX := (civet: Civet, dir: Dir) =>
     when '^' then civet.x + 0.3
 </Playground>
 
+### Pattern Matching
+
+<Playground>
+switch s
+  ""
+    console.log "nothing"
+  /\s+/
+    console.log "whitespace"
+  "hi"
+    console.log "greeting"
+</Playground>
+
+<Playground>
+switch a
+  []
+    console.log "empty"
+  [item]
+    console.log "one", item
+  [first, ...middle, last]
+    console.log "multiple", first, "...", last
+  else
+    console.log "not array"
+</Playground>
+
+::: info
+Array patterns are exact; object patterns allow unmatched properties
+(similar to TypeScript types).
+:::
+
+<Playground>
+switch x
+  {type: "text", content}
+    console.log `"${content}"`
+  {type, ...rest}
+    console.log `unknown type ${type}`
+  else
+    console.log 'unknown'
+</Playground>
+
+<Playground>
+switch x
+  [{type: "text", content: /\s+/}, ...rest]
+    console.log "leading whitespace"
+  [{type: "text", content}, ...rest]
+    console.log "leading text:", content
+  [{type}, ...rest]
+    console.log "leading type:", type
+</Playground>
+
 ## Loops
 
 ### Loop Expressions

@@ -17,6 +17,20 @@ compiled TypeScript output on
 
 ## Highlights: Beyond TC39
 
+### Pattern Matching
+
+[TC39 Proposal: Pattern Matching](https://github.com/tc39/proposal-pattern-matching)
+
+<Playground>
+switch x
+  0
+    console.log("zero")
+  /^\s+$/
+    console.log("whitespace")
+  [{type: "text", content}, ...rest]
+    console.log("leading text", content)
+</Playground>
+
 ### Pipelines
 
 [TC39 Proposal: Pipe Operator](https://github.com/tc39/proposal-pipeline-operator)
@@ -39,15 +53,15 @@ a |> & + 1 |> bar
 
 <Playground>
 text = """
-  This text is a string that doesn't include the leading
-  whitespace.
+  This text is a string that doesn't include
+  the leading whitespace.
 """
 </Playground>
 
 <Playground>
 text = ```
   Also works for
-  templates!
+  ${templates}!
 ```
 </Playground>
 
