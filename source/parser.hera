@@ -769,10 +769,10 @@ PropertyAccess
 
 PropertyGlob
   # NOTE: Added shorthand obj.{a,b:c} -> {a: obj.a, c: obj.b}
-  OptionalDot ObjectBindingPattern:pattern ->
+  OptionalDot BracedObjectLiteral:object ->
     return {
       type: "PropertyGlob",
-      pattern,
+      object,
       children: $0
     }
 
@@ -1938,6 +1938,7 @@ BracedObjectLiteral
 
       return {
         type: "ObjectExpression",
+        content,
         children,
         names: children.flatMap((c) => {
           return c.names || []
@@ -2026,7 +2027,7 @@ PropertyDefinition
     const value = [{...at, token: "this."}, id]
     return {
       type: "Property",
-      children: [...ws, id, ": ", ...value],
+      children: [ws, id, ": ", ...value],
       name: id,
       names: id.names,
       value,
@@ -2034,7 +2035,7 @@ PropertyDefinition
   __:ws NamedProperty:prop ->
     return {
       ...prop,
-      children: [...ws, ...prop.children],
+      children: [ws, ...prop.children],
     }
   # NOTE: Added LiveScript flagging shorthand {+x, -y} -> {x: true, y: false}
   # NOTE: extended to allow {!y} -> {y: false}
@@ -2043,7 +2044,7 @@ PropertyDefinition
     const value = toggle === "+" ? "true" : "false"
     return {
       type: "Property",
-      children: [...ws, id, ": ", value],
+      children: [ws, id, ": ", value],
       name: id,
       names: id.names,
       value,
@@ -2054,12 +2055,12 @@ PropertyDefinition
     if (def.block.empty) return $skip
     return {
       ...def,
-      children: [...ws, ...def.children],
+      children: [ws, ...def.children],
     }
   __:ws DotDotDot:dots ExtendedExpression:exp ->
     return {
       type: "SpreadProperty",
-      children: [...ws, dots, exp],
+      children: [ws, dots, exp],
       names: exp.names,
       value: [dots, exp],
     }
@@ -2068,7 +2069,7 @@ PropertyDefinition
   __:ws CallExpression:value ->
     // `{identifier}` remains `{identifier}`, the one shorthand JS supports
     if (value.type === "Identifier") {
-      return {...value, children: [...ws, ...value.children]}
+      return {...value, children: [ws, ...value.children]}
     }
     // More complicated expressions gains `name:` prefix
     // Look for last PropertyAccess like `.foo` or Identifier,
@@ -5788,20 +5789,21 @@ Init
           const prefix = children.slice(0, i)
           .concat(glob.children[0]) // dot
           const parts = []
-          for (const part of glob.pattern.content) {
-            if (part.init) {
-              throw new Error("Glob pattern cannot have initializers")
+          for (const part of glob.object.content) {
+            // TODO: could maybe support ...spread via ref assignment
+            if (part.type === "SpreadProperty") {
+              throw new Error("Glob pattern cannot have ...spread property")
             }
-            if (part.type === "AtBindingProperty") {
-              throw new Error("Glob pattern cannot have @property")
+            if (part.type === "MethodDefinition") {
+              throw new Error("Glob pattern cannot have method definition")
             }
-            // TODO: could maybe support ...rest via ref assignment
-            if (part.type === "BindingRestProperty") {
-              throw new Error("Glob pattern cannot have ...rest property")
+            if (part.value && !["CallExpression", "MemberExpression", "Identifier"].includes(part.value.type)) {
+              throw new Error("Glob pattern must have call or member expression value")
             }
-            const name = part.value ? module.insertTrimmingSpace(part.value, "") : part.name
-            const value = prefix.concat(module.insertTrimmingSpace(part.name, ""))
-            const wValue = part.value && module.getTrimmingSpace(part.value)
+            const {name} = part
+            let value = part.value ?? part.name
+            const wValue = module.getTrimmingSpace(part.value)
+            value = prefix.concat(module.insertTrimmingSpace(value, ""))
             if (wValue) value.unshift(wValue)
             parts.push({
               type: "Property",
@@ -5821,10 +5823,9 @@ Init
           const object = {
             type: "ObjectExpression",
             children: [
-              glob.pattern.children[0], // {
+              glob.object.children[0], // {
               ...parts,
-              glob.pattern.children.at(-2), // whitespace
-              glob.pattern.children.at(-1), // }
+              glob.object.children.at(-1), // whitespace and }
             ],
           }
           if (i === children.length-1) return object
