@@ -56,7 +56,7 @@ Object globs:
 <Playground>
 obj{a,b};
 obj.{a,b};
-obj.{a:x, b:y}
+obj.{x:a, b.c()?.y}
 </Playground>
 
 Flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects):
