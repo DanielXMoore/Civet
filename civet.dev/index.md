@@ -117,12 +117,6 @@ x.map &.callback a, b
 x.map +&
 </Playground>
 
-::: info
-Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc),
-[Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax),
-or [Elm record access](https://elm-lang.org/docs/records#access)
-:::
-
 ### Custom Infix Operators
 
 <Playground>
