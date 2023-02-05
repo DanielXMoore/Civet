@@ -127,6 +127,25 @@ people := [
 ]
 </Playground>
 
+### Rest
+
+Rest properties/parameters/elements are no longer limited to the final position.
+You may use them in their first or middle positions as well.
+
+<Playground>
+[...head, last] = [1, 2, 3, 4, 5]
+</Playground>
+
+<Playground>
+{a, ...rest, b} = {a: 7, b: 8, x: 0, y: 1}
+</Playground>
+
+<Playground>
+function justDoIt(a, ...args, cb) {
+  cb.apply(a, args)
+}
+</Playground>
+
 ### Triple-Quoted Strings
 
 Leading indentation is removed.
@@ -147,6 +166,14 @@ console.log """
 """
 </Playground>
 
+<Playground>
+console.log ```
+  <div>
+    Civet ${version}
+  </div>
+```
+</Playground>
+
 ### Humanized Operators
 
 <Playground>
@@ -164,6 +191,55 @@ item is in array
 item is not in array
 substring is in string
 </Playground>
+
+## Operators
+
+<Playground>
+a and= b
+a or= b
+a ?= b
+obj.key ?= 'civet'
+</Playground>
+
+### Chained Comparisons
+
+<Playground>
+a < b <= c
+a is b is not c
+a instanceof b not instanceof c
+</Playground>
+
+### `instanceof` shorthand
+
+<Playground>
+a <? b
+a !<? b
+a <? b !<? c
+</Playground>
+
+### `typeof` shorthand
+
+<Playground>
+a <? "string"
+a !<? "string"
+a instanceof "number"
+a not instanceof "number"
+</Playground>
+
+### Modulo Operator
+
+<Playground>
+let a = -3
+let b = 5
+let rem = a % b
+let mod = a %% b
+console.log rem, mod
+</Playground>
+
+### Custom Infix Operators
+
+You can also define your own infix operators;
+see [Functions as Infix Operators](#functions-as-infix-operators) below.
 
 ## Functions
 
@@ -277,7 +353,7 @@ x.map .name
 x.map ?.profile?.name[0...3]
 </Playground>
 
-### Functions as Infix Operations
+### Functions as Infix Operators
 
 You can "bless" an existing function to behave as an infix operator
 (and a negated form) like so:
@@ -638,59 +714,6 @@ elt as HTMLInputElement
 </Playground>
 
 ## Misc
-
-### Operators
-
-<Playground>
-a and= b
-a or= b
-a ?= b
-obj.key ?= 'civet'
-</Playground>
-
-### Chained Comparisons
-
-<Playground>
-a < b <= c
-a is b is not c
-a instanceof b not instanceof c
-</Playground>
-
-### `instanceof` shorthand
-
-<Playground>
-a <? b
-a !<? b
-a <? b !<? c
-</Playground>
-
-### `typeof` shorthand
-
-<Playground>
-a <? "string"
-a !<? "string"
-a instanceof "number"
-a not instanceof "number"
-</Playground>
-
-### Rest
-
-Rest properties/parameters/elements are no longer limited to the final position.
-You may use them in their first or middle positions as well.
-
-<Playground>
-[...head, last] = [1, 2, 3, 4, 5]
-</Playground>
-
-<Playground>
-{a, ...rest, b} = {a: 7, b: 8, x: 0, y: 1}
-</Playground>
-
-<Playground>
-function justDoIt(a, ...args, cb) {
-  cb.apply(a, args)
-}
-</Playground>
 
 ### ESM Import
 
