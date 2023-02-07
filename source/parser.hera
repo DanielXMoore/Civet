@@ -222,7 +222,7 @@ AssignmentExpression
 NonPipelineAssignmentExpression
   # NOTE: Try to match a single line assignment expression before matching newline then assignment expression
   SingleLineAssignmentExpression
-  __ AssignmentExpressionTail
+  # __ AssignmentExpressionTail
 
 SingleLineAssignmentExpression
   TrailingComment*:ws AssignmentExpressionTail:tail ->
@@ -334,26 +334,10 @@ ShortCircuitExpression
 PipelineExpression
   # It is important for pipeline to evaluated left-to-right
   #
-  ( __ PipelineHeadItem __  Pipe ):head ( __ PipelineTailItem __  Pipe )*:body __:preTailWS PipelineTailItem:tail ->
-    let children = head.slice(0, -1).map(module.skipIfOnlyWS)
-    for (const [leadingComment, expr, trailingComment] of body) {
-      children = module.constructPipeStep(
-        {
-          leadingComment: module.skipIfOnlyWS(leadingComment),
-          trailingComment: module.skipIfOnlyWS(trailingComment),
-          expr
-        },
-        { expr: children }
-      )
-    }
+  PipelineHeadItem:head ( __ Pipe __ PipelineTailItem )+:body ->
     return {
-      children: module.constructPipeStep(
-        {
-          leadingComment: module.skipIfOnlyWS(preTailWS),
-          expr: tail
-        },
-        { expr: children }
-      )
+      type: "PipelineExpression",
+      children: [head, body]
     }
 
 PipelineHeadItem
@@ -4337,6 +4321,12 @@ Protected
     return { $loc, token: $1 }
 
 Pipe
+  "||>" ->
+    return { $loc, token: $1 }
+
+  "|>=" ->
+    return { $loc, token: $1 }
+
   "|>" ->
     return { $loc, token: $1 }
 
@@ -7258,7 +7248,66 @@ Init
       })
     }
 
+    // head: expr
+    // body: [ws, pipe, ws, expr][]
+
+    function processPipelineExpressions(statements) {
+      gatherRecursiveAll(statements, n => n.type === "PipelineExpression")
+      .forEach((s) => {
+        const [ , body ] = s.children
+        let   [ arg ]   = s.children
+
+        let i = 0, l = body.length
+        const children = []
+
+        for (i = 0; i < l; i++) {
+          const step = body[i]
+          const [leadingComment, pipe, trailingComment, expr] = step
+          const returns = pipe.token === "||>"
+
+          if (pipe.token === "|>=") {
+            if (i === 0) {
+              // TODO: assignment node
+              children.push(arg, " = ")
+            } else {
+              children.push({
+                type: "Error",
+                message: "Can't use |>= in the middle of a pipeline",
+              })
+            }
+          }
+
+          const [result, returning] = module.constructPipeStep(
+            {
+              leadingComment: module.skipIfOnlyWS(leadingComment),
+              trailingComment: module.skipIfOnlyWS(trailingComment),
+              expr
+            },
+            arg,
+            returns ? arg : null
+          )
+
+          if (result.type === "ReturnStatement") {
+            // TODO: Attach errors/warnings if there are more steps
+            arg = result
+            break
+          }
+
+          if (returning) {
+            arg = returning
+            children.push(result, ",")
+          } else {
+            arg = result
+          }
+        }
+
+        children.push(arg)
+        s.children = children
+      })
+    }
+
     module.processProgram = function(statements) {
+      processPipelineExpressions(statements)
       processAssignments(statements)
       processFunctions(statements)
       processSwitchExpressions(statements)
@@ -7561,26 +7610,75 @@ Init
     module.gatherBindingCode = gatherBindingCode
 
     module.constructInvocation = function(
-      caller,
-      callee
+      fn,
+      arg,
     ) {
-      const callerArr = [caller.leadingComment, caller.expr, caller.trailingComment]
-      const calleeArr = [callee.leadingComment, callee.expr, callee.trailingComment]
-      if (caller.expr.type === 'Identifier') {
-        return [callerArr, "(", calleeArr, ")"]
-      } else {
-        return ["(", callerArr, ")", "(", calleeArr, ")"]
+      const fnArr = [fn.leadingComment, fn.expr, fn.trailingComment]
+
+      const lhs = module.makeLeftHandSideExpression(fn.expr)
+
+      // Attach comments
+      let comment = module.skipIfOnlyWS(fn.trailingComment)
+      if (comment) lhs.children.splice(2, 0, comment)
+      comment = module.skipIfOnlyWS(fn.leadingComment)
+      if (comment) lhs.children.splice(1, 0, comment)
+
+      switch (arg.type) {
+        case "CommaExpression":
+          arg = {
+            type: "ParenthesizedExpression",
+            children: ["(", arg, ")"],
+          }
+          break
+      }
+
+      return {
+        type: "CallExpression",
+        children: [ lhs, "(", arg, ")" ],
       }
     }
 
     module.constructPipeStep = function(
-      caller,
-      callee
+      fn,
+      arg,
+      returning,
     ) {
-      if (caller.expr.token === "yield" || caller.expr.token === "await" || caller.expr.token === "return") {
-        return [caller.leadingComment, caller.expr, caller.trailingComment, " ", callee.leadingComment, callee.expr, callee.trailingComment]
+
+      const children = [[fn.leadingComment, fn.expr, fn.trailingComment].map(module.skipIfOnlyWS), " ", arg]
+
+      // Handle special non-function cases
+      switch (fn.expr.token) {
+        case "yield":
+        case "await":
+          if (returning) {
+            return [
+              children,
+              returning
+            ]
+          }
+
+          return [
+            children,
+            null
+          ]
+
+        case "return":
+          // Return ignores ||> returning argument
+          return [{
+            type: "ReturnStatement",
+            children,
+          }, null]
       }
-      return module.constructInvocation(caller, callee)
+
+      if (returning) {
+        return [
+          module.constructInvocation(fn, arg),
+          returning
+        ]
+
+      }
+
+      return [module.constructInvocation(fn, arg), null]
     }
 
     return $0
