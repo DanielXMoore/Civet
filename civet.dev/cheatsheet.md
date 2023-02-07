@@ -54,9 +54,10 @@ templated := {`${prefix}${suffix}`: result}
 Object globs:
 
 <Playground>
-obj{a,b};
-obj.{a,b};
-obj.{x:a, b.c()?.y}
+point = data{x,y}
+point = data.{x,y};
+point.{x,y} = data
+complex := obj.{x:a, b.c()?.y}
 </Playground>
 
 Flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects):
