@@ -175,6 +175,23 @@ console.log ```
 ```
 </Playground>
 
+## Operators
+
+### All JavaScript/TypeScript Operators
+
+<Playground>
+center := min + length / 2
+name := user?.name ?? defaultName
+typeof x === "string" && x += "!"
+result! as string | number
+</Playground>
+
+### Late Assignment
+
+<Playground>
+a + b = c
+</Playground>
+
 ### Humanized Operators
 
 <Playground>
@@ -187,19 +204,28 @@ a not instanceof b
 a?
 </Playground>
 
+### Includes Operator
+
 <Playground>
 item is in array
 item is not in array
 substring is in string
 </Playground>
 
-## Operators
+### Assignment Operators
 
 <Playground>
 a and= b
 a or= b
 a ?= b
-obj.key ?= 'civet'
+obj.key ?= "civet"
+</Playground>
+
+### Optional Chaining
+
+<Playground>
+obj?[key]
+fun?(arg)
 </Playground>
 
 ### Chained Comparisons
@@ -744,13 +770,6 @@ metadata from ./package.json assert type: 'json'
 {x} = await import url
 </Playground>
 
-### Optional Chaining
-
-<Playground>
-obj?[key]
-fun?(arg)
-</Playground>
-
 ### Range Literals
 
 `[x..y]` includes `x` and `y`, while `[x...y]` includes `x` but not `y`.
@@ -772,12 +791,6 @@ start := numbers[..2]
 mid := numbers[3...-2]
 end := numbers[-2..]
 numbers[1...-1] = []
-</Playground>
-
-### Late Assignment
-
-<Playground>
-a + b = c
 </Playground>
 
 ### Block Comments
