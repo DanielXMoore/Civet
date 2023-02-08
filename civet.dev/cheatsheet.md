@@ -227,7 +227,21 @@ a instanceof "number"
 a not instanceof "number"
 </Playground>
 
+### Logical XOR Operator
+
+<Playground>
+a ^^ b
+a xor b
+</Playground>
+
+<Playground>
+a !^ b
+a xnor b
+</Playground>
+
 ### Modulo Operator
+
+`%` can return negative values, while `%%` is always between 0 and the divisor.
 
 <Playground>
 let a = -3
