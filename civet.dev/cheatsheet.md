@@ -58,6 +58,8 @@ point = data{x,y}
 point = data.{x,y};
 point.{x,y} = data
 complex := obj.{x:a, b.c()?.y}
+merged := data.{...global, ...user};
+data.{a, b, ...rest} = result
 </Playground>
 
 Flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects):
