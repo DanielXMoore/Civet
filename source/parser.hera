@@ -63,9 +63,7 @@ Arguments
   # a b => a(b)
   # a b, c, d => a(b, c, d)
   # x y z => x(y(z))
-  SuppressTrailingMemberProperty ImplicitArguments?:args ->
-    module.suppressTrailingMemberProperty.pop()
-
+  SuppressTrailingMemberProperty ImplicitArguments?:args PopTrailingMemberProperty ->
     if (args) return args
     return $skip
 
@@ -3275,24 +3273,30 @@ Condition
     }
 
 ExpressionWithIndentedApplicationSuppressed
-  SuppressIndentedApplication ExtendedExpression?:exp ->
-    module.suppressIndentedApplication = false
-
+  SuppressIndentedApplication ExtendedExpression?:exp PopIndentedApplication ->
     if (exp) return exp
     return $skip
 
 SuppressIndentedApplication
   "" ->
-    module.suppressIndentedApplication = true
+    module.suppressIndentedApplication.push(true)
+
+PopIndentedApplication
+  "" ->
+    module.suppressIndentedApplication.pop()
 
 IndentedApplicationAllowed
   "" ->
-    if (module.suppressIndentedApplication) return $skip
+    if (module.indentedApplicationSuppressed) return $skip
     return
 
 SuppressTrailingMemberProperty
   "" ->
     module.suppressTrailingMemberProperty.push(true)
+
+PopTrailingMemberProperty
+  "" ->
+    module.suppressTrailingMemberProperty.pop()
 
 TrailingMemberPropertyAllowed
   "" ->
@@ -4510,8 +4514,7 @@ JSXElement
   JSXSelfClosingElement
   # NOTE: In default JSX mode, JSX children must be properly indented,
   # and closing tags are optional (but still allowed).
-  !CoffeeJSXEnabled PushJSXOpeningElement:open JSXMixedChildren?:children JSXOptionalClosingElement:close ->
-    module.JSXTagStack.pop()
+  !CoffeeJSXEnabled PushJSXOpeningElement:open JSXMixedChildren?:children JSXOptionalClosingElement:close JSXTagPop ->
     if (!children) return $skip
     $0 = $0.slice(1)
     let parts
@@ -4564,8 +4567,7 @@ JSXClosingElement
 JSXFragment
   # NOTE: In default JSX mode, JSX children must be properly indented,
   # and closing tags are optional (but still allowed).
-  !CoffeeJSXEnabled PushJSXOpeningFragment:open JSXMixedChildren?:children JSXOptionalClosingFragment:close ->
-    module.JSXTagStack.pop()
+  !CoffeeJSXEnabled PushJSXOpeningFragment:open JSXMixedChildren?:children JSXOptionalClosingFragment:close JSXTagPop ->
     if (!children) return $skip
     $0 = $0.slice(1)
     const parts = close ? $0 :
@@ -4585,6 +4587,11 @@ JSXFragment
       children: $0,
       jsxChildren: children ? children.jsxChildren : []
     }
+
+JSXTagPop
+  "" ->
+    module.JSXTagStack.pop()
+    return $1
 
 PushJSXOpeningFragment
   "<>" ->
@@ -5497,14 +5504,16 @@ ObjectIsEnabled
 # Reset module level data
 Reset
   "" ->
-    // Storage for PushIndent/PopIndent
-    module.indentLevels = [{
-      level: 0,
-      token: "",
-    }]
-
-    module.suppressTrailingMemberProperty = [false]
-    module.JSXTagStack = []
+    // Storage for ParserState
+    Object.assign(module, {
+      indentLevels: [{
+        level: 0,
+        token: "",
+      }],
+      suppressIndentedApplication: [false],
+      suppressTrailingMemberProperty: [false],
+      JSXTagStack: [],
+    });
 
     module.operators = new Set
 
@@ -5520,6 +5529,12 @@ Reset
         trailingMemberPropertySuppressed: {
           get() {
             const {suppressTrailingMemberProperty: s} = module
+            return s[s.length-1]
+          },
+        },
+        indentedApplicationSuppressed: {
+          get() {
+            const {suppressIndentedApplication: s} = module
             return s[s.length-1]
           },
         },
@@ -5809,6 +5824,20 @@ Reset
       } else {
         return '"' + str.replace(/"/g, '\\"') + '"'
       }
+    }
+
+    // Hack to pass parser state to cache key
+    return {
+      type: "ParserMeta",
+      children: [],
+      stateHash(pos) {
+        const stateInt =
+          ((module.currentIndent % 16) << 2) |
+          (module.trailingMemberPropertySuppressed << 1) |
+          (module.indentedApplicationSuppressed << 0)
+        // TODO: optimize this to compute an integer instead of a string
+        return `${pos|0}:${module.currentJSXTag || ""}:${stateInt}`
+      },
     }
 
 Init

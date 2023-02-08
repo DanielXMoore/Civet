@@ -111,6 +111,27 @@ uncacheable = new Set [
   "UpdateExpression"
 ]
 
+uncacheable = new Set [
+  # Meta
+  "Debugger"
+
+  # Indentation
+  "InsertIndent"
+  "PushIndent"
+  "PopIndent"
+  "TrackIndented"
+  # Nested Application
+  "PopIndentedApplication"
+  "SuppressIndentedApplication"
+  # Trailing Member Expressions
+  "SuppressTrailingMemberProperty"
+  "PopTrailingMemberProperty"
+  # JSX
+  "PushJSXOpeningElement"
+  "PushJSXOpeningFragment"
+  "JSXTagPop"
+]
+
 export compile = (src, options) ->
   if (!options)
     options = {}
@@ -163,14 +184,16 @@ makeCache = ->
   caches = new Map
 
   # stack = []
+  stateHash = null
 
   events =
     enter: (ruleName, state) ->
       cache = caches.get(ruleName)
       if cache
-        if cache.has(state.pos)
+        key = stateHash(state.pos)
+        if cache.has(key)
           # logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "💰"
-          result = cache.get(state.pos)
+          result = cache.get(key)
           return {
             cache: if result then { ...result }
           }
@@ -181,6 +204,10 @@ makeCache = ->
       return
 
     exit: (ruleName, state, result) ->
+      # special hack to get access to parser state
+      if ruleName is "Reset"
+        { stateHash } = result.value
+
       cache = caches.get(ruleName)
 
       if !cache and !uncacheable.has(ruleName)
@@ -188,10 +215,11 @@ makeCache = ->
         caches.set(ruleName, cache)
 
       if cache
+        key = stateHash(state.pos)
         if result
-          cache.set(state.pos, {...result})
+          cache.set(key, {...result})
         else
-          cache.set(state.pos, result)
+          cache.set(key, result)
 
       if parse.config.verbose and result
         console.log "Parsed #{JSON.stringify state.input[state.pos...result.pos]} [pos #{state.pos}-#{result.pos}] as #{ruleName}"#, JSON.stringify(result.value)
