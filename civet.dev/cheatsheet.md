@@ -260,11 +260,15 @@ a not instanceof "number"
 <Playground>
 a ^^ b
 a xor b
+a ^^= b
+a xor= b
 </Playground>
 
 <Playground>
 a !^ b
 a xnor b
+a !^= b
+a xnor= b
 </Playground>
 
 ### Modulo Operator
