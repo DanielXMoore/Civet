@@ -194,6 +194,14 @@ result! as string | number
 a + b = c
 </Playground>
 
+### Multi Assignment
+
+<Playground>
+(count[key] ?= 0)++
+(count[key] ?= 0) += 1
+++count *= 2
+</Playground>
+
 ### Humanized Operators
 
 <Playground>

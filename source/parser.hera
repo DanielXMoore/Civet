@@ -213,10 +213,19 @@ UnaryPostfix
 # https://262.ecma-international.org/#prod-UpdateExpression
 UpdateExpression
   # NOTE: Not allowing whitespace betwen prefix and postfix increment operators and operand
-  UpdateExpressionSymbol UnaryExpression
+  UpdateExpressionSymbol UnaryExpression ->
+    return {
+      type: "UpdateExpression",
+      assigned: $2,
+      children: $0,
+    }
   LeftHandSideExpression UpdateExpressionSymbol? ->
-    if ($2) return $0
-    return $1
+    if (!$2) return $1
+    return {
+      type: "UpdateExpression",
+      assigned: $1,
+      children: $0,
+    }
 
 UpdateExpressionSymbol
   ("++" / "--") ->
@@ -266,7 +275,9 @@ AssignmentExpressionTail
 ActualAssignment
   # NOTE: Eliminated left recursion
   # NOTE: Consolidated assignment ops
-  ( __ LeftHandSideExpression WAssignmentOp )+ ExtendedExpression ->
+  # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
+  # e.g. ++x *= 2 which we later convert to ++x, x *= 2
+  ( __ UpdateExpression WAssignmentOp )+ ExtendedExpression ->
     $1 = $1.map((x) => [x[0], x[1], ...x[2]])
     $0 = [$1, $2]
     return {
@@ -276,6 +287,7 @@ ActualAssignment
       // from fake assignments that only add a name to a scope
       names: null,
       lhs: $1,
+      assigned: $1[0][1],
       exp: $2,
     }
 
@@ -2508,8 +2520,9 @@ Xnor
   /!\^\^?/ / "xnor"
 
 UnaryOp
-  # Lookahead to prevent unary operators from overriding block unary operator shorthand
-  /[!~+-](?!\s|[!~+-]*&)/ ->
+  # Lookahead to prevent unary operators from overriding update operators
+  # ++/-- or block unary operator shorthand
+  /(?!\+\+|--)[!~+-](?!\s|[!~+-]*&)/ ->
     return { $loc, token: $0 }
   ( Await / Delete / Void / Typeof ) __
   Not # only when CoffeeNotEnabled (see definition of `Not`)
@@ -6880,7 +6893,7 @@ Init
     function processAssignments(statements) {
       gatherRecursiveAll(statements, n => n.type === "AssignmentExpression" && n.names === null)
       .forEach(exp => {
-        let {lhs: $1, exp: $2} = exp, pre = [], tail = [], i = 0, len = $1.length
+        let {lhs: $1, exp: $2} = exp, tail = [], i = 0, len = $1.length
 
         // identifier=
         if ($1.some((left) => left[left.length-1].special)) {
@@ -6894,20 +6907,6 @@ Init
           // Wrap right-hand side with call
           $2 = [ call, "(", lhs, ", ", $2, ")" ]
         }
-
-        // Move assignments within LHS to run earlier via comma operator
-        $1.forEach((lhsPart, i) => {
-          let expr = lhsPart[1]
-          while (expr.type === "ParenthesizedExpression") {
-            expr = expr.expression
-          }
-          if (expr.type === "AssignmentExpression") {
-            pre.push([lhsPart[1], ", "])
-            const newLhs = expr.lhs[0][1]
-            // TODO: use ref to avoid duplicating function calls
-            lhsPart[1] = newLhs
-          }
-        })
 
         // Force parens around destructuring object assignments
         // Walk from left to right the minimal number of parens are added and enclose all destructured assignments
@@ -6980,8 +6979,52 @@ Init
 
         // Gather all identifier names from the lhs array
         const names = $1.flatMap(([,l]) => l.names || [])
-        exp.children = [...pre, $1, $2, ...tail]
+        exp.children = [$1, $2, ...tail]
         exp.names = names
+      })
+
+      // Move assignments/updates within LHS of assignments/updates
+      // to run earlier via comma operator
+      gatherRecursiveAll(statements, n => n.type === "AssignmentExpression" || n.type === "UpdateExpression")
+      .forEach(exp => {
+        function extractAssignment(lhs) {
+          let expr = lhs
+          while (expr.type === "ParenthesizedExpression") {
+            expr = expr.expression
+          }
+          if (expr.type === "AssignmentExpression" ||
+              expr.type === "UpdateExpression") {
+            if (expr.type === "UpdateExpression" &&
+                expr.children[0] === expr.assigned) {  // postfix update
+              post.push([", ", lhs])
+            } else {
+              pre.push([lhs, ", "])
+            }
+            // TODO: use ref to avoid duplicating function calls
+            return expr.assigned
+          }
+        }
+        const pre = [], post = []
+        switch (exp.type) {
+          case "AssignmentExpression":
+            if (!exp.lhs) return
+            exp.lhs.forEach((lhsPart, i) => {
+              let newLhs = extractAssignment(lhsPart[1])
+              if (newLhs) {
+                lhsPart[1] = newLhs
+              }
+            })
+            break
+          case "UpdateExpression":
+            let newLhs = extractAssignment(exp.assigned)
+            if (newLhs) {
+              const i = exp.children.indexOf(exp.assigned)
+              exp.assigned = exp.children[i] = newLhs
+            }
+            break
+        }
+        if (pre.length) exp.children.unshift(...pre)
+        if (post.length) exp.children.push(...post)
       })
     }
 
