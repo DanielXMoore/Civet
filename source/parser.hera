@@ -389,6 +389,7 @@ PrimaryExpression
   Literal
   ArrayLiteral
   IdentifierReference # NOTE: Must be below ObjectLiteral for inline objects `a: 1, b: 2` to not be shadowed by matching the first identifier
+  Break -> { type: "BreakValue", children: $0 }
   FunctionExpression
   ClassExpression
   RegularExpressionLiteral
@@ -3413,23 +3414,25 @@ ExpressionStatement
 KeywordStatement
   # https://262.ecma-international.org/#prod-BreakStatement
   # NOTE: no label
-  "break" NonIdContinue -> {
+  Break -> {
     type: "BreakStatement",
     children: $0,
   }
 
   # https://262.ecma-international.org/#prod-ContinueStatement
   # NOTE: no label
-  "continue" NonIdContinue -> {
-    type: "ContinueStatement",
-    children: $0,
-  }
+  "continue" NonIdContinue ->
+    return {
+      type: "ContinueStatement",
+      children: [{ $loc, token: $1 }],
+    }
 
   # https://262.ecma-international.org/#sec-debugger-statement
-  "debugger" NonIdContinue -> {
-    type: "DebuggerStatement",
-    children: $0,
-  }
+  "debugger" NonIdContinue ->
+    return {
+      type: "DebuggerStatement",
+      children: [{ $loc, token: $1 }],
+    }
 
   # https://262.ecma-international.org/#prod-ReturnStatement
   Return MaybeNestedExpression? -> {
@@ -3442,6 +3445,10 @@ KeywordStatement
     type: "ThrowStatement",
     children: $0,
   }
+
+Break
+  "break" NonIdContinue ->
+    return { $loc, token: $1 }
 
 DebuggerExpression
   "debugger" NonIdContinue ->
@@ -6930,6 +6937,54 @@ Init
       })
     }
 
+    function processBreak(statements) {
+      let breakRef
+      gatherRecursive(statements, n => n.type === "BreakValue" && !n.ref)
+      .forEach((b) => {
+        // Set b.ref to prevent this BreakValue from being processed again
+        breakRef = b.ref = {
+          type: "Ref",
+          base: "broke",
+        }
+        // Replace break token, allowing for whitespace to have been pushed
+        // into b.children[0]
+        b.children[b.children.findIndex(c => c.token === "break")] = b.ref
+      })
+      if (!breakRef) return
+      let loops = 0
+      function breaksInLoops(statements) {
+        gatherRecursive(statements, n => n.type === "ForStatement" || n.type === "IterationStatement" || n.type === "FunctionExpression" || n.type === "ArrowFunction")
+        .forEach((loop) => {
+          // Avoid recursing into other functions
+          if (loop.type === "FunctionExpression" || loop.type === "ArrowFunction") return
+          loops++
+          loop.children = [ "{ ", breakRef, " = false; ", ...loop.children, " }" ]
+          gatherRecursive(loop, n => n.type === "BreakStatement" || n.type === "SwitchStatement" || n.type === "FunctionExpression" || n.type === "ArrowFunction")
+          .forEach((b) => {
+            if (b.type === "BreakStatement") {
+              b.children = [ "{ ", breakRef, " = true; ", ...b.children, " }" ]
+            } else if (b.type === "SwitchStatement") {
+              // Ignore breaks within switch, but look for inner loops
+              breaksInLoops(b)
+            }
+          })
+        })
+      }
+      breaksInLoops(statements)
+      if (!loops) {
+        throw new Error("Use of break as value in function with no loops")
+      }
+      const declaration = [ "var ", breakRef, {
+        ts: true,
+        children: [": boolean"],
+      }, "; " ]
+      if (statements.type === "BlockStatement") {
+        statements.children.splice(1, 0, declaration) // add after {
+      } else {
+        statements.unshift(declaration)
+      }
+    }
+
     function processFunctions(statements) {
       gatherRecursiveAll(statements, n => {
         return (
@@ -6940,6 +6995,7 @@ Init
       .forEach((f) => {
         processParams(f)
         const { block, returnType } = f
+        processBreak(block)
         if (module.config.implicitReturns) {
           const isVoid  = returnType  === "void"
           const isBlock = block?.type === "BlockStatement"
@@ -6953,6 +7009,7 @@ Init
       .forEach((f) => {
         processParams(f)
         const {signature, block} = f
+        processBreak(block)
         if (module.config.implicitReturns) {
           const isConstructor = signature.name       === "constructor"
           const isVoid        = signature.returnType === "void"
@@ -7568,6 +7625,7 @@ Init
       processPipelineExpressions(statements)
       processAssignments(statements)
       processFunctions(statements)
+      processBreak(statements) // after all functions already processed
       processSwitchExpressions(statements)
       processTryExpressions(statements)
 
@@ -7605,22 +7663,7 @@ Init
     }
 
     function populateRefs(statements) {
-      const refNodes = gatherNodes(statements, ({type}) => type === "Ref")
-      const blockNodes = new Set(gatherNodes(statements, ({type}) => type === "BlockStatement"))
-      const forNodes = gatherNodes(statements, ({type}) => type === "ForStatement")
-
-      // Populate refs from inside out
-      forNodes.forEach(({declaration, block}) => {
-        // Need to include declarations with block because they share scope
-        if (block.type === "BlockStatement") {
-          populateRefs([declaration, ...block.children])
-        } else { // single non-block statement
-          populateRefs([declaration, ...block])
-        }
-        blockNodes.delete(block)
-      })
-
-      blockNodes.forEach(({expressions}) => populateRefs(expressions))
+      const refNodes = gatherRecursive(statements, ({type}) => type === "Ref")
 
       if (refNodes.length) {
         // Find all ids within nested scopes
