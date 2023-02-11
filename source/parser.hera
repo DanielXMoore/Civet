@@ -1980,7 +1980,7 @@ NestedImplicitPropertyDefinitions
     return defs.flat()
 
 NestedImplicitPropertyDefinition
-  Nested:ws NamedProperty:prop ObjectPropertyDelimiter:delimiter ->
+  Nested:ws ImplicitNamedProperty:prop ObjectPropertyDelimiter:delimiter ->
     return {
       ...prop,
       children: [...ws, ...prop.children, delimiter],
@@ -2000,7 +2000,7 @@ NestedPropertyDefinition
     }))
 
 InlineObjectLiteral
-  InsertInlineOpenBrace:open SnugNamedProperty ImplicitInlineObjectPropertyDelimiter ( ( Samedent / _* ) NamedProperty ImplicitInlineObjectPropertyDelimiter )* InsertCloseBrace:close ->
+  InsertInlineOpenBrace:open SnugNamedProperty ImplicitInlineObjectPropertyDelimiter ( ( Samedent / _* ) ImplicitNamedProperty ImplicitInlineObjectPropertyDelimiter )* InsertCloseBrace:close ->
     return {
       type: "ObjectExpression",
       children: [open, $2, $3, ...$4, close],
@@ -2135,10 +2135,23 @@ NamedProperty
       value: exp,
     }
 
+# NOTE: Variation on NamedProperty that forbids newlines after colon
+# when forbidMultiLineImplicitObjectLiteral is set
+ImplicitNamedProperty
+  PropertyName:name __ Colon ( MultiLineImplicitObjectLiteralAllowed / !EOS ) ExtendedExpression:exp ->
+    return {
+      type: "Property",
+      children: $0,
+      name: name,
+      names: exp.names || [],
+      value: exp,
+    }
+
 # Named property but doesn't allow any space between name and colon
 # used to distinguish between braceless inline objects and ternary expression conditions
+# Only used by implicit object literals, so forbid newlines after colon
 SnugNamedProperty
-  PropertyName Colon ExtendedExpression:exp ->
+  PropertyName Colon ( MultiLineImplicitObjectLiteralAllowed / !EOS ) ExtendedExpression:exp ->
     return {
       type: "Property",
       children: $0,
@@ -3250,15 +3263,16 @@ CaseClause
     }
 
 CaseExpressionList
-  ( _* ExpressionWithIndentedApplicationForbidden ImpliedColon ) ( __ Comma ExpressionWithIndentedApplicationForbidden ImpliedColon )* ->
+  ForbidMultiLineImplicitObjectLiteral ( _* ExpressionWithIndentedApplicationForbidden ImpliedColon )?:first ( __ Comma ExpressionWithIndentedApplicationForbidden ImpliedColon )*:rest RestoreMultiLineImplicitObjectLiteral ->
+    if (!first) return $skip
     // Convert comma separated expression list to `case <exp>:`
-    const result = $2.map(([ws, _comma, exp, col]) => {
+    const result = rest.map(([ws, _comma, exp, col]) => {
       exp = module.insertTrimmingSpace(exp, "")
 
       if (ws.length) return [module.insertTrimmingSpace("case ", ws), exp, col]
       return ["case ", exp, col]
     })
-    result./**/unshift($1)
+    result./**/unshift(first)
 
     return result
 
@@ -3341,7 +3355,7 @@ RestoreIndentedApplication
 IndentedApplicationAllowed
   "" ->
     if (module.config.verbose) {
-      console.log("IndentedApplicationAllowed:", module.ForbidIndentedApplication)
+      console.log("forbidIndentedApplication:", module.forbidIndentedApplication)
     }
     if (module.indentedApplicationForbidden) return $skip
     return
@@ -3358,18 +3372,37 @@ RestoreTrailingMemberProperty
   "" ->
     module.forbidTrailingMemberProperty.pop()
 
-AllowAll
-  AllowTrailingMemberProperty AllowIndentedApplication
-
-RestoreAll
-  RestoreTrailingMemberProperty RestoreIndentedApplication
-
 TrailingMemberPropertyAllowed
   "" ->
     if (module.config.verbose) {
-      console.log("IndentedApplicationAllowed:", module.forbidTrailingMemberProperty)
+      console.log("forbidTrailingMemberProperty:", module.forbidTrailingMemberProperty)
     }
     if (module.trailingMemberPropertyForbidden) return $skip
+
+ForbidMultiLineImplicitObjectLiteral
+  "" ->
+    module.forbidMultiLineImplicitObjectLiteral.push(true)
+
+AllowMultiLineImplicitObjectLiteral
+  "" ->
+    module.forbidMultiLineImplicitObjectLiteral.push(false)
+
+RestoreMultiLineImplicitObjectLiteral
+  "" ->
+    module.forbidMultiLineImplicitObjectLiteral.pop()
+
+MultiLineImplicitObjectLiteralAllowed
+  "" ->
+    if (module.config.verbose) {
+      console.log("forbidMultiLineImplicitObjectLiteral:", module.forbidMultiLineImplicitObjectLiteral)
+    }
+    if (module.multiLineImplicitObjectLiteralForbidden) return $skip
+
+AllowAll
+  AllowTrailingMemberProperty AllowIndentedApplication AllowMultiLineImplicitObjectLiteral
+
+RestoreAll
+  RestoreTrailingMemberProperty RestoreIndentedApplication RestoreMultiLineImplicitObjectLiteral
 
 # https://262.ecma-international.org/#prod-ExpressionStatement
 ExpressionStatement
@@ -5578,8 +5611,9 @@ Reset
       token: "",
     }]
 
-    module.forbidTrailingMemberProperty = [false]
     module.forbidIndentedApplication = [false]
+    module.forbidTrailingMemberProperty = [false]
+    module.forbidMultiLineImplicitObjectLiteral = [false]
     module.JSXTagStack = []
 
     module.operators = new Set
@@ -5602,6 +5636,12 @@ Reset
         trailingMemberPropertyForbidden: {
           get() {
             const {forbidTrailingMemberProperty: s} = module
+            return s[s.length-1]
+          },
+        },
+        multiLineImplicitObjectLiteralForbidden: {
+          get() {
+            const {forbidMultiLineImplicitObjectLiteral: s} = module
             return s[s.length-1]
           },
         },
