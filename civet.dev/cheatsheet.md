@@ -412,6 +412,14 @@ function search(list)
   list.destroy()
 </Playground>
 
+<Playground>
+function search<T>(list: T[], pred: (T) => boolean)
+  let return: number | undefined
+  if list
+    return = list.findIndex pred
+    list.splice return.value, 1
+</Playground>
+
 ### Single-Argument Function Shorthand
 
 <Playground>
