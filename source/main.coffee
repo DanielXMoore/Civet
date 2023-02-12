@@ -161,7 +161,7 @@ export compile = (src, options) ->
 
   if options.errors?.length
     #TODO: Better error display
-    throw new Error "Parse errors: #{options.errors.join("\n")} "
+    throw new Error "Parse errors: #{options.errors.map((e) -> e.message).join("\n")} "
 
   return result
 
