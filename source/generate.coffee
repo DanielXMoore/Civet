@@ -51,12 +51,15 @@ export default gen = (node, options) ->
 
 # Remove empty arrays, empty string, null, undefined from node tree
 # Useful for debugging so I don't need to step though tons of empty nodes
+# Also remove parent pointers so we can JSON.stringify the tree
 export prune = (node) ->
   if node is null or node is undefined
     return
 
   if node.length is 0
     return
+  if node.parent?
+    delete node.parent
 
   if Array.isArray(node)
     a = node.map (n) ->
