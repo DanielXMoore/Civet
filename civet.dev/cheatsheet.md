@@ -395,6 +395,23 @@ circle := (degrees: number): {x: number, y: number} =>
   y: Math.sin theta
 </Playground>
 
+### `return.value`
+
+Instead of specifying a function's return value when it returns,
+you can prepare it ahead of time using `return.value`
+(or its shorthand, assigning to `return`).
+Using this feature disables implicit `return` for that function.
+
+<Playground>
+function search(list)
+  return unless list
+  for item of list
+    if match item
+      return = item
+  return++ if return.value
+  list.destroy()
+</Playground>
+
 ### Single-Argument Function Shorthand
 
 <Playground>
