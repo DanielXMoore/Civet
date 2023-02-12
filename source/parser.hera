@@ -592,6 +592,10 @@ CallExpression
       type: "CallExpression",
       children: [$1, ...$2, ...rest.flat()],
     })
+  # NOTE: Special `return.value` (and `return =` shorthand)
+  # for changing the automatic return value of function
+  ( "return.value" NonIdContinue ) / ( "return" &WAssignmentOp ) ->
+    return { type: "ReturnValue", children: $0 }
 
   MemberExpression:member AllowedTrailingMemberExpressions:trailing CallExpressionRest*:rest ->
     if (rest.length || trailing.length) {
@@ -3436,8 +3440,10 @@ KeywordStatement
   }
 
   # https://262.ecma-international.org/#prod-ReturnStatement
-  Return MaybeNestedExpression? -> {
+  # NOTE: Modified to leave room for `return.value` and `return =`
+  Return !("." / WAssignmentOp) MaybeNestedExpression?:expression -> {
     type: "ReturnStatement",
+    expression,
     children: $0,
   }
 
@@ -6298,6 +6304,13 @@ Init
       }
     }
 
+    function getIndent(statement) {
+      let indent = statement?.[0]
+      // Hacky way to get the indent of the last expression
+      if (Array.isArray(indent)) indent = indent[indent.length - 1]
+      return indent
+    }
+
     // [indent, statement, semicolon]
     function insertReturn(node) {
       if (!node) return
@@ -6324,9 +6337,7 @@ Init
 
       const [, exp, semi] = node
       if (semi?.type === "SemicolonDelimiter") return
-      let indent = node[0]
-      // Hacky way to get the indent of the last expression
-      if (Array.isArray(indent)) indent = indent[indent.length - 1]
+      let indent = getIndent(node)
       if (!exp) return
 
       switch (exp.type) {
@@ -6859,12 +6870,14 @@ Init
 
     // Gather nodes that match a predicate recursing into all unmatched children
     // i.e. if the predicate matches a node it is not recursed into further
-    function gatherRecursive(node, predicate) {
+    function gatherRecursive(node, predicate, skipPredicate) {
       if (node == null) return []
 
       if (Array.isArray(node)) {
         return node.flatMap((n) => gatherRecursive(n, predicate))
       }
+
+      if (skipPredicate?.(node)) return []
 
       if (predicate(node)) {
         return [node]
@@ -6886,6 +6899,39 @@ Init
       }
 
       return nodes
+    }
+
+    function isFunction({type}) {
+      return type === "FunctionExpression" || type === "ArrowFunction" ||
+             type === "MethodDefinition"
+    }
+    function gatherRecursiveWithinFunction(node, predicate) {
+      return gatherRecursive(node, predicate, isFunction)
+    }
+
+    function addParentPointers(node, parent) {
+      if (node == null) return
+      if (typeof node !== "object") return
+      node.parent = parent
+      if (Array.isArray(node)) {
+        for (const child of node) {
+          addParentPointers(child, node)
+        }
+      } else if (node.children) {
+        for (const child of node.children) {
+          addParentPointers(child, node)
+        }
+      }
+    }
+
+    // Find nearest strict ancestor that satisfies predicate,
+    // aborting (and returning undefined) if stopPredicate returns true
+    function findAncestor(node, predicate, stopPredicate) {
+      node = node.parent
+      while (node && !stopPredicate?.(node)) {
+        if (predicate(node)) return node
+        node = node.parent
+      }
     }
 
     function processParams(f) {
@@ -6951,17 +6997,72 @@ Init
       })
     }
 
-    function processFunctions(statements) {
-      gatherRecursiveAll(statements, n => {
-        return (
-          n.type === "FunctionExpression" ||
-          n.type === "ArrowFunction"
-        )
+    // Support for `return.value` and `return =`
+    // for changing automatic return value of function.
+    // Returns whether any present (so shouldn't do implicit return).
+    function processReturnValue(block) {
+      const values = gatherRecursiveWithinFunction(block,
+        ({type}) => type === "ReturnValue")
+      if (!values.length) return false
+
+      const ref = {
+        type: "Ref",
+        base: "ret",
+        id: "ret",
+      }
+
+      let declared
+      values.forEach(value => {
+        value.children = [ref]
+
+        // Check whether return.value already declared within this function
+        const ancestor = findAncestor(value,
+          ({type}) => type === "Declaration",
+          isFunction)
+        if (ancestor) declared = true
       })
+
+      // Add declaration of return.value after {
+      if (!declared) {
+        block.expressions.unshift([
+          getIndent(block.expressions[0]),
+          {
+            type: "Declaration",
+            children: ["let ", ref, ";\n"],
+            names: [],
+          }
+        ])
+      }
+
+      // Transform existing `return` -> `return ret`
+      gatherRecursiveWithinFunction(block,
+        r => r.type === "ReturnStatement" && !r.expression)
+      .forEach((r) => {
+        r.expression = ref
+        r.children.splice(-1, 1, " ", ref)
+      })
+
+      // Implicit return before }
+      if (block.children.at(-2)?.type !== "ReturnStatement") {
+        block.expressions.push([
+          [ "\n", getIndent(block.expressions.at(-1)) ],
+          {
+            type: "ReturnStatement",
+            expression: ref,
+            children: ["return ", ref]
+          }
+        ])
+      }
+
+      return true
+    }
+
+    function processFunctions(statements) {
+      gatherRecursiveAll(statements, ({type}) => type === "FunctionExpression" || type === "ArrowFunction")
       .forEach((f) => {
         processParams(f)
         const { block, returnType } = f
-        if (module.config.implicitReturns) {
+        if (!processReturnValue(block) && module.config.implicitReturns) {
           const isVoid  = returnType  === "void"
           const isBlock = block?.type === "BlockStatement"
           if (!isVoid && isBlock) {
@@ -6970,11 +7071,11 @@ Init
         }
       })
 
-      gatherRecursiveAll(statements, n => n.type === "MethodDefinition")
+      gatherRecursiveAll(statements, ({type}) => type === "MethodDefinition")
       .forEach((f) => {
         processParams(f)
         const {signature, block} = f
-        if (module.config.implicitReturns) {
+        if (!processReturnValue(block) && module.config.implicitReturns) {
           const isConstructor = signature.name       === "constructor"
           const isVoid        = signature.returnType === "void"
           const isSet         = signature.modifier   === "set"
@@ -7586,6 +7687,7 @@ Init
     }
 
     module.processProgram = function(statements) {
+      addParentPointers(statements)
       processPipelineExpressions(statements)
       processAssignments(statements)
       processFunctions(statements)
@@ -7626,22 +7728,7 @@ Init
     }
 
     function populateRefs(statements) {
-      const refNodes = gatherNodes(statements, ({type}) => type === "Ref")
-      const blockNodes = new Set(gatherNodes(statements, ({type}) => type === "BlockStatement"))
-      const forNodes = gatherNodes(statements, ({type}) => type === "ForStatement")
-
-      // Populate refs from inside out
-      forNodes.forEach(({declaration, block}) => {
-        // Need to include declarations with block because they share scope
-        if (block.type === "BlockStatement") {
-          populateRefs([declaration, ...block.children])
-        } else { // single non-block statement
-          populateRefs([declaration, ...block])
-        }
-        blockNodes.delete(block)
-      })
-
-      blockNodes.forEach(({expressions}) => populateRefs(expressions))
+      const refNodes = gatherRecursive(statements, ({type}) => type === "Ref")
 
       if (refNodes.length) {
         // Find all ids within nested scopes

@@ -147,7 +147,12 @@ repl = (options) ->
         else '🐱> '
     writer:
       if options.ast
-        (obj) -> JSON.stringify obj, null, 2
+        (obj) ->
+          try
+            JSON.stringify obj, null, 2
+          catch e
+            console.log "Failed to stringify: #{e}"
+            obj
       else if options.compile
         (obj) ->
           if typeof obj == 'string'
