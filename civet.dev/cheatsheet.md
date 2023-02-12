@@ -102,6 +102,15 @@ matrix.0.0
 array.-1
 </Playground>
 
+`$:` behaves specially for Svelte compatibility.  If you want a key of `$`,
+wrap it in quotes or use explicit braces.
+
+<Playground>
+$: document.title = title
+"$": "dollar"
+{$: "dollar"}
+</Playground>
+
 ### Arrays
 
 Commas are optional at the ends of lines.
@@ -633,6 +642,26 @@ do
   total += item.value
   item = item.next
 while item?
+</Playground>
+
+### Labels
+
+<Playground>
+:outer while (list = next())?
+  for item of list
+    if finale item
+      break outer
+  continue :outer
+</Playground>
+
+::: info
+Labels have the colon on the left to avoid conflict with implicit object
+literals.  The colons are optional in `break` and `continue`.
+As a special case, Svelte's `$:` can be used with the colon on the right.
+:::
+
+<Playground>
+$: document.title = title
 </Playground>
 
 ## Classes
