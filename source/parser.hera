@@ -312,7 +312,7 @@ ArrowFunctionTail
     return {
       type: "ArrowFunction",
       parameters,
-      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
+      returnType: suffix,
       ts: false,
       block: expOrBlock,
       children: $0,
@@ -1331,7 +1331,7 @@ FunctionSignature
       type: "FunctionSignature",
       id: wid?.[1],
       parameters,
-      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
+      returnType: suffix,
       ts: false,
       block: null,
       children: !parameters.implicit ? $0 :
@@ -1425,7 +1425,7 @@ OperatorSignature
       type: "FunctionSignature",
       id,
       parameters,
-      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
+      returnType: suffix,
       ts: false,
       block: null,
       children: [ func, w1, id, w2, parameters, suffix ],
@@ -1469,7 +1469,7 @@ ThinArrowFunction
       type: "FunctionExpression",
       id: undefined,
       parameters,
-      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
+      returnType: suffix,
       ts: false,
       block: block,
       children: [
@@ -2272,7 +2272,7 @@ MethodSignature
       name: name,
       modifier: $1?.[0]?.token, // get/set
       // TODO: get return type from type annotation
-      returnType: undefined,
+      returnType: suffix,
       parameters,
     }
 
@@ -5273,21 +5273,31 @@ TypeSuffix
   }
 
 ReturnTypeSuffix
-  __ Colon ( __ "asserts" NonIdContinue )? TypePredicate ->
-    const children = [...$1, $2]
-    if ($3) children./**/push($3)
-    children./**/push($4)
+  __ Colon ( __ "asserts" NonIdContinue )?:asserts TypePredicate:t ->
+    if (asserts) {
+      t = {
+        type: "AssertsType",
+        t,
+        children: [asserts[0], asserts[1], t],
+      }
+    }
 
     return {
       type: "ReturnTypeAnnotation",
-      children,
+      children: [$1, $2, t],
+      t,
       ts: true,
     }
 
 TypePredicate
-  Type ( __ "is" NonIdContinue Type )? ->
-    if (!$2) return $1
-    return $0
+  Type:lhs ( __ "is" NonIdContinue Type )?:rhs ->
+    if (!rhs) return lhs
+    return {
+      type: "TypePredicate",
+      lhs,
+      rhs: rhs[3],
+      children: [lhs, ...rhs],
+    }
 
 Type
   TypeConditional
@@ -5299,6 +5309,7 @@ TypeBinary
 
 TypeUnary
   ( __ TypeUnaryOp NonIdContinue )* TypePrimary TypeUnarySuffix* ->
+    if (!$1.length && !$3.length) return $2
     return [...$1, $2, ...$3]
 
 TypeUnarySuffix
@@ -5320,8 +5331,19 @@ TypePrimary
   _? InlineInterfaceLiteral
   _? TypeTuple
   _? ImportType
-  _? TypeLiteral
-  _? IdentifierName (Dot IdentifierName)* TypeArguments?
+  _? TypeLiteral:t ->
+    return {
+      type: "LiteralType",
+      t,
+      children: $0,
+    }
+  _? IdentifierName (Dot IdentifierName)* TypeArguments?:args ->
+    return {
+      type: "IdentifierType",
+      children: $0,
+      raw: [$2.name, ...$3.map(([dot, id]) => dot.token + id.name), ].join(''),
+      args,
+    }
   # NOTE: Check FunctionType before parenthesized in order to distinguish between (a: T) => U and
   # A parenthesized inline interface (a: T) ---> ({a: T})
   # NOTE: Check Type before ( EOS Type ) to find implicit nested interfaces first. EOS would swallow the
@@ -5360,7 +5382,7 @@ TypeLiteral
   # interpolated strings get checked first before StringLiteral.
   Literal
   "void" NonIdContinue ->
-    return { $loc, token: "void" }
+    return { type: "VoidType", $loc, token: $1 }
   "[]" ->
     return { $loc, token: "[]" }
 
@@ -7014,7 +7036,8 @@ Init
     // Support for `return.value` and `return =`
     // for changing automatic return value of function.
     // Returns whether any present (so shouldn't do implicit return).
-    function processReturnValue(block) {
+    function processReturnValue(func) {
+      const {block} = func
       const values = gatherRecursiveWithinFunction(block,
         ({type}) => type === "ReturnValue")
       if (!values.length) return false
@@ -7038,11 +7061,18 @@ Init
 
       // Add declaration of return.value after {
       if (!declared) {
+        let returnType = func.returnType ?? func.signature?.returnType
+        if (returnType) {
+          const {t} = returnType
+          if (t.type === "AssertsType" || t.type === "TypePredicate") {
+            returnType = undefined
+          }
+        }
         block.expressions.unshift([
           getIndent(block.expressions[0]),
           {
             type: "Declaration",
-            children: ["let ", ref, ";\n"],
+            children: ["let ", ref, returnType, ";\n"],
             names: [],
           }
         ])
@@ -7071,13 +7101,17 @@ Init
       return true
     }
 
+    function isVoidType(t) {
+      return t?.type === "LiteralType" && t.t.type === "VoidType"
+    }
+
     function processFunctions(statements) {
       gatherRecursiveAll(statements, ({type}) => type === "FunctionExpression" || type === "ArrowFunction")
       .forEach((f) => {
         processParams(f)
-        const { block, returnType } = f
-        if (!processReturnValue(block) && module.config.implicitReturns) {
-          const isVoid  = returnType  === "void"
+        if (!processReturnValue(f) && module.config.implicitReturns) {
+          const { block, returnType } = f
+          const isVoid  = isVoidType(returnType?.t)
           const isBlock = block?.type === "BlockStatement"
           if (!isVoid && isBlock) {
             insertReturn(block)
@@ -7088,10 +7122,10 @@ Init
       gatherRecursiveAll(statements, ({type}) => type === "MethodDefinition")
       .forEach((f) => {
         processParams(f)
-        const {signature, block} = f
-        if (!processReturnValue(block) && module.config.implicitReturns) {
+        if (!processReturnValue(f) && module.config.implicitReturns) {
+          const {signature, block} = f
           const isConstructor = signature.name       === "constructor"
-          const isVoid        = signature.returnType === "void"
+          const isVoid        = isVoidType(signature.returnType?.t)
           const isSet         = signature.modifier   === "set"
 
           if (!isConstructor && !isSet && !isVoid) {

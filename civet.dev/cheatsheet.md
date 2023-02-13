@@ -403,21 +403,20 @@ you can prepare it ahead of time using `return.value`
 Using this feature disables implicit `return` for that function.
 
 <Playground>
-function search(list)
+function sum(list: number[])
+  return .= 0
+  for item of list
+    return += item
+</Playground>
+
+<Playground>
+function search<T>(list: T[]): T | undefined
   return unless list
   for item of list
     if match item
       return = item
   return++ if return.value
   list.destroy()
-</Playground>
-
-<Playground>
-function search<T>(list: T[], pred: (T) => boolean)
-  let return: number | undefined
-  if list
-    return = list.findIndex pred
-    list.splice return.value, 1
 </Playground>
 
 ### Single-Argument Function Shorthand
