@@ -312,7 +312,7 @@ ArrowFunctionTail
     return {
       type: "ArrowFunction",
       parameters,
-      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
+      returnType: suffix,
       ts: false,
       block: expOrBlock,
       children: $0,
@@ -525,7 +525,7 @@ AccessModifier
 FieldDefinition
   # TODO: CoffeeCompat class method fields
   # name: (param1, param2) ->
-  CoffeeClassesEnabled ClassElementName:id __ Colon __ AssignmentExpression:exp ->
+  CoffeeClassesEnabled ClassElementName:id _? Colon __ AssignmentExpression:exp ->
     switch (exp.type) {
       // TODO: => functions
       case "FunctionExpression":
@@ -592,10 +592,7 @@ CallExpression
       type: "CallExpression",
       children: [$1, ...$2, ...rest.flat()],
     })
-  # NOTE: Special `return.value` (and `return =` shorthand)
-  # for changing the automatic return value of function
-  ( "return.value" NonIdContinue ) / ( "return" &WAssignmentOp ) ->
-    return { type: "ReturnValue", children: $0 }
+  ReturnValue
 
   MemberExpression:member AllowedTrailingMemberExpressions:trailing CallExpressionRest*:rest ->
     if (rest.length || trailing.length) {
@@ -607,6 +604,20 @@ CallExpression
     }
 
     return member
+
+# NOTE: Special `return.value` (and `return =` shorthand)
+# for changing the automatic return value of function
+ReturnValue
+  ( "return.value" NonIdContinue ) / ( Return &AfterReturnShorthand ) ->
+    return { type: "ReturnValue", children: [$1[0]] }
+
+AfterReturnShorthand
+  WAssignmentOp
+  UpdateExpressionSymbol
+  # Allow e.g. `let return: T`
+  TypeSuffix
+  __ LetAssignment
+  __ ConstAssignment
 
 CallExpressionRest
   MemberExpressionRest
@@ -905,6 +916,9 @@ NWBindingIdentifier
       ref,
     }
   Identifier:id
+  # NOTE: Support for return := 1 and let return: number
+  ReturnValue ->
+    return { children: [$1], names: [] }
 
 AtIdentifierRef
   ReservedWord:r ->
@@ -1028,7 +1042,7 @@ BindingProperty
   # NOTE: Must be checked first to pick up trailing "..." form
   BindingRestProperty
 
-  _? PropertyName:name __ Colon ( BindingIdentifier / BindingPattern ):b Initializer?:init ->
+  _? PropertyName:name _? Colon ( BindingIdentifier / BindingPattern ):b Initializer?:init ->
     return {
       name,
       value: b,
@@ -1187,7 +1201,7 @@ NestedMatchingPropertyList
 MatchingProperty
   MatchingRestProperty
 
-  _? PropertyName:name __ Colon _? ( BindingIdentifier / MatchingPattern ):match ->
+  _? PropertyName:name _? Colon _? ( BindingIdentifier / MatchingPattern ):match ->
     return {
       type: "BindingMatchProperty",
       name,
@@ -1261,7 +1275,7 @@ NestedMatchingElementList
 MatchingElement
   MatchingRestElement
 
-  _?:ws BindingIdentifier:name __ Colon _? ( BindingIdentifier / MatchingPattern ):match ->
+  _?:ws BindingIdentifier:name _? Colon _? ( BindingIdentifier / MatchingPattern ):match ->
     // Attach blockPrefix to bind sub-patterns
     let blockPrefix
     switch (match.type) {
@@ -1317,7 +1331,7 @@ FunctionSignature
       type: "FunctionSignature",
       id: wid?.[1],
       parameters,
-      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
+      returnType: suffix,
       ts: false,
       block: null,
       children: !parameters.implicit ? $0 :
@@ -1411,7 +1425,7 @@ OperatorSignature
       type: "FunctionSignature",
       id,
       parameters,
-      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
+      returnType: suffix,
       ts: false,
       block: null,
       children: [ func, w1, id, w2, parameters, suffix ],
@@ -1455,7 +1469,7 @@ ThinArrowFunction
       type: "FunctionExpression",
       id: undefined,
       parameters,
-      returnType: suffix?.children?.[1]?.[0]?.[1]?.token,
+      returnType: suffix,
       ts: false,
       block: block,
       children: [
@@ -2136,7 +2150,7 @@ PropertyDefinition
 NamedProperty
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
   # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
-  PropertyName:name __ Colon ExtendedExpression:exp ->
+  PropertyName:name _? Colon ExtendedExpression:exp ->
     return {
       type: "Property",
       children: $0,
@@ -2148,7 +2162,7 @@ NamedProperty
 # NOTE: Variation on NamedProperty that forbids newlines after colon
 # when forbidMultiLineImplicitObjectLiteral is set
 ImplicitNamedProperty
-  PropertyName:name __ Colon ( MultiLineImplicitObjectLiteralAllowed / !EOS ) ExtendedExpression:exp ->
+  PropertyName:name _? Colon ( MultiLineImplicitObjectLiteralAllowed / !EOS ) ExtendedExpression:exp ->
     return {
       type: "Property",
       children: $0,
@@ -2264,7 +2278,7 @@ MethodSignature
       name: name,
       modifier: $1?.[0]?.token, // get/set
       // TODO: get return type from type annotation
-      returnType: undefined,
+      returnType: suffix,
       parameters,
     }
 
@@ -3287,7 +3301,7 @@ CaseExpressionList
     return result
 
 ImpliedColon
-  __ Colon
+  _? Colon
   "" ->
     return { $loc, token: ":" }
 
@@ -3447,7 +3461,7 @@ KeywordStatement
 
   # https://262.ecma-international.org/#prod-ReturnStatement
   # NOTE: Modified to leave room for `return.value` and `return =`
-  Return !("." / WAssignmentOp) MaybeNestedExpression?:expression -> {
+  Return !("." / AfterReturnShorthand) MaybeNestedExpression?:expression -> {
     type: "ReturnStatement",
     expression,
     children: $0,
@@ -5258,28 +5272,38 @@ TypeIndex
   __ PropertyName __ In Type ( __ As Type )?
 
 TypeSuffix
-  QuestionMark? __ Colon Type -> {
+  QuestionMark? _? Colon Type -> {
     type: "TypeSuffix",
     ts: true,
     children: $0
   }
 
 ReturnTypeSuffix
-  __ Colon ( __ "asserts" NonIdContinue )? TypePredicate ->
-    const children = [...$1, $2]
-    if ($3) children./**/push($3)
-    children./**/push($4)
+  _? Colon ( __ "asserts" NonIdContinue )?:asserts TypePredicate:t ->
+    if (asserts) {
+      t = {
+        type: "AssertsType",
+        t,
+        children: [asserts[0], asserts[1], t],
+      }
+    }
 
     return {
       type: "ReturnTypeAnnotation",
-      children,
+      children: [$1, $2, t],
+      t,
       ts: true,
     }
 
 TypePredicate
-  Type ( __ "is" NonIdContinue Type )? ->
-    if (!$2) return $1
-    return $0
+  Type:lhs ( __ "is" NonIdContinue Type )?:rhs ->
+    if (!rhs) return lhs
+    return {
+      type: "TypePredicate",
+      lhs,
+      rhs: rhs[3],
+      children: [lhs, ...rhs],
+    }
 
 Type
   TypeConditional
@@ -5291,6 +5315,7 @@ TypeBinary
 
 TypeUnary
   ( __ TypeUnaryOp NonIdContinue )* TypePrimary TypeUnarySuffix* ->
+    if (!$1.length && !$3.length) return $2
     return [...$1, $2, ...$3]
 
 TypeUnarySuffix
@@ -5312,8 +5337,19 @@ TypePrimary
   _? InlineInterfaceLiteral
   _? TypeTuple
   _? ImportType
-  _? TypeLiteral
-  _? IdentifierName (Dot IdentifierName)* TypeArguments?
+  _? TypeLiteral:t ->
+    return {
+      type: "LiteralType",
+      t,
+      children: $0,
+    }
+  _? IdentifierName (Dot IdentifierName)* TypeArguments?:args ->
+    return {
+      type: "IdentifierType",
+      children: $0,
+      raw: [$2.name, ...$3.map(([dot, id]) => dot.token + id.name), ].join(''),
+      args,
+    }
   # NOTE: Check FunctionType before parenthesized in order to distinguish between (a: T) => U and
   # A parenthesized inline interface (a: T) ---> ({a: T})
   # NOTE: Check Type before ( EOS Type ) to find implicit nested interfaces first. EOS would swallow the
@@ -5352,7 +5388,7 @@ TypeLiteral
   # interpolated strings get checked first before StringLiteral.
   Literal
   "void" NonIdContinue ->
-    return { $loc, token: "void" }
+    return { type: "VoidType", $loc, token: $1 }
   "[]" ->
     return { $loc, token: "[]" }
 
@@ -7006,7 +7042,8 @@ Init
     // Support for `return.value` and `return =`
     // for changing automatic return value of function.
     // Returns whether any present (so shouldn't do implicit return).
-    function processReturnValue(block) {
+    function processReturnValue(func) {
+      const {block} = func
       const values = gatherRecursiveWithinFunction(block,
         ({type}) => type === "ReturnValue")
       if (!values.length) return false
@@ -7030,11 +7067,20 @@ Init
 
       // Add declaration of return.value after {
       if (!declared) {
+        let returnType = func.returnType ?? func.signature?.returnType
+        if (returnType) {
+          const {t} = returnType
+          if (t.type === "TypePredicate") {
+            returnType = ": boolean"
+          } else if (t.type === "AssertsType") {
+            returnType = undefined
+          }
+        }
         block.expressions.unshift([
           getIndent(block.expressions[0]),
           {
             type: "Declaration",
-            children: ["let ", ref, ";\n"],
+            children: ["let ", ref, returnType, ";\n"],
             names: [],
           }
         ])
@@ -7063,13 +7109,17 @@ Init
       return true
     }
 
+    function isVoidType(t) {
+      return t?.type === "LiteralType" && t.t.type === "VoidType"
+    }
+
     function processFunctions(statements) {
       gatherRecursiveAll(statements, ({type}) => type === "FunctionExpression" || type === "ArrowFunction")
       .forEach((f) => {
         processParams(f)
-        const { block, returnType } = f
-        if (!processReturnValue(block) && module.config.implicitReturns) {
-          const isVoid  = returnType  === "void"
+        if (!processReturnValue(f) && module.config.implicitReturns) {
+          const { block, returnType } = f
+          const isVoid  = isVoidType(returnType?.t)
           const isBlock = block?.type === "BlockStatement"
           if (!isVoid && isBlock) {
             insertReturn(block)
@@ -7080,10 +7130,10 @@ Init
       gatherRecursiveAll(statements, ({type}) => type === "MethodDefinition")
       .forEach((f) => {
         processParams(f)
-        const {signature, block} = f
-        if (!processReturnValue(block) && module.config.implicitReturns) {
+        if (!processReturnValue(f) && module.config.implicitReturns) {
+          const {signature, block} = f
           const isConstructor = signature.name       === "constructor"
-          const isVoid        = signature.returnType === "void"
+          const isVoid        = isVoidType(signature.returnType?.t)
           const isSet         = signature.modifier   === "set"
 
           if (!isConstructor && !isSet && !isVoid) {
