@@ -1,4 +1,5 @@
 "civet coffeeCompat"
+# NOTE: Hera has an updated version of this file converted from CoffeeScript to Civet.
 
 # Utility function to create a line/column lookup table for an input string
 export locationTable = (input) ->
