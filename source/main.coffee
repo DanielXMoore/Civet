@@ -82,6 +82,8 @@ uncacheable = new Set [
   "NestedImplicitPropertyDefinitions"
   "NestedInterfaceProperty"
   "NestedJSXChildExpression"
+  "NestedModuleItem"
+  "NestedModuleItems"
   "NestedObject"
   "NestedPropertyDefinitions"
   "NonSingleBracedBlock"
