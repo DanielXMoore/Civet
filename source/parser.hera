@@ -2797,6 +2797,8 @@ IterationStatement
   # NOTE: Added `loop` from CoffeeScript
   LoopStatement
   !CoffeeDoEnabled DoWhileStatement -> $2
+  # DoStatement must come after DoWhile statement
+  !CoffeeDoEnabled DoStatement -> $2
   WhileStatement
   ForStatement
 
@@ -2804,6 +2806,7 @@ IterationExpression
   IterationStatement ->
     return {
       type: "IterationExpression",
+      subtype: $1.type,
       children: [$1],
       block: $1.block,
     }
@@ -2832,6 +2835,15 @@ DoWhileStatement
     block: block
   }
 
+DoStatement
+  Do NoPostfixBracedBlock:block ->
+    block = module.insertTrimmingSpace(block, "")
+    return {
+      type: "DoStatement",
+      children: [block],
+      block,
+    }
+
 # https://262.ecma-international.org/#prod-WhileStatement
 WhileStatement
   # NOTE: Condition provides optional parens
@@ -2839,7 +2851,7 @@ WhileStatement
     return {
       type: "IterationStatement",
       children: [...clause.children, block],
-      block: block
+      block,
     }
 
 WhileClause
@@ -6284,37 +6296,53 @@ Init
     }
 
     function expressionizeIteration(exp) {
-      const resultsRef = {
-        type: "Ref",
-        base: "results",
-        id: "results",
-      }
+      const i = exp.children.indexOf(exp.block)
+      if (exp.subtype === "DoStatement") {
+        // Just wrap with IIFE
+        insertReturn(exp.block)
+        exp.children.splice(i, 1, "(()=>", ...exp.children, ")()")
+      } else {
+        const resultsRef = {
+          type: "Ref",
+          base: "results",
+          id: "results",
+        }
 
-      // insert `results.push` to gather results array
-      insertPush(exp.block, resultsRef)
-      // Wrap with IIFE
-      exp.children = ["(()=>{const ", resultsRef, "=[];", ...exp.children, "; return ", resultsRef, "})()"]
+        // insert `results.push` to gather results array
+        insertPush(exp.block, resultsRef)
+
+        // Wrap with IIFE
+        exp.children.splice(i, 1, "(()=>{const ", resultsRef, "=[];", ...exp.children, "; return ", resultsRef, "})()")
+      }
     }
 
     function wrapIterationReturningResults(statement, outerRef) {
-      const resultsRef = {
-        type: "Ref",
-        base: "results",
-        id: "results",
-      }
-
-      const declaration = {
-        type: "Declaration",
-        children: ["const ", resultsRef, "=[];"],
-      }
-
-      insertPush(statement.block, resultsRef)
-
-      statement.children.unshift(declaration)
-      if (outerRef) {
-        statement.children.push(";", outerRef, ".push(", resultsRef, ");")
+      if (statement.type === "DoStatement") {
+        if (outerRef) {
+          insertPush(statement.block, outerRef)
+        } else {
+          insertReturn(statement.block)
+        }
       } else {
-        statement.children.push(";return ", resultsRef, ";")
+        const resultsRef = {
+          type: "Ref",
+          base: "results",
+          id: "results",
+        }
+
+        const declaration = {
+          type: "Declaration",
+          children: ["const ", resultsRef, "=[];"],
+        }
+
+        insertPush(statement.block, resultsRef)
+
+        statement.children.unshift(declaration)
+        if (outerRef) {
+          statement.children.push(";", outerRef, ".push(", resultsRef, ");")
+        } else {
+          statement.children.push(";return ", resultsRef, ";")
+        }
       }
     }
 
@@ -6362,6 +6390,7 @@ Init
           return
         case "ForStatement":
         case "IterationStatement":
+        case "DoStatement":
           wrapIterationReturningResults(exp, ref)
           return
         case "BlockStatement":
@@ -6471,6 +6500,7 @@ Init
           return
         case "ForStatement":
         case "IterationStatement":
+        case "DoStatement":
           wrapIterationReturningResults(exp)
           return
         case "BlockStatement":
@@ -7406,8 +7436,9 @@ Init
     module.attachPostfixStatementAsExpression = function (exp, post) {
       let clause
       switch (post[1].type) {
-        case "IterationStatement":
         case "ForStatement":
+        case "IterationStatement":
+        case "DoStatement":
           clause = module.addPostfixStatement(exp, ...post)
           return {
             type: "IterationExpression",
