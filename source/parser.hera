@@ -421,8 +421,7 @@ ClassDeclaration
 
 # https://262.ecma-international.org/#prod-ClassExpression
 ClassExpression
-  Decorators? ( Abstract __ )? Class ClassBinding? ClassHeritage? ClassBody ->
-    return $0
+  Decorators? ( Abstract __ )? Class ClassBinding? ClassHeritage? ClassBody
 
 ClassBinding
   !EOS BindingIdentifier TypeParameters? -> [$2, $3]
@@ -511,6 +510,27 @@ ClassElement
 
 ClassElementDefinition
   ( MethodDefinition / FieldDefinition )
+
+# `declare class` form of ClassDeclaration, where all methods are signatures
+ClassSignature
+  Decorators? ( Abstract __ )? Class ClassBinding? ClassHeritage? ClassSignatureBody
+
+ClassSignatureBody
+  __ OpenBrace NestedClassSignatureElements? __ CloseBrace
+  InsertOpenBrace NestedClassSignatureElements? InsertNewline InsertIndent InsertCloseBrace
+
+NestedClassSignatureElements
+  PushIndent NestedClassSignatureElement*:elements PopIndent ->
+    if (!elements.length) return $skip
+    return elements
+
+NestedClassSignatureElement
+  Nested ClassSignatureElement StatementDelimiter
+
+ClassSignatureElement
+  # NOTE: MethodSignature instead of MethodDefinition
+  Decorators? AccessModifier? ( Static TrailingComment* )? ( MethodSignature / FieldDefinition )
+  Static ClassSignatureBody
 
 AccessModifier
   ( ( Public / Private / Protected ) __ )? ( Readonly __ )? ->
@@ -2261,6 +2281,7 @@ MethodModifier
   ( Async __ ) ( Star __ )?
   Star __
   #Async __
+
 # TypeScript method signature
 MethodSignature
   ConstructorShorthand NonEmptyParameters:parameters ->
@@ -3682,9 +3703,9 @@ ExportDeclaration
   Export __ ExportFromClause __ FromClause ->
     if (!$3.ts) return $0
     return { ts: true, children: $0 }
-  # NOTE: Declaration should come before NamedExports
-  # so that NamedExports doesn't grab function, async, type, etc.
-  Export __ ( Declaration / TypeAndNamedExports / VariableStatement / ExportVarDec ) ->
+  # NOTE: Declaration and VariableStatement should come before NamedExports
+  # so that NamedExports doesn't grab function, async, type, var, etc.
+  Export __ ( Declaration / VariableStatement / TypeAndNamedExports / ExportVarDec ) ->
     if (!$3.ts) return $0
     return { ts: true, children: $0 }
 
@@ -4457,6 +4478,10 @@ LetOrConst
   ( "let" / "const" ) NonIdContinue ->
     return { $loc, token: $1 }
 
+LetOrConstOrVar
+  LetOrConst
+  Var
+
 Loop
   # NOTE: loop becomes while
   "loop" NonIdContinue ->
@@ -5197,22 +5222,25 @@ NestedJSXChildExpression
 ## Type Stuff
 
 TypeDeclaration
-  # TODO: Support `declare class`
-  # TODO: Support `declare module`
-  # TODO: Support `declare global {}`
   # NOTE: First check for forms with a `declare` keyword present
   ( Export _? )? ( Declare _? )  TypeLexicalDeclaration -> { ts: true, children: $0 }
   ( Export _? )? ( Declare _? )? TypeDeclarationRest    -> { ts: true, children: $0 }
 
+# NOTE: These are declarations even without a `declare` prefix
 TypeDeclarationRest
   # TODO: ( __ Type ) can be refined further to check for consistently nested binary ops, etc.
   TypeKeyword TrailingComment* IdentifierName TypeParameters? __ Equals ( ( _? Type ) / ( __ Type ) )
   Interface   TrailingComment* IdentifierName TypeParameters? InterfaceExtendsClause? InterfaceBlock
-  Namespace   TrailingComment* IdentifierName NamespaceBlock
+  Namespace   TrailingComment* IdentifierName ModuleBlock
   FunctionSignature
 
+# NOTE: These are all guaranteed to be preceded by a `declare` keyword
 TypeLexicalDeclaration
-  __ !Namespace LetOrConst TypeDeclarationBinding ( CommaDelimiter __ TypeDeclarationBinding )*
+  __ LetOrConstOrVar TypeDeclarationBinding ( CommaDelimiter __ TypeDeclarationBinding )*
+  ClassSignature
+  Namespace TrailingComment* IdentifierName DeclareBlock
+  Module _ StringLiteral DeclareBlock?
+  Global DeclareBlock?
 
 TypeDeclarationBinding
   # NOTE: This is almost the same as LexicalBinding except it cannot have an initializer
@@ -5225,13 +5253,25 @@ InterfaceExtendsTarget
   ImplementsTarget
 
 TypeKeyword
-  "type" NonIdContinue
+  "type" NonIdContinue ->
+    return { $loc, token: $1 }
 
 Interface
-  "interface" NonIdContinue
+  "interface" NonIdContinue ->
+    return { $loc, token: $1 }
+
+Global
+  "global" NonIdContinue ->
+    return { $loc, token: $1 }
+
+Module
+  "module" NonIdContinue ->
+    return { $loc, token: $1 }
 
 Namespace
-  "namespace" NonIdContinue
+  "namespace" NonIdContinue ->
+    return { $loc, token: $1 }
+
 
 InterfaceBlock
   __ OpenBrace NestedInterfaceProperties __ CloseBrace
@@ -5260,19 +5300,39 @@ InterfacePropertyDelimiter
   &( __ CloseBrace )
   &EOS
 
-NamespaceBlock
-  __ OpenBrace NestedTypeDeclarations __ CloseBrace
-  __ OpenBrace ( __ TypeDeclaration InterfacePropertyDelimiter)* __ CloseBrace
+# Namespace blocks are like self-contained modules
+ModuleBlock
+  __ OpenBrace NestedModuleItems __ CloseBrace
   # NOTE: Added indentation based implied braces
-  InsertOpenBrace NestedTypeDeclarations InsertNewline InsertIndent InsertCloseBrace
+  InsertOpenBrace NestedModuleItems InsertNewline InsertIndent InsertCloseBrace
 
-NestedTypeDeclarations
-  PushIndent NestedTypeDeclaration*:decs PopIndent ->
+NestedModuleItems
+  PushIndent NestedModuleItem*:items PopIndent ->
+    if (items.length) return items
+    return $skip
+
+# Based on TopLevelStatement
+NestedModuleItem
+  Nested ModuleItem StatementDelimiter
+
+DeclareBlock
+  __ OpenBrace NestedDeclareElements __ CloseBrace
+  __ OpenBrace ( __ DeclareElement InterfacePropertyDelimiter)* __ CloseBrace
+  # NOTE: Added indentation based implied braces
+  InsertOpenBrace NestedDeclareElements InsertNewline InsertIndent InsertCloseBrace
+
+NestedDeclareElements
+  PushIndent NestedDeclareElement*:decs PopIndent ->
     if (decs.length) return decs
     return $skip
 
-NestedTypeDeclaration
-  Nested TypeDeclaration InterfacePropertyDelimiter
+NestedDeclareElement
+  Nested DeclareElement InterfacePropertyDelimiter
+
+# NOTE: Variation on TypeDeclaration where Declare already applied.
+DeclareElement
+  ( Export _? )? TypeLexicalDeclaration -> { ts: true, children: $0 }
+  ( Export _? )? TypeDeclarationRest    -> { ts: true, children: $0 }
 
 TypeIndexSignature
   ( [+-]? "readonly" __ )? OpenBracket TypeIndex CloseBracket ( __ [+-] QuestionMark )?
@@ -5283,6 +5343,11 @@ TypeIndex
 
 TypeSuffix
   QuestionMark? _? Colon Type -> {
+    type: "TypeSuffix",
+    ts: true,
+    children: $0
+  }
+  QuestionMark _? -> {
     type: "TypeSuffix",
     ts: true,
     children: $0
