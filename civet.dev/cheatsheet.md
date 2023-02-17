@@ -1199,7 +1199,8 @@ no
 
 ### CoffeeScript Comments
 
-If you don't need private fields, you can enable `#` for single-line comments:
+If you don't need [private class fields](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes/Private_class_fields),
+you can enable `#` for single-line comments:
 
 <Playground>
 "civet coffeeComment"
