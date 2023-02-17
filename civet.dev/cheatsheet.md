@@ -690,7 +690,7 @@ function parities(list: number[]): string[]
 
 ::: info
 Because loop expressions wrap in an
-[IFFE](https://developer.mozilla.org/en-US/docs/Glossary/IIFE),
+[IIFE](https://developer.mozilla.org/en-US/docs/Glossary/IIFE),
 you cannot use `return` inside such a loop,
 nor can you `break` or `continue` any outer loop.
 :::
@@ -746,7 +746,7 @@ x :=
 
 ::: info
 Because `do` expressions wrap in an
-[IFFE](https://developer.mozilla.org/en-US/docs/Glossary/IIFE),
+[IIFE](https://developer.mozilla.org/en-US/docs/Glossary/IIFE),
 you cannot use `return`, `break`, or `continue` within them.
 :::
 
