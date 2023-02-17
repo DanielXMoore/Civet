@@ -18,9 +18,10 @@ The TypeScript code on
 
 [[toc]]
 
-## Basics
+## Variable Declaration
 
-### Variable Declaration
+By default, you are responsible for declaring your variables
+via `var`, `let`, `const`, or their shorthands:
 
 <Playground>
 a := 10
@@ -30,7 +31,34 @@ let d: boolean
 var v: any
 </Playground>
 
-### Objects
+Alternatively, you can use a `"civet"` directive at the beginning of your file
+to specify one of two automatic variable declaration modes:
+
+### `autoVar`
+
+<Playground>
+"civet autoVar"
+sos = 0
+for item of iterable
+  square = item * item
+  sos += square
+</Playground>
+
+### `autoLet`
+
+<Playground>
+"civet autoLet"
+sos = 0
+for item of iterable
+  square = item * item
+  sos += square
+</Playground>
+
+## Objects
+
+### Unbraced Literals
+
+When every property has a value, braces can be omitted.
 
 <Playground>
 person := name: 'Henry', age: 4
@@ -42,7 +70,19 @@ obj :=
     y: 'cool'
 </Playground>
 
-Literal shorthand beyond `{x}`:
+`$:` behaves specially for Svelte compatibility.  If you want a key of `$`,
+wrap it in quotes or use explicit braces.
+
+<Playground>
+$: document.title = title
+"$": "dollar"
+{$: "dollar"}
+</Playground>
+
+### Braced Literals
+
+With braces, the `{x}` shorthand generalizes to any
+sequence of member accesses and/or calls:
 
 <Playground>
 another := {person.name, obj?.c?.x}
@@ -51,7 +91,10 @@ named := {lookup[x+y]}
 templated := {`${prefix}${suffix}`: result}
 </Playground>
 
-Object globs:
+### Object Globs
+
+Inspired by
+[brace expansion in shell globs](https://en.wikipedia.org/wiki/Bash_(Unix_shell)#Brace_expansion):
 
 <Playground>
 point = data{x,y}
@@ -62,7 +105,9 @@ merged := data.{...global, ...user};
 data.{a, b, ...rest} = result
 </Playground>
 
-Flagging shorthand inspired by [LiveScript](https://livescript.net/#literals-objects):
+### Flagging Shorthand
+
+Inspired by [LiveScript](https://livescript.net/#literals-objects):
 
 <Playground>
 config := {
@@ -72,7 +117,9 @@ config := {
 }
 </Playground>
 
-Methods and getters/setters in braced objects:
+### Methods and Getters/Setters
+
+Braced objects support methods and getters/setters:
 
 <Playground>
 p := {
@@ -93,7 +140,7 @@ To specify a blank body, use `;` or `{}`.
 
 :::
 
-Property access shorthand:
+### Property Access Shorthand
 
 <Playground>
 json.'long property'
@@ -102,16 +149,7 @@ matrix.0.0
 array.-1
 </Playground>
 
-`$:` behaves specially for Svelte compatibility.  If you want a key of `$`,
-wrap it in quotes or use explicit braces.
-
-<Playground>
-$: document.title = title
-"$": "dollar"
-{$: "dollar"}
-</Playground>
-
-### Arrays
+## Arrays
 
 Commas are optional at the ends of lines.
 
@@ -157,6 +195,16 @@ function justDoIt(a, ...args, cb) {
   cb.apply(a, args)
 }
 </Playground>
+
+## Strings
+
+Strings can span multiple lines:
+
+<Playground>
+console.log "Hello,
+world!"
+</Playground>
+
 
 ### Triple-Quoted Strings
 
@@ -916,33 +964,6 @@ type narrowing with `Object.is` as well as it does for `===`.
 "civet objectIs"
 a is b
 a is not b
-</Playground>
-
-## Automatic Variable Declaration
-
-By default, you are responsible for declaring your variables
-via `var`, `let`, `const`, or their shorthands. Alternatively,
-you can use a `"civet"` directive at the beginning of your file
-to specify one of two automatic variable declaration modes.
-
-### `autoVar`
-
-<Playground>
-"civet autoVar"
-sos = 0
-for item of iterable
-  square = item * item
-  sos += square
-</Playground>
-
-### `autoLet`
-
-<Playground>
-"civet autoLet"
-sos = 0
-for item of iterable
-  square = item * item
-  sos += square
 </Playground>
 
 ## JSX
