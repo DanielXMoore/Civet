@@ -410,10 +410,10 @@ function abort
 </Playground>
 
 <Playground>
-function circle(theta: number): {x: number, y: number}
+function circle(degrees: number): {x: number, y: number}
   radians := degrees * Math.PI / 180
-  x: Math.cos theta
-  y: Math.sin theta
+  x: Math.cos radians
+  y: Math.sin radians
 </Playground>
 
 ::: info
@@ -477,8 +477,8 @@ last value.  See [above](#function) for how to avoid this behavior.
 <Playground>
 circle := (degrees: number): {x: number, y: number} =>
   radians := degrees * Math.PI / 180
-  x: Math.cos theta
-  y: Math.sin theta
+  x: Math.cos radians
+  y: Math.sin radians
 </Playground>
 
 ### `return.value`
