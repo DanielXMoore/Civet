@@ -640,6 +640,13 @@ function parities(list: number[]): string[]
       "odd"
 </Playground>
 
+::: info
+Because loop expressions wrap in an
+[IFFE](https://developer.mozilla.org/en-US/docs/Glossary/IIFE),
+you cannot use `return` inside such a loop,
+nor can you `break` or `continue` any outer loop.
+:::
+
 ### Infinite Loop
 
 <Playground>
@@ -666,6 +673,27 @@ do
   total += item.value
   item = item.next
 while item?
+</Playground>
+
+### Do Blocks
+
+To put multiple lines in a scope and possibly an expression,
+you can use `do` without a `while`/`until` suffix, similar to
+[TC39 proposal: `do` expressions](https://github.com/tc39/proposal-do-expressions).
+
+<Playground>
+x := 5
+do
+  x := 10
+  console.log x
+console.log x
+</Playground>
+
+<Playground>
+x :=
+  do
+    y := f()
+    y*y
 </Playground>
 
 ### Labels

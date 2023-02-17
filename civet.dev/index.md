@@ -71,8 +71,20 @@ items = for item of items
     item.toUpperCase()
   else
     "<empty>"
+</Playground>
+
+<Playground>
 x == null ? throw "x is null" : x.fn()
 </Playground>
+
+[TC39 proposal: `do` expressions](https://github.com/tc39/proposal-do-expressions)
+
+<Playground>
+x = do
+  const tmp = f()
+  tmp * tmp + 1
+</Playground>
+
 
 ### Dedented Strings and Templates
 
