@@ -696,6 +696,12 @@ x :=
     y*y
 </Playground>
 
+::: info
+Because `do` expressions wrap in an
+[IFFE](https://developer.mozilla.org/en-US/docs/Glossary/IIFE),
+you cannot use `return`, `break`, or `continue` within them.
+:::
+
 ### Labels
 
 <Playground>
