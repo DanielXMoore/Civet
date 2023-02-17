@@ -27,6 +27,7 @@ export default async function vitePressConfig() {
       nav: [
         { text: 'Getting started', link: '/getting-started' },
         { text: 'Cheatsheet', link: '/cheatsheet' },
+        { text: 'Comparison', link: '/comparison' },
         { text: 'Integrations', link: '/integrations' },
         { text: 'Config', link: '/config' },
         { text: 'Playground', link: '/playground' },
