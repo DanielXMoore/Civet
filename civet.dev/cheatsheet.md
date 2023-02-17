@@ -196,6 +196,29 @@ function justDoIt(a, ...args, cb) {
 }
 </Playground>
 
+### Range Literals
+
+`[x..y]` includes `x` and `y`, while `[x...y]` includes `x` but not `y`.
+
+<Playground>
+letters := ['a'..'f']
+numbers := [1..10]
+reversed := [10..1]
+indices := [0...array.length]
+</Playground>
+
+### Array/String Slicing
+
+`[i..j]` includes `i` and `j`, while `[i...j]` includes `i` but not `j`.
+`i` and/or `j` can be omitted when slicing.
+
+<Playground>
+start := numbers[..2]
+mid := numbers[3...-2]
+end := numbers[-2..]
+numbers[1...-1] = []
+</Playground>
+
 ## Strings
 
 Strings can span multiple lines:
@@ -346,6 +369,21 @@ let b = 5
 let rem = a % b
 let mod = a %% b
 console.log rem, mod
+</Playground>
+
+### `Object.is`
+
+The `"civet objectIs"` directive changes the behavior of the `is` operator to
+[`Object.is`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/is),
+which is a bit better behaved than `===`.
+The plan is to make this the default behavior, once TypeScript supports
+type narrowing with `Object.is` as well as it does for `===`.
+(Currently, `a is b` will not correctly narrow `b` in some edge cases.)
+
+<Playground>
+"civet objectIs"
+a is b
+a is not b
 </Playground>
 
 ### Custom Infix Operators
@@ -903,9 +941,12 @@ interface Node<T>
 elt as HTMLInputElement
 </Playground>
 
-## Misc
+## Modules
 
-### ESM Import
+### `from` Shorthand
+
+If you have `from` in your `import`, you can omit `import`.
+You can also omit quotes around most filenames.
 
 <Playground>
 fs from fs
@@ -913,33 +954,38 @@ fs from fs
 metadata from ./package.json assert type: 'json'
 </Playground>
 
+### Import Like Object Destructuring
+
+<Playground>
+import {X: LocalX, Y: LocalY} from "./util"
+{X: LocalX, Y: LocalY} from "./util"
+</Playground>
+
 ### Dynamic Import
+
+If it's not the start of a statement,
+dynamic `import` does not require parentheses.
 
 <Playground>
 {x} = await import url
 </Playground>
 
-### Range Literals
-
-`[x..y]` includes `x` and `y`, while `[x...y]` includes `x` but not `y`.
+### Export Shorthand
 
 <Playground>
-letters := ['a'..'f']
-numbers := [1..10]
-reversed := [10..1]
-indices := [0...array.length]
+export a, b, c from "./cool.js"
+export x = 3
 </Playground>
 
-### Array/String Slicing
+## Comments
 
-`[i..j]` includes `i` and `j`, while `[i...j]` includes `i` but not `j`.
-`i` and/or `j` can be omitted when slicing.
+### JavaScript Comments
 
 <Playground>
-start := numbers[..2]
-mid := numbers[3...-2]
-end := numbers[-2..]
-numbers[1...-1] = []
+// one-line comment
+/** Block comment
+ */
+const i /* inline comment */ : number
 </Playground>
 
 ### Block Comments
@@ -951,19 +997,16 @@ block comment
 ###
 </Playground>
 
-### `Object.is`
+### `#` Comments
 
-The `"civet objectIs"` directive changes the behavior of the `is` operator to
-[`Object.is`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/is),
-which is a bit better behaved than `===`.
-The plan is to make this the default behavior, once TypeScript supports
-type narrowing with `Object.is` as well as it does for `===`.
-(Currently, `a is b` will not correctly narrow `b` in some edge cases.)
+If you do not need
+[private class fields](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes/Private_class_fields),
+you can enable `#` one-line comments (as in many other languages)
+via a `"civet"` directive at the beginning of your file:
 
 <Playground>
-"civet objectIs"
-a is b
-a is not b
+"civet coffee-comment"
+# one-line comment
 </Playground>
 
 ## JSX
