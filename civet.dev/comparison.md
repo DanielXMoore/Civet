@@ -8,8 +8,8 @@ aside: false
 Civet aims to be 99% compatible with existing JavaScript/TypeScript code.
 However, there are a few intentional deviations.
 
-In the examples below,
-Civet is on <span class="wide">the left</span><span class="narrow">top</span>,
+In the examples below, Civet code is on
+<span class="wide">the left</span><span class="narrow">top</span>,
 and compiled TypeScript output on
 <span class="wide">the right</span><span class="narrow">bottom</span>.
 

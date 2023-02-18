@@ -11,11 +11,22 @@ aside: false
 
 <Hero />
 
-Civet on <span class="wide">the left</span><span class="narrow">top</span>,
-compiled TypeScript output on
-<span class="wide">the right</span><span class="narrow">bottom</span>:
+***Civet*** is a language that compiles to
+[TypeScript](https://www.typescriptlang.org/) or
+[JavaScript](https://developer.mozilla.org/en-US/docs/Web/JavaScript),
+so you can [use existing tooling](/integrations)
+but enable concise and powerful syntax.
+In addition to 99% JS/TS [compatibility](/comparison), there are many
+features, with some highlights below and more comprehensive examples
+on the [cheatsheet](/cheatsheet).
+See also Civet's
+[design philosophy](https://github.com/DanielXMoore/Civet#philosophy).
 
 ## Highlights: Beyond TC39
+
+Civet code on <span class="wide">the left</span><span class="narrow">top</span>,
+compiled TypeScript output on
+<span class="wide">the right</span><span class="narrow">bottom</span>.
 
 ### Pattern Matching
 
