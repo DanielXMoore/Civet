@@ -3350,28 +3350,53 @@ ImpliedColon
 TryStatement
   Try:t NoPostfixBracedOrEmptyBlock:b CatchClause?:c FinallyClause?:f ->
     if (!c && !f) {
+      const e = []
+      const emptyCatchBlock = {
+        type: "BlockStatement",
+        expressions: e,
+        children: ["{", e, "}"],
+        bare: false,
+        empty: true,
+      }
+
+      c = {
+        type: "CatchClause",
+        children: [" catch(e) ", emptyCatchBlock],
+        block: emptyCatchBlock,
+      }
+
       return {
         type: "TryStatement",
-        children: [t, b, " catch(e) {}"]
+        blocks: [ b, emptyCatchBlock ],
+        children: [t, b, c],
       }
     }
 
+    const blocks = [b]
+    if (c) blocks.push(c.block)
+
     return {
       type: "TryStatement",
-      children: [t, b, c, f]
+      blocks,
+      children: [t, b, c, f],
     }
 
 TryExpression
   TryStatement:t ->
     return {
       type: "TryExpression",
-      blocks: [ t.children[1], t.children[2]?.[3] ],
+      blocks: t.blocks,
       children: ["(()=>{", t, "})()"]
     }
 
 # https://262.ecma-international.org/#prod-Catch
 CatchClause
-  ( Samedent / _ ) Catch CatchBind? ( ThenClause / BracedOrEmptyBlock )
+  ( Samedent / _ ) Catch CatchBind? ( ThenClause / BracedOrEmptyBlock ):block ->
+    return {
+      type: "CatchClause",
+      children: $0,
+      block,
+    }
 
 # NOTE: Added optional parentheses to catch binding
 CatchBind
@@ -6356,7 +6381,12 @@ Init
       // TODO: unify this with the `exp` switch
       switch (node.type) {
         case "BlockStatement":
-          insertPush(node.expressions[node.expressions.length - 1], ref)
+          if (node.expressions.length) {
+            const last = node.expressions[node.expressions.length - 1]
+            insertPush(last, ref)
+          } else {
+            node.expressions.push([ref, ".push(void 0);"])
+          }
           return
         case "CaseBlock":
           node.clauses.forEach((clause) => {
@@ -6413,12 +6443,10 @@ Init
           insertPush(exp.children[2], ref)
           return
         case "TryStatement":
-          // try block
-          insertPush(exp.children[1], ref)
-          // catch block
-          if (exp.children[2]) insertPush(exp.children[2][2], ref)
           // NOTE: CoffeeScript doesn't add a push to an empty catch block but does add if there is any statement in the catch block
-          // NOTE: do not insert a push in the finally block
+          // we always add a push to the catch block
+          // NOTE: does not insert a push in the finally block
+          exp.blocks.forEach(block => insertPush(block, ref))
           return
       }
 
@@ -6467,7 +6495,15 @@ Init
       // TODO: unify this with the `exp` switch
       switch (node.type) {
         case "BlockStatement":
-          insertReturn(node.expressions[node.expressions.length - 1])
+          if (node.expressions.length) {
+            const last = node.expressions[node.expressions.length - 1]
+            insertReturn(last)
+          } else {
+            // NOTE: Kind of hacky but I'm too much of a coward to make `->` add an implicit return
+            if (node.parent.type === "CatchClause") {
+              node.expressions.push(["return"])
+            }
+          }
           return
         // NOTE: "CaseClause"s don't get a return statements inserted
         case "WhenClause":
@@ -6522,10 +6558,7 @@ Init
           insertSwitchReturns(exp)
           return
         case "TryStatement":
-          // try block
-          insertReturn(exp.children[1])
-          // catch block
-          if (exp.children[2]) insertReturn(exp.children[2][3])
+          exp.blocks.forEach(block => insertReturn(block))
           // NOTE: do not insert a return in the finally block
           return
       }
