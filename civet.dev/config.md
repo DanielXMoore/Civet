@@ -4,4 +4,4 @@ title: Config
 
 # {{ $frontmatter.title }}
 
-[README.md](https://github.com/DanielXMoore/Civet#readme)
+For now, see the [README on GitHub](https://github.com/DanielXMoore/Civet#readme).

@@ -55,7 +55,7 @@ Things Kept from CoffeeScript
 Things Removed from CoffeeScript
 ---
 
-Most of these can be enabled by adding a [`"civet coffeeCompat"` directive prologue](#coffeescript-compatibility) to the top of your file.
+Most of these features are not available by default, but can be enabled by adding a [`"civet coffeeCompat"` directive prologue](#coffeescript-compatibility) to the top of your file.
 The goal is to provide a very high level of compatibility with existing CoffeeScript code while offering a fine grained migration path to modern
 Civet.
 
@@ -65,7 +65,7 @@ Civet.
   - `not instanceof` (use `!(a instanceof b)`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
   - `not of` use (`"civet coffeeCompat"`, or `"civet coffeeNot"`)
   - NOTE: CoffeeScript `not` precedence is dubious. `not a < b` should be equivalent to `!(a < b)` but it is in fact `!a < b`
-- `do` keyword (replaced with JS `do`, invoke using existing `(-> ...)()` syntax, `"civet coffeeCompat"`, or `"civet coffeeDo"`)
+- `do` keyword (replaced with JS `do...while` blocks and new `do` blocks; replace with `((x) -> ...)(x)` syntax or use `"civet coffeeCompat"`, or `"civet coffeeDo"`)
 - `for from` (use JS `for of`, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for own of` (use JS `for in` and check manually, switch to `Map#keys/values/entries`, or use `Object.create(null)`, or `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for ... when <condition>` (use `continue if exp` inside loop, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
@@ -74,6 +74,7 @@ Civet.
 - Prototype shorthand: `X::` → `X.prototype`, `X::a` → `X.prototype.a` (use `"civet coffeeCompat"`, or `civet "coffeePrototype"`). Note that Civet doesn't allow space
 between the identifier and the `::`.
 - Backtick embedded JS (replaced by template literals)
+- `#` one-line comments, to make room for private class fields (use `//`, or `"civet coffeeCompat"` or `"civet coffeeComment"` to enable)
 - Will add later
   - Conditional assignment `a?[x] = 3` → `a ? a[x] = 3 : undefined`
   - Multiple slice assignment `otherNumbers[0...] = numbers[3..6] = [-3, -4, -5, -6]`
