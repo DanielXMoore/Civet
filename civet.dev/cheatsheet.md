@@ -386,6 +386,49 @@ a is b
 a is not b
 </Playground>
 
+### Pipe Operator
+
+Based on
+[F# pipes](https://learn.microsoft.com/en-us/dotnet/fsharp/language-reference/symbol-and-operator-reference/#function-symbols-and-operators) and
+[TC39 Proposal: Pipe Operator](https://github.com/tc39/proposal-pipeline-operator).
+
+<Playground>
+data
+  |> Object.keys
+  |> console.log
+</Playground>
+
+Pairs particularly well with
+[single-argument function shorthand](#single-argument-function-shorthand):
+
+<Playground>
+x.length |> & + 1 |> .toString()
+</Playground>
+
+Use `await`, `yield`, or `return` in your pipeline:
+
+<Playground>
+fetch url |> await
+|> .json() |> await
+|> return
+</Playground>
+
+Pipe assignment:
+
+<Playground>
+data |>= .content
+</Playground>
+
+Fat pipes `||>` are for diversions to call a function,
+passing the left-hand value to the next two steps in the pipeline:
+
+<Playground>
+count |> & + 1
+||> console.log
+|> & * 2
+||> console.log
+</Playground>
+
 ### Custom Infix Operators
 
 You can also define your own infix operators;
