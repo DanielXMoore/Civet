@@ -120,6 +120,21 @@ By contrast, JavaScript would treat the code on
 as three binary operators with an index access (and a member access),
 followed by a code block with a label.
 
+## Labels
+
+In Civet, labels are written `:label` instead of `label:`.
+(The one exception is `$:` which can be written as `$:`
+for Svelte compatibility.)
+
+<Playground>
+:label while (true) {
+  break label
+}
+$: document.title = title
+</Playground>
+
+(This is to enable most object literals not needing braces.)
+
 ## Anything Else
 
 If some existing JS/TS code does not parse in Civet and it does not fall into
