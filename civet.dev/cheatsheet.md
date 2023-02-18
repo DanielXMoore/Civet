@@ -776,10 +776,9 @@ console.log x
 </Playground>
 
 <Playground>
-x :=
-  do
-    y := f()
-    y*y
+x := do
+  y := f()
+  y*y
 </Playground>
 
 ::: info
