@@ -419,8 +419,16 @@ Pipe assignment:
 data |>= .content
 </Playground>
 
-Fat pipes `||>` are for diversions to call a function,
-passing the left-hand value to the next two steps in the pipeline:
+Fat pipes `||>` pass the left-hand value to the next two steps in the pipeline
+(ignoring the output from the right-hand side):
+
+<Playground>
+array
+||> .pop()
+||> .push 5
+||> .sort()
+||> .reverse()
+</Playground>
 
 <Playground>
 count |> & + 1
