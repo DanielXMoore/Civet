@@ -91,6 +91,7 @@ uncacheable = new Set [
   "NestedObject"
   "NestedPropertyDefinitions"
   "NonSingleBracedBlock"
+  "NotDedented"
   "ObjectLiteral"
   "PopIndent"
   "PopJSXStack"
