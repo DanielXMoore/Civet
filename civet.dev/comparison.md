@@ -76,6 +76,20 @@ with braces or indented blocks too.
 }
 </Playground>
 
+If you don't like implicit returns outside of single-line arrow functions,
+you can turn off this feature entirely via a `"civet"` directive
+at the top of your file:
+
+<Playground>
+"civet -implicitReturns"
+function hello() {
+  console.log("Hello world!")
+}
+=>
+  console.log("Hello world!")
+(x) => x + 1
+</Playground>
+
 ## Indentation
 
 Because Civet allows for indented blocks as shorthand for braced blocks,
@@ -134,6 +148,39 @@ $: document.title = title
 </Playground>
 
 (This is to enable most object literals not needing braces.)
+
+## JSX
+
+To allow for automatic closing of JSX tags, Civet requires JSX children
+to be properly indented.
+
+<Playground>
+<div>
+  <h1>Hello</h1>
+  <p>Text</p>
+"not inside div anymore"
+</Playground>
+
+If you're OK with explicitly closing all tags, you can turn off the
+indentation requirement via a `"civet"` directive:
+
+<Playground>
+"civet coffeeJSX"
+<div>
+  <h1>Hello</h1>
+  <p>Text</p>
+still inside div
+</div>
+</Playground>
+
+Another discrepancy is that Civet automatically combines consecutive JSX tags
+at the same indentation level into a JSX fragment.
+(Otherwise, only the last tag would serve a function.)
+
+<Playground>
+<h1>Hello</h1>
+<p>Text</p>
+</Playground>
 
 ## Anything Else
 
