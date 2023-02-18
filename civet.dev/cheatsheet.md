@@ -5,7 +5,7 @@ aside: false
 
 # {{ $frontmatter.title }}
 
-Civet on <span class="wide">the left</span><span class="narrow">top</span>,
+Civet code on <span class="wide">the left</span><span class="narrow">top</span>,
 compiled TypeScript output on
 <span class="wide">the right</span><span class="narrow">bottom</span>.
 
