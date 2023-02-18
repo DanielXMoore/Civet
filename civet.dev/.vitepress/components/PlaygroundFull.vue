@@ -115,6 +115,7 @@ function clear() {
 .buttons {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   flex-wrap: wrap;
   margin: 15px 0;
   gap: 15px;
