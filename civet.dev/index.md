@@ -11,7 +11,7 @@ aside: false
 
 <Hero />
 
-***Civet*** is a language that compiles to
+***Civet*** is a programming language that compiles to
 [TypeScript](https://www.typescriptlang.org/) or
 [JavaScript](https://developer.mozilla.org/en-US/docs/Web/JavaScript),
 so you can [use existing tooling](/integrations)
