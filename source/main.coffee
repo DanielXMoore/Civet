@@ -70,6 +70,7 @@ uncacheable = new Set [
   "MemberExpression"
   "MemberExpressionRest"
   "Nested"
+  "NestedArgumentList"
   "NestedBindingElement"
   "NestedBindingElements"
   "NestedBlockExpression"
@@ -91,12 +92,19 @@ uncacheable = new Set [
   "NestedModuleItems"
   "NestedObject"
   "NestedPropertyDefinitions"
+  "NonAssignmentExtendedExpression"
+  "NonPipelineArgumentPart"
+  "NonPipelineArgumentList"
+  "NonPipelineAssignmentExpression"
+  "NonPipelineExtendedExpression"
+  "NonPipelinePostfixedExpression"
   "NonSingleBracedBlock"
   "NotDedented"
   "ObjectLiteral"
   "PopIndent"
   "PopJSXStack"
   "PostfixedExpression"
+  "PostfixedSingleLineStatements"
   "PostfixedStatement"
   "PrimaryExpression"
   "PushIndent"
@@ -199,6 +207,9 @@ makeCache = ->
       cache = caches.get(ruleName)
 
       if !cache and !uncacheable.has(ruleName)
+        #if /Line[S]/.test(ruleName)
+        #  console.log ruleName
+        #  return
         cache = new Map
         caches.set(ruleName, cache)
 
