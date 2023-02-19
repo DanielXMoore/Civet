@@ -483,6 +483,14 @@ function abort
   process.exit 1;
 </Playground>
 
+### One-Line Functions
+
+<Playground>
+function do console.log "Anonymous"
+function f do console.log "Named"
+function f(x) do console.log x
+</Playground>
+
 ### Function Overloading
 
 <Playground>
