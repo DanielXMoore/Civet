@@ -2,6 +2,7 @@
 import { onMounted, ref, watch, nextTick, computed } from 'vue';
 import { compileCivetToHtml } from '../utils/compileCivetToHtml';
 import { b64 } from '../utils/b64';
+import { ligatures } from '../utils/ligatures';
 
 const emit = defineEmits(['input']);
 const props = defineProps<{
@@ -75,7 +76,7 @@ const playgroundUrl = computed(() => {
 
 <template>
   <div v-if="props.compileAtStart && loading">Loading playground...</div>
-  <div v-else class="wrapper">
+  <div v-else :class="{ wrapper: true,  ligatures: ligatures}">
     <div class="col" @click="textareaEl?.focus()">
       <div class="code code--user">
         <textarea
@@ -112,6 +113,10 @@ const playgroundUrl = computed(() => {
       <div class="code code--output">
         <div v-if="outputHtml" v-html="outputHtml" />
         <slot v-else name="output" />
+      </div>
+      <div class="compilation-info">
+        <input type="checkbox" v-model="ligatures"/>
+        <label>Ligatures</label>
       </div>
     </div>
   </div>
@@ -221,4 +226,6 @@ const playgroundUrl = computed(() => {
 .code--input:deep(pre) {
   overflow: visible;
 }
+
+input { vertical-align: middle; }
 </style>
