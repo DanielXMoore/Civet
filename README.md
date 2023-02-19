@@ -74,6 +74,11 @@ Civet is essentially a tasteful superset of TypeScript.
 
 ### Implementations of New and Proposed ES Features
 
+See the [documentation](https://civet.dev/) for examples of these
+and other features.
+
+- Pattern matching (based on [TC39 proposal](https://github.com/tc39/proposal-pattern-matching))
+  - `switch` can match patterns like `[{type: "text", name}, ...rest]`
 - Pipe operator (based on [F# pipes](https://learn.microsoft.com/en-us/dotnet/fsharp/language-reference/symbol-and-operator-reference/#function-symbols-and-operators), [Hack pipes](https://docs.hhvm.com/hack/expressions-and-operators/pipe) and the [TC39 proposal](https://github.com/tc39/proposal-pipeline-operator))
   - `data |> Object.keys |> console.log` equivalent to
     `console.log(Object.keys(data))`
@@ -82,14 +87,19 @@ Civet is essentially a tasteful superset of TypeScript.
   - `|> await`, `|> yield`, and `|> return` (at end)
     for wrapping left-hand side with that operation
 - Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc), [Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax), [Elm record access](https://elm-lang.org/docs/records#access)
-  - Access: `x.map &.name` → `x.map(a => a.name)`
+  - Access: `x.map &.name` or `x.map .name` → `x.map(a => a.name)`
   - Nested access + slices: `x.map &.profile?.name[0...3]` → `x.map(a => a.profile?.name.slice(0, 3))`
   - Function call: `x.map &.callback a, b` → `x.map($ => $.callback(a, b))`
   - Unary operators: `x.map !!&` → `x.map($ => !!$)`
   - Binary operators: `x.map &+1` → `x.map($ => $+1)`
-- Flagging shorthand based on [from LiveScript](https://livescript.net/#literals-objects):
-  `{+debug, -live, !verbose}` → `{debug: true, live: false, verbose: false}`
-
+- Object literal shorthand
+  - `{foo()}` → `{foo: foo()}`, `{props.foo}` → `{foo: props.foo}`
+  - ``{`${x}${y}`: z}`` → ``{[`${x}${y}`]: z}``
+  - `data.{x,y}` or `data{x,y}` → `{x: data.x, y: data.y}`
+  - Flagging shorthand based on [from LiveScript](https://livescript.net/#literals-objects):
+    `{+debug, -live, !verbose}` → `{debug: true, live: false, verbose: false}`
+- Custom infix operators from any two-argument function
+- `do` expressions, `if` expressions, `for` expressions
 
 ### Convenience for ES6+ Features
 
@@ -194,7 +204,7 @@ could be a valid property `1.e10` → `1..e10`. The workaround is to add a trail
 - `when` inside switch automatically breaks and adds block scope.
 - `else` inside switch adds block scope.
 - No whitespace between unary operators and operands. Mandatory whitespace between condition and ternary `?` ex. `x ? a : b` since `x?` is the unary existential operator.
-- No labels (yet...)
+- Labels written `:label` (except for special case `$:` for Svelte)
 
 ### Scripting Improvements
 
