@@ -19,8 +19,7 @@ but enable concise and powerful syntax.
 In addition to 99% JS/TS [compatibility](/comparison), there are many
 features, with some highlights below and more comprehensive examples
 on the [cheatsheet](/cheatsheet).
-See also Civet's
-[design philosophy](https://github.com/DanielXMoore/Civet#philosophy).
+See also Civet's [design philosophy](/philosophy).
 
 ## Highlights: Beyond TC39
 
