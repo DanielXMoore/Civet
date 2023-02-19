@@ -35,6 +35,7 @@ uncacheable = new Set [
   "ConditionalExpression"
   "Declaration"
   "Debugger"
+  "ElementListWithIndentedApplicationForbidden"
   "ElseClause"
   "Expression"
   "ExpressionStatement"
