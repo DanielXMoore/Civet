@@ -23,7 +23,7 @@ const actions = [
     tagline="Expressive Syntax and Faster Coding with Civet"
     :image="{
       src: 'https://user-images.githubusercontent.com/13007891/210392977-03a3b140-ec63-4ce9-b6e3-0a0f7cac6cbe.png',
-      alt: 'civet',
+      alt: 'Civet logo',
     }"
     :actions="actions"
   />
