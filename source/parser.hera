@@ -7952,29 +7952,81 @@ Init
         let   [ , arg ]   = s.children
 
         let i = 0, l = body.length
-        const children = [ws]
 
-        let usingRef = false
+        const refDec = []
+        const children = [ws, refDec]
+
+        let usingRef = null
 
         for (i = 0; i < l; i++) {
           const step = body[i]
           const [leadingComment, pipe, trailingComment, expr] = step
           const returns = pipe.token === "||>"
+          let ref, result,
+            returning = returns ? arg : null
 
           if (pipe.token === "|>=") {
+            let initRef
             if (i === 0) {
-              // TODO: assignment node
-              children.push(arg, " = ")
+              switch(arg.type) {
+                case "MemberExpression":
+                  // If there is only a single access then we don't need a ref
+                  if (arg.children.length <= 2) break
+                case "CallExpression":
+                  const access = arg.children.pop()
+                  usingRef = module.needsRef({}) // hacky: using this like a "createRef"
+                  initRef = {
+                    type: "AssignmentExpression",
+                    children: [usingRef, " = ", arg, ";"],
+                  }
+
+                  arg = {
+                    type: "MemberExpression",
+                    children: [usingRef, access]
+                  }
+
+                  break;
+              }
+
+              // remove refDec from children and put it inside lhs of assignment
+              // TODO: should be attached to node to be hoisted
+              children.pop()
+              // assignment node
+              const lhs = [[
+                [refDec, initRef],
+                arg,
+                [],
+                {token: "=", children: [" = "]}
+              ]];
+
+              Object.assign(s, {
+                type: "AssignmentExpression",
+                children: [ lhs, children ],
+                names: null,
+                lhs,
+                assigned: arg,
+                exp: children,
+              })
+
+              // Clone so that the same node isn't on the left and right because splice manipulation
+              // moves things around and can cause a loop in the graph
+              arg = structuredClone(arg)
+
+              // except keep the ref the same
+              if (arg.children[0].type === "Ref") {
+                arg.children[0] = usingRef
+              }
+
             } else {
               children.push({
                 type: "Error",
                 message: "Can't use |>= in the middle of a pipeline",
               })
             }
+          } else {
+            s.children = children
           }
 
-          let ref, result,
-            returning = returns ? arg : null
           if(returns && (ref = module.needsRef(arg))) {
             // Use the existing ref if present
             usingRef = usingRef || ref
@@ -8022,12 +8074,14 @@ Init
           }
         }
 
+        debugger
+
+        // TODO: Hoistable ref declarations
         if (usingRef) {
-          children.unshift("let ", usingRef, ";")
+          refDec.unshift("let ", usingRef, ";")
         }
 
         children.push(arg)
-        s.children = children
         // Update parent pointers
         addParentPointers(s, s.parent)
       })
