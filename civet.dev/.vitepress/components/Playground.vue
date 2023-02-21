@@ -2,7 +2,7 @@
 import { onMounted, ref, watch, nextTick, computed } from 'vue';
 import { compileCivetToHtml } from '../utils/compileCivetToHtml';
 import { b64 } from '../utils/b64';
-import { ligatures } from '../utils/ligatures';
+import { ligatures } from '../store/ligatures.store';
 
 const emit = defineEmits(['input']);
 const props = defineProps<{
@@ -114,10 +114,10 @@ const playgroundUrl = computed(() => {
         <div v-if="outputHtml" v-html="outputHtml" />
         <slot v-else name="output" />
       </div>
-      <div class="compilation-info">
+      <label class="compilation-info">
         <input type="checkbox" v-model="ligatures"/>
-        <label>Ligatures</label>
-      </div>
+        Ligatures
+      </label>
     </div>
   </div>
 </template>
