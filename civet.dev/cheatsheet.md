@@ -792,6 +792,22 @@ you cannot use `return` inside such a loop,
 nor can you `break` or `continue` any outer loop.
 :::
 
+Loops that use `await` automatically get `await`ed.
+If you'd rather obtain the promise for the results so you can `await` them
+yourself, use `async for`.
+
+<Playground>
+results :=
+  for url of urls
+    await fetch url
+</Playground>
+
+<Playground>
+promise :=
+  async for url of urls
+    await fetch url
+</Playground>
+
 ### Infinite Loop
 
 <Playground>
@@ -845,6 +861,16 @@ Because `do` expressions wrap in an
 [IIFE](https://developer.mozilla.org/en-US/docs/Glossary/IIFE),
 you cannot use `return`, `break`, or `continue` within them.
 :::
+
+### Async Do Blocks
+
+You can create a promise using `await` notation with `async do`:
+
+<Playground>
+promise := async do
+  result := await fetch url
+  await result.json()
+</Playground>
 
 ### Labels
 
