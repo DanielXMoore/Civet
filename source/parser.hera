@@ -13,7 +13,7 @@ Program
 TopLevelStatement
   EOS? ModuleItem StatementDelimiter
 
-# Expressions with If and Switch
+# Expressions with If and Switch, but no comma operator
 ExtendedExpression
   NonAssignmentExtendedExpression
   AssignmentExpression
@@ -2816,12 +2816,13 @@ IterationStatement
   ForStatement
 
 IterationExpression
-  IterationStatement ->
+  ( Async __ )?:async IterationStatement:statement ->
     return {
       type: "IterationExpression",
-      subtype: $1.type,
-      children: [$1],
-      block: $1.block,
+      subtype: statement.type,
+      children: [statement],
+      block: statement.block,
+      async,
     }
 
 # NOTE: Added from CoffeeScript
@@ -3513,6 +3514,11 @@ RestoreAll
 ExpressionStatement
   # NOTE: semi-colons are being handled elsewhere
   # NOTE: Shouldn't need negative lookahead if shadowed in the proper order
+  # NOTE: Allow for e.g. await forms of IterationExpression that weren't
+  # already parsed as IterationStatement. Must be before Expression to avoid
+  # treated `async do ...` like a function call `async(do ...)`.
+  IterationExpression
+  # NOTE: Expression enables , operator
   Expression
 
 KeywordStatement
@@ -6351,7 +6357,7 @@ Init
       if (exp.subtype === "DoStatement") {
         // Just wrap with IIFE
         insertReturn(exp.block)
-        exp.children.splice(i, 1, ...module.wrapIIFE(exp.children))
+        exp.children.splice(i, 1, ...module.wrapIIFE(exp.children, exp.async))
         return
       }
 
@@ -6365,9 +6371,11 @@ Init
       insertPush(exp.block, resultsRef)
 
       // Wrap with IIFE
-      exp.children.splice(i, 1, module.wrapIIFE(
-        ["const ", resultsRef, "=[];", ...exp.children, "; return ", resultsRef]
-      ))
+      exp.children.splice(i, 1,
+        module.wrapIIFE([
+          "const ", resultsRef, "=[];", ...exp.children, "; return ", resultsRef
+        ], exp.async)
+      )
     }
 
     // Does this expression have an `await` in it and thus needs to be `async`?
@@ -6376,10 +6384,14 @@ Init
     }
 
     // Wrap an expression in an IIFE, adding async/await if expression
-    // uses await.  Returns an Array suitable for `children`.
-    module.wrapIIFE = (exp) => {
+    // uses await, or just adding async if specified.
+    // Returns an Array suitable for `children`.
+    module.wrapIIFE = (exp, async) => {
       let prefix, suffix
-      if (module.hasAwait(exp)) {
+      if (async) {
+        prefix = "(async ()=>{"
+        suffix = "})()"
+      } else if (module.hasAwait(exp)) {
         prefix = "(await (async ()=>{"
         suffix = "})())"
       } else {
@@ -7115,7 +7127,7 @@ Init
       if (node == null) return []
 
       if (Array.isArray(node)) {
-        return node.flatMap((n) => gatherRecursive(n, predicate))
+        return node.flatMap((n) => gatherRecursive(n, predicate, skipPredicate))
       }
 
       if (skipPredicate?.(node)) return []
@@ -7124,7 +7136,7 @@ Init
         return [node]
       }
 
-      return gatherRecursive(node.children, predicate)
+      return gatherRecursive(node.children, predicate, skipPredicate)
     }
 
     function gatherRecursiveAll(node, predicate) {
@@ -7142,9 +7154,11 @@ Init
       return nodes
     }
 
-    function isFunction({type}) {
+    function isFunction(node) {
+      const {type} = node
       return type === "FunctionExpression" || type === "ArrowFunction" ||
-             type === "MethodDefinition"
+             type === "MethodDefinition" || node.async
+      // do blocks can be marked async to prevent automatic await
     }
     function gatherRecursiveWithinFunction(node, predicate) {
       return gatherRecursive(node, predicate, isFunction)
