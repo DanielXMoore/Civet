@@ -6268,6 +6268,21 @@ Init
       }
     }
 
+    module.needsRef = function(expression, base="ref") {
+      switch (expression.type) {
+        case "Ref":
+        case "Identifier":
+        case "Literal":
+          return
+        default:
+          return {
+            type: "Ref",
+            base,
+            id: base,
+          }
+      }
+    }
+
     // Convert (non-Template) Literal to actual JavaScript value
     module.literalValue = function(literal) {
       let {raw} = literal
@@ -6640,6 +6655,7 @@ Init
     // TODO: Avoid parentheses in more cases by adding more types.
     module.makeLeftHandSideExpression = function(expression) {
       switch (expression.type) {
+        case "Ref":
         case "Identifier":
         case "Literal":
         case "CallExpression":
@@ -7182,6 +7198,31 @@ Init
           addParentPointers(child, node)
         }
       }
+    }
+
+    function removeParentPointers(node) {
+      if (node == null) return
+      if (typeof node !== "object") return
+
+      // NOTE: Arrays are transparent and skipped when traversing via parent
+      if (Array.isArray(node)) {
+        for (const child of node) {
+          removeParentPointers(child)
+        }
+        return
+      }
+
+      node.parent = null
+      if (node.children) {
+        for (const child of node.children) {
+          removeParentPointers(child)
+        }
+      }
+    }
+
+    function clone(node) {
+      removeParentPointers(node)
+      return structuredClone(node)
     }
 
     // Find nearest strict ancestor that satisfies predicate,
@@ -7850,22 +7891,7 @@ Init
           expression = expression.expression
         }
 
-        let ref
-
-        switch (expression.type) {
-          case "Identifier":
-          case "Literal":
-            ref = expression
-            break
-          default:
-            // TODO: push statement assigning ref
-            ref = {
-              type: "Ref",
-              base: "m",
-              id: "m",
-            }
-        }
-
+        let ref = module.needsRef(expression, "m") || expression
         let prev = [],
           root = prev
 
@@ -7965,33 +7991,118 @@ Init
         let   [ , arg ]   = s.children
 
         let i = 0, l = body.length
-        const children = [ws]
+
+        const refDec = []
+        const children = [ws, refDec]
+
+        let usingRef = null
 
         for (i = 0; i < l; i++) {
           const step = body[i]
           const [leadingComment, pipe, trailingComment, expr] = step
           const returns = pipe.token === "||>"
+          let ref, result,
+            returning = returns ? arg : null
 
           if (pipe.token === "|>=") {
+            let initRef
             if (i === 0) {
-              // TODO: assignment node
-              children.push(arg, " = ")
+              outer: switch(arg.type) {
+                case "MemberExpression":
+                  // If there is only a single access then we don't need a ref
+                  if (arg.children.length <= 2) break
+                case "CallExpression":
+                  const access = arg.children.pop()
+
+                  switch (access.type) {
+                    case "PropertyAccess":
+                    case "SliceExpression":
+                      break
+                    default:
+                      children.unshift({
+                        type: "Error",
+                        $loc: pipe.token.$loc,
+                        message: `Can't assign to ${access.type}`,
+                      })
+                      arg.children.push(access)
+                      break outer
+                  }
+
+                  usingRef = module.needsRef({}) // hacky: using this like a "createRef"
+                  initRef = {
+                    type: "AssignmentExpression",
+                    children: [usingRef, " = ", arg, ","],
+                  }
+
+                  arg = {
+                    type: "MemberExpression",
+                    children: [usingRef, access]
+                  }
+
+                  break;
+              }
+
+              // remove refDec from children and put it inside lhs of assignment
+              // TODO: should be attached to node to be hoisted
+              children.pop()
+              // assignment node
+              const lhs = [[
+                [refDec, initRef],
+                arg,
+                [],
+                {token: "=", children: [" = "]}
+              ]];
+
+              Object.assign(s, {
+                type: "AssignmentExpression",
+                children: [ lhs, children ],
+                names: null,
+                lhs,
+                assigned: arg,
+                exp: children,
+              })
+
+              // Clone so that the same node isn't on the left and right because splice manipulation
+              // moves things around and can cause a loop in the graph
+              arg = clone(arg)
+
+              // except keep the ref the same
+              if (arg.children[0].type === "Ref") {
+                arg.children[0] = usingRef
+              }
+
             } else {
-              children.push({
+              children.unshift({
                 type: "Error",
+                $loc: pipe.token.$loc,
                 message: "Can't use |>= in the middle of a pipeline",
               })
             }
+          } else {
+            s.children = children
           }
 
-          const [result, returning] = module.constructPipeStep(
+          if(returns && (ref = module.needsRef(arg))) {
+            // Use the existing ref if present
+            usingRef = usingRef || ref
+            arg = {
+              type: "ParenthesizedExpression",
+              children: ["(", {
+                type: "AssignmentExpression",
+                children: [usingRef, " = ", arg],
+              }, ")"],
+            }
+            returning = usingRef
+          }
+
+          [result, returning] = module.constructPipeStep(
             {
               leadingComment: module.skipIfOnlyWS(leadingComment),
               trailingComment: module.skipIfOnlyWS(trailingComment),
               expr
             },
             arg,
-            returns ? arg : null
+            returning,
           )
 
           if (result.type === "ReturnStatement") {
@@ -8018,8 +8129,12 @@ Init
           }
         }
 
+        // TODO: Hoistable ref declarations
+        if (usingRef) {
+          refDec.unshift("let ", usingRef, ";")
+        }
+
         children.push(arg)
-        s.children = children
         // Update parent pointers
         addParentPointers(s, s.parent)
       })
