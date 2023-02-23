@@ -437,6 +437,14 @@ count |> & + 1
 ||> console.log
 </Playground>
 
+<Playground>
+url |> fetch |> await
+||> (response) => console.log response.status
+|> .json() |> await
+||> (json) => console.log "json:", json
+|> callback
+</Playground>
+
 ### Custom Infix Operators
 
 You can also define your own infix operators;
@@ -872,6 +880,13 @@ promise := async do
   await result.json()
 </Playground>
 
+<Playground>
+await Promise.allSettled for url of urls
+  async do
+    result := await fetch url
+    await result.json()
+</Playground>
+
 ### Labels
 
 <Playground>
@@ -1017,6 +1032,16 @@ interface Signal
 interface Node<T>
   value: T
   next: Node<T>
+</Playground>
+
+### Enum
+
+<Playground>
+enum Direction
+  Up
+  Down
+  Left = 2 * Down
+  Right = 2 * Left
 </Playground>
 
 ### Assertions

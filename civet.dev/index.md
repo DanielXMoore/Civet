@@ -84,7 +84,12 @@ items = for item of items
 </Playground>
 
 <Playground>
-x == null ? throw "x is null" : x.fn()
+return
+  if x == null
+    throw "x is null"
+  else
+    log `received x of ${x}`
+    x.value()
 </Playground>
 
 [TC39 proposal: `do` expressions](https://github.com/tc39/proposal-do-expressions)
