@@ -1715,6 +1715,7 @@ Literal
   LiteralContent ->
     return {
       type: "Literal",
+      subtype: $1.type,
       children: $0,
       raw: $1.token,
     }
@@ -3806,6 +3807,7 @@ Declaration
   ClassDeclaration
   LexicalDeclaration
   TypeDeclaration
+  EnumDeclaration
   OperatorDeclaration
 
 # https://262.ecma-international.org/#prod-HoistableDeclaration
@@ -4532,6 +4534,10 @@ In
 # https://262.ecma-international.org/#prod-LetOrConst
 LetOrConst
   ( "let" / "const" ) NonIdContinue ->
+    return { $loc, token: $1 }
+
+Const
+  "const" NonIdContinue ->
     return { $loc, token: $1 }
 
 LetOrConstOrVar
@@ -5315,6 +5321,10 @@ TypeKeyword
   "type" NonIdContinue ->
     return { $loc, token: $1 }
 
+Enum
+  "enum" NonIdContinue ->
+    return { $loc, token: $1 }
+
 Interface
   "interface" NonIdContinue ->
     return { $loc, token: $1 }
@@ -5355,7 +5365,7 @@ BasicInterfaceProperty
   ( TypeIndexSignature / PropertyName ) TypeSuffix InterfacePropertyDelimiter
 
 InterfacePropertyDelimiter
-  _* ( Semicolon / Comma )
+  _? ( Semicolon / Comma )
   &( __ CloseBrace )
   &EOS
 
@@ -5392,6 +5402,98 @@ NestedDeclareElement
 DeclareElement
   ( Export _? )? TypeLexicalDeclaration -> { ts: true, children: $0 }
   ( Export _? )? TypeDeclarationRest    -> { ts: true, children: $0 }
+
+EnumDeclaration
+  ( Const _ )?:isConst Enum TrailingComment* IdentifierName:id EnumBlock:block ->
+    const ts = {
+      ts: true,
+      children: $0,
+    }
+    // const enums do not generate any JavaScript code
+    if (isConst) return ts
+    // Generate JS output for enum similar to how TypeScript does
+    const names = new Set(block.properties.map(p => p.name.name))
+    return [ts,
+      {
+        js: true,
+        children: [
+          ["let ", id, " = {};\n"],
+          ...block.properties.map((property, i) => {
+            let init, isString
+            if (property.init) {
+              // Replace references to other enum members.
+              // TS further restricts this to past enum members,
+              // but we don't need to enforce that here.
+              init = module.replaceNodes(structuredClone(property.init),
+                n => n.type === "Identifier" && names.has(n.name),
+                n => [id, '["', n.name, '"]'])
+              const value = init[init.length - 1]
+              isString = value.type === "TemplateLiteral" ||
+                (value.type === "Literal" && value.subtype === "StringLiteral")
+            } else {
+              // Default initializer is previous property + 1, or 0 if first.
+              // TS further restricts this to when previous property is
+              // constant, but we don't need to enforce that here.
+              init = i === 0 ? " = 0" :
+                [" = ", id, '["', block.properties[i-1].name, '"] + 1']
+            }
+            // String enums do not get back references
+            if (isString) {
+              return [
+                id, '["', property.name, '"]', init, ";\n",
+              ]
+            } else {
+              return [
+                id, "[", id, '["', property.name, '"]', init,
+                '] = "', property.name, '";\n',
+              ]
+            }
+          }),
+        ],
+      }
+    ]
+
+EnumBlock
+  __ OpenBrace NestedEnumProperties:props __ CloseBrace ->
+    return {
+      properties: props.properties,
+      children: $0,
+    }
+  __ OpenBrace ( __ EnumProperty )*:props __ CloseBrace ->
+    return {
+      properties: props.map(p => p[1]),
+      children: $0,
+    }
+  # NOTE: Added indentation based implied braces
+  InsertOpenBrace NestedEnumProperties:props InsertNewline InsertIndent InsertCloseBrace ->
+    return {
+      properties: props.properties,
+      children: $0,
+    }
+
+NestedEnumProperties
+  PushIndent NestedEnumProperty*:props PopIndent ->
+    if (!props.length) return $skip
+    return {
+      properties: props.map((p) => p.property),
+      children: $0,
+    }
+
+NestedEnumProperty
+  Nested EnumProperty ->
+    return {
+      property: $2,
+      children: $0,
+    }
+
+EnumProperty
+  Identifier:name ( __ Equals ExtendedExpression )?:init ObjectPropertyDelimiter ->
+    return {
+      type: "EnumProperty",
+      name,
+      init,
+      children: $0,
+    }
 
 TypeIndexSignature
   ( [+-]? "readonly" __ )? OpenBracket TypeIndex CloseBracket ( __ [+-] QuestionMark )?
@@ -7241,6 +7343,22 @@ Init
         if (predicate(node)) return node
         node = node.parent
       }
+    }
+
+    // Replace all nodes that match predicate with replacer(node)
+    module.replaceNodes = (root, predicate, replacer) => {
+      if (root == null) return root
+      const array = Array.isArray(root) ? root : root.children
+      if (!array) return root
+      array.forEach((node, i) => {
+        if (node == null) return
+        if (predicate(node)) {
+          array[i] = replacer(node, root)
+        } else {
+          module.replaceNodes(node, predicate, replacer)
+        }
+      })
+      return root
     }
 
     function processParams(f) {
