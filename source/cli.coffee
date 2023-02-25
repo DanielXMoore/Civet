@@ -169,7 +169,8 @@ repl = (options) ->
           output = compile input, {...options, filename}
         catch error
           #console.error "Failed to transpile Civet:"
-          return callback error
+          console.error error
+          return callback ''
         if options.compile or options.ast
           callback null, output
         else

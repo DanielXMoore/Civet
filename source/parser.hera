@@ -5,13 +5,51 @@
 # https://262.ecma-international.org/13.0/
 
 Program
-  Reset Init __ TopLevelStatement*:statements __ ->
+  # EOS allows for initial comment blocks and newlines,
+  # when Init didn't already consume them.
+  Reset Init EOS? TopLevelStatements:statements __ ->
     module.processProgram(statements)
-
     return $0
 
+TopLevelStatements
+  # If first line is strictly indented, require all lines to be equally so
+  # Use TrackIndented instead of PushIndent to avoid requiring leading EOS
+  TrackIndented:indent TopLevelSingleLineStatements:first NestedTopLevelStatements*:rest PopIndent ->
+    return [
+      [indent, ...first[0]],
+      ...first.slice(1).map(s => ["", ...s]),
+      ...rest.flat(),
+    ]
+  # Unindented case: rely on initial indentLevel of 0
+  TopLevelSingleLineStatements:first NestedTopLevelStatements*:rest ->
+    return [
+      ...first.map(s => ["", ...s]),
+      ...rest.flat(),
+    ]
+  # Empty case
+  "" -> []
+
+NestedTopLevelStatements
+  Nested:nested TopLevelSingleLineStatements:statements ->
+    return [
+      [nested, ...statements[0]],
+      ...statements.slice(1).map(s => ["", ...s]),
+    ]
+
+# Multiple top-level statements on the same line
+TopLevelSingleLineStatements
+  ( !EOS TopLevelStatement )+:statements ->
+    return statements.map(([, statement]) => statement)
+
 TopLevelStatement
-  EOS? ModuleItem StatementDelimiter
+  _?:ws ModuleItem:statement StatementDelimiter:delimiter ->
+    if (ws) {
+      statement = {
+        ...statement,
+        children: [ws, ...statement.children],
+      }
+    }
+    return [statement, delimiter]
 
 # Expressions with If and Switch, but no comma operator
 ExtendedExpression
@@ -1533,10 +1571,11 @@ ExplicitBlock
       empty: true,
     }
   __ OpenBrace NestedBlockStatements:block __ CloseBrace ->
-    return Object.assign({}, block, {
+    return {
+      ...block,
       children: [$1, $2, ...block.children, $4, $5],
       bare: false,
-    })
+    }
 
 ImplicitNestedBlock
   # NOTE: Check &EOS needed by eventual PushIndent to skip work if not needed
@@ -1557,7 +1596,7 @@ Block
 
   ThenClause
   # NOTE: !EOS prevents capturing a following unindented Statement
-  TrailingComment*:ws !EOS Statement:s ->
+  _?:ws !EOS Statement:s ->
     const expressions = [[ws, s]]
     return {
       type: "BlockStatement",
@@ -1701,11 +1740,14 @@ NestedBlockStatements
   PushIndent NestedBlockStatement*:statements PopIndent ->
     if (!statements.length) return $skip
 
+    // separate first EOS from indent for easier insertion to top of block
     const first = statements[0]
-    // separate EOS from indent
     const ws = first[0]
-    const [indent] = ws.slice(-1)
-    first[0] = indent
+    const indent = ws.at(-1)
+    statements = [
+      [indent, ...first.slice(1)],
+      ...statements.slice(1),
+    ]
 
     return {
       type: "BlockStatement",
@@ -1715,7 +1757,11 @@ NestedBlockStatements
     }
 
 NestedBlockStatement
-  Nested StatementListItem StatementDelimiter
+  Nested:nested _?:ws StatementListItem:statement StatementDelimiter:delimiter ->
+    if (ws) {
+      statement = {...statement, children: [ ws, ...statement.children ]}
+    }
+    return [nested, statement, delimiter]
 
 # https://262.ecma-international.org/#prod-Literal
 Literal
@@ -2927,11 +2973,16 @@ ForStatementControl
     if ($3) {
       const indent = module.currentIndent.token + "  "
       const block = "continue\n"
-      $2.blockPrefix.push([indent, {
-        type: "IfStatement",
-        then: block,
-        children: ["if (!(", module.insertTrimmingSpace($3, ""), ")) ", block],
-      }])
+      $2 = {
+        ...$2,
+        blockPrefix: [...$2.blockPrefix,
+          [indent, {
+            type: "IfStatement",
+            then: block,
+            children: ["if (!(", module.insertTrimmingSpace($3, ""), ")) ", block],
+          }]
+        ],
+      }
     }
 
     return $2
@@ -3608,9 +3659,9 @@ MaybeNestedExpression
 
 # https://262.ecma-international.org/#prod-ImportDeclaration
 ImportDeclaration
-  Import __ TypeKeyword __ ImportClause __ FromClause ImportAssertion? -> { ts: true, children: $0 }
-  Import __ ImportClause __ FromClause ImportAssertion?
-  Import __ ModuleSpecifier ImportAssertion?
+  Import __ TypeKeyword __ ImportClause __ FromClause ImportAssertion? -> { type: "ImportDeclaration", ts: true, children: $0 }
+  Import __ ImportClause __ FromClause ImportAssertion? -> { type: "ImportDeclaration", children: $0 }
+  Import __ ModuleSpecifier ImportAssertion? -> { type: "ImportDeclaration", children: $0 }
   # NOTE: Added import shorthand
   # NOTE: Not adding $loc to source map here yet because it will point to the start of the identifier
   # the proper place may be to use the From location
@@ -3623,7 +3674,7 @@ ImportDeclaration
     }
     const children = [i, t, c, w, f, a]
     if (!t) return children
-    return { ts: true, children }
+    return { type: "ImportDeclaration", ts: true, children }
 
 ImpliedImport
   "" ->
@@ -3764,15 +3815,14 @@ ImportedBinding
 # https://262.ecma-international.org/#prod-ExportDeclaration
 ExportDeclaration
   # NOTE: Using ExtendedExportDeclaration to allow If/Switch expressions
-  Export __ Default __ ( HoistableDeclaration / ClassDeclaration / ExtendedExpression )
+  Export __ Default __ ( HoistableDeclaration / ClassDeclaration / ExtendedExpression ) ->
+    return { type: "ExportDeclaration", children: $0 }
   Export __ ExportFromClause __ FromClause ->
-    if (!$3.ts) return $0
-    return { ts: true, children: $0 }
+    return { type: "ExportDeclaration", ts: $3.ts, children: $0 }
   # NOTE: Declaration and VariableStatement should come before NamedExports
   # so that NamedExports doesn't grab function, async, type, var, etc.
   Export __ ( Declaration / VariableStatement / TypeAndNamedExports / ExportVarDec ) ->
-    if (!$3.ts) return $0
-    return { ts: true, children: $0 }
+    return { type: "ExportDeclaration", ts: $3.ts, children: $0 }
 
 # CoffeeScript style `export x = 3` -> `export var x = 3`
 ExportVarDec
@@ -6603,10 +6653,7 @@ Init
 
       const [, exp] = node
       if (!exp) return
-
-      let indent = node[0]
-      // Hacky way to get the indent of the last expression
-      if (Array.isArray(indent)) indent = indent[indent.length - 1]
+      const indent = getIndent(node)
 
       switch (exp.type) {
         case "BreakStatement":
@@ -6682,7 +6729,7 @@ Init
 
     function getIndent(statement) {
       let indent = statement?.[0]
-      // Hacky way to get the indent of the last expression
+      // Hacky way to get the indent out of [EOS, indent] pair
       if (Array.isArray(indent)) indent = indent[indent.length - 1]
       return indent
     }
@@ -8333,11 +8380,8 @@ Init
     }
 
     function findDecs(statements) {
-      const declarationNames = gatherNodes(statements, (node) => {
-        if(node.type === "Declaration") {
-          return true
-        }
-      }).flatMap(d => d.names)
+      const declarationNames = gatherNodes(statements, ({type}) => type === "Declaration")
+      .flatMap(d => d.names)
 
       return new Set(declarationNames)
     }
@@ -8407,9 +8451,7 @@ Init
       scopes.push(decs)
       const varIds = []
       const assignmentStatements = findAssignments(statements, scopes)
-      const undeclaredIdentifiers = assignmentStatements.flatMap((a) => {
-        return a.names
-      })
+      const undeclaredIdentifiers = assignmentStatements.flatMap(a => a.names)
 
       // Unique, undeclared identifiers in this scope
       undeclaredIdentifiers.filter((x, i, a) => {
@@ -8445,8 +8487,7 @@ Init
 
       if (varIds.length) {
         // get indent from first statement
-        let indent = statements[0][0]
-        if (Array.isArray(indent)) indent = indent[indent.length - 1]
+        const indent = getIndent(statements[0])
         statements.unshift([indent, "var ", varIds.join(", "), "\n"])
       }
 
@@ -8537,7 +8578,7 @@ Init
             statement[1].children.unshift(["let "])
           else {
             let tail = "\n"
-            // Is this statement start with a new Line?
+            // Does this statement start with a newline?
             if (gatherNodes(indent, (node) => node.token && node.token.endsWith("\n")).length > 0)
               tail = undefined
             targetStatements.push([indent, "let ", undeclaredIdentifiers.join(", "), tail])
@@ -8710,6 +8751,7 @@ TrackIndented
     }
 
     module.indentLevels.push(indent)
+    return $1
 
 Samedent
   EOS Indent:indent ->
