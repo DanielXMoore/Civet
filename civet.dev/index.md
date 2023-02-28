@@ -63,7 +63,8 @@ a |> & + 1 |> bar
 x.map .name
 x.map &.profile?.name[0...3]
 x.map &.callback a, b
-x.map +&
+x.map &+1
+x.map -&
 </Playground>
 
 ### Custom Infix Operators
