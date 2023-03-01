@@ -3137,7 +3137,7 @@ WhenCondition
 
 CoffeeForStatementParameters
   # NOTE: Coffee for loops can't have parens
-  ( Await __ )? InsertOpenParen:open CoffeeForDeclaration:declaration CoffeeForIndex?:index __ ( In / Of / From ):kind ExpressionWithIndentedApplicationForbidden:exp ( __ By ExpressionWithIndentedApplicationForbidden )?:step InsertCloseParen:close ->
+  ( Await __ )? InsertOpenParen:open CoffeeForDeclaration:declaration CoffeeForIndex?:index __ ( In / Of / From ):kind ExpressionWithIndentedApplicationForbidden:exp ( _? By ExpressionWithIndentedApplicationForbidden )?:step InsertCloseParen:close ->
     let blockPrefix = []
     const indent = module.currentIndent.token + "  "
     exp = module.insertTrimmingSpace(exp, "")
@@ -3190,87 +3190,8 @@ CoffeeForStatementParameters
         case "Identifier":
           expRef = exp
           break
-        case "RangeExpression": {
-          const {start, end, inclusive} = exp
-
-          let stepExp = step?.[2]
-          let stepRef
-          if (stepExp) {
-            stepExp = module.insertTrimmingSpace(stepExp, "")
-            if (stepExp.type === "Literal") {
-              stepRef = stepExp
-            } else {
-              stepRef = {
-                type: "Ref",
-                base: "step",
-                id: "step",
-              }
-            }
-          }
-
-          let startRef, endRef
-          if (start.type === "Literal") {
-            startRef = start
-          } else if (start.type === "Identifier") {
-            startRef = start
-          } else {
-            startRef = {
-              type: "Ref",
-              base: "ref",
-              id: "ref",
-            }
-          }
-
-          if (end.type === "Literal") {
-            endRef = end
-          } else if (end.type === "Identifier") {
-            endRef = end
-          } else {
-            endRef = {
-              type: "Ref",
-              base: "ref",
-              id: "ref",
-            }
-          }
-
-          const startRefDec = (startRef !== start) ? [startRef, " = ", start, ", "] : []
-          const endRefDec = (endRef !== end) ? [endRef, " = ", end, ", "] : []
-          const varRef = declaration
-          const ascDec = stepRef
-          ? stepRef !== stepExp
-            ? [", step = ", stepExp]
-            : []
-          : [", asc = ", startRef, " <= ", endRef]
-          declaration = {
-            type: "Declaration",
-            children: ["let ", ...startRefDec, ...endRefDec, counterRef, " = ", varRef, " = ", startRef, ...ascDec],
-            names: varRef.names,
-          }
-
-          blockPrefix./**/push(["", {
-            type: "AssignmentExpression",
-            children: [], // Empty assignment to trigger auto-var
-            names: varRef.names,
-          }])
-
-          const counterPart = inclusive
-            ? [counterRef, " <= ", endRef, " : ", counterRef, " >= ", endRef]
-            : [counterRef, " < " , endRef, " : ", counterRef, " > " , endRef]
-
-          const condition = stepRef
-            ? [stepRef, " !== 0 && (", stepRef, " > 0 ? ", ...counterPart, ")"]
-            : ["asc ? ", ...counterPart]
-
-          const increment = stepRef
-          ? [varRef, " = ", counterRef, " += ", stepRef]
-          : [varRef, " = asc ? ++", counterRef, " : --", counterRef]
-
-          return {
-            declaration,
-            children: [$1, open, declaration, "; ", ...condition, "; ", ...increment, close],
-            blockPrefix,
-          }
-        }
+        case "RangeExpression":
+          return module.forRange(open, declaration, exp, step?.[2], close)
         default:
           expRef = {
             type: "Ref",
@@ -3383,13 +3304,23 @@ ForStatementParameters
   # https://262.ecma-international.org/#prod-ForInOfStatement
   # NOTE: Consolidated declarations
   # NOTE: Consolidated optional 'await'
-  ( Await __ )? OpenParen __    ForInOfDeclaration:declaration __ ( In / Of ) ExpressionWithIndentedApplicationForbidden __ CloseParen ->
+  ( Await __ )? OpenParen:open __    ForInOfDeclaration:declaration __ ( In / Of ):op ExpressionWithIndentedApplicationForbidden:exp ( __ By ExpressionWithIndentedApplicationForbidden )?:step __ CloseParen:close ->
+    if (exp.type === "RangeExpression" && op.token === "of") {
+      return module.forRange(open, declaration, exp, step, close)
+    } else if (step) {
+      throw new Error("for..of/in cannot use 'by' except with range literals")
+    }
     return {
       declaration,
       children: $0,
     }
   # NOTE: Added optional parens
-  ( Await __ )? InsertOpenParen ForInOfDeclaration:declaration __ ( In / Of ) ExpressionWithIndentedApplicationForbidden InsertCloseParen ->
+  ( Await __ )? InsertOpenParen:open ForInOfDeclaration:declaration __ ( In / Of ):op ExpressionWithIndentedApplicationForbidden:exp ( __ By ExpressionWithIndentedApplicationForbidden )?:step InsertCloseParen:close ->
+    if (exp.type === "RangeExpression" && op.token === "of") {
+      return module.forRange(open, declaration, exp, step, close)
+    } else if (step) {
+      throw new Error("for..of/in cannot use 'by' except with range literals")
+    }
     return {
       declaration: declaration,
       children: $0,
@@ -3401,6 +3332,7 @@ ForInOfDeclaration
     return {
       type: "ForDeclaration",
       children: $0,
+      declare: $1,
       names: binding.names,
     }
   ForDeclaration
@@ -3408,10 +3340,11 @@ ForInOfDeclaration
 
 # https://262.ecma-international.org/#prod-ForDeclaration
 ForDeclaration
-  LetOrConst:c NonIdContinue ForBinding:binding ->
+  LetOrConst:c ForBinding:binding ->
     return {
       type: "ForDeclaration",
       children: [c, binding],
+      declare: c,
       names: binding.names,
     }
   # NOTE: Added default implicit const to for bindings
@@ -3421,6 +3354,7 @@ ForDeclaration
     return {
       type: "ForDeclaration",
       children: [c, binding],
+      declare: c,
       names: binding.names,
     }
 
@@ -6560,6 +6494,7 @@ Init
       }
       return node
     }
+
     module.processUnaryExpression = (pre, exp, post) => {
       // Handle "?" postfix
       if (post?.token === "?") {
@@ -6661,6 +6596,109 @@ Init
         return parseInt(raw, 10)
       }
       throw new Error("Unrecognized literal " + JSON.stringify(literal))
+    }
+
+    module.forRange = function(open, forDeclaration, range, stepExp, close) {
+      const {start, end, inclusive} = range
+
+      const counterRef = {
+        type: "Ref",
+        base: "i",
+        id: "i",
+      }
+
+      let stepRef
+      if (stepExp) {
+        stepExp = module.insertTrimmingSpace(stepExp, "")
+        if (stepExp.type === "Literal") {
+          stepRef = stepExp
+        } else {
+          stepRef = {
+            type: "Ref",
+            base: "step",
+            id: "step",
+          }
+        }
+      }
+
+      let startRef, endRef
+      if (start.type === "Literal") {
+        startRef = start
+      } else if (start.type === "Identifier") {
+        startRef = start
+      } else {
+        startRef = {
+          type: "Ref",
+          base: "ref",
+          id: "ref",
+        }
+      }
+
+      if (end.type === "Literal") {
+        endRef = end
+      } else if (end.type === "Identifier") {
+        endRef = end
+      } else {
+        endRef = {
+          type: "Ref",
+          base: "ref",
+          id: "ref",
+        }
+      }
+
+      const startRefDec = (startRef !== start) ? [startRef, " = ", start, ", "] : []
+      const endRefDec = (endRef !== end) ? [endRef, " = ", end, ", "] : []
+      const ascDec = stepRef
+      ? stepRef !== stepExp
+        ? [", step = ", stepExp]
+        : []
+      : [", asc = ", startRef, " <= ", endRef]
+
+      let varAssign = [], varLetAssign = varAssign, varLet = varAssign, blockPrefix
+      if (forDeclaration.declare) { // var/let/const declaration of variable
+        if (forDeclaration.declare.token === "let") {
+          const varName = forDeclaration.children.splice(1)  // strip let
+          varAssign = [...module.insertTrimmingSpace(varName, ""), " = "]
+          varLet = [",", ...varName, " = ", counterRef]
+        } else { // const or var: put inside loop
+          blockPrefix = [
+            ["", forDeclaration, " = ", counterRef, ";\n"]
+          ]
+        }
+      } else { // Coffee-style for loop
+        varAssign = varLetAssign = [forDeclaration, " = "]
+        blockPrefix = [
+          ["", {
+            type: "AssignmentExpression",
+            children: [], // Empty assignment to trigger auto-var
+            names: forDeclaration.names,
+          }]
+        ]
+      }
+
+      const declaration = {
+        type: "Declaration",
+        children: ["let ", ...startRefDec, ...endRefDec, counterRef, " = ", ...varLetAssign, startRef, ...varLet, ...ascDec],
+        names: forDeclaration.names,
+      }
+
+      const counterPart = inclusive
+        ? [counterRef, " <= ", endRef, " : ", counterRef, " >= ", endRef]
+        : [counterRef, " < " , endRef, " : ", counterRef, " > " , endRef]
+
+      const condition = stepRef
+        ? [stepRef, " !== 0 && (", stepRef, " > 0 ? ", ...counterPart, ")"]
+        : ["asc ? ", ...counterPart]
+
+      const increment = stepRef
+      ? [...varAssign, counterRef, " += ", stepRef]
+      : [...varAssign, "asc ? ++", counterRef, " : --", counterRef]
+
+      return {
+        declaration,
+        children: [open, declaration, "; ", ...condition, "; ", ...increment, close],
+        blockPrefix,
+      }
     }
 
     module.expressionizeIfClause = function(clause, b, e) {
