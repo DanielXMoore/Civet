@@ -125,6 +125,7 @@ function clear() {
   width: calc(50% - 10px);
   border-radius: 5px;
   padding: 16px 18px;
+  color: var(--vp-code-block-color);
   background: var(--vp-code-block-bg);
   caret-color: var(--vp-button-brand-border);
   line-height: var(--vp-code-line-height);
