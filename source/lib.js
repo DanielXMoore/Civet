@@ -54,8 +54,75 @@ function removeParentPointers(node) {
   }
 }
 
+// Gather child nodes that match a predicate
+// while recursing into nested expressions
+// without recursing into nested blocks/for loops
+function gatherNodes(node, predicate) {
+  if (node == null) return []
+
+  if (Array.isArray(node)) {
+    return node.flatMap((n) => gatherNodes(n, predicate))
+  }
+
+  if (predicate(node)) {
+    return [node]
+  }
+
+  switch (node.type) {
+    case "BlockStatement":
+      return []
+    case "ForStatement":
+      // Descend into expressions but not into declarations or the body of the for loop
+      const isDec = node.declaration?.type === "Declaration"
+      return node.children.flatMap((n) => {
+        if (isDec && n === node.declaration) return []
+        return gatherNodes(n, predicate)
+      })
+    default:
+      return gatherNodes(node.children, predicate)
+  }
+
+  return []
+}
+
+// Gather nodes that match a predicate recursing into all unmatched children
+// i.e. if the predicate matches a node it is not recursed into further
+function gatherRecursive(node, predicate, skipPredicate) {
+  if (node == null) return []
+
+  if (Array.isArray(node)) {
+    return node.flatMap((n) => gatherRecursive(n, predicate, skipPredicate))
+  }
+
+  if (skipPredicate?.(node)) return []
+
+  if (predicate(node)) {
+    return [node]
+  }
+
+  return gatherRecursive(node.children, predicate, skipPredicate)
+}
+
+function gatherRecursiveAll(node, predicate) {
+  if (node == null) return []
+
+  if (Array.isArray(node)) {
+    return node.flatMap((n) => gatherRecursiveAll(n, predicate))
+  }
+
+  const nodes = gatherRecursiveAll(node.children, predicate)
+  if (predicate(node)) {
+    nodes.push(node)
+  }
+
+  return nodes
+}
+
 module.exports = {
   clone,
   deepCopy,
+  gatherNodes,
+  gatherRecursive,
+  gatherRecursiveAll,
   removeParentPointers,
 }
