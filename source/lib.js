@@ -125,6 +125,10 @@ function hasAwait(exp) {
   return gatherRecursiveWithinFunction(exp, ({ type }) => type === "Await").length > 0
 }
 
+function hasYield(exp) {
+  return gatherRecursiveWithinFunction(exp, ({ type }) => type === "Yield").length > 0
+}
+
 function isFunction(node) {
   const { type } = node
   return type === "FunctionExpression" || type === "ArrowFunction" ||
@@ -144,6 +148,7 @@ module.exports = {
   gatherRecursiveAll,
   gatherRecursiveWithinFunction,
   hasAwait,
+  hasYield,
   isFunction,
   removeParentPointers,
 }
