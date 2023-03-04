@@ -11,6 +11,10 @@ const {
   gatherNodes,
   gatherRecursive,
   gatherRecursiveAll,
+  gatherRecursiveWithinFunction,
+  hasAwait,
+  hasYield,
+  isFunction,
   removeParentPointers,
 } = require("./lib.js")
 ```
@@ -357,22 +361,28 @@ YieldTail
 
 # https://262.ecma-international.org/#prod-ArrowFunction
 ArrowFunction
-  ( Async __ )? ArrowFunctionTail:tail ->
-    return {
-      ...tail,
-      children: [...($1 || []), ...tail.children]
+  ThinArrowFunction
+  ( Async _ )?:async Parameters:parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
+    if (hasAwait(expOrBlock) && !async) {
+      async = "async "
     }
 
-ArrowFunctionTail
-  ThinArrowFunction
-  Parameters:parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
+    let error
+    if (hasYield(expOrBlock)) {
+      error = {
+        type: "Error",
+        message: "Can't use yield inside of => arrow function",
+      }
+    }
+
     return {
       type: "ArrowFunction",
       parameters,
       returnType: suffix,
       ts: false,
+      async,
       block: expOrBlock,
-      children: $0,
+      children: [async, $0.slice(1), error],
     }
 
 FatArrow
@@ -626,10 +636,19 @@ FieldDefinition
     switch (exp.type) {
       // TODO: => functions
       case "FunctionExpression":
+        const fnTokenIndex = exp.children.findIndex(c => c?.token?.startsWith("function"))
+        // copy
+        const children = exp.children.slice()
+        if (exp.generator) {
+          // replace "function" and move generator ahead of id
+          children.splice(fnTokenIndex, 2, children[fnTokenIndex+1], id)
+        } else {
+          // replace "function" token with id
+          children.splice(fnTokenIndex, 1, id)
+        }
         return {
           ...exp,
-          // Remove "function" token
-          children: [id, ...exp.children.slice(1)]
+          children,
         }
       default:
         return [id, " = ", exp]
@@ -1436,16 +1455,21 @@ FunctionDeclaration
 
 FunctionSignature
   # NOTE: Merged in async and generator with optionals
-  ( Async _? )?:async Function:func ( _? Star )?:star ( _? NWBindingIdentifier )?:wid _?:w Parameters:parameters ReturnTypeSuffix?:suffix ->
+  ( Async _ )?:async Function:func ( _? Star )?:generator ( _? NWBindingIdentifier )?:wid _?:w Parameters:parameters ReturnTypeSuffix?:suffix ->
+    if (!async) async = []
+    if (!generator) generator = []
+
     return {
       type: "FunctionSignature",
       id: wid?.[1],
       parameters,
       returnType: suffix,
       ts: false,
+      async,
+      generator,
       block: null,
       children: !parameters.implicit ? $0 :
-        [ async, func, star, wid, parameters, w, suffix ],
+        [ async, func, generator, wid, parameters, w, suffix ],
         // move whitespace w to after implicit () in parameters
     }
 
@@ -1457,6 +1481,14 @@ FunctionExpression
     if (!block) {
       signature.ts = true
       return signature
+    }
+
+    if (hasAwait(block) && !signature.async.length) {
+      signature.async.push("async ")
+    }
+
+    if (hasYield(block) && !signature.generator.length) {
+      signature.generator.push("*")
     }
 
     // Attach the block
@@ -1490,7 +1522,7 @@ AmpersandFunctionExpression
     }
 
     const children = [ ref, " => ", ...body ]
-    if (module.hasAwait(body)) {
+    if (hasAwait(body)) {
       children.unshift("async ")
     }
 
@@ -1577,16 +1609,29 @@ AmpersandUnaryPrefix
   [!~+-]+
 
 ThinArrowFunction
-  Parameters:parameters ReturnTypeSuffix?:suffix _* Arrow:arrow BracedOrEmptyBlock:block ->
+  ( Async _ )?:async Parameters:parameters ReturnTypeSuffix?:suffix _* Arrow:arrow BracedOrEmptyBlock:block ->
+    if (hasAwait(block) && !async) {
+      async = "async "
+    }
+
+    let generator
+    if (hasYield(block)) {
+      generator = "*"
+    }
+
     return {
       type: "FunctionExpression",
       id: undefined,
       parameters,
       returnType: suffix,
       ts: false,
+      async,
+      generator,
       block: block,
       children: [
+        async,
         { $loc: arrow.$loc, token: "function" },
+        generator,
         parameters,
         suffix,
         block
@@ -2367,9 +2412,47 @@ MethodDefinition
   # NOTE: Not adding extra validation using PropertySetParameterList
   # NOTE: If this node layout changes, be sure to update `convertMethodTOFunction`
   MethodSignature:signature !PropertyAccess BracedOrEmptyBlock:block ->
+    let children = $0
+    let generatorPos = 0
+    const { modifier } = signature
+
+    if (hasAwait(block)) {
+      generatorPos++
+      children = children.slice()
+      // get or set
+      if (modifier?.get || modifier?.set) {
+        children.push({
+          type: "Error",
+          message: "Getters and setters cannot be async",
+        })
+      } else if(modifier?.async) {
+        // Do nothing, already async
+      } else {
+        // Insert implicit async
+        children.unshift("async ")
+      }
+    }
+
+    if (hasYield(block)) {
+      if (children === $0) children = children.slice()
+
+      // get or set
+      if (modifier?.get || modifier?.set) {
+        children.push({
+          type: "Error",
+          message: "Getters and setters cannot be generators",
+        })
+      } else if(modifier?.generator) {
+        // Do nothing, already generator
+      } else {
+        // Insert implicit generator
+        children.splice(generatorPos, 0, "*")
+      }
+    }
+
     return {
       type: "MethodDefinition",
-      children: $0,
+      children,
       name: signature.name,
       signature,
       block,
@@ -2378,11 +2461,34 @@ MethodDefinition
 
 MethodModifier
   # NOTE: Merged get/set definitions
-  GetOrSet _?
+  GetOrSet:kind _? ->
+    return {
+      type: "MethodModifier",
+      async: false,
+      generator: false,
+      get: kind.token === "get",
+      set: kind.token === "set",
+      children: $0,
+    }
   # NOTE: Merged async and generator into MethodModifier
-  ( Async __ ) ( Star __ )?
-  Star __
-  #Async __
+  ( Async __ ) ( Star __ )? ->
+    return {
+      type: "MethodModifier",
+      async: true,
+      get: false,
+      set: false,
+      generator: !!$1,
+      children: $0,
+    }
+  Star __ ->
+    return {
+      type: "MethodModifier",
+      async: false,
+      get: false,
+      set: false,
+      generator: true,
+      children: $0,
+    }
 
 # TypeScript method signature
 MethodSignature
@@ -2395,8 +2501,8 @@ MethodSignature
       parameters,
     }
 
-  # NOTE: If this node layout changes, be sure to update `convertMethodTOFunction`
-  MethodModifier? ClassElementName:name _* NonEmptyParameters:parameters ReturnTypeSuffix?:suffix ->
+  # NOTE: If this node layout changes, be sure to update `convertMethodToFunction`
+  MethodModifier?:modifier ClassElementName:name _? NonEmptyParameters:parameters ReturnTypeSuffix?:suffix ->
     // Normalize name so we can check if it is `constructor`
     if (name.name) {
       name = name.name
@@ -2408,8 +2514,7 @@ MethodSignature
       type: "MethodSignature",
       children: $0,
       name: name,
-      modifier: $1?.[0]?.token, // get/set
-      // TODO: get return type from type annotation
+      modifier, // get/set/async/generator
       returnType: suffix,
       parameters,
     }
@@ -4833,7 +4938,7 @@ While
 
 Yield
   "yield" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { $loc, token: $1, type: "Yield" }
 
 ## JSX
 
@@ -6624,11 +6729,6 @@ Init
       )
     }
 
-    // Does this expression have an `await` in it and thus needs to be `async`?
-    module.hasAwait = (exp) => {
-      return gatherRecursiveWithinFunction(exp, ({type}) => type === "Await").length > 0
-    }
-
     // Wrap an expression in an IIFE, adding async/await if expression
     // uses await, or just adding async if specified.
     // Returns an Array suitable for `children`.
@@ -6637,7 +6737,7 @@ Init
       if (async) {
         prefix = "(async ()=>{"
         suffix = "})()"
-      } else if (module.hasAwait(exp)) {
+      } else if (hasAwait(exp)) {
         prefix = "(await (async ()=>{"
         suffix = "})())"
       } else {
@@ -7348,16 +7448,6 @@ Init
       }
     }
 
-    function isFunction(node) {
-      const {type} = node
-      return type === "FunctionExpression" || type === "ArrowFunction" ||
-             type === "MethodDefinition" || node.async
-      // do blocks can be marked async to prevent automatic await
-    }
-    function gatherRecursiveWithinFunction(node, predicate) {
-      return gatherRecursive(node, predicate, isFunction)
-    }
-
     function addParentPointers(node, parent) {
       if (node == null) return
       if (typeof node !== "object") return
@@ -7562,7 +7652,7 @@ Init
           const {signature, block} = f
           const isConstructor = signature.name       === "constructor"
           const isVoid        = isVoidType(signature.returnType?.t)
-          const isSet         = signature.modifier   === "set"
+          const isSet         = signature.modifier?.set
 
           if (!isConstructor && !isSet && !isVoid) {
             insertReturn(block)
@@ -7773,25 +7863,25 @@ Init
     // Given a MethodDefinition, convert into a FunctionExpression
     module.convertMethodToFunction = function(method) {
       const {signature, block} = method
-      let opening = signature.children[0] // MethodModifier
-      if (opening) {
-        if (opening[0].type === 'GetOrSet') {
+      let { modifier } = signature
+      if (modifier) {
+        if (modifier.get || modifier.set) {
           throw new Error('cannot convert get/set method to function')
-        } else if (opening[0][0]?.type === 'Async') {
+        } else if (modifier.async) {
           // put function after async
-          opening = [opening[0][0], " function ", ...opening.slice(1)]
+          modifier = [modifier.children[0][0], " function ", ...modifier.children.slice(1)]
         } else {
-          opening = ["function ", ...opening]
+          modifier = ["function ", ...modifier.children]
         }
       } else {
-        opening = "function ";
+        modifier = "function ";
       }
       return {
         ...signature,
         id: signature.name,
         type: "FunctionExpression",
         children: [
-          [opening, ...signature.children.slice(1)],
+          [modifier, ...signature.children.slice(1)],
           block,
         ],
         block,
