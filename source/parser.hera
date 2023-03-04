@@ -11,6 +11,9 @@ const {
   gatherNodes,
   gatherRecursive,
   gatherRecursiveAll,
+  gatherRecursiveWithinFunction,
+  hasAwait,
+  isFunction,
   removeParentPointers,
 } = require("./lib.js")
 ```
@@ -357,22 +360,21 @@ YieldTail
 
 # https://262.ecma-international.org/#prod-ArrowFunction
 ArrowFunction
-  ( Async __ )? ArrowFunctionTail:tail ->
-    return {
-      ...tail,
-      children: [...($1 || []), ...tail.children]
+  ThinArrowFunction
+  ( Async _ )?:async Parameters:parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
+    if (!async) async = []
+    if (hasAwait(expOrBlock)) {
+      async.push("async ")
     }
 
-ArrowFunctionTail
-  ThinArrowFunction
-  Parameters:parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
     return {
       type: "ArrowFunction",
       parameters,
       returnType: suffix,
       ts: false,
+      async,
       block: expOrBlock,
-      children: $0,
+      children: [async, $0.slice(1)],
     }
 
 FatArrow
@@ -626,10 +628,14 @@ FieldDefinition
     switch (exp.type) {
       // TODO: => functions
       case "FunctionExpression":
+        const fnTokenIndex = exp.children.findIndex(c => c.token === "function")
+        // copy
+        const children = exp.children.slice()
+        // replace "function" token with id
+        children.splice(fnTokenIndex, 1, id)
         return {
           ...exp,
-          // Remove "function" token
-          children: [id, ...exp.children.slice(1)]
+          children,
         }
       default:
         return [id, " = ", exp]
@@ -1436,13 +1442,16 @@ FunctionDeclaration
 
 FunctionSignature
   # NOTE: Merged in async and generator with optionals
-  ( Async _? )?:async Function:func ( _? Star )?:star ( _? NWBindingIdentifier )?:wid _?:w Parameters:parameters ReturnTypeSuffix?:suffix ->
+  ( Async _ )?:async Function:func ( _? Star )?:star ( _? NWBindingIdentifier )?:wid _?:w Parameters:parameters ReturnTypeSuffix?:suffix ->
+    if (!async) async = []
+
     return {
       type: "FunctionSignature",
       id: wid?.[1],
       parameters,
       returnType: suffix,
       ts: false,
+      async,
       block: null,
       children: !parameters.implicit ? $0 :
         [ async, func, star, wid, parameters, w, suffix ],
@@ -1457,6 +1466,10 @@ FunctionExpression
     if (!block) {
       signature.ts = true
       return signature
+    }
+
+    if (hasAwait(block) && !signature.async.length) {
+      signature.async.push("async ")
     }
 
     // Attach the block
@@ -1490,7 +1503,7 @@ AmpersandFunctionExpression
     }
 
     const children = [ ref, " => ", ...body ]
-    if (module.hasAwait(body)) {
+    if (hasAwait(body)) {
       children.unshift("async ")
     }
 
@@ -1577,15 +1590,22 @@ AmpersandUnaryPrefix
   [!~+-]+
 
 ThinArrowFunction
-  Parameters:parameters ReturnTypeSuffix?:suffix _* Arrow:arrow BracedOrEmptyBlock:block ->
+  ( Async _ )?:async Parameters:parameters ReturnTypeSuffix?:suffix _* Arrow:arrow BracedOrEmptyBlock:block ->
+    if (!async) async = []
+    if (hasAwait(block)) {
+      async.push("async ")
+    }
+
     return {
       type: "FunctionExpression",
       id: undefined,
       parameters,
       returnType: suffix,
       ts: false,
+      async,
       block: block,
       children: [
+        async,
         { $loc: arrow.$loc, token: "function" },
         parameters,
         suffix,
@@ -2367,9 +2387,29 @@ MethodDefinition
   # NOTE: Not adding extra validation using PropertySetParameterList
   # NOTE: If this node layout changes, be sure to update `convertMethodTOFunction`
   MethodSignature:signature !PropertyAccess BracedOrEmptyBlock:block ->
+    let children = $0
+
+    debugger
+
+    if (hasAwait(block)) {
+      children = children.slice()
+      // get or set
+      if (signature.modifier) {
+        children.push({
+          type: "Error",
+          message: "Getters and setters cannot be async",
+        })
+      } else if(gatherRecursive(signature.modifier, (n) => n.type === "Async").length) {
+        // Do nothing, alread async
+      } else {
+        // Insert implicit async
+        children.unshift("async ")
+      }
+    }
+
     return {
       type: "MethodDefinition",
-      children: $0,
+      children,
       name: signature.name,
       signature,
       block,
@@ -2382,7 +2422,6 @@ MethodModifier
   # NOTE: Merged async and generator into MethodModifier
   ( Async __ ) ( Star __ )?
   Star __
-  #Async __
 
 # TypeScript method signature
 MethodSignature
@@ -2396,7 +2435,7 @@ MethodSignature
     }
 
   # NOTE: If this node layout changes, be sure to update `convertMethodTOFunction`
-  MethodModifier? ClassElementName:name _* NonEmptyParameters:parameters ReturnTypeSuffix?:suffix ->
+  MethodModifier? ClassElementName:name _? NonEmptyParameters:parameters ReturnTypeSuffix?:suffix ->
     // Normalize name so we can check if it is `constructor`
     if (name.name) {
       name = name.name
@@ -2409,7 +2448,6 @@ MethodSignature
       children: $0,
       name: name,
       modifier: $1?.[0]?.token, // get/set
-      // TODO: get return type from type annotation
       returnType: suffix,
       parameters,
     }
@@ -6624,11 +6662,6 @@ Init
       )
     }
 
-    // Does this expression have an `await` in it and thus needs to be `async`?
-    module.hasAwait = (exp) => {
-      return gatherRecursiveWithinFunction(exp, ({type}) => type === "Await").length > 0
-    }
-
     // Wrap an expression in an IIFE, adding async/await if expression
     // uses await, or just adding async if specified.
     // Returns an Array suitable for `children`.
@@ -6637,7 +6670,7 @@ Init
       if (async) {
         prefix = "(async ()=>{"
         suffix = "})()"
-      } else if (module.hasAwait(exp)) {
+      } else if (hasAwait(exp)) {
         prefix = "(await (async ()=>{"
         suffix = "})())"
       } else {
@@ -7346,16 +7379,6 @@ Init
           message: "Multiple rest properties in object pattern",
         }, props]
       }
-    }
-
-    function isFunction(node) {
-      const {type} = node
-      return type === "FunctionExpression" || type === "ArrowFunction" ||
-             type === "MethodDefinition" || node.async
-      // do blocks can be marked async to prevent automatic await
-    }
-    function gatherRecursiveWithinFunction(node, predicate) {
-      return gatherRecursive(node, predicate, isFunction)
     }
 
     function addParentPointers(node, parent) {
