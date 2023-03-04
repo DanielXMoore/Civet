@@ -7,7 +7,7 @@ for some reasonable starting points.
 ## Parser
 
 The Civet parser and most of the transpiler is defined by
-[the `grammar.hera` file](source/grammar.hera),
+[the `parser.hera` file](source/parser.hera),
 which is written in [Hera](https://github.com/DanielXMoore/Hera).
 Hera is a parser generator built on the theory of Parser Expression Grammars
 (PEGs).
@@ -18,7 +18,7 @@ or try playing with the
 [interactive Hera demo](https://danielx.net/hera/docs/README.html);
 for example, the URL Parser demo should be fairly accessible.
 
-An alternative interface to reading Civet's `grammar.hera` is
+An alternative interface to reading Civet's `parser.hera` is
 [this railroad diagram](https://civet.dev/railroad.html),
 generated with the
 [Railroad Diagram Generator](https://www.bottlecaps.de/rr/ui).
