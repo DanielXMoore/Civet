@@ -171,6 +171,29 @@ function getTrimmingSpace(target) {
   if (target.token) return target.token.match(/^ ?/)[0]
 }
 
+// Returns whether the expression should be memoized with a ref to
+// avoid multiple evaluations.
+function needsRef(exp) {
+  switch (exp.type) {
+    case "Identifier":
+    case "Literal":
+    case "Ref":
+      return false
+    default:
+      return true
+  }
+}
+
+// Transform into a ref if needed
+function maybeRef(exp, base = "ref") {
+  if (!needsRef(exp)) return exp
+  return {
+    type: "Ref",
+    base: base,
+    id: base,
+  }
+}
+
 // Construct for loop from RangeLiteral
 function forRange(open, forDeclaration, range, stepExp, close) {
   const {start, end, inclusive} = range
@@ -184,41 +207,11 @@ function forRange(open, forDeclaration, range, stepExp, close) {
   let stepRef
   if (stepExp) {
     stepExp = insertTrimmingSpace(stepExp, "")
-    if (stepExp.type === "Literal") {
-      stepRef = stepExp
-    } else {
-      stepRef = {
-        type: "Ref",
-        base: "step",
-        id: "step",
-      }
-    }
+    stepRef = maybeRef(stepExp, "step")
   }
 
-  let startRef, endRef
-  if (start.type === "Literal") {
-    startRef = start
-  } else if (start.type === "Identifier") {
-    startRef = start
-  } else {
-    startRef = {
-      type: "Ref",
-      base: "ref",
-      id: "ref",
-    }
-  }
-
-  if (end.type === "Literal") {
-    endRef = end
-  } else if (end.type === "Identifier") {
-    endRef = end
-  } else {
-    endRef = {
-      type: "Ref",
-      base: "ref",
-      id: "ref",
-    }
-  }
+  const startRef = maybeRef(start, "start")
+  const endRef = maybeRef(end, "end")
 
   const startRefDec = (startRef !== start) ? [startRef, " = ", start, ", "] : []
   const endRefDec = (endRef !== end) ? [endRef, " = ", end, ", "] : []
