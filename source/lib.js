@@ -140,15 +140,154 @@ function gatherRecursiveWithinFunction(node, predicate) {
   return gatherRecursive(node, predicate, isFunction)
 }
 
+// Trims the first single space from the spacing array or node's children if present
+// maintains $loc for source maps
+function insertTrimmingSpace(target, c) {
+  if (!target) return target
+
+  if (Array.isArray(target)) return target.map((e, i) => {
+    if (i === 0) return insertTrimmingSpace(e, c)
+    return e
+  })
+  if (target.children) return Object.assign({}, target, {
+    children: target.children.map((e, i) => {
+      if (i === 0) return insertTrimmingSpace(e, c)
+      return e
+    })
+  })
+
+  if (target.token) return Object.assign({}, target, {
+    token: target.token.replace(/^ ?/, c)
+  })
+
+  return target
+}
+
+// Returns leading space as a string, or undefined if none
+function getTrimmingSpace(target) {
+  if (!target) return
+  if (Array.isArray(target)) return getTrimmingSpace(target[0])
+  if (target.children) return getTrimmingSpace(target.children[0])
+  if (target.token) return target.token.match(/^ ?/)[0]
+}
+
+// Construct for loop from RangeLiteral
+function forRange(open, forDeclaration, range, stepExp, close) {
+  const {start, end, inclusive} = range
+
+  const counterRef = {
+    type: "Ref",
+    base: "i",
+    id: "i",
+  }
+
+  let stepRef
+  if (stepExp) {
+    stepExp = insertTrimmingSpace(stepExp, "")
+    if (stepExp.type === "Literal") {
+      stepRef = stepExp
+    } else {
+      stepRef = {
+        type: "Ref",
+        base: "step",
+        id: "step",
+      }
+    }
+  }
+
+  let startRef, endRef
+  if (start.type === "Literal") {
+    startRef = start
+  } else if (start.type === "Identifier") {
+    startRef = start
+  } else {
+    startRef = {
+      type: "Ref",
+      base: "ref",
+      id: "ref",
+    }
+  }
+
+  if (end.type === "Literal") {
+    endRef = end
+  } else if (end.type === "Identifier") {
+    endRef = end
+  } else {
+    endRef = {
+      type: "Ref",
+      base: "ref",
+      id: "ref",
+    }
+  }
+
+  const startRefDec = (startRef !== start) ? [startRef, " = ", start, ", "] : []
+  const endRefDec = (endRef !== end) ? [endRef, " = ", end, ", "] : []
+  const ascDec = stepRef
+  ? stepRef !== stepExp
+    ? [", step = ", stepExp]
+    : []
+  : [", asc = ", startRef, " <= ", endRef]
+
+  let varAssign = [], varLetAssign = varAssign, varLet = varAssign, blockPrefix
+  if (forDeclaration.declare) { // var/let/const declaration of variable
+    if (forDeclaration.declare.token === "let") {
+      const varName = forDeclaration.children.splice(1)  // strip let
+      varAssign = [...insertTrimmingSpace(varName, ""), " = "]
+      varLet = [",", ...varName, " = ", counterRef]
+    } else { // const or var: put inside loop
+      // TODO: missing indentatino
+      blockPrefix = [
+        ["", forDeclaration, " = ", counterRef, ";\n"]
+      ]
+    }
+  } else { // Coffee-style for loop
+    varAssign = varLetAssign = [forDeclaration, " = "]
+    blockPrefix = [
+      ["", {
+        type: "AssignmentExpression",
+        children: [], // Empty assignment to trigger auto-var
+        names: forDeclaration.names,
+      }]
+    ]
+  }
+
+  const declaration = {
+    type: "Declaration",
+    children: ["let ", ...startRefDec, ...endRefDec, counterRef, " = ", ...varLetAssign, startRef, ...varLet, ...ascDec],
+    names: forDeclaration.names,
+  }
+
+  const counterPart = inclusive
+    ? [counterRef, " <= ", endRef, " : ", counterRef, " >= ", endRef]
+    : [counterRef, " < " , endRef, " : ", counterRef, " > " , endRef]
+
+  const condition = stepRef
+    ? [stepRef, " !== 0 && (", stepRef, " > 0 ? ", ...counterPart, ")"]
+    : ["asc ? ", ...counterPart]
+
+  const increment = stepRef
+  ? [...varAssign, counterRef, " += ", stepRef]
+  : [...varAssign, "asc ? ++", counterRef, " : --", counterRef]
+
+  return {
+    declaration,
+    children: [open, declaration, "; ", ...condition, "; ", ...increment, close],
+    blockPrefix,
+  }
+}
+
 module.exports = {
   clone,
   deepCopy,
+  forRange,
   gatherNodes,
   gatherRecursive,
   gatherRecursiveAll,
   gatherRecursiveWithinFunction,
+  getTrimmingSpace,
   hasAwait,
   hasYield,
+  insertTrimmingSpace,
   isFunction,
   removeParentPointers,
 }
