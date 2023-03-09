@@ -215,11 +215,22 @@ function forRange(open, forDeclaration, range, stepExp, close) {
 
   const startRefDec = (startRef !== start) ? [startRef, " = ", start, ", "] : []
   const endRefDec = (endRef !== end) ? [endRef, " = ", end, ", "] : []
-  const ascDec = stepRef
-  ? stepRef !== stepExp
-    ? [", step = ", stepExp]
-    : []
-  : [", asc = ", startRef, " <= ", endRef]
+
+  let ascDec, ascRef
+  if (stepRef) {
+    if (stepRef !== stepExp) {
+      ascDec = [", ", stepRef, " = ", stepExp]
+    } else {
+      ascDec = []
+    }
+  } else {
+    ascRef = {
+      type: "Ref",
+      base: "asc",
+      id: "asc",
+    }
+    ascDec = [", ", ascRef, " = ", startRef, " <= ", endRef]
+  }
 
   let varAssign = [], varLetAssign = varAssign, varLet = varAssign, blockPrefix
   if (forDeclaration.declare) { // var/let/const declaration of variable
@@ -228,7 +239,7 @@ function forRange(open, forDeclaration, range, stepExp, close) {
       varAssign = [...insertTrimmingSpace(varName, ""), " = "]
       varLet = [",", ...varName, " = ", counterRef]
     } else { // const or var: put inside loop
-      // TODO: missing indentatino
+      // TODO: missing indentation
       blockPrefix = [
         ["", forDeclaration, " = ", counterRef, ";\n"]
       ]
@@ -256,11 +267,11 @@ function forRange(open, forDeclaration, range, stepExp, close) {
 
   const condition = stepRef
     ? [stepRef, " !== 0 && (", stepRef, " > 0 ? ", ...counterPart, ")"]
-    : ["asc ? ", ...counterPart]
+    : [ascRef, " ? ", ...counterPart]
 
   const increment = stepRef
   ? [...varAssign, counterRef, " += ", stepRef]
-  : [...varAssign, "asc ? ++", counterRef, " : --", counterRef]
+  : [...varAssign, ascRef, " ? ++", counterRef, " : --", counterRef]
 
   return {
     declaration,
