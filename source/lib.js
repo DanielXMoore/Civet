@@ -269,7 +269,7 @@ function forRange(open, forDeclaration, range, stepExp, close) {
   }
 
   let varAssign = [], varLetAssign = varAssign, varLet = varAssign, blockPrefix
-  if (forDeclaration.declare) { // var/let/const declaration of variable
+  if (forDeclaration?.declare) { // var/let/const declaration of variable
     if (forDeclaration.declare.token === "let") {
       const varName = forDeclaration.children.splice(1)  // strip let
       varAssign = [...insertTrimmingSpace(varName, ""), " = "]
@@ -280,7 +280,7 @@ function forRange(open, forDeclaration, range, stepExp, close) {
         ["", forDeclaration, " = ", counterRef, ";\n"]
       ]
     }
-  } else { // Coffee-style for loop
+  } else if (forDeclaration) { // Coffee-style for loop
     varAssign = varLetAssign = [forDeclaration, " = "]
     blockPrefix = [
       ["", {
@@ -294,7 +294,7 @@ function forRange(open, forDeclaration, range, stepExp, close) {
   const declaration = {
     type: "Declaration",
     children: ["let ", ...startRefDec, ...endRefDec, counterRef, " = ", ...varLetAssign, startRef, ...varLet, ...ascDec],
-    names: forDeclaration.names,
+    names: forDeclaration?.names,
   }
 
   const counterPart = inclusive
