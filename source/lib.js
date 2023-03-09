@@ -194,6 +194,42 @@ function maybeRef(exp, base = "ref") {
   }
 }
 
+// Convert (non-Template) Literal to actual JavaScript value
+function literalValue(literal) {
+  let {raw} = literal
+  switch (raw) {
+    case "null": return null
+    case "true": return true
+    case "false": return false
+  }
+  if (
+    (raw.startsWith('"') && raw.endsWith('"')) ||
+    (raw.startsWith("'") && raw.endsWith("'"))
+  ) {
+    return raw.slice(1, -1)
+  }
+  const numeric = literal.children.find(
+    (child) => child.type === "NumericLiteral"
+  )
+  if (numeric) {
+    raw = raw.replace(/_/g, "")
+    const {token} = numeric
+    if (token.endsWith("n")) {
+      return BigInt(raw.slice(0, -1))
+    } else if (token.match(/[\.eE]/)) {
+      return parseFloat(raw)
+    } else if (token.startsWith("0")) {
+      switch (token.charAt(1).toLowerCase()) {
+        case "x": return parseInt(raw.replace(/0[xX]/, ""), 16)
+        case "b": return parseInt(raw.replace(/0[bB]/, ""), 2)
+        case "o": return parseInt(raw.replace(/0[oO]/, ""), 8)
+      }
+    }
+    return parseInt(raw, 10)
+  }
+  throw new Error("Unrecognized literal " + JSON.stringify(literal))
+}
+
 // Construct for loop from RangeLiteral
 function forRange(open, forDeclaration, range, stepExp, close) {
   const {start, end, inclusive} = range
@@ -216,13 +252,13 @@ function forRange(open, forDeclaration, range, stepExp, close) {
   const startRefDec = (startRef !== start) ? [startRef, " = ", start, ", "] : []
   const endRefDec = (endRef !== end) ? [endRef, " = ", end, ", "] : []
 
-  let ascDec, ascRef
+  let ascDec = [], ascRef, asc
   if (stepRef) {
     if (stepRef !== stepExp) {
       ascDec = [", ", stepRef, " = ", stepExp]
-    } else {
-      ascDec = []
     }
+  } else if (start.type === "Literal" && end.type === "Literal") {
+    asc = literalValue(start) <= literalValue(end)
   } else {
     ascRef = {
       type: "Ref",
@@ -267,11 +303,15 @@ function forRange(open, forDeclaration, range, stepExp, close) {
 
   const condition = stepRef
     ? [stepRef, " !== 0 && (", stepRef, " > 0 ? ", ...counterPart, ")"]
-    : [ascRef, " ? ", ...counterPart]
+    : ascRef
+      ? [ascRef, " ? ", ...counterPart]
+      : asc ? counterPart.slice(0, 3) : counterPart.slice(4)
 
   const increment = stepRef
-  ? [...varAssign, counterRef, " += ", stepRef]
-  : [...varAssign, ascRef, " ? ++", counterRef, " : --", counterRef]
+    ? [...varAssign, counterRef, " += ", stepRef]
+    : ascRef
+      ? [...varAssign, ascRef, " ? ++", counterRef, " : --", counterRef]
+      : [...varAssign, asc ? "++" : "--", counterRef]
 
   return {
     declaration,
@@ -293,5 +333,6 @@ module.exports = {
   hasYield,
   insertTrimmingSpace,
   isFunction,
+  literalValue,
   removeParentPointers,
 }
