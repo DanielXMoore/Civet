@@ -196,7 +196,7 @@ function maybeRef(exp, base = "ref") {
 
 // Convert (non-Template) Literal to actual JavaScript value
 function literalValue(literal) {
-  let {raw} = literal
+  let { raw } = literal
   switch (raw) {
     case "null": return null
     case "true": return true
@@ -213,7 +213,7 @@ function literalValue(literal) {
   )
   if (numeric) {
     raw = raw.replace(/_/g, "")
-    const {token} = numeric
+    const { token } = numeric
     if (token.endsWith("n")) {
       return BigInt(raw.slice(0, -1))
     } else if (token.match(/[\.eE]/)) {
@@ -232,7 +232,7 @@ function literalValue(literal) {
 
 // Construct for loop from RangeLiteral
 function forRange(open, forDeclaration, range, stepExp, close) {
-  const {start, end, inclusive} = range
+  const { start, end, inclusive } = range
 
   const counterRef = {
     type: "Ref",
@@ -320,6 +320,53 @@ function forRange(open, forDeclaration, range, stepExp, close) {
   }
 }
 
+// Adjust a parsed string by escaping newlines
+function modifyString(str) {
+  // Replace non-escaped newlines with escaped newlines
+  // taking into account the possibility of a preceding escaped backslash
+  return str.replace(/(^.?|[^\\]{2})(\\\\)*\n/g, '$1$2\\n')
+}
+
+// Add quotes around a string to make it a valid JavaScript string,
+// escaping any \s
+function quoteString(str) {
+  str = str.replace(/\\/g, '\\\\')
+  if (str.includes('"') && !str.includes("'")) {
+    return "'" + str.replace(/'/g, "\\'") + "'"
+  } else {
+    return '"' + str.replace(/"/g, '\\"') + '"'
+  }
+}
+
+function processCoffeeInterpolation(s, parts, e, $loc) {
+  // Check for no interpolations
+  if (parts.length === 0 || (parts.length === 1 && parts[0].token != null)) {
+    return {
+      type: "StringLiteral",
+      token: parts.length ? `"${modifyString(parts[0].token)}"` : '""',
+      $loc,
+    }
+  }
+
+  parts.forEach((part) => {
+    // Is a string
+    if (part.token) {
+      // Escape '${' and '`'
+      const str = part.token.replace(/(`|\$\{)/g, "\\$1")
+      // Escape non-continuation newlines
+      part.token = modifyString(str)
+    }
+  })
+
+  // Convert to backtick enclosed string
+  s.token = e.token = "`"
+
+  return {
+    type: "TemplateLiteral",
+    children: [s, parts, e],
+  }
+}
+
 module.exports = {
   clone,
   deepCopy,
@@ -334,5 +381,8 @@ module.exports = {
   insertTrimmingSpace,
   isFunction,
   literalValue,
+  modifyString,
+  processCoffeeInterpolation,
+  quoteString,
   removeParentPointers,
 }
