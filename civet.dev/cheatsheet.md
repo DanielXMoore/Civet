@@ -816,6 +816,12 @@ promise :=
     await fetch url
 </Playground>
 
+### Postfix Loop
+
+<Playground>
+console.log item for item of array
+</Playground>
+
 ### Infinite Loop
 
 <Playground>
@@ -823,6 +829,18 @@ i .= 0
 loop
   i++
   break if i > 5
+</Playground>
+
+### Range Loop
+
+<Playground>
+for i of [0...array.length]
+  array[i] = array[i].toString()
+</Playground>
+
+<Playground>
+for [1..5]
+  attempt()
 </Playground>
 
 ### Until Loop
