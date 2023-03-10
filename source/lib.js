@@ -299,7 +299,7 @@ function forRange(open, forDeclaration, range, stepExp, close) {
 
   const counterPart = inclusive
     ? [counterRef, " <= ", endRef, " : ", counterRef, " >= ", endRef]
-    : [counterRef, " < ", endRef, " : ", counterRef, " > ", endRef]
+    : [counterRef, " < " , endRef, " : ", counterRef, " > " , endRef]
 
   const condition = stepRef
     ? [stepRef, " !== 0 && (", stepRef, " > 0 ? ", ...counterPart, ")"]
