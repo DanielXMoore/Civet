@@ -19,6 +19,9 @@ const {
   insertTrimmingSpace,
   isFunction,
   literalValue,
+  modifyString,
+  processCoffeeInterpolation,
+  quoteString,
   removeParentPointers,
 } = require("./lib.js")
 ```
@@ -4250,14 +4253,14 @@ StringLiteral
   DoubleQuote DoubleStringCharacters:str DoubleQuote ->
     return {
       type: "StringLiteral",
-      token: `"${module.modifyString(str.token)}"`,
+      token: `"${modifyString(str.token)}"`,
       $loc,
     }
 
   SingleQuote SingleStringCharacters:str SingleQuote ->
     return {
       type: "StringLiteral",
-      token: `'${module.modifyString(str.token)}'`,
+      token: `'${modifyString(str.token)}'`,
       $loc,
     }
 
@@ -4282,32 +4285,7 @@ CoffeeStringSubstitution
 
 CoffeeInterpolatedDoubleQuotedString
   CoffeeInterpolationEnabled DoubleQuote:s ( CoffeeDoubleQuotedStringCharacters / CoffeeStringSubstitution )*:parts DoubleQuote:e ->
-    // Check for no interpolations
-    if (parts.length === 0 || (parts.length === 1 && parts[0].token != null)) {
-      return {
-        type: "StringLiteral",
-        token: parts.length ? `"${module.modifyString(parts[0].token)}"` : '""',
-        $loc,
-      }
-    }
-
-    parts.forEach((part) => {
-      // Is a string
-      if(part.token) {
-        // Escape '${' and '`'
-        const str = part.token.replace(/(`|\$\{)/g, "\\$1")
-        // Escape non-continuation newlines
-        part.token = module.modifyString(str)
-      }
-    })
-
-    // Convert to backtick enclosed string
-    s.token = e.token = "`"
-
-    return {
-      type: "TemplateLiteral",
-      children: [s, parts, e],
-    }
+    return processCoffeeInterpolation(s, parts, e, $loc)
 
 CoffeeDoubleQuotedStringCharacters
   /(?:\\.|#(?!\{)|[^"#])+/ ->
@@ -5262,7 +5240,7 @@ JSXAttributeSpace
 
 JSXShorthandString
   /(?:[\w\-:]+|\([^()]*\)|\[[^\[\]]*\])+/ ->
-    return module.quoteString($0)
+    return quoteString($0)
   TemplateLiteral ->
     return [ "{", $1, "}" ]
   # NOTE: TemplateLiteral must be before StringLiteral,
@@ -5847,8 +5825,26 @@ TypeConditional
     if ($2) return $0
     return $1
 
+TypeTemplateSubstitution
+  SubstitutionStart Type __ CloseBrace
+
+TypeTemplateLiteral
+  Backtick ( TemplateCharacters / TypeTemplateSubstitution )* Backtick ->
+    return {
+      type: "TemplateLiteral",
+      children: $0,
+    }
+  CoffeeInterpolatedDoubleQuotedTypeLiteral
+
+CoffeeStringTypeSubstitution
+  CoffeeSubstitutionStart Type __ CloseBrace
+
+CoffeeInterpolatedDoubleQuotedTypeLiteral
+  CoffeeInterpolationEnabled DoubleQuote:s ( CoffeeDoubleQuotedStringCharacters / CoffeeStringTypeSubstitution )*:parts DoubleQuote:e ->
+    return processCoffeeInterpolation(s, parts, e, $loc)
+
 TypeLiteral
-  TemplateLiteral
+  TypeTemplateLiteral
   # NOTE: TemplateLiteral must be before Literal, so that CoffeeScript
   # interpolated strings get checked first before StringLiteral.
   Literal
@@ -6450,32 +6446,6 @@ Reset
         }
       }
     })
-
-    // TODO: this is only here because directive prologues depend on it
-    // eventually all these `module.*` variables should be handled better in Hera
-
-    // Adjust a parsed string by escaping newlines
-    module.modifyString = function(str) {
-      // Replace non-escaped newlines with escaped newlines
-      // taking into account the possibility of a preceding escaped backslash
-      return str.replace(/(^.?|[^\\]{2})(\\\\)*\n/g, '$1$2\\n')
-    }
-
-    // Turn the \n's (e.g. added by modifyString) back into actual newlines
-    module.unmodifyString = function(str) {
-      return str.replace(/\\n/g, '\n')
-    }
-
-    // Add quotes around a string to make it a valid JavaScript string,
-    // escaping any \s
-    module.quoteString = function(str) {
-      str = str.replace(/\\/g, '\\\\')
-      if (str.includes('"') && !str.includes("'")) {
-        return "'" + str.replace(/'/g, "\\'") + "'"
-      } else {
-        return '"' + str.replace(/"/g, '\\"') + '"'
-      }
-    }
 
 Init
   Shebang? DirectivePrologue*:directives "" ->
