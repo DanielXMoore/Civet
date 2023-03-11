@@ -1,6 +1,8 @@
 /**
 @file esbuild plugin for Civet language
 
+Simple zero config example
+
 @example
 ```javascript
 import esbuild from 'esbuild'
@@ -13,16 +15,91 @@ esbuild.build({
   ]
 }).catch(() => process.exit(1))
 ```
+
+Chain civet output into another esbuild plugin, solid for example
+
+@example
+```javascript
+import esbuild from 'esbuild'
+const { solidPlugin } = require('esbuild-plugin-solid');
+import civetPlugin from '@danielx/civet/esbuild-plugin'
+
+esbuild.build({
+  ...,
+  plugins: [
+    civetPlugin(
+      next: solidPlugin()
+    )
+  ]
+}).catch(() => process.exit(1))
+```
 */
 
-{ readFile } := require 'fs/promises'
+{ readFile, writeFile } := require 'fs/promises'
 path := require 'path'
 
 // NOTE: this references the built version of the module, not the source
 { compile } := require "../dist/main.js"
 
-module.exports = {
-  name: 'civet'
+interface Options
+  filter?: RegExp
+  inlineMap?: boolean
+  js?: boolean
+  next?: unknown
+
+// NOTE: this function is named civet so esbuild gets "civet" as the name of the plugin
+civet := (options: Options) ->
+  {
+    filter=/\.civet$/
+    inlineMap=true
+    js=true
+    next
+  } := options
+
+  let nextTransform
+  let tmpPath: null | string
+
+  if next
+    { tmpdir } := require 'os'
+    tmpPath = path.join tmpdir(), 'civet'
+    next.setup {
+      onLoad: (_, handler) ->
+        nextTransform = handler
+    }
+
+  return {
+    name: "civet"
+    setup(build)
+      build.onLoad {
+      filter
+    }, (args) ->
+      try
+        source := await readFile args.path, 'utf8'
+        filename := path.relative(process.cwd(), args.path)
+        compiled := compile source, {
+          filename
+          inlineMap
+          js
+        }
+
+        // I'd prefer not to use temp files but I can't find a way to pas a stream to fs.readFile which is what
+        // most esbuild plugins use
+        await writeFile path.join(tmpPath, filename), compiled
+        await nextTransform {
+          path: path.join(tmpPath, filename)
+        }
+
+        return
+          contents: compiled
+      catch e
+        return
+          errors: [{
+            text: e.message
+          }]
+  }
+
+// Default zero-config plugin
+Object.assign civet, {
   setup(build)
     build.onLoad {
       filter: /\.civet$/
@@ -44,3 +121,5 @@ module.exports = {
             text: e.message
           }]
 }
+
+module.exports = civet
