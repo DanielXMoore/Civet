@@ -7,6 +7,42 @@
  */
 
 /**
+ * Duplicate a block and attach statements from the clause to be prefixed to the block.
+ * Adds braces if the block is bare.
+ *
+ * @returns the duplicated block with prefix statements attached.
+ */
+function blockWithPrefix(clause, block) {
+  if (!clause) return block
+  const { blockPrefix } = clause
+
+  if (blockPrefix && blockPrefix.length) {
+    const indent = getIndent(block.expressions[0])
+    // Match prefix statements to block indent level
+    const prefixStatements = indent
+      ? blockPrefix.map((statement) => [indent, ...statement.slice(1)])
+      : blockPrefix
+
+    const expressions = [...prefixStatements, ...block.expressions]
+
+    block = {
+      ...block,
+      expressions,
+      children: block.children === block.expressions ? expressions :
+        block.children.map((c) => c === block.expressions ? expressions : c),
+    }
+    // Add braces if block lacked them
+    if (block.bare) {
+      // Now copied, so mutation is OK
+      block.children = [[" {\n", indent], ...block.children, "}"]
+      block.bare = false
+    }
+  }
+
+  return block
+}
+
+/**
  * Clone an AST node including children (removing parent pointes)
  * This gives refs new identities which may not be what we want.
  *
@@ -116,6 +152,16 @@ function gatherRecursiveAll(node, predicate) {
   }
 
   return nodes
+}
+
+/**
+ * Gets the indentation node from a statement.
+ */
+function getIndent(statement) {
+  let indent = statement?.[0]
+  // Hacky way to get the indent out of [EOS, indent] pair
+  if (Array.isArray(indent)) indent = indent[indent.length - 1]
+  return indent
 }
 
 /**
@@ -282,13 +328,6 @@ function forRange(open, forDeclaration, range, stepExp, close) {
     }
   } else if (forDeclaration) { // Coffee-style for loop
     varAssign = varLetAssign = [forDeclaration, " = "]
-    blockPrefix = [
-      ["", {
-        type: "AssignmentExpression",
-        children: [], // Empty assignment to trigger auto-var
-        names: forDeclaration.names,
-      }]
-    ]
   }
 
   const declaration = {
@@ -488,6 +527,7 @@ function processLetAssignmentDeclaration(l, id, suffix, ws, la, e) {
 }
 
 module.exports = {
+  blockWithPrefix,
   clone,
   deepCopy,
   forRange,
@@ -496,6 +536,7 @@ module.exports = {
   gatherRecursive,
   gatherRecursiveAll,
   gatherRecursiveWithinFunction,
+  getIndent,
   getTrimmingSpace,
   hasAwait,
   hasYield,
