@@ -444,12 +444,17 @@ function processConstAssignmentDeclaration(c, id, suffix, ws, ca, e) {
   splices = splices.map(s => [", ", s])
   thisAssignments = thisAssignments.map(a => [";", a])
 
-  const children = [c, id, suffix, ...ws, ca, e, ...splices, ...thisAssignments]
+  const binding = [c, id, suffix, ...ws]
+  const initializer = [ca, e, ...splices, ...thisAssignments]
+
+  const children = [binding, initializer]
 
   return {
     type: "Declaration",
     names: id.names,
     children,
+    binding,
+    initializer,
   }
 }
 
@@ -468,12 +473,17 @@ function processLetAssignmentDeclaration(l, id, suffix, ws, la, e) {
   splices = splices.map(s => [", ", s])
   thisAssignments = thisAssignments.map(a => [";", a])
 
-  const children = [l, id, suffix, ...ws, la, e, ...splices, ...thisAssignments]
+  const binding = [l, id, suffix, ...ws]
+  const initializer = [la, e, ...splices, ...thisAssignments]
+
+  const children = [binding, initializer]
 
   return {
     type: "Declaration",
     names: id.names,
     children,
+    binding,
+    initializer,
   }
 }
 
