@@ -320,6 +320,44 @@ function forRange(open, forDeclaration, range, stepExp, close) {
   }
 }
 
+function gatherBindingCode(statements, opts) {
+  const thisAssignments = []
+  const splices = []
+
+  function insertRestSplices(s, p, thisAssignments) {
+    gatherRecursiveAll(s, n => n.blockPrefix || (opts?.injectParamProps && n.accessModifier) || n.type === "AtBinding")
+      .forEach((n) => {
+        // Insert `this` assignments
+        if (n.type === "AtBinding") {
+          const { ref } = n, { id } = ref
+          thisAssignments.push([`this.${id} = `, ref])
+          return
+        }
+
+        if (opts?.injectParamProps && n.type === "Parameter" && n.accessModifier) {
+          n.names.forEach(id => {
+            thisAssignments.push({
+              type: "AssignmentExpression",
+              children: [`this.${id} = `, id],
+              js: true
+            })
+          })
+          return
+        }
+
+        const { blockPrefix } = n
+        p.push(blockPrefix)
+
+        // Search for any further nested splices, and at bindings
+        insertRestSplices(blockPrefix, p, thisAssignments)
+      })
+  }
+
+  insertRestSplices(statements, splices, thisAssignments)
+
+  return [splices, thisAssignments]
+}
+
 // Adjust a parsed string by escaping newlines
 function modifyString(str) {
   // Replace non-escaped newlines with escaped newlines
@@ -367,10 +405,83 @@ function processCoffeeInterpolation(s, parts, e, $loc) {
   }
 }
 
+function processConstAssignmentDeclaration(c, id, suffix, ws, ca, e) {
+  // Adjust position to space before assignment to make TypeScript remapping happier
+  c = {
+    ...c,
+    $loc: {
+      pos: ca.$loc.pos - 1,
+      length: ca.$loc.length + 1,
+    }
+  }
+
+  let exp
+  if (e.type === "FunctionExpression") {
+    exp = e
+  } else {
+    exp = e[1]
+  }
+
+  // TODO: Better AST nodes so we don't have to adjust for whitespace nodes here
+  if (exp?.children?.[0]?.token?.match(/^\s+$/)) exp.children.shift()
+
+  if (id.type === "Identifier" && exp?.type === "FunctionExpression" && !exp.id) {
+    const i = exp.children.findIndex(c => c?.token === "function") + 1
+    exp = {
+      ...exp,
+      // Insert id, type suffix, spacing
+      children: [...exp.children.slice(0, i), " ", id, suffix, ws, ...exp.children.slice(i)]
+    }
+    return {
+      type: "Declaration",
+      children: [exp],
+      names: id.names,
+    }
+  }
+
+  let [splices, thisAssignments] = gatherBindingCode(id)
+
+  splices = splices.map(s => [", ", s])
+  thisAssignments = thisAssignments.map(a => [";", a])
+
+  const children = [c, id, suffix, ...ws, ca, e, ...splices, ...thisAssignments]
+
+  return {
+    type: "Declaration",
+    names: id.names,
+    children,
+  }
+}
+
+function processLetAssignmentDeclaration(l, id, suffix, ws, la, e) {
+  // Adjust position to space before assignment to make TypeScript remapping happier
+  l = {
+    ...l,
+    $loc: {
+      pos: la.$loc.pos - 1,
+      length: la.$loc.length + 1,
+    }
+  }
+
+  let [splices, thisAssignments] = gatherBindingCode(id)
+
+  splices = splices.map(s => [", ", s])
+  thisAssignments = thisAssignments.map(a => [";", a])
+
+  const children = [l, id, suffix, ...ws, la, e, ...splices, ...thisAssignments]
+
+  return {
+    type: "Declaration",
+    names: id.names,
+    children,
+  }
+}
+
 module.exports = {
   clone,
   deepCopy,
   forRange,
+  gatherBindingCode,
   gatherNodes,
   gatherRecursive,
   gatherRecursiveAll,
@@ -383,6 +494,8 @@ module.exports = {
   literalValue,
   modifyString,
   processCoffeeInterpolation,
+  processConstAssignmentDeclaration,
+  processLetAssignmentDeclaration,
   quoteString,
   removeParentPointers,
 }

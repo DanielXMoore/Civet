@@ -9,6 +9,7 @@ const {
   clone,
   deepCopy,
   forRange,
+  gatherBindingCode,
   gatherNodes,
   gatherRecursive,
   gatherRecursiveAll,
@@ -21,6 +22,8 @@ const {
   literalValue,
   modifyString,
   processCoffeeInterpolation,
+  processConstAssignmentDeclaration,
+  processLetAssignmentDeclaration,
   quoteString,
   removeParentPointers,
 } = require("./lib.js")
@@ -4039,76 +4042,12 @@ LexicalDeclaration
     }
   # NOTE: Added const shorthand
   # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
-  InsertConst:c ( BindingPattern / BindingIdentifier ):id TypeSuffix?:suffix __:ws ConstAssignment:ca ExtendedExpression:e ->
-    // Adjust position to space before assignment to make TypeScript remapping happier
-    c = {
-      ...c,
-      $loc: {
-        pos: ca.$loc.pos - 1,
-        length: ca.$loc.length + 1,
-      }
-    }
-
-    let exp
-    if (e.type === "FunctionExpression") {
-      exp = e
-    } else {
-      exp = e[1]
-    }
-
-    // TODO: Better AST nodes so we don't have to adjust for whitespace nodes here
-    if (exp?.children?.[0]?.token?.match(/^\s+$/)) exp.children.shift()
-
-    if (id.type === "Identifier" && exp?.type === "FunctionExpression" && !exp.id) {
-      const i = exp.children.findIndex(c => c?.token === "function") + 1
-      exp = {
-        ...exp,
-        // Insert id, type suffix, spacing
-        children: [...exp.children.slice(0, i), " ", id, $3, $4, ...exp.children.slice(i)]
-      }
-      return {
-        type: "Declaration",
-        children: [exp],
-        names: id.names,
-      }
-    }
-
-    let [splices, thisAssignments] = module.gatherBindingCode(id)
-
-    splices = splices.map(s => [", ", s])
-    thisAssignments = thisAssignments.map(a => [";", a])
-
-    const children = [c, id, suffix, ...ws, ca, e, ...splices, ...thisAssignments]
-
-    return {
-      type: "Declaration",
-      names: id.names,
-      children,
-    }
+  InsertConst ( BindingPattern / BindingIdentifier ) TypeSuffix? __ ConstAssignment ExtendedExpression ->
+    return processConstAssignmentDeclaration(...$0)
 
   # Note added let shorthand
   InsertLet:l ( BindingPattern / BindingIdentifier ):id TypeSuffix?:suffix __:ws LetAssignment:la ExtendedExpression:e ->
-    // Adjust position to space before assignment to make TypeScript remapping happier
-    l = {
-      ...l,
-      $loc: {
-        pos: la.$loc.pos - 1,
-        length: la.$loc.length + 1,
-      }
-    }
-
-    let [splices, thisAssignments] = module.gatherBindingCode(id)
-
-    splices = splices.map(s => [", ", s])
-    thisAssignments = thisAssignments.map(a => [";", a])
-
-    const children = [l, id, suffix, ...ws, la, e, ...splices, ...thisAssignments]
-
-    return {
-      type: "Declaration",
-      names: id.names,
-      children,
-    }
+    return processLetAssignmentDeclaration(...$0)
 
 ConstAssignment
   ":=" ->
@@ -7585,7 +7524,7 @@ Init
     function processBindingPatternLHS(lhs, tail) {
       // Expand AtBindings first before gathering splices
       adjustAtBindings(lhs, true)
-      const [splices, thisAssignments] = module.gatherBindingCode(lhs)
+      const [splices, thisAssignments] = gatherBindingCode(lhs)
       // TODO: This isn't quite right for compound assignments, may need to wrap with parens and use comma to return the complete value
       tail.push(...splices.map(s => [", ", s]), ...thisAssignments.map(a => [", ", a]))
     }
@@ -8561,46 +8500,6 @@ Init
       scopes.pop()
       statements.splice(0, statements.length, targetStatements)
     }
-
-    function gatherBindingCode(statements, opts) {
-      const thisAssignments = []
-      const splices = []
-
-      function insertRestSplices(s, p, thisAssignments) {
-        gatherRecursiveAll(s, n => n.blockPrefix || (opts?.injectParamProps && n.accessModifier) || n.type === "AtBinding" )
-        .forEach((n) => {
-          // Insert `this` assignments
-          if (n.type === "AtBinding") {
-            const { ref } = n, { id } = ref
-            thisAssignments.push([`this.${id} = `, ref])
-            return
-          }
-
-          if (opts?.injectParamProps && n.type === "Parameter" && n.accessModifier) {
-            n.names.forEach(id => {
-              thisAssignments.push({
-                type: "AssignmentExpression",
-                children: [`this.${id} = `, id],
-                js: true
-              })
-            })
-            return
-          }
-
-          const { blockPrefix } = n
-          p.push(blockPrefix)
-
-          // Search for any further nested splices, and at bindings
-          insertRestSplices(blockPrefix, p, thisAssignments)
-        })
-      }
-
-      insertRestSplices(statements, splices, thisAssignments)
-
-      return [splices, thisAssignments]
-    }
-
-    module.gatherBindingCode = gatherBindingCode
 
     module.constructInvocation = function(
       fn,
