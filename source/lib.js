@@ -189,7 +189,7 @@ function hoistRefDecs(statements) {
       const { hoistableDec } = node
 
       // TODO: expand set to include other parents that can have hoistable decs attached
-      const outer = closest(node, ["IfStatement"])
+      const outer = closest(node, ["IfStatement", "IterationStatement"])
       const block = outer.parent
 
       // NOTE: This is more accurately 'statements'
