@@ -44,7 +44,7 @@ interface Options {
   next?: Plugin
 }
 
-{ readFile, writeFile, mkdir } := require 'fs/promises'
+{ readFile, writeFile, mkdtemp, rmdir } := require 'fs/promises'
 path := require 'path'
 
 // NOTE: this references the built version of the module, not the source
@@ -61,32 +61,35 @@ civet := (options: Options = {}): Plugin ->
 
   let nextTransform: (args: OnLoadArgs) => OnLoadResult | Promise<OnLoadResult | null | undefined> | null | undefined
   let tmpPath: null | string
-  let dirCreated = false
 
   if next
-    { tmpdir } := require 'os'
-    tmpPath = path.join tmpdir(), `civet-${process.pid}`
-
     next.setup {
-      onEnd()
-        ;
-      onStart()
-        ;
-      resolve()
-        ;
-      onResolve()
-        ;
-      initialOptions()
-        ;
-      esbuild()
-        esbuild
+      onEnd();
+      onStart();
+      resolve();
+      onResolve();
+      initialOptions();
+      esbuild();
       onLoad(_, handler)
         nextTransform = handler
     }
 
   return {
     name: "civet"
+
     setup(build)
+
+      build.onStart ->
+        if next
+          { tmpdir } := require 'os'
+          tmpPath = await mkdtemp path.join tmpdir(), "civet-"
+        return
+
+      build.onEnd ->
+        if tmpPath
+          await rmdir tmpPath, { recursive: true }
+        return
+
       build.onLoad { filter }, (args) ->
         try
           source := await readFile args.path, 'utf8'
@@ -97,19 +100,16 @@ civet := (options: Options = {}): Plugin ->
             js
           }
 
-          if next
-            if !dirCreated
-              await mkdir tmpPath
-              dirCreated = true
-
+          if next and tmpPath
             outputFileName := filename + js ? '.jsx' : '.tsx'
+            outputFilePath := path.join tmpPath, outputFileName
 
             // I'd prefer not to use temp files but I can't find a way to pass a stream to fs.readFile which is what
             // most esbuild plugins use
-            await writeFile path.join(tmpPath, outputFileName), compiled
+            await writeFile outputFilePath, compiled
             return await nextTransform {
               ...args
-              path: path.join(tmpPath, filename)
+              path: outputFilePath
             }
 
           return
@@ -118,6 +118,12 @@ civet := (options: Options = {}): Plugin ->
           return
             errors: [{
               text: e.message
+              location:
+                file: args.path
+                namespace: args.namespace
+                line: e.line
+                column: e.column
+              detail: e
             }]
   }
 
