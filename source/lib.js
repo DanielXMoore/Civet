@@ -42,6 +42,14 @@ function blockWithPrefix(clause, block) {
   return block
 }
 
+function closest(node, types) {
+  do {
+    if (types.includes(node.type)) {
+      return node
+    }
+  } while (node = node.parent)
+}
+
 /**
  * Clone an AST node including children (removing parent pointes)
  * This gives refs new identities which may not be what we want.
@@ -173,6 +181,26 @@ function hasAwait(exp) {
 
 function hasYield(exp) {
   return gatherRecursiveWithinFunction(exp, ({ type }) => type === "Yield").length > 0
+}
+
+function hoistRefDecs(statements) {
+  gatherRecursiveAll(statements, (s) => s.hoistableDec)
+    .forEach(node => {
+      const { hoistableDec } = node
+
+      // TODO: expand set to include other parents that can have hoistable decs attached
+      const outer = closest(node, ["IfStatement"])
+      const block = outer.parent
+
+      // NOTE: This is more accurately 'statements'
+      const { expressions } = block
+      const index = expressions.indexOf(outer)
+      const indent = getIndent(outer)
+      if (indent) hoistableDec[0] = indent
+      expressions.splice(index, 0, hoistableDec)
+
+      node.hoistableDec = null
+    })
 }
 
 function isFunction(node) {
@@ -540,6 +568,7 @@ module.exports = {
   getTrimmingSpace,
   hasAwait,
   hasYield,
+  hoistRefDecs,
   insertTrimmingSpace,
   isFunction,
   literalValue,
