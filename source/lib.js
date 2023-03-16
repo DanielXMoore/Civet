@@ -7,21 +7,18 @@
  */
 
 /**
- * Duplicate a block and attach statements from the clause to be prefixed to the block.
+ * Duplicate a block and attach statements prefixing the block.
  * Adds braces if the block is bare.
  *
- * @returns the duplicated block with prefix statements attached.
+ * @returns the duplicated block with prefix statements attached or the unchanged block.
  */
-function blockWithPrefix(clause, block) {
-  if (!clause) return block
-  const { blockPrefix } = clause
-
-  if (blockPrefix && blockPrefix.length) {
+function blockWithPrefix(prefixStatements, block) {
+  if (prefixStatements && prefixStatements.length) {
     const indent = getIndent(block.expressions[0])
     // Match prefix statements to block indent level
-    const prefixStatements = indent
-      ? blockPrefix.map((statement) => [indent, ...statement.slice(1)])
-      : blockPrefix
+    if (indent) {
+      prefixStatements = prefixStatements.map((statement) => [indent, ...statement.slice(1)])
+    }
 
     const expressions = [...prefixStatements, ...block.expressions]
 
@@ -95,6 +92,16 @@ function removeParentPointers(node) {
     for (const child of node.children) {
       removeParentPointers(child)
     }
+  }
+}
+
+// Find nearest strict ancestor that satisfies predicate,
+// aborting (and returning undefined) if stopPredicate returns true
+function findAncestor(node, predicate, stopPredicate) {
+  node = node.parent
+  while (node && !stopPredicate?.(node)) {
+    if (predicate(node)) return node
+    node = node.parent
   }
 }
 
@@ -184,22 +191,30 @@ function hasYield(exp) {
 }
 
 function hoistRefDecs(statements) {
-  gatherRecursiveAll(statements, (s) => s.hoistableDec)
+  gatherRecursiveAll(statements, (s) => s.hoistDec)
     .forEach(node => {
-      const { hoistableDec } = node
+      const { hoistDec } = node
 
       // TODO: expand set to include other parents that can have hoistable decs attached
       const outer = closest(node, ["IfStatement", "IterationStatement"])
+      if (!outer) {
+        node.children.push({
+          type: "Error",
+          message: "Can't hoist declarations inside expressions yet."
+        })
+        return
+      }
+
       const block = outer.parent
 
       // NOTE: This is more accurately 'statements'
       const { expressions } = block
       const index = expressions.indexOf(outer)
       const indent = getIndent(outer)
-      if (indent) hoistableDec[0] = indent
-      expressions.splice(index, 0, hoistableDec)
+      if (indent) hoistDec[0][0] = indent
+      expressions.splice(index, 0, hoistDec)
 
-      node.hoistableDec = null
+      node.hoistDec = null
     })
 }
 
@@ -558,6 +573,7 @@ module.exports = {
   blockWithPrefix,
   clone,
   deepCopy,
+  findAncestor,
   forRange,
   gatherBindingCode,
   gatherNodes,
