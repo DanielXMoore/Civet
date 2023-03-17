@@ -6,21 +6,28 @@
 
 ```
 const {
+  blockWithPrefix,
   clone,
   deepCopy,
+  findAncestor,
   forRange,
+  gatherBindingCode,
   gatherNodes,
   gatherRecursive,
   gatherRecursiveAll,
   gatherRecursiveWithinFunction,
+  getIndent,
   getTrimmingSpace,
   hasAwait,
   hasYield,
+  hoistRefDecs,
   insertTrimmingSpace,
   isFunction,
   literalValue,
   modifyString,
   processCoffeeInterpolation,
+  processConstAssignmentDeclaration,
+  processLetAssignmentDeclaration,
   quoteString,
   removeParentPointers,
 } = require("./lib.js")
@@ -30,7 +37,13 @@ Program
   # EOS allows for initial comment blocks and newlines,
   # when Init didn't already consume them.
   Reset Init EOS? TopLevelStatements:statements __ ->
-    module.processProgram(statements)
+    // NOTE: Wrap top level statements in a bare block so they have a parent
+    module.processProgram({
+      type: "BlockStatement",
+      expressions: statements,
+      children: [statements],
+      bare: true,
+    })
     return $0
 
 TopLevelStatements
@@ -2921,14 +2934,17 @@ IfStatement
   # NOTE: Added paren-less condition
   # NOTE: Block isn't Statement so we can handle implied braces by nesting
   (IfClause / UnlessClause):clause Block:block ElseClause?:e ->
-    const children = [...clause.children, block]
+    const children = [...clause.children]
+    block = blockWithPrefix(clause.condition.expression.blockPrefix, block)
+    children.push(block)
     if (block.bare && e) children./**/push(";")
     if (e) children./**/push(e)
+
     return {
-      type: "IfStatement",
+      ...clause,
+      children,
       then: block,
       else: e,
-      children,
     }
 
 ElseClause
@@ -2936,7 +2952,12 @@ ElseClause
   _? Else Block
 
 IfClause
-  If Condition -> { type: "IfStatement", children: $0 }
+  If Condition:condition ->
+    return {
+      type: "IfStatement",
+      children: $0,
+      condition,
+    }
 
 UnlessClause
   Unless:kind Condition:condition ->
@@ -2947,6 +2968,7 @@ UnlessClause
       type: "IfStatement",
       // TODO: Don't add unnecessary parens
       children: [kind, ["(!", condition, ")"]],
+      condition,
     }
 
 # NOTE: Added IfExpression from CoffeeScript
@@ -3101,27 +3123,30 @@ DoStatement
 WhileStatement
   # NOTE: Condition provides optional parens
   WhileClause:clause Block:block ->
+    block = blockWithPrefix(clause.condition.expression.blockPrefix, block)
     return {
-      type: "IterationStatement",
+      ...clause,
       children: [...clause.children, block],
       block,
     }
 
 WhileClause
-  ( While / Until ):kind _?:ws Condition:cond ->
+  ( While / Until ):kind _?:ws Condition:condition ->
     if (kind.token === "until") {
       kind.token = "while"
 
       // TODO: Don't add unnecessary parens
       return {
         type: "IterationStatement",
-        children: [kind, ...ws, ["(!", ...cond.children, ")"]]
+        children: [kind, ...ws, ["(!", ...condition.children, ")"]],
+        condition,
       }
     }
 
     return {
       type: "IterationStatement",
-      children: [kind, ...ws, ...cond.children]
+      children: [kind, ...ws, ...condition.children],
+      condition,
     }
 
 # https://262.ecma-international.org/#prod-ForStatement
@@ -3129,21 +3154,8 @@ WhileClause
 # NOTE: Merged into single rule
 ForStatement
   ForClause:clause Block:block ->
-    if (clause.blockPrefix) {
-      const expressions = [...clause.blockPrefix, ...block.expressions]
-      block = {
-        ...block,
-        expressions,
-        children: block.children === block.expressions ? expressions :
-          block.children.map((c) => c === block.expressions ? expressions : c),
-      }
-      // Add braces if block lacked them
-      if (block.bare) {
-        // Now copied, so mutation is OK
-        block.children = [" {\n", ...block.children, "\n}"]
-        block.bare = false
-      }
-    }
+    block = blockWithPrefix(clause.blockPrefix, block)
+
     return {
       ...clause,
       children: [...clause.children, block],
@@ -3628,7 +3640,22 @@ CatchParameter
 
 # An expression with explicit or implied parentheses, for use in if/while/switch
 Condition
+  # NOTE: DeclarationCondition must come before the ExpressionCondition because we need to look ahead to potentially match `:=` or `.=`
+  OpenParen:open _?:ws DeclarationCondition:expression CloseParen:close ->
+    return {
+      type: "ParenthesizedExpression",
+      children: [open, ws, expression, close],
+      expression,
+    }
   ParenthesizedExpression !( _? ( BinaryOp / AssignmentOp / Dot / QuestionMark ) ) !( _ OperatorAssignmentOp ) -> $1
+  # NOTE: DeclarationCondition must come before the ExpressionCondition because we need to look ahead to potentially match `:=` or `.=`
+  InsertOpenParen:open DeclarationCondition:expression InsertCloseParen:close ->
+    return {
+      type: "ParenthesizedExpression",
+      children: [open, expression, close],
+      expression,
+    }
+
   InsertOpenParen:open ExpressionWithIndentedApplicationForbidden:expression InsertCloseParen:close ->
     // Don't double wrap parethesized expressions
     if (expression.type === "ParenthesizedExpression") return expression
@@ -3638,6 +3665,24 @@ Condition
       children: [open, expression, close],
       expression,
     }
+
+DeclarationCondition
+  LexicalDeclaration:dec ->
+    const ref = {
+      type: "Ref",
+      base: "ref",
+    }
+
+    const { binding, initializer } = dec
+
+    const initCondition = {
+      type: "AssignmentExpression",
+      children: [ref, " ", initializer],
+      hoistDec: [["", ["let ", ref], ";\n"]],
+      blockPrefix: [["", [ binding, "= ", ref ], ";\n"]],
+    }
+
+    return initCondition
 
 ExpressionWithIndentedApplicationForbidden
   ForbidIndentedApplication ExtendedExpression?:exp RestoreIndentedApplication ->
@@ -4039,76 +4084,12 @@ LexicalDeclaration
     }
   # NOTE: Added const shorthand
   # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
-  InsertConst:c ( BindingPattern / BindingIdentifier ):id TypeSuffix?:suffix __:ws ConstAssignment:ca ExtendedExpression:e ->
-    // Adjust position to space before assignment to make TypeScript remapping happier
-    c = {
-      ...c,
-      $loc: {
-        pos: ca.$loc.pos - 1,
-        length: ca.$loc.length + 1,
-      }
-    }
-
-    let exp
-    if (e.type === "FunctionExpression") {
-      exp = e
-    } else {
-      exp = e[1]
-    }
-
-    // TODO: Better AST nodes so we don't have to adjust for whitespace nodes here
-    if (exp?.children?.[0]?.token?.match(/^\s+$/)) exp.children.shift()
-
-    if (id.type === "Identifier" && exp?.type === "FunctionExpression" && !exp.id) {
-      const i = exp.children.findIndex(c => c?.token === "function") + 1
-      exp = {
-        ...exp,
-        // Insert id, type suffix, spacing
-        children: [...exp.children.slice(0, i), " ", id, $3, $4, ...exp.children.slice(i)]
-      }
-      return {
-        type: "Declaration",
-        children: [exp],
-        names: id.names,
-      }
-    }
-
-    let [splices, thisAssignments] = module.gatherBindingCode(id)
-
-    splices = splices.map(s => [", ", s])
-    thisAssignments = thisAssignments.map(a => [";", a])
-
-    const children = [c, id, suffix, ...ws, ca, e, ...splices, ...thisAssignments]
-
-    return {
-      type: "Declaration",
-      names: id.names,
-      children,
-    }
+  InsertConst ( BindingPattern / BindingIdentifier ) TypeSuffix? __ ConstAssignment ExtendedExpression ->
+    return processConstAssignmentDeclaration(...$0)
 
   # Note added let shorthand
   InsertLet:l ( BindingPattern / BindingIdentifier ):id TypeSuffix?:suffix __:ws LetAssignment:la ExtendedExpression:e ->
-    // Adjust position to space before assignment to make TypeScript remapping happier
-    l = {
-      ...l,
-      $loc: {
-        pos: la.$loc.pos - 1,
-        length: la.$loc.length + 1,
-      }
-    }
-
-    let [splices, thisAssignments] = module.gatherBindingCode(id)
-
-    splices = splices.map(s => [", ", s])
-    thisAssignments = thisAssignments.map(a => [";", a])
-
-    const children = [l, id, suffix, ...ws, la, e, ...splices, ...thisAssignments]
-
-    return {
-      type: "Declaration",
-      names: id.names,
-      children,
-    }
+    return processLetAssignmentDeclaration(...$0)
 
 ConstAssignment
   ":=" ->
@@ -4627,7 +4608,7 @@ CoffeeSubstitutionStart
     return { $loc, token: "${" }
 
 Colon
-  ":" ->
+  ":" !"=" ->
     return { $loc, token: $1 }
 
 Comma
@@ -6537,10 +6518,15 @@ Init
               children: [...pre, ...exp.children, post]
             }
           default:
+            const expression = {
+              ...exp,
+              children: [...pre, "(", exp.children, ")", post]
+            }
+
             return {
               type: "ParenthesizedExpression",
-              children: ["(", ...pre, "(", exp, ")", post, ")"]
-              // TODO: expression:
+              children: ["(", expression, ")"],
+              expression,
             }
         }
       }
@@ -6821,13 +6807,6 @@ Init
           exp.caseBlock.clauses.forEach(insertReturn)
           return
       }
-    }
-
-    function getIndent(statement) {
-      let indent = statement?.[0]
-      // Hacky way to get the indent out of [EOS, indent] pair
-      if (Array.isArray(indent)) indent = indent[indent.length - 1]
-      return indent
     }
 
     // [indent, statement, semicolon]
@@ -7371,16 +7350,6 @@ Init
       }
     }
 
-    // Find nearest strict ancestor that satisfies predicate,
-    // aborting (and returning undefined) if stopPredicate returns true
-    function findAncestor(node, predicate, stopPredicate) {
-      node = node.parent
-      while (node && !stopPredicate?.(node)) {
-        if (predicate(node)) return node
-        node = node.parent
-      }
-    }
-
     // Replace all nodes that match predicate with replacer(node)
     module.replaceNodes = (root, predicate, replacer) => {
       if (root == null) return root
@@ -7585,7 +7554,7 @@ Init
     function processBindingPatternLHS(lhs, tail) {
       // Expand AtBindings first before gathering splices
       adjustAtBindings(lhs, true)
-      const [splices, thisAssignments] = module.gatherBindingCode(lhs)
+      const [splices, thisAssignments] = gatherBindingCode(lhs)
       // TODO: This isn't quite right for compound assignments, may need to wrap with parens and use comma to return the complete value
       tail.push(...splices.map(s => [", ", s]), ...thisAssignments.map(a => [", ", a]))
     }
@@ -8321,14 +8290,19 @@ Init
       })
     }
 
-    module.processProgram = function(statements) {
-      addParentPointers(statements)
+    module.processProgram = function(root) {
+      addParentPointers(root)
+
+      const { expressions: statements } = root
+
       processPipelineExpressions(statements)
       processAssignments(statements)
       processPatternMatching(statements)
       processFunctions(statements)
       processSwitchExpressions(statements)
       processTryExpressions(statements)
+
+      hoistRefDecs(statements)
 
       // Modify iteration expressions
       gatherRecursiveAll(statements, n => n.type === "IterationExpression")
@@ -8561,46 +8535,6 @@ Init
       scopes.pop()
       statements.splice(0, statements.length, targetStatements)
     }
-
-    function gatherBindingCode(statements, opts) {
-      const thisAssignments = []
-      const splices = []
-
-      function insertRestSplices(s, p, thisAssignments) {
-        gatherRecursiveAll(s, n => n.blockPrefix || (opts?.injectParamProps && n.accessModifier) || n.type === "AtBinding" )
-        .forEach((n) => {
-          // Insert `this` assignments
-          if (n.type === "AtBinding") {
-            const { ref } = n, { id } = ref
-            thisAssignments.push([`this.${id} = `, ref])
-            return
-          }
-
-          if (opts?.injectParamProps && n.type === "Parameter" && n.accessModifier) {
-            n.names.forEach(id => {
-              thisAssignments.push({
-                type: "AssignmentExpression",
-                children: [`this.${id} = `, id],
-                js: true
-              })
-            })
-            return
-          }
-
-          const { blockPrefix } = n
-          p.push(blockPrefix)
-
-          // Search for any further nested splices, and at bindings
-          insertRestSplices(blockPrefix, p, thisAssignments)
-        })
-      }
-
-      insertRestSplices(statements, splices, thisAssignments)
-
-      return [splices, thisAssignments]
-    }
-
-    module.gatherBindingCode = gatherBindingCode
 
     module.constructInvocation = function(
       fn,

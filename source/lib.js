@@ -7,6 +7,47 @@
  */
 
 /**
+ * Duplicate a block and attach statements prefixing the block.
+ * Adds braces if the block is bare.
+ *
+ * @returns the duplicated block with prefix statements attached or the unchanged block.
+ */
+function blockWithPrefix(prefixStatements, block) {
+  if (prefixStatements && prefixStatements.length) {
+    const indent = getIndent(block.expressions[0])
+    // Match prefix statements to block indent level
+    if (indent) {
+      prefixStatements = prefixStatements.map((statement) => [indent, ...statement.slice(1)])
+    }
+
+    const expressions = [...prefixStatements, ...block.expressions]
+
+    block = {
+      ...block,
+      expressions,
+      children: block.children === block.expressions ? expressions :
+        block.children.map((c) => c === block.expressions ? expressions : c),
+    }
+    // Add braces if block lacked them
+    if (block.bare) {
+      // Now copied, so mutation is OK
+      block.children = [[" {\n", indent], ...block.children, "}"]
+      block.bare = false
+    }
+  }
+
+  return block
+}
+
+function closest(node, types) {
+  do {
+    if (types.includes(node.type)) {
+      return node
+    }
+  } while (node = node.parent)
+}
+
+/**
  * Clone an AST node including children (removing parent pointes)
  * This gives refs new identities which may not be what we want.
  *
@@ -51,6 +92,16 @@ function removeParentPointers(node) {
     for (const child of node.children) {
       removeParentPointers(child)
     }
+  }
+}
+
+// Find nearest strict ancestor that satisfies predicate,
+// aborting (and returning undefined) if stopPredicate returns true
+function findAncestor(node, predicate, stopPredicate) {
+  node = node.parent
+  while (node && !stopPredicate?.(node)) {
+    if (predicate(node)) return node
+    node = node.parent
   }
 }
 
@@ -119,6 +170,16 @@ function gatherRecursiveAll(node, predicate) {
 }
 
 /**
+ * Gets the indentation node from a statement.
+ */
+function getIndent(statement) {
+  let indent = statement?.[0]
+  // Hacky way to get the indent out of [EOS, indent] pair
+  if (Array.isArray(indent)) indent = indent[indent.length - 1]
+  return indent
+}
+
+/**
  * Does this expression have an `await` in it and thus needs to be `async`?
  */
 function hasAwait(exp) {
@@ -127,6 +188,34 @@ function hasAwait(exp) {
 
 function hasYield(exp) {
   return gatherRecursiveWithinFunction(exp, ({ type }) => type === "Yield").length > 0
+}
+
+function hoistRefDecs(statements) {
+  gatherRecursiveAll(statements, (s) => s.hoistDec)
+    .forEach(node => {
+      const { hoistDec } = node
+
+      // TODO: expand set to include other parents that can have hoistable decs attached
+      const outer = closest(node, ["IfStatement", "IterationStatement"])
+      if (!outer) {
+        node.children.push({
+          type: "Error",
+          message: "Can't hoist declarations inside expressions yet."
+        })
+        return
+      }
+
+      const block = outer.parent
+
+      // NOTE: This is more accurately 'statements'
+      const { expressions } = block
+      const index = expressions.indexOf(outer)
+      const indent = getIndent(outer)
+      if (indent) hoistDec[0][0] = indent
+      expressions.splice(index, 0, hoistDec)
+
+      node.hoistDec = null
+    })
 }
 
 function isFunction(node) {
@@ -282,13 +371,6 @@ function forRange(open, forDeclaration, range, stepExp, close) {
     }
   } else if (forDeclaration) { // Coffee-style for loop
     varAssign = varLetAssign = [forDeclaration, " = "]
-    blockPrefix = [
-      ["", {
-        type: "AssignmentExpression",
-        children: [], // Empty assignment to trigger auto-var
-        names: forDeclaration.names,
-      }]
-    ]
   }
 
   const declaration = {
@@ -318,6 +400,44 @@ function forRange(open, forDeclaration, range, stepExp, close) {
     children: [open, declaration, "; ", ...condition, "; ", ...increment, close],
     blockPrefix,
   }
+}
+
+function gatherBindingCode(statements, opts) {
+  const thisAssignments = []
+  const splices = []
+
+  function insertRestSplices(s, p, thisAssignments) {
+    gatherRecursiveAll(s, n => n.blockPrefix || (opts?.injectParamProps && n.accessModifier) || n.type === "AtBinding")
+      .forEach((n) => {
+        // Insert `this` assignments
+        if (n.type === "AtBinding") {
+          const { ref } = n, { id } = ref
+          thisAssignments.push([`this.${id} = `, ref])
+          return
+        }
+
+        if (opts?.injectParamProps && n.type === "Parameter" && n.accessModifier) {
+          n.names.forEach(id => {
+            thisAssignments.push({
+              type: "AssignmentExpression",
+              children: [`this.${id} = `, id],
+              js: true
+            })
+          })
+          return
+        }
+
+        const { blockPrefix } = n
+        p.push(blockPrefix)
+
+        // Search for any further nested splices, and at bindings
+        insertRestSplices(blockPrefix, p, thisAssignments)
+      })
+  }
+
+  insertRestSplices(statements, splices, thisAssignments)
+
+  return [splices, thisAssignments]
 }
 
 // Adjust a parsed string by escaping newlines
@@ -367,22 +487,111 @@ function processCoffeeInterpolation(s, parts, e, $loc) {
   }
 }
 
+function processConstAssignmentDeclaration(c, id, suffix, ws, ca, e) {
+  // Adjust position to space before assignment to make TypeScript remapping happier
+  c = {
+    ...c,
+    $loc: {
+      pos: ca.$loc.pos - 1,
+      length: ca.$loc.length + 1,
+    }
+  }
+
+  let exp
+  if (e.type === "FunctionExpression") {
+    exp = e
+  } else {
+    exp = e[1]
+  }
+
+  // TODO: Better AST nodes so we don't have to adjust for whitespace nodes here
+  if (exp?.children?.[0]?.token?.match(/^\s+$/)) exp.children.shift()
+
+  if (id.type === "Identifier" && exp?.type === "FunctionExpression" && !exp.id) {
+    const i = exp.children.findIndex(c => c?.token === "function") + 1
+    exp = {
+      ...exp,
+      // Insert id, type suffix, spacing
+      children: [...exp.children.slice(0, i), " ", id, suffix, ws, ...exp.children.slice(i)]
+    }
+    return {
+      type: "Declaration",
+      children: [exp],
+      names: id.names,
+    }
+  }
+
+  let [splices, thisAssignments] = gatherBindingCode(id)
+
+  splices = splices.map(s => [", ", s])
+  thisAssignments = thisAssignments.map(a => [";", a])
+
+  const binding = [c, id, suffix, ...ws]
+  const initializer = [ca, e, ...splices, ...thisAssignments]
+
+  const children = [binding, initializer]
+
+  return {
+    type: "Declaration",
+    names: id.names,
+    children,
+    binding,
+    initializer,
+  }
+}
+
+function processLetAssignmentDeclaration(l, id, suffix, ws, la, e) {
+  // Adjust position to space before assignment to make TypeScript remapping happier
+  l = {
+    ...l,
+    $loc: {
+      pos: la.$loc.pos - 1,
+      length: la.$loc.length + 1,
+    }
+  }
+
+  let [splices, thisAssignments] = gatherBindingCode(id)
+
+  splices = splices.map(s => [", ", s])
+  thisAssignments = thisAssignments.map(a => [";", a])
+
+  const binding = [l, id, suffix, ...ws]
+  const initializer = [la, e, ...splices, ...thisAssignments]
+
+  const children = [binding, initializer]
+
+  return {
+    type: "Declaration",
+    names: id.names,
+    children,
+    binding,
+    initializer,
+  }
+}
+
 module.exports = {
+  blockWithPrefix,
   clone,
   deepCopy,
+  findAncestor,
   forRange,
+  gatherBindingCode,
   gatherNodes,
   gatherRecursive,
   gatherRecursiveAll,
   gatherRecursiveWithinFunction,
+  getIndent,
   getTrimmingSpace,
   hasAwait,
   hasYield,
+  hoistRefDecs,
   insertTrimmingSpace,
   isFunction,
   literalValue,
   modifyString,
   processCoffeeInterpolation,
+  processConstAssignmentDeclaration,
+  processLetAssignmentDeclaration,
   quoteString,
   removeParentPointers,
 }
