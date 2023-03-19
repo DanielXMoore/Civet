@@ -14,7 +14,7 @@
  */
 function blockWithPrefix(prefixStatements, block) {
   if (prefixStatements && prefixStatements.length) {
-    const indent = getIndent(block.expressions[0])
+    const indent = block.expressions[0][0]
     // Match prefix statements to block indent level
     if (indent) {
       prefixStatements = prefixStatements.map((statement) => [indent, ...statement.slice(1)])
@@ -31,7 +31,7 @@ function blockWithPrefix(prefixStatements, block) {
     // Add braces if block lacked them
     if (block.bare) {
       // Now copied, so mutation is OK
-      block.children = [[" {\n", indent], ...block.children, "}"]
+      block.children = [[" {"], ...block.children, "}"]
       block.bare = false
     }
   }
