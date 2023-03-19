@@ -170,12 +170,21 @@ function gatherRecursiveAll(node, predicate) {
 }
 
 /**
- * Gets the indentation node from a statement.
+ * Gets the indentation node from a statement. Includes newline,
+ * excludes comments, strips location info.
  */
 function getIndent(statement) {
+  debugger
   let indent = statement?.[0]
-  // Hacky way to get the indent out of [EOS, indent] pair
-  if (Array.isArray(indent)) indent = indent[indent.length - 1]
+  if (Array.isArray(indent)) {
+    indent = indent.flat(Infinity)
+
+    return indent.filter((n) => n && !(n.type === "Comment")).map((n) => {
+      if (typeof n === "string") return n
+      if (n.token != null) return n.token
+      return ""
+    })
+  }
   return indent
 }
 
