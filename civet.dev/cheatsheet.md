@@ -1000,6 +1000,14 @@ class Civet < Animal <: Named
 class Civet <: Animal, Named
 </Playground>
 
+### Decorators
+
+<Playground>
+@@Object.seal
+class Civet
+  @name = "Civet"
+</Playground>
+
 ## Types
 
 ### Import

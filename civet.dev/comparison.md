@@ -10,8 +10,10 @@ However, there are a few intentional deviations.
 
 In the examples below, Civet code is on
 <span class="wide">the left</span><span class="narrow">top</span>,
-and compiled TypeScript output on
+and compiled TypeScript output is on
 <span class="wide">the right</span><span class="narrow">bottom</span>.
+
+[[toc]]
 
 ## Single-Argument Arrow Functions
 
@@ -148,6 +150,18 @@ $: document.title = title
 </Playground>
 
 (This is to enable most object literals not needing braces.)
+
+## Decorators
+
+Civet uses `@` as
+[shorthand for `this`, `static`, and `constructor`](/cheatsheet#this).
+Decorators need to be written with `@@`:
+
+<Playground>
+@@Object.seal
+class Civet
+  @name = "Civet"
+</Playground>
 
 ## JSX
 
