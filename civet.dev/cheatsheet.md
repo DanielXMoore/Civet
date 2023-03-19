@@ -54,6 +54,32 @@ for item of iterable
   sos += square
 </Playground>
 
+### Declarations in Conditions and Loops
+
+<Playground>
+if match := regex.exec string
+  console.log match[1], match[2]
+</Playground>
+
+<Playground>
+if [, dir, base] := /^(.*\/)?([^/]*)$/.exec file
+  console.log dir, base
+</Playground>
+
+<Playground>
+if {x, y} := getLocation()
+  console.log `At ${x}, ${y}`
+else
+  console.log "Not anywhere"
+</Playground>
+
+<Playground>
+node .= linkedList.head
+while {data, next} := node
+  console.log data
+  node = next
+</Playground>
+
 ## Objects
 
 ### Unbraced Literals

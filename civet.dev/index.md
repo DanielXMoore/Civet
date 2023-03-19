@@ -74,6 +74,13 @@ operator {min, max} := Math
 value min ceiling max floor
 </Playground>
 
+### Declarations in Conditions and Loops
+
+<Playground>
+if match := regex.exec string
+  console.log match
+</Playground>
+
 ### Everything is an Expression
 
 <Playground>
