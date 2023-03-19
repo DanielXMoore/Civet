@@ -209,9 +209,10 @@ function hoistRefDecs(statements) {
 
       // NOTE: This is more accurately 'statements'
       const { expressions } = block
-      const index = expressions.indexOf(outer)
-      const indent = getIndent(outer)
-      if (indent) hoistDec[0][0] = indent
+      const index = expressions.findIndex(([, s]) => outer === s)
+      if (index < 0) throw new Error("Couldn't find expression in block for hoistable declaration.")
+      const indent = expressions[index][0]
+      hoistDec[0][0] = indent
       expressions.splice(index, 0, hoistDec)
 
       node.hoistDec = null
