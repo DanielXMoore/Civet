@@ -174,7 +174,6 @@ function gatherRecursiveAll(node, predicate) {
  * excludes comments, strips location info.
  */
 function getIndent(statement) {
-  debugger
   let indent = statement?.[0]
   if (Array.isArray(indent)) {
     indent = indent.flat(Infinity)
