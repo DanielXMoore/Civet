@@ -376,7 +376,7 @@ function forRange(open, forDeclaration, range, stepExp, close) {
     } else { // const or var: put inside loop
       // TODO: missing indentation
       blockPrefix = [
-        ["", forDeclaration, " = ", counterRef, ";\n"]
+        ["", forDeclaration, " = ", counterRef, ";"]
       ]
     }
   } else if (forDeclaration) { // Coffee-style for loop
