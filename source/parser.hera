@@ -43,6 +43,7 @@ Program
       expressions: statements,
       children: [statements],
       bare: true,
+      root: true,
     })
     return $0
 
@@ -1846,19 +1847,10 @@ NestedBlockStatements
     // Each element of statements is a list of same-line statements. Flatten.
     statements = statements.flat()
 
-    // separate first EOS from indent for easier insertion to top of block
-    const first = statements[0]
-    const ws = first[0]
-    const indent = ws.at(-1)
-    statements = [
-      [indent, ...first.slice(1)],
-      ...statements.slice(1),
-    ]
-
     return {
       type: "BlockStatement",
       expressions: statements,
-      children: [ws.slice(0, -1), statements],
+      children: [statements],
       bare: true,
     }
 
@@ -3178,12 +3170,12 @@ ForStatementControl
   !CoffeeForLoopsEnabled ForStatementParameters -> $2
   CoffeeForLoopsEnabled CoffeeForStatementParameters WhenCondition? ->
     if ($3) {
-      const indent = module.currentIndent.token + "  "
-      const block = "continue\n"
+      // TODO: actual block and continue ast nodes
+      const block = "continue;"
       $2 = {
         ...$2,
         blockPrefix: [...$2.blockPrefix,
-          [indent, {
+          ["", {
             type: "IfStatement",
             then: block,
             children: ["if (!(", insertTrimmingSpace($3, ""), ")) ", block],
@@ -3201,7 +3193,6 @@ CoffeeForStatementParameters
   # NOTE: Coffee for loops can't have parens
   ( Await __ )? InsertOpenParen:open CoffeeForDeclaration:declaration CoffeeForIndex?:index __ ( In / Of / From ):kind ExpressionWithIndentedApplicationForbidden:exp ( _? By ExpressionWithIndentedApplicationForbidden )?:step InsertCloseParen:close ->
     let blockPrefix = []
-    const indent = module.currentIndent.token + "  "
     exp = insertTrimmingSpace(exp, "")
     declaration = insertTrimmingSpace(declaration, "")
 
@@ -3220,16 +3211,16 @@ CoffeeForStatementParameters
       if (declaration.own) {
         const hasPropRef = module.getRef("hasProp")
 
-        blockPrefix./**/push([indent, "if (!", hasPropRef, ".call(", exp, ", ", declaration, ")) continue\n"])
+        blockPrefix./**/push(["", "if (!", hasPropRef, ".call(", exp, ", ", declaration, ")) continue", ";"])
       }
 
       // index is actually value in Coffee "for of", y = z[x]
       if (index) {
-        blockPrefix./**/push([indent, {
+        blockPrefix./**/push(["", {
           type: "AssignmentExpression",
           children: [index, " = ", exp, "[", declaration, "]"],
           names: index.names,
-        }, ";\n"])
+        }, ";"])
       }
 
       kind.token = "in"
@@ -3278,11 +3269,11 @@ CoffeeForStatementParameters
         ? [expRef, " = ", insertTrimmingSpace(exp, ""), ", "]
         : []
 
-      blockPrefix./**/push([indent, {
+      blockPrefix./**/push(["", {
         type: "AssignmentExpression",
-        children: [varRef, " = ", expRef, "[", indexAssignment, counterRef, "]\n"],
+        children: [varRef, " = ", expRef, "[", indexAssignment, counterRef, "]"],
         names: assignmentNames,
-      }])
+      }, ";"])
 
       declaration = {
         type: "Declaration",
@@ -3679,7 +3670,7 @@ DeclarationCondition
       type: "AssignmentExpression",
       children: [ref, " ", initializer],
       hoistDec: [["", ["let ", ref], ";"]],
-      blockPrefix: [["", [ binding, "= ", ref ], ";\n"]],
+      blockPrefix: [["", [ binding, "= ", ref ], ";"]],
     }
 
     return initCondition
@@ -4438,7 +4429,7 @@ SingleLineComment
 JSSingleLineComment
   # JS Comments are two slashes not followed by a third (because that is a heregex)
   /\/\/(?!\/)[^\r\n]*/ ->
-    return { $loc, token: $0 }
+    return { type: "Comment", $loc, token: $0 }
 
 # https://262.ecma-international.org/#prod-MultiLineComment
 MultiLineComment
@@ -4448,17 +4439,17 @@ MultiLineComment
 
 JSMultiLineComment
   $( "/*" (!"*/" . )* "*/" ) ->
-    return { $loc, token: $1 }
+    return { type: "Comment", $loc, token: $1 }
 
 CoffeeSingleLineComment
   # NOTE: CoffeeScript style single line comments
   /#(?!##(?!#))([^\r\n]*)/ ->
-    return { $loc, token: `//${$1}` }
+    return { type: "Comment", $loc, token: `//${$1}` }
 
 CoffeeMultiLineComment
   CoffeeHereCommentStart $/[^]*?###/ ->
     $2 = $2.slice(0, $2.length-3).replace(/\*\//g, "* /")
-    return { $loc, token: `/*${$2}*/` }
+    return { type: "Comment", $loc, token: `/*${$2}*/` }
 
 CoffeeHereCommentStart
   /###(?!#)/
@@ -6872,7 +6863,11 @@ Init
           // else block
           if (exp.else) insertReturn(exp.else[2])
           // Add explicit return after if block if no else block
-          else exp.children.push(["\n", indent, wrapWithReturn()])
+          else exp.children.push(["", {
+            type: "ReturnStatement",
+            // NOTE: add a prefixed semi-colon because the if block may not be braced
+            children: [";return"],
+          }])
           return
         case "PatternMatchingStatement":
           insertReturn(exp.children[0][0])
@@ -7393,15 +7388,20 @@ Init
         injectParamProps: f.name === 'constructor'
       })
 
+      const delimiter = {
+        type: "SemicolonDelimiter",
+        children: [";"],
+      }
+
       const prefix = splices
         .map(s => ["let ", s])
         .concat(thisAssignments)
         .map((s) => s.type
           ? {
             ...s,
-            children: [indent, ...s.children, ";\n"]
+            children: [indent, ...s.children, delimiter]
           }
-          : [indent, s, ";\n"]
+          : [indent, s, delimiter]
         )
 
       expressions.unshift(...prefix)
@@ -7473,9 +7473,10 @@ Init
           getIndent(block.expressions[0]),
           {
             type: "Declaration",
-            children: ["let ", ref, returnType, ";\n"],
+            children: ["let ", ref, returnType],
             names: [],
-          }
+          },
+          ";"
         ])
       }
 
@@ -7490,7 +7491,7 @@ Init
       // Implicit return before }
       if (block.children.at(-2)?.type !== "ReturnStatement") {
         block.expressions.push([
-          [ "\n", getIndent(block.expressions.at(-1)) ],
+          [ getIndent(block.expressions.at(-1)) ],
           {
             type: "ReturnStatement",
             expression: ref,
@@ -8087,13 +8088,13 @@ Init
               const patternBindings = nonMatcherBindings(pattern)
 
               splices = splices.map(s => [", ", nonMatcherBindings(s)])
-              thisAssignments = thisAssignments.map(a => [indent, a, ";\n"])
+              thisAssignments = thisAssignments.map(a => [indent, a, ";"])
 
               const duplicateDeclarations = aggregateDuplicateBindings([patternBindings, splices])
 
-              prefix.push([indent, "const ", patternBindings, " = ", ref, splices, ";\n"])
+              prefix.push([indent, "const ", patternBindings, " = ", ref, splices, ";"])
               prefix.push(...thisAssignments)
-              prefix.push(...duplicateDeclarations.map(d => [indent, d, ";\n"]))
+              prefix.push(...duplicateDeclarations.map(d => [indent, d, ";"]))
 
               break
             }
@@ -8436,7 +8437,12 @@ Init
       if (varIds.length) {
         // get indent from first statement
         const indent = getIndent(statements[0])
-        statements.unshift([indent, "var ", varIds.join(", "), "\n"])
+        let delimiter = ";"
+        if (statements[0][1]?.parent?.root) {
+          delimiter = ";\n"
+        }
+        // TODO: Declaration ast node
+        statements.unshift([indent, "var ", varIds.join(", "), delimiter])
       }
 
       scopes.pop()

@@ -31,7 +31,7 @@ function blockWithPrefix(prefixStatements, block) {
     // Add braces if block lacked them
     if (block.bare) {
       // Now copied, so mutation is OK
-      block.children = [[" {\n", indent], ...block.children, "}"]
+      block.children = [[" {"], ...block.children, "}"]
       block.bare = false
     }
   }
@@ -170,12 +170,20 @@ function gatherRecursiveAll(node, predicate) {
 }
 
 /**
- * Gets the indentation node from a statement.
+ * Gets the indentation node from a statement. Includes newline,
+ * excludes comments, strips location info.
  */
 function getIndent(statement) {
   let indent = statement?.[0]
-  // Hacky way to get the indent out of [EOS, indent] pair
-  if (Array.isArray(indent)) indent = indent[indent.length - 1]
+  if (Array.isArray(indent)) {
+    indent = indent.flat(Infinity)
+
+    return indent.filter((n) => n && !(n.type === "Comment")).map((n) => {
+      if (typeof n === "string") return n
+      if (n.token != null) return n.token
+      return ""
+    })
+  }
   return indent
 }
 
@@ -367,7 +375,7 @@ function forRange(open, forDeclaration, range, stepExp, close) {
     } else { // const or var: put inside loop
       // TODO: missing indentation
       blockPrefix = [
-        ["", forDeclaration, " = ", counterRef, ";\n"]
+        ["", forDeclaration, " = ", counterRef, ";"]
       ]
     }
   } else if (forDeclaration) { // Coffee-style for loop
