@@ -14,7 +14,7 @@
  */
 function blockWithPrefix(prefixStatements, block) {
   if (prefixStatements && prefixStatements.length) {
-    const indent = block.expressions[0][0]
+    const indent = getIndent(block.expressions[0])
     // Match prefix statements to block indent level
     if (indent) {
       prefixStatements = prefixStatements.map((statement) => [indent, ...statement.slice(1)])
