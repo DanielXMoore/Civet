@@ -163,6 +163,16 @@ class Civet
   @name = "Civet"
 </Playground>
 
+Civet also does not support decorators on the same line as methods.
+This lets you use implicit function call syntax:
+
+<Playground>
+class Civet
+  @@description translate "Caffeine time!"
+  drink()
+    @fetch @coffeeCup
+</Playground>
+
 ## JSX
 
 To allow for automatic closing of JSX tags, Civet requires JSX children
