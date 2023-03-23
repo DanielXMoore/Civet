@@ -582,6 +582,79 @@ function processLetAssignmentDeclaration(l, id, suffix, ws, la, e) {
   }
 }
 
+function processUnaryExpression(pre, exp, post) {
+  // Handle "?" postfix
+  if (post?.token === "?") {
+    post = {
+      $loc: post.$loc,
+      token: " != null",
+    }
+
+    switch (exp.type) {
+      case "Identifier":
+      case "Literal":
+        return {
+          ...exp,
+          children: [...pre, ...exp.children, post]
+        }
+      default:
+        const expression = {
+          ...exp,
+          children: [...pre, "(", exp.children, ")", post]
+        }
+
+        return {
+          type: "ParenthesizedExpression",
+          children: ["(", expression, ")"],
+          expression,
+        }
+    }
+  }
+
+  // Combine unary - to create negative numeric literals
+  if (exp.type === "Literal") {
+    if (pre.length === 1 && pre[0].token === "-") {
+      const children = [pre[0], ...exp.children]
+      if (post) exp.children./**/push(post)
+
+      return {
+        type: "Literal",
+        children,
+        raw: `-${exp.raw}`
+      }
+    }
+  }
+
+  // Await ops
+  const l = pre.length
+  if (l) {
+    const last = pre[l - 1]
+    if (last.type === "Await" && last.op) {
+      if (exp.type !== "ParenthesizedExpression") {
+        exp = ["(", exp, ")"]
+      }
+      exp = {
+        type: "CallExpression",
+        children: [" Promise", last.op, exp]
+      }
+    }
+  }
+
+  if (exp.children) {
+    const children = [...pre, ...exp.children]
+    if (post) children./**/push(post)
+    return Object.assign({}, exp, { children })
+  } else if (Array.isArray(exp)) {
+    const children = [...pre, ...exp]
+    if (post) children./**/push(post)
+    return { children }
+  } else {
+    const children = [...pre, exp]
+    if (post) children./**/push(post)
+    return { children }
+  }
+}
+
 module.exports = {
   blockWithPrefix,
   clone,
@@ -605,6 +678,7 @@ module.exports = {
   processCoffeeInterpolation,
   processConstAssignmentDeclaration,
   processLetAssignmentDeclaration,
+  processUnaryExpression,
   quoteString,
   removeParentPointers,
 }
