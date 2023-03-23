@@ -533,10 +533,10 @@ function processConstAssignmentDeclaration(c, id, suffix, ws, ca, e) {
   let [splices, thisAssignments] = gatherBindingCode(id)
 
   splices = splices.map(s => [", ", s])
-  thisAssignments = thisAssignments.map(a => [";", a])
+  thisAssignments = thisAssignments.map(a => ["", a, ";"])
 
   const binding = [c, id, suffix, ...ws]
-  const initializer = [ca, e, ...splices, ...thisAssignments]
+  const initializer = [ca, e]
 
   const children = [binding, initializer]
 
@@ -546,6 +546,8 @@ function processConstAssignmentDeclaration(c, id, suffix, ws, ca, e) {
     children,
     binding,
     initializer,
+    splices,
+    thisAssignments,
   }
 }
 
@@ -562,10 +564,10 @@ function processLetAssignmentDeclaration(l, id, suffix, ws, la, e) {
   let [splices, thisAssignments] = gatherBindingCode(id)
 
   splices = splices.map(s => [", ", s])
-  thisAssignments = thisAssignments.map(a => [";", a])
+  thisAssignments = thisAssignments.map(a => ["", a, ";"])
 
   const binding = [l, id, suffix, ...ws]
-  const initializer = [la, e, ...splices, ...thisAssignments]
+  const initializer = [la, e]
 
   const children = [binding, initializer]
 
@@ -575,6 +577,8 @@ function processLetAssignmentDeclaration(l, id, suffix, ws, la, e) {
     children,
     binding,
     initializer,
+    splices,
+    thisAssignments,
   }
 }
 
