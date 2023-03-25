@@ -258,18 +258,32 @@ cli = ->
     else # run
       esm = /^\s*(import|export)\b/m.test output
       if esm
+        # Run ESM code via `node --loader @danielx/civet/esm` subprocess
         if stdin
-          console.error "Cannot use ESM import/export when reading Civet code from stdin"
-          process.exit 1
+          # If code was read on stdin via command-line argument "-", try to
+          # save it in a temporary file in same directory so paths are correct.
+          filename = ".stdin-#{process.pid}.civet"
+          try
+            await fs.writeFile filename, content, {encoding}
+          catch e
+            console.error "Could not write #{filename} for Civet ESM mode:"
+            console.error e
+            process.exit 1
         child = require('child_process').spawnSync argv[0], [
           '--loader'
           '@danielx/civet/esm'
           filename
           ...scriptArgs
         ], stdio: 'inherit'
+        if stdin
+          # Delete temporary file
+          await fs.unlink filename
         process.exit child.status
       else
-        module.filename = await fs.realpath filename
+        try
+          module.filename = await fs.realpath filename
+        catch
+          module.filename = filename
         process.argv = ["civet", module.filename, ...scriptArgs]
         module.paths =
           require('module')._nodeModulePaths path.dirname module.filename
