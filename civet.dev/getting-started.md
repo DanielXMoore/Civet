@@ -66,19 +66,26 @@ To use TypeScript for type checking, create a `tsconfig.json` file. For example:
 
 ## Executing code
 
-Simple execution of .civet source file without `import`s:
+Simple execution of a .civet source file (CommonJS or ESM):
 
 ```sh
 civet source.civet ...args...
 ```
 
-Directly execute a .civet source file without `import`s in Node:
+Directly execute a .civet CommonJS source file in Node:
 
 ```sh
 node -r @danielx/civet/register source.civet ...args...
 ```
 
-Execute an ESM .civet source file with `import`s in Node using ts-node:
+Directly execute a .civet ESM source file in Node:
+
+```sh
+node --loader @danielx/civet/esm source.civet ...args...
+```
+
+Directly execute a .civet or .ts source file that mixes .civet and .ts code,
+using [ts-node](https://typestrong.org/ts-node/):
 
 ```sh
 node --loader ts-node/esm --loader @danielx/civet/esm source.civet ...args...

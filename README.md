@@ -35,7 +35,7 @@ civet
 civet -c
 # Compile Civet source file to TypeScript
 civet < source.civet > output.ts
-# Execute a simple .civet script (no imports)
+# Execute a .civet script
 civet source.civet ...args...
 # Execute a .civet source file in node using ts-node
 node --loader ts-node/esm --loader @danielx/civet/esm source.civet

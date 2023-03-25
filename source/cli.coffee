@@ -20,6 +20,7 @@ if process.argv.includes "--help"
         civet                                        # REPL for executing code
         civet -c                                     # REPL for transpiling code
         civet --ast                                  # REPL for parsing code
+        civet [options] input.civet                  # run input.civet
         civet [options] -c input.civet               # -> input.civet.tsx
         civet [options] -c input.civet -o .ts        # -> input.ts
         civet [options] -c input.civet -o dir        # -> dir/input.civet.tsx
@@ -48,7 +49,7 @@ encoding = "utf8"
 fs = require "fs/promises"
 path = require "path"
 
-parseArgs = (args = process.argv[2..]) ->
+parseArgs = (args) ->
   options = {}
   Object.defineProperty options, 'run',
     get: -> not (@ast or @compile)
@@ -183,7 +184,8 @@ repl = (options) ->
         callback new nodeRepl.Recoverable "Enter a blank line to execute code."
 
 cli = ->
-  {filenames, scriptArgs, options} = parseArgs()
+  argv = process.argv  # process.argv gets overridden when running scripts
+  {filenames, scriptArgs, options} = parseArgs argv[2..]
   unless filenames.length
     if process.stdin.isTTY
       options.repl = true
@@ -254,14 +256,28 @@ cli = ->
           console.error "#{outputFilename} failed to write:"
           console.error error
     else # run
-      module.filename = await fs.realpath filename
-      process.argv = ["civet", module.filename, ...scriptArgs]
-      module.paths =
-        require('module')._nodeModulePaths path.dirname module.filename
-      try
-        module._compile output, module.filename
-      catch error
-        console.error "#{filename} crashed while running:"
-        console.error error
+      esm = /^\s*(import|export)\b/m.test output
+      if esm
+        if stdin
+          console.error "Cannot use ESM import/export when reading Civet code from stdin"
+          process.exit 1
+        child = require('child_process').spawnSync argv[0], [
+          '--loader'
+          '@danielx/civet/esm'
+          filename
+          ...scriptArgs
+        ], stdio: 'inherit'
+        process.exit child.status
+      else
+        module.filename = await fs.realpath filename
+        process.argv = ["civet", module.filename, ...scriptArgs]
+        module.paths =
+          require('module')._nodeModulePaths path.dirname module.filename
+        try
+          module._compile output, module.filename
+        catch error
+          console.error "#{filename} crashed while running in CJS mode:"
+          console.error error
+          process.exit 1
 
 cli() if require.main == module
