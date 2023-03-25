@@ -471,6 +471,27 @@ url |> fetch |> await
 |> callback
 </Playground>
 
+### Await Operators
+
+[TC39 proposal: `await` operations](https://github.com/tc39/proposal-await.ops)
+
+<Playground>
+await.allSettled promises
+</Playground>
+
+<Playground>
+await.all
+  for url of urls
+    fetch url
+</Playground>
+
+<Playground>
+await.all
+  for url of urls
+    async do
+      fetch url |> await |> .json() |> await
+</Playground>
+
 ### Custom Infix Operators
 
 You can also define your own infix operators;
