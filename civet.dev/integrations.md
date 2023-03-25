@@ -26,3 +26,4 @@ title: Integrations
 ## Testing
 
 - [c8 + Mocha](https://github.com/DanielXMoore/Civet#c8--mocha)
+- [Civet CLI](https://civet.dev/getting-started#executing-code)
