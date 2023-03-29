@@ -1212,6 +1212,21 @@ and [jsx spec issues](https://github.com/facebook/jsx/issues)
 <div .button.{size()}>
 </Playground>
 
+### Implicit Element
+
+<Playground>
+<.foo>Civet
+</Playground>
+
+<Playground>
+"civet defaultElement=span"
+<.foo>Civet
+</Playground>
+
+::: info
+Implicit elements must start with `id` or `class` shorthand (`#` or `.`).
+:::
+
 ### Boolean Toggles
 
 <Playground>
