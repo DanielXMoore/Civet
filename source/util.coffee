@@ -129,13 +129,13 @@ to use a new source map referencing upstream source files.
 SourceMap.remap = (codeWithSourceMap, upstreamMap, sourcePath, targetPath) ->
   # Extract downstream source map, if any
   sourceMapText = null
-  codeWithoutSourceMap = codeWithSourceMap.replace(smRegexp, (match) =>
-    sourceMapText = match
+  codeWithoutSourceMap = codeWithSourceMap.replace(smRegexp, (match, sm) =>
+    sourceMapText = sm
     ""
   )
 
   if sourceMapText
-    parsed = SourceMap.parseWithLines sourceMapText[1]
+    parsed = SourceMap.parseWithLines sourceMapText
     composedLines = SourceMap.composeLines upstreamMap.data.lines, parsed.lines
     upstreamMap.data.lines = composedLines
 
