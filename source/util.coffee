@@ -26,6 +26,7 @@ export lookupLineColumn = (table, pos) ->
   # [line, column]; zero based
   return [l, pos - prevEnd]
 
+# NOTE: Use https://evanw.github.io/source-map-visualization/ to visualize resulting files with source maps
 export SourceMap = (sourceString) ->
   srcTable = locationTable sourceString
 
@@ -122,24 +123,24 @@ smRegexp = /\n\/\/# sourceMappingURL=data:application\/json;charset=utf-8;base64
 
 #
 ###*
-Remap a string with compiled code and a source map to use a new source map
-referencing upstream source files.
+Remap a string with compiled code and an optional downstream source map
+to use a new source map referencing upstream source files.
 ###
 SourceMap.remap = (codeWithSourceMap, upstreamMap, sourcePath, targetPath) ->
-  sourceMapText = codeWithSourceMap.match(smRegexp)
+  # Extract downstream source map, if any
+  sourceMapText = null
+  codeWithoutSourceMap = codeWithSourceMap.replace(smRegexp, (match) =>
+    sourceMapText = match
+    ""
+  )
 
   if sourceMapText
     parsed = SourceMap.parseWithLines sourceMapText[1]
-  else
-    console.warn "No source map found in code"
-    return codeWithSourceMap
-
-  composedLines = SourceMap.composeLines upstreamMap.data.lines, parsed.lines
-  upstreamMap.data.lines = composedLines
+    composedLines = SourceMap.composeLines upstreamMap.data.lines, parsed.lines
+    upstreamMap.data.lines = composedLines
 
   remappedSourceMapJSON = upstreamMap.json(sourcePath, targetPath)
 
-  codeWithoutSourceMap = codeWithSourceMap.replace(smRegexp, "")
   # NOTE: be sure to keep comment split up so as not to trigger tools from confusing it with the actual sourceMappingURL
   newSourceMap = "#{"sourceMapping"}URL=data:application/json;charset=utf-8;base64,#{base64Encode JSON.stringify(remappedSourceMapJSON)}"
 

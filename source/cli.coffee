@@ -198,7 +198,6 @@ cli = ->
   if options.run
     options.js = true
     options.inlineMap = true
-    require '../register.js'
 
   return repl options if options.repl
 
@@ -280,6 +279,7 @@ cli = ->
           await fs.unlink filename
         process.exit child.status
       else
+        require '../register.js'
         try
           module.filename = await fs.realpath filename
         catch
