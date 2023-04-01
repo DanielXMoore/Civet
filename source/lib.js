@@ -583,6 +583,7 @@ function processLetAssignmentDeclaration(l, id, suffix, ws, la, e) {
 }
 
 function processUnaryExpression(pre, exp, post) {
+  if (!(pre.length || post)) return exp
   // Handle "?" postfix
   if (post?.token === "?") {
     post = {
@@ -640,18 +641,9 @@ function processUnaryExpression(pre, exp, post) {
     }
   }
 
-  if (exp.children) {
-    const children = [...pre, ...exp.children]
-    if (post) children./**/push(post)
-    return Object.assign({}, exp, { children })
-  } else if (Array.isArray(exp)) {
-    const children = [...pre, ...exp]
-    if (post) children./**/push(post)
-    return { children }
-  } else {
-    const children = [...pre, exp]
-    if (post) children./**/push(post)
-    return { children }
+  return {
+    type: "UnaryExpression",
+    children: [...pre, exp, post]
   }
 }
 
