@@ -4,7 +4,7 @@ import parser from "./parser.hera"
 { parse } = parser
 import generate, { prune } from "./generate.coffee"
 import * as util from "./util.coffee"
-{ SourceMap, base64Encode } = util
+{ SourceMap } = util
 export { parse, generate, util }
 
 # Rules that are not cacheable
@@ -165,9 +165,7 @@ export compile = (src, options) ->
     code = generate ast, options
 
     if options.inlineMap
-      srcMapJSON = sm.json(filename, "")
-      # NOTE: separate comment to prevent this string getting picked up as actual sourceMappingURL in tools
-      return "#{code}\n#{"//#"} sourceMappingURL=data:application/json;base64,#{base64Encode JSON.stringify(srcMapJSON)}\n"
+      return SourceMap.remap code, sm, filename, filename + '.tsx'
     else
       return {
         code,

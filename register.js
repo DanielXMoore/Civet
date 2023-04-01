@@ -22,4 +22,13 @@ if (require.extensions) {
     module._compile(js, filename);
     return;
   };
+
+  try {
+    require('@cspotcode/source-map-support').install({
+      environment: 'node',
+      hookRequire: true  // support inline source maps
+    })
+  } catch (e) {
+    // ignore missing dependency
+  }
 }
