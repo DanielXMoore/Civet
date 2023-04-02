@@ -52,6 +52,13 @@ declare module "@danielx/civet" {
 declare module "@danielx/civet/esbuild-plugin" {
   import { Plugin } from "esbuild"
 
-  const plugin: Plugin
+  interface Options {
+    filter?: RegExp
+    inlineMap?: boolean
+    js?: boolean
+    next?: unknown
+  }
+
+  const plugin: ((options: Options) => Plugin) & Plugin
   export default plugin
 }

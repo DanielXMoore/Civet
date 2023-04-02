@@ -1,6 +1,8 @@
 /**
 @file esbuild plugin for Civet language
 
+Simple zero config example
+
 @example
 ```javascript
 import esbuild from 'esbuild'
@@ -13,34 +15,121 @@ esbuild.build({
   ]
 }).catch(() => process.exit(1))
 ```
+
+Chain civet output into another esbuild plugin, solid for example
+
+@example
+```javascript
+import esbuild from 'esbuild'
+const { solidPlugin } = require('esbuild-plugin-solid');
+import civetPlugin from '@danielx/civet/esbuild-plugin'
+
+esbuild.build({
+  ...,
+  plugins: [
+    civetPlugin(
+      next: solidPlugin()
+    )
+  ]
+}).catch(() => process.exit(1))
+```
 */
 
-{ readFile } := require 'fs/promises'
+import type { Plugin, OnLoadArgs, OnLoadResult } from 'esbuild'
+
+interface Options {
+  filter?: RegExp
+  inlineMap?: boolean
+  js?: boolean
+  next?: Plugin
+}
+
+{ readFile, writeFile, mkdtemp, rmdir } := require 'fs/promises'
 path := require 'path'
 
 // NOTE: this references the built version of the module, not the source
 { compile } := require "../dist/main.js"
 
-module.exports = {
-  name: 'civet'
-  setup(build)
-    build.onLoad {
-      filter: /\.civet$/
-    }, (args) ->
-      try
-        source := await readFile args.path, 'utf8'
-        filename := path.relative(process.cwd(), args.path)
-        compiled := compile source, {
-          filename
-          inlineMap: true
-          js: true
-        }
+// NOTE: this function is named civet so esbuild gets "civet" as the name of the plugin
+civet := (options: Options = {}): Plugin ->
+  {
+    filter=/\.civet$/
+    inlineMap=true
+    js=true
+    next
+  } := options
 
+  let nextTransform: (args: OnLoadArgs) => OnLoadResult | Promise<OnLoadResult | null | undefined> | null | undefined
+  let tmpPath: null | string
+
+  if next
+    next.setup {
+      onEnd();
+      onStart();
+      resolve();
+      onResolve();
+      initialOptions();
+      esbuild();
+      onLoad(_, handler)
+        nextTransform = handler
+    }
+
+  return {
+    name: "civet"
+
+    setup(build)
+
+      build.onStart ->
+        if next
+          { tmpdir } := require 'os'
+          tmpPath = await mkdtemp path.join tmpdir(), "civet-"
         return
-          contents: compiled
-      catch e
+
+      build.onEnd ->
+        if tmpPath
+          await rmdir tmpPath, { recursive: true }
         return
-          errors: [{
-            text: e.message
-          }]
-}
+
+      build.onLoad { filter }, (args) ->
+        try
+          source := await readFile args.path, 'utf8'
+          filename := path.relative(process.cwd(), args.path)
+          compiled := compile source, {
+            filename
+            inlineMap
+            js
+          }
+
+          if next and tmpPath
+            outputFileName := filename + js ? '.jsx' : '.tsx'
+            outputFilePath := path.join tmpPath, outputFileName
+
+            // I'd prefer not to use temp files but I can't find a way to pass a stream to fs.readFile which is what
+            // most esbuild plugins use
+            await writeFile outputFilePath, compiled
+            return await nextTransform {
+              ...args
+              path: outputFilePath
+            }
+
+          return
+            contents: compiled
+        catch e
+          return
+            errors: [{
+              text: e.message
+              location:
+                file: args.path
+                namespace: args.namespace
+                line: e.line
+                column: e.column
+              detail: e
+            }]
+  }
+
+defaultPlugin := civet()
+
+// Default zero-config plugin
+civet.setup = defaultPlugin.setup
+
+module.exports = civet
