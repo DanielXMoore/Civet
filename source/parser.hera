@@ -23,6 +23,7 @@ const {
   hoistRefDecs,
   insertTrimmingSpace,
   isFunction,
+  lastAccessInCallExpression,
   literalValue,
   modifyString,
   processCoffeeInterpolation,
@@ -2281,8 +2282,8 @@ PropertyDefinitionList
 # https://262.ecma-international.org/#prod-PropertyDefinition
 PropertyDefinition
   # NOTE: Added CoffeeScript {@id} -> {id: this.id} shorthand
-  __:ws At:at IdentifierReference:id ->
-    const value = [{...at, token: "this."}, id]
+  __:ws AtThis:at IdentifierReference:id ->
+    const value = [at, ".", id]
     return {
       type: "Property",
       children: [ws, id, ": ", ...value],
@@ -2330,26 +2331,9 @@ PropertyDefinition
     if (value.type === "Identifier") {
       return {...value, children: [ws, ...value.children]}
     }
-    // More complicated expressions gains `name:` prefix
-    // Look for last PropertyAccess like `.foo` or Identifier,
-    // before any calls like `(args)`.
-    let exp = value, children, i
-    do {
-      ({children} = exp)
-      i = children.length-1
-      while (i >= 0 && (
-        children[i].type === "Call" ||
-        children[i].type === "NonNullAssertion" ||
-        children[i].type === "Optional"
-      )) i--
-      if (i < 0) return $skip
-      // Recurse into nested MemberExpression, e.g. from `x.y()`
-    } while (children[i].type === "MemberExpression" && (exp = children[i]))
-    const last = children[i]
+    const last = lastAccessInCallExpression(value)
     let name
-    if (last.name) {
-      ({name} = last)
-    } else if (last.type === "Index") {
+    if (last.type === "Index") {
       // TODO: If `last` is a suitable string literal, could use it for `name`.
       // TODO: Should use a ref instead of duplicating the expression.
       name = {
@@ -2357,7 +2341,8 @@ PropertyDefinition
         children: last.children,
       }
     } else {
-      return $skip
+      ({name} = last)
+      if (!name) return $skip
     }
     return {
       type: "Property",
@@ -5277,6 +5262,31 @@ JSXAttribute
   # NOTE: Adding ...foo shorthand for {...foo}
   InsertInlineOpenBrace DotDotDot InlineJSXAttributeValue InsertCloseBrace &JSXAttributeSpace
 
+  # NOTE: @foo and @@foo shorthands
+  # for foo={this.foo} and foo={this.foo.bind(this)}
+  AtThis:at Identifier?:id InlineJSXCallExpressionRest*:rest &JSXAttributeSpace ->
+    const access = id && {
+      type: "PropertyAccess",
+      children: [".", id],
+      name: id,
+    }
+    const expr = module.processCallMemberExpression({
+      type: "CallExpression",
+      children: [ at, access, ...rest ],
+    })
+    const last = lastAccessInCallExpression(expr)
+    let name
+    if (last.type === "Index") {
+      return [
+        "{...{",
+        {...last, type: "ComputedPropertyName"},
+        ": ", expr, "}}"
+      ]
+    } else if (last.name) {
+      return [last.name, "={", expr, "}"]
+    }
+    return $skip
+
   # NOTE: #id shorthand
   "#" JSXShorthandString ->
     return [ " ", "id=", $2 ]
@@ -5380,7 +5390,7 @@ InlineJSXCallExpression
       type: "CallExpression",
       children: [
         $1,
-        { type: "Call", children: [args] },
+        { type: "Call", children: args },
         ...rest.flat()
       ],
     })
@@ -5389,7 +5399,7 @@ InlineJSXCallExpression
       type: "CallExpression",
       children: [
         $1,
-        { type: "Call", children: [args] },
+        { type: "Call", children: args },
         ...rest.flat()
       ],
     })
@@ -5411,9 +5421,10 @@ InlineJSXCallExpressionRest
       return "`" + $1.token.slice(1, -1).replace(/(`|\$\{)/g, "\\$1") + "`"
     }
     return $1
-  ( OptionalShorthand / NonNullAssertion )? ExplicitArguments ->
-    if (!$1) return $2
-    return [ $1, ...$2 ]
+  ( OptionalShorthand / NonNullAssertion )? ExplicitArguments:args ->
+    args = { type: "Call", children: args }
+    if (!$1) return args
+    return [ $1, args ]
 
 # MemberExpression, with PrimaryExpression -> InlineJSXPrimaryExpression
 InlineJSXMemberExpression

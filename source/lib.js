@@ -467,6 +467,26 @@ function quoteString(str) {
   }
 }
 
+// Look for last property access like `.foo` or `[computed]` or root Identifier,
+// before any calls like `(args)`, non-null assertions `!`, and optionals `?`.
+// The return value should have a `name` property (for "Identifier" and
+// "Index") or have `type` of "Index" (for `[computed]`).
+function lastAccessInCallExpression(exp) {
+  let children, i
+  do {
+    ({children} = exp)
+    i = children.length - 1
+    while (i >= 0 && (
+      children[i].type === "Call" ||
+      children[i].type === "NonNullAssertion" ||
+      children[i].type === "Optional"
+    )) i--
+    if (i < 0) return $skip
+    // Recurse into nested MemberExpression, e.g. from `x.y()`
+  } while (children[i].type === "MemberExpression" && (exp = children[i]))
+  return children[i]
+}
+
 function processCoffeeInterpolation(s, parts, e, $loc) {
   // Check for no interpolations
   if (parts.length === 0 || (parts.length === 1 && parts[0].token != null)) {
@@ -665,6 +685,7 @@ module.exports = {
   hoistRefDecs,
   insertTrimmingSpace,
   isFunction,
+  lastAccessInCallExpression,
   literalValue,
   modifyString,
   processCoffeeInterpolation,
