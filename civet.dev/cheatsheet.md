@@ -1253,7 +1253,9 @@ Implicit elements must start with `id` or `class` shorthand (`#` or `.`).
 <div {foo}>Civet
 <div {props.name}>Civet
 <div {data()}>Civet
-<div {@@onClick}>Civet
+<div @name>Civet
+<div @data()>Civet
+<div @@onClick>Civet
 <div ...foo>Civet
 <div [expr]={value}>Civet
 </Playground>
