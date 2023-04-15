@@ -487,6 +487,79 @@ function lastAccessInCallExpression(exp) {
   return children[i]
 }
 
+// Given a MethodDefinition, convert into a FunctionExpression.
+// Returns undefined if the method is a getter or setter.
+function convertMethodToFunction(method) {
+  const {signature, block} = method
+  let { modifier } = signature
+  if (modifier) {
+    if (modifier.get || modifier.set) {
+      return
+    } else if (modifier.async) {
+      // put function after async
+      modifier = [modifier.children[0][0], " function ", ...modifier.children.slice(1)]
+    } else {
+      modifier = ["function ", ...modifier.children]
+    }
+  } else {
+    modifier = "function ";
+  }
+  return {
+    ...signature,
+    id: signature.name,
+    type: "FunctionExpression",
+    children: [
+      [modifier, ...signature.children.slice(1)],
+      block,
+    ],
+    block,
+  }
+}
+
+// Convert an ObjectExpression (with `content` property)
+// into a set of JSX attributes.
+// {foo} is equivalent to foo={foo}, and
+// {foo, bar: baz} is equivalent to foo={foo} and bar={baz}.
+// {...foo} is a special case.
+function convertObjectToJSXAttributes(obj) {
+  const {content} = obj
+  const parts = [] // JSX attributes
+  const rest = []  // parts that need to be in {...rest} form
+  for (let i = 0; i < content.length; i++) {
+    if (i > 0) parts.push(' ')
+    const part = content[i]
+    switch (part.type) {
+      case 'Identifier':
+        parts.push([part.name, '={', part.name, '}'])
+        break
+      case 'Property':
+        if (part.name.type === 'ComputedPropertyName') {
+          rest.push(part)
+        } else {
+          parts.push([part.name, '={', insertTrimmingSpace(part.value, ''), '}'])
+        }
+        break
+      case 'SpreadProperty':
+        parts.push(['{', part.dots, part.value, '}'])
+        break
+      case 'MethodDefinition':
+        const func = convertMethodToFunction(part)
+        if (func) {
+          parts.push([part.name, '={', convertMethodToFunction(part), '}'])
+        } else {
+          rest.push(part)
+        }
+        break
+      default:
+        throw new Error(`invalid object literal type in JSX attribute: ${part.type}`)
+    }
+  }
+  if (rest.length) {
+    parts.push(['{...{', ...rest, '}}'])
+  }
+  return parts
+}
+
 function processCoffeeInterpolation(s, parts, e, $loc) {
   // Check for no interpolations
   if (parts.length === 0 || (parts.length === 1 && parts[0].token != null)) {
@@ -670,6 +743,8 @@ function processUnaryExpression(pre, exp, post) {
 module.exports = {
   blockWithPrefix,
   clone,
+  convertMethodToFunction,
+  convertObjectToJSXAttributes,
   deepCopy,
   findAncestor,
   forRange,
