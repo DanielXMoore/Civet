@@ -470,7 +470,7 @@ function quoteString(str) {
 // Look for last property access like `.foo` or `[computed]` or root Identifier,
 // before any calls like `(args)`, non-null assertions `!`, and optionals `?`.
 // The return value should have a `name` property (for "Identifier" and
-// "Index") or have `type` of "Index" (for `[computed]`).
+// "Index"), or have `type` of "Index" (for `[computed]`), or be undefined.
 function lastAccessInCallExpression(exp) {
   let children, i
   do {
@@ -481,7 +481,7 @@ function lastAccessInCallExpression(exp) {
       children[i].type === "NonNullAssertion" ||
       children[i].type === "Optional"
     )) i--
-    if (i < 0) return $skip
+    if (i < 0) return
     // Recurse into nested MemberExpression, e.g. from `x.y()`
   } while (children[i].type === "MemberExpression" && (exp = children[i]))
   return children[i]
