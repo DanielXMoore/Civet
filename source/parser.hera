@@ -730,7 +730,7 @@ LeftHandSideExpression
 CallExpression
   # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
   "super" ArgumentsWithTrailingMemberExpressions CallExpressionRest*:rest ->
-    return module.processGlob({
+    return module.processCallMemberExpression({
       type: "CallExpression",
       children: [$1, ...$2, ...rest.flat()],
     })
@@ -738,7 +738,7 @@ CallExpression
   # (At top level, ImportDeclaration will match first.)
   # NOTE: Using ExtendedExpression to allow for If/Switch expressions
   "import" ArgumentsWithTrailingMemberExpressions CallExpressionRest*:rest ->
-    return module.processGlob({
+    return module.processCallMemberExpression({
       type: "CallExpression",
       children: [$1, ...$2, ...rest.flat()],
     })
@@ -746,7 +746,7 @@ CallExpression
   MemberExpression:member AllowedTrailingMemberExpressions:trailing CallExpressionRest*:rest ->
     if (rest.length || trailing.length) {
       rest = rest.flat()
-      return module.processGlob({
+      return module.processCallMemberExpression({
         type: "CallExpression",
         children: [member, ...trailing, ...rest]
       })
@@ -787,7 +787,7 @@ MemberExpression
   # NOTE: Eliminated left recursion
   ( PrimaryExpression / SuperProperty / MetaProperty ) MemberExpressionRest*:rest ->
     if (rest.length || Array.isArray($1)) {
-      return module.processGlob({
+      return module.processCallMemberExpression({
         type: "MemberExpression",
         children: [$1, ...rest].flat(),
       })
@@ -809,6 +809,7 @@ MemberExpressionRest
   # NOTE: Combined Optional and Property access
   PropertyAccess
   PropertyGlob
+  PropertyBind
   # NOTE: Added TypeScript '!' non-null assertion
   NonNullAssertion
 
@@ -946,11 +947,21 @@ PropertyAccess
 
 PropertyGlob
   # NOTE: Added shorthand obj.{a,b:c} -> {a: obj.a, c: obj.b}
-  OptionalDot BracedObjectLiteral:object ->
+  OptionalDot:dot BracedObjectLiteral:object ->
     return {
       type: "PropertyGlob",
+      dot,
       object,
-      children: $0
+      children: $0,
+    }
+
+PropertyBind
+  # NOTE: foo@.bar and foo@bar shorthand for foo.bar.bind(foo)
+  ( QuestionMark / NonNullAssertion )?:modifier At OptionalDot:dot ( IdentifierName / PrivateIdentifier ):id ->
+    return {
+      type: "PropertyBind",
+      name: id.name,
+      children: [modifier, dot, id],  // omit `@` from children
     }
 
 SuperProperty
@@ -5281,7 +5292,7 @@ JSXAttribute
     return [ " ", id, "={", value, "}" ]
 
 JSXAttributeSpace
-  /[\s>]/
+  /[\s>]|\/>/
 
 JSXShorthandString
   /(?:[\w\-:]+|\([^()]*\)|\[[^\[\]]*\])+/ ->
@@ -5311,7 +5322,7 @@ JSXAttributeValue
   OpenBrace PostfixedExpression Whitespace? CloseBrace
   JSXElement
   JSXFragment
-  InsertInlineOpenBrace InlineJSXAttributeValue:value InsertCloseBrace ->
+  InsertInlineOpenBrace:open InlineJSXAttributeValue:value InsertCloseBrace:close &JSXAttributeSpace ->
     // Check for string literal resulting from CoffeeScript interpolated
     // double-quoted string that didn't end up actually interpolating.
     if (value.type === "StringLiteral") {
@@ -5319,7 +5330,7 @@ JSXAttributeValue
       // which avoids e.g. converting newlines into \n.
       return $skip
     }
-    return $0
+    return [open, value, close]  // omit &JSXAttributeSpace
   # NOTE: InlineJSXAttributeValue which contains TemplateLiteral must be before
   # StringLiteral, so that CoffeeScript interpolated strings get checked first.
   # NOTE: JSX strings allow newlines, and they get passed through as-is.
@@ -5364,25 +5375,56 @@ InlineJSXUpdateExpression
 # This also acts as a replacement for LeftHandSideExpression
 # (we don't allow New because that has whitespace).
 InlineJSXCallExpression
-  "super" ExplicitArguments
-  "import" OpenParen PostfixedExpression __ CloseParen
-  InlineJSXMemberExpression InlineJSXCallExpressionRest* ->
-    if ($2.length) return $0
-    return $1
+  "super" ExplicitArguments:args InlineJSXCallExpressionRest*:rest ->
+    return module.processCallMemberExpression({
+      type: "CallExpression",
+      children: [
+        $1,
+        { type: "Call", children: [args] },
+        ...rest.flat()
+      ],
+    })
+  "import" ExplicitArguments:args InlineJSXCallExpressionRest*:rest ->
+    return module.processCallMemberExpression({
+      type: "CallExpression",
+      children: [
+        $1,
+        { type: "Call", children: [args] },
+        ...rest.flat()
+      ],
+    })
+  InlineJSXMemberExpression:member InlineJSXCallExpressionRest*:rest ->
+    if (rest.length) {
+      rest = rest.flat()
+      return module.processCallMemberExpression({
+        type: "CallExpression",
+        children: [member, ...rest]
+      })
+    }
+    return member
 
 # CallExpressionRest, with only explicit function calls.
 InlineJSXCallExpressionRest
-  MemberExpressionRest
-  TemplateLiteral
-  ( OptionalShorthand / NonNullAssertion )? ExplicitArguments
+  InlineJSXMemberExpressionRest
+  TemplateLiteral / StringLiteral ->
+    if ($1.type === "StringLiteral") {
+      return "`" + $1.token.slice(1, -1).replace(/(`|\$\{)/g, "\\$1") + "`"
+    }
+    return $1
+  ( OptionalShorthand / NonNullAssertion )? ExplicitArguments ->
+    if (!$1) return $2
+    return [ $1, ...$2 ]
 
 # MemberExpression, with PrimaryExpression -> InlineJSXPrimaryExpression
 InlineJSXMemberExpression
-  InlineJSXPrimaryExpression InlineJSXMemberExpressionRest* ->
-    if ($2.length) return $0
+  ( InlineJSXPrimaryExpression / SuperProperty / MetaProperty ) InlineJSXMemberExpressionRest*:rest ->
+    if (rest.length || Array.isArray($1)) {
+      return module.processCallMemberExpression({
+        type: "MemberExpression",
+        children: [$1, ...rest].flat(),
+      })
+    }
     return $1
-  SuperProperty
-  MetaProperty
 
 # MemberExpressionRest without optional IndentFurther before PropertyAccess
 InlineJSXMemberExpressionRest
@@ -5397,6 +5439,8 @@ InlineJSXMemberExpressionRest
     }
     return $2
   PropertyAccess
+  PropertyGlob
+  PropertyBind
   NonNullAssertion
 
 # Subset of PrimaryExpression; omissions documented below.
@@ -6502,14 +6546,15 @@ Init
       }
     })
 
-    module.processGlob = (node) => {
+    // Process globs and bind shorthand in Call/MemberExpression
+    module.processCallMemberExpression = (node) => {
       const {children} = node
       for (let i = 0; i < children.length; i++) {
         const glob = children[i]
         if (glob?.type === "PropertyGlob") {
           // TODO: add ref to ensure object base evaluated only once
           const prefix = children.slice(0, i)
-          .concat(glob.children[0]) // dot
+          .concat(glob.dot)
           const parts = []
           for (const part of glob.object.content) {
             if (part.type === "MethodDefinition") {
@@ -6559,9 +6604,24 @@ Init
             ],
           }
           if (i === children.length-1) return object
-          return module.processGlob({  // in case there are more globs
+          return module.processCallMemberExpression({  // in case there are more
             ...node,
             children: [ object, ...children.slice(i+1) ]
+          })
+        } else if (glob?.type === "PropertyBind") {
+          // TODO: add ref to ensure object base evaluated only once
+          const prefix = children.slice(0, i)
+          return module.processCallMemberExpression({  // in case there are more
+            ...node,
+            children: [
+              prefix,
+              {
+                ...glob,
+                type: "PropertyAccess",
+                children: [ ...glob.children, ".bind(", prefix, ")" ]
+              },
+              ...children.slice(i+1)
+            ]
           })
         }
       }
