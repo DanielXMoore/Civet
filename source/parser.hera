@@ -5292,7 +5292,7 @@ JSXAttribute
     return [ " ", id, "={", value, "}" ]
 
 JSXAttributeSpace
-  /[\s>]/
+  /[\s>]|\/>/
 
 JSXShorthandString
   /(?:[\w\-:]+|\([^()]*\)|\[[^\[\]]*\])+/ ->
@@ -5322,7 +5322,7 @@ JSXAttributeValue
   OpenBrace PostfixedExpression Whitespace? CloseBrace
   JSXElement
   JSXFragment
-  InsertInlineOpenBrace InlineJSXAttributeValue:value InsertCloseBrace ->
+  InsertInlineOpenBrace:open InlineJSXAttributeValue:value InsertCloseBrace:close &JSXAttributeSpace ->
     // Check for string literal resulting from CoffeeScript interpolated
     // double-quoted string that didn't end up actually interpolating.
     if (value.type === "StringLiteral") {
@@ -5330,7 +5330,7 @@ JSXAttributeValue
       // which avoids e.g. converting newlines into \n.
       return $skip
     }
-    return $0
+    return [open, value, close]  // omit &JSXAttributeSpace
   # NOTE: InlineJSXAttributeValue which contains TemplateLiteral must be before
   # StringLiteral, so that CoffeeScript interpolated strings get checked first.
   # NOTE: JSX strings allow newlines, and they get passed through as-is.
@@ -5375,25 +5375,56 @@ InlineJSXUpdateExpression
 # This also acts as a replacement for LeftHandSideExpression
 # (we don't allow New because that has whitespace).
 InlineJSXCallExpression
-  "super" ExplicitArguments
-  "import" OpenParen PostfixedExpression __ CloseParen
-  InlineJSXMemberExpression InlineJSXCallExpressionRest* ->
-    if ($2.length) return $0
-    return $1
+  "super" ExplicitArguments:args InlineJSXCallExpressionRest*:rest ->
+    return module.processCallMemberExpression({
+      type: "CallExpression",
+      children: [
+        $1,
+        { type: "Call", children: [args] },
+        ...rest.flat()
+      ],
+    })
+  "import" ExplicitArguments:args InlineJSXCallExpressionRest*:rest ->
+    return module.processCallMemberExpression({
+      type: "CallExpression",
+      children: [
+        $1,
+        { type: "Call", children: [args] },
+        ...rest.flat()
+      ],
+    })
+  InlineJSXMemberExpression:member InlineJSXCallExpressionRest*:rest ->
+    if (rest.length) {
+      rest = rest.flat()
+      return module.processCallMemberExpression({
+        type: "CallExpression",
+        children: [member, ...rest]
+      })
+    }
+    return member
 
 # CallExpressionRest, with only explicit function calls.
 InlineJSXCallExpressionRest
-  MemberExpressionRest
-  TemplateLiteral
-  ( OptionalShorthand / NonNullAssertion )? ExplicitArguments
+  InlineJSXMemberExpressionRest
+  TemplateLiteral / StringLiteral ->
+    if ($1.type === "StringLiteral") {
+      return "`" + $1.token.slice(1, -1).replace(/(`|\$\{)/g, "\\$1") + "`"
+    }
+    return $1
+  ( OptionalShorthand / NonNullAssertion )? ExplicitArguments ->
+    if (!$1) return $2
+    return [ $1, ...$2 ]
 
 # MemberExpression, with PrimaryExpression -> InlineJSXPrimaryExpression
 InlineJSXMemberExpression
-  InlineJSXPrimaryExpression InlineJSXMemberExpressionRest* ->
-    if ($2.length) return $0
+  ( InlineJSXPrimaryExpression / SuperProperty / MetaProperty ) InlineJSXMemberExpressionRest*:rest ->
+    if (rest.length || Array.isArray($1)) {
+      return module.processCallMemberExpression({
+        type: "MemberExpression",
+        children: [$1, ...rest].flat(),
+      })
+    }
     return $1
-  SuperProperty
-  MetaProperty
 
 # MemberExpressionRest without optional IndentFurther before PropertyAccess
 InlineJSXMemberExpressionRest
@@ -5408,6 +5439,8 @@ InlineJSXMemberExpressionRest
     }
     return $2
   PropertyAccess
+  PropertyGlob
+  PropertyBind
   NonNullAssertion
 
 # Subset of PrimaryExpression; omissions documented below.
