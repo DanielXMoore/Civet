@@ -1249,22 +1249,7 @@ Implicit elements must start with `id` or `class` shorthand (`#` or `.`).
 
 ### Attributes
 
-<Playground>
-<div {foo}>Civet
-<div {props.name}>Civet
-<div {data()}>Civet
-<div @name>Civet
-<div @data()>Civet
-<div @@onClick>Civet
-<div ...foo>Civet
-<div [expr]={value}>Civet
-</Playground>
-
-::: tip
-
 Attribute values without whitespace or suitably wrapped (parenthesized expressions, strings and template strings, regular expressions, array literals, braced object literals) do not need braces:
-
-:::
 
 <Playground>
 <div
@@ -1274,6 +1259,35 @@ Attribute values without whitespace or suitably wrapped (parenthesized expressio
   list=[1, 2, 3]
 >
   Civet
+</Playground>
+
+Arbitrary [braced literals](#braced-literals) convert to equivalent JSX:
+
+<Playground>
+<div {foo}>Civet
+<div {props.name}>Civet
+<div {data()}>Civet
+</Playground>
+
+Call/member/glob/spread expressions without unwrapped whitespace
+do not need braces
+(but note that simple identifiers remain empty attributes):
+
+<Playground>
+<div foo>Civet
+<div data()>Civet
+<div @name>Civet
+<div @@onClick>Civet
+<div modal@onClick>Civet
+<div props{name, value}>Civet
+<div ...foo>Civet
+</Playground>
+
+Computed property names:
+
+<Playground>
+<div [expr]={value}>Civet
+<div `data-${key}`={value}>Civet
 </Playground>
 
 ### Comments
