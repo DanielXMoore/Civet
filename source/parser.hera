@@ -1114,6 +1114,8 @@ AtIdentifierRef
 BindingPattern
   ObjectBindingPattern
   ArrayBindingPattern
+  Literal
+  RegularExpressionLiteral
 
 # https://262.ecma-international.org/#prod-ObjectBindingPattern
 # NOTE: Simplified from spec
@@ -1124,6 +1126,7 @@ ObjectBindingPattern
       children: $0,
       content: c.children,
       names: c.names,
+      properties: c.children,
     }
 
 ObjectBindingPatternContent
@@ -1149,15 +1152,17 @@ ArrayBindingPattern
   _? OpenBracket ArrayBindingPatternContent:c __ CloseBracket ->
     return {
       type: "ArrayBindingPattern",
+      children: $0,
       names: c.names,
-      children: $0
+      elements: c.children,
+      length: c.length,
     }
 
 ArrayBindingPatternContent
   # NOTE: Added indentation based binding elements
   NestedBindingElements
   BindingElementList?:elements ->
-    if (!elements) return { children: [], names: [] }
+    if (!elements) return { children: [], names: [], length: 0 }
 
     return module.adjustBindingElements(elements)
 
@@ -1210,31 +1215,36 @@ BindingProperty
   # NOTE: Must be checked first to pick up trailing "..." form
   BindingRestProperty
 
-  _? PropertyName:name _? Colon ( BindingIdentifier / BindingPattern ):b Initializer?:init ->
+  _? PropertyName:name _? Colon _? ( BindingIdentifier / BindingPattern ):value Initializer?:init ->
     return {
+      type: "BindingProperty",
+      children: $0,
       name,
-      value: b,
+      value,
       init,
-      names: b.names,
-      children: $0
+      names: value.names,
     }
 
-  BindingIdentifier:b Initializer?:init ->
-    if (b.type === "AtBinding") {
+  _?:ws BindingIdentifier:binding Initializer?:init ->
+    if (binding.type === "AtBinding") {
       return {
         type: "AtBindingProperty",
-        ref: b.ref,
+        children: $0,
+        binding,
+        ref: binding.ref,
         init,
         names: [],
-        children: $0
       }
     }
 
     return {
-      name: b,
+      type: "BindingProperty",
+      children: $0,
+      name: binding,
+      value: undefined,
       init,
-      names: b.names,
-      children: $0
+      names: binding.names,
+      identifier: binding,
     }
 
 # https://262.ecma-international.org/#prod-BindingRestProperty
@@ -1269,12 +1279,19 @@ NestedBindingElement
 # https://262.ecma-international.org/#prod-BindingElement
 BindingElement
   BindingRestElement
+
   # NOTE: Merged in SingleNameBinding
-  ( BindingIdentifier / BindingPattern ):binding Initializer? ->
+  _?:ws ( BindingIdentifier / BindingPattern ):binding Initializer?:initializer ->
+    binding = {
+      ...binding,
+      children: [...binding.children, initializer],
+    }
+
     return {
       names: binding.names,
-      children: $0
+      children: [ws, binding]
     }
+
   # NOTE: Merged in ElisionElement
   &( _? "," ) ->
     return {
@@ -1314,176 +1331,6 @@ EmptyBindingPattern
       names: [],
       ref,
     }
-
-# Pattern matching
-MatchingPattern
-  ObjectMatchingPattern
-  ArrayMatchingPattern
-  Literal
-  RegularExpressionLiteral
-  # TODO: Relational RHS
-
-ObjectMatchingPattern
-  _?:ws OpenBrace:open ObjectMatchingPatternContent:properties __:ws CloseBrace:close ->
-    return {
-      type: "ObjectMatchingPattern",
-      children: [ws, open, ...properties.children, ...ws, close],
-      properties: properties.children
-    }
-
-ObjectMatchingPatternContent
-  # NOTE: Added indentation based binding properties
-  NestedMatchingProperties
-  MatchingPropertyList?:properties ->
-    if (!properties) return { children: [], names: [], }
-
-    return module.reorderBindingRestProperty(properties)
-
-NestedMatchingProperties
-  # NOTE: Add NestedBindingProperties after rest from CoffeeScript
-  PushIndent NestedMatchingPropertyList*:properties PopIndent ->
-    if (!props.length) return $skip
-
-    return module.reorderBindingRestProperty(props.flat())
-
-MatchingPropertyList
-  ( MatchingProperty ObjectPropertyDelimiter )+:props ->
-    return props.map(([prop, delim]) => {
-      return {
-        ...prop,
-        children: [...prop.children, delim],
-      }
-    })
-
-NestedMatchingPropertyList
-  Nested:ws MatchingPropertyList:props ->
-    // Attach whitespace to first property
-    return props.map( (prop, i) => {
-      if (i > 0) return prop
-      return {
-        ...prop,
-        children: [ws, ...prop.children],
-      }
-    })
-
-MatchingProperty
-  MatchingRestProperty
-
-  _? PropertyName:name _? Colon _? ( BindingIdentifier / MatchingPattern ):match ->
-    return {
-      type: "BindingMatchProperty",
-      name,
-      match,
-      children: $0,
-    }
-
-  _?:ws BindingIdentifier:b ->
-    if (b.type === "AtBinding") {
-      return {
-        type: "AtBindingProperty",
-        ref: b.ref,
-        names: [],
-        children: [ws, b]
-      }
-    }
-
-    return {
-      type: "BindingProperty",
-      names: b.names,
-      children: [ws, b],
-      identifier: b,
-    }
-
-MatchingRestProperty
-  BindingRestProperty
-
-ArrayMatchingPattern
-  _?:ws OpenBracket ArrayMatchingPatternContent:elements __ CloseBracket ->
-    return {
-      type: "ArrayMatchingPattern",
-      children: $0,
-      elements: elements.children,
-      length: elements.length,
-    }
-
-ArrayMatchingPatternContent
-  # NOTE: Added indentation based binding elements
-  NestedMatchingElements
-  MatchingElementList?:elements ->
-    if (!elements) return { children: [], names: [], length: 0 }
-
-    return module.adjustBindingElements(elements)
-
-NestedMatchingElements
-  PushIndent NestedMatchingElementList*:elements PopIndent ->
-    return module.adjustBindingElements(elements.flat())
-
-MatchingElementList
-  ( MatchingElement ArrayElementDelimiter )+:elements ->
-
-    return elements.map(([element, delim]) => {
-      return {
-        ...element,
-        children: [...element.children, delim],
-      }
-    })
-
-NestedMatchingElementList
-  Nested:ws MatchingElementList:elements ->
-
-    // Attach whitespace to first element
-    return elements.map( (element, i) => {
-      if (i > 0) return element
-      return {
-        ...element,
-        children: [ws, ...element.children],
-      }
-    })
-
-MatchingElement
-  MatchingRestElement
-
-  _?:ws BindingIdentifier:name _? Colon _? ( BindingIdentifier / MatchingPattern ):match ->
-    // Attach blockPrefix to bind sub-patterns
-    let blockPrefix
-    switch (match.type) {
-      case "ArrayMatchingPattern":
-      case "ObjectMatchingPattern":
-        blockPrefix = [ match, " = ", name ]
-        break;
-      default:
-        break;
-    }
-
-    return {
-      names: name.names,
-      children: [ ws, {
-        type: "BindingMatchElement",
-        name,
-        match,
-        children: [ name ],
-        blockPrefix,
-      } ],
-    }
-
-  # NOTE: Merged in SingleNameBinding
-  _?:ws ( BindingIdentifier / MatchingPattern ):binding ->
-    return {
-      names: binding.names,
-      children: [ ws, binding ]
-    }
-
-  &( _? "," ) ->
-    return {
-      children: [{
-        type: "ElisionElement",
-        children: [""],
-      }],
-      names: [],
-    }
-
-MatchingRestElement
-  BindingRestElement
 
 # https://262.ecma-international.org/#prod-FunctionDeclaration
 FunctionDeclaration
@@ -3525,7 +3372,7 @@ NestedCaseClause
 
 # https://262.ecma-international.org/#prod-CaseClause
 CaseClause
-  MatchingPattern:pattern ( ThenClause / NestedBlockStatements / EmptyBareBlock ):block ->
+  BindingPattern:pattern ( ThenClause / NestedBlockStatements / EmptyBareBlock ):block ->
     return {
       type: "PatternClause",
       children: $0,
@@ -7488,7 +7335,7 @@ Init
 
         if (asThis) {
           // Convert from @x to x: this.x keeping any whitespace or initializer to the right
-          const atBinding = binding.children[0]
+          const atBinding = binding.binding
           atBinding.children.pop()
           atBinding.type = undefined
 
@@ -7795,7 +7642,7 @@ Init
 
     function getPatternConditions(pattern, ref, conditions) {
       switch (pattern.type) {
-        case "ArrayMatchingPattern": {
+        case "ArrayBindingPattern": {
           const { elements, length } = pattern,
             hasRest = elements.some(e => e.rest),
             comparator = hasRest ? " >= " : " === ",
@@ -7811,13 +7658,13 @@ Init
             const subRef = [ref, "[", i.toString(), "]"]
 
             switch (e.type) {
-              case "ArrayMatchingPattern":
-              case "ObjectMatchingPattern":
+              case "ArrayBindingPattern":
+              case "ObjectBindingPattern":
               case "RegularExpressionLiteral":
               case "Literal":
                 getPatternConditions(e, subRef, conditions)
                 break
-              case "BindingMatchElement":
+              case "BindingElement":
                 getPatternConditions(e.match, subRef, conditions)
                 break
             }
@@ -7833,13 +7680,13 @@ Init
               const subRef = [ref, "[", ref, ".length - ", (postLength + i).toString(), "]"]
 
               switch (e.type) {
-                case "ArrayMatchingPattern":
-                case "ObjectMatchingPattern":
+                case "ArrayBindingPattern":
+                case "ObjectBindingPattern":
                 case "RegularExpressionLiteral":
                 case "Literal":
                   getPatternConditions(e, subRef, conditions)
                   break
-                case "BindingMatchElement":
+                case "BindingElement":
                   getPatternConditions(e.match, subRef, conditions)
                   break
               }
@@ -7848,7 +7695,7 @@ Init
 
           break
         }
-        case "ObjectMatchingPattern": {
+        case "ObjectBindingPattern": {
           conditions.push(
             ["typeof ", ref, " === 'object'"],
             [ref, " != null"],
@@ -7856,8 +7703,8 @@ Init
 
           pattern.properties.forEach((p) => {
             switch(p.type) {
-              case "BindingMatchProperty": {
-                const {name, match} = p
+              case "BindingProperty": {
+                const {name, value} = p
                 let subRef
                 switch(name.type) {
                   case "ComputedPropertyName":
@@ -7875,12 +7722,12 @@ Init
                     subRef = [ref, ".", name]
                 }
 
-                getPatternConditions(p.match, subRef, conditions)
+                if (value) {
+                  getPatternConditions(value, subRef, conditions)
+                }
 
                 break
-              } case "BindingProperty":
-                conditions.push(["'", p.identifier ,"' in ", ref])
-                break
+              }
             }
           })
 
@@ -7894,6 +7741,9 @@ Init
 
           break
         }
+        case "Identifier":
+          // Alias adds no conditions
+          break
         default: {
           conditions.push([
             ref,
@@ -7920,28 +7770,20 @@ Init
     function elideMatchersFromPropertyBindings(properties) {
       return properties.map((p) => {
         switch (p.type) {
-          case "BindingMatchProperty": {
-            const { children, name, match } = p
-            const [ws,,,,,, sep] = children
+          case "BindingProperty": {
+            const { children, name, value } = p
+            const [ws] = children
+            const sep = children[children.length - 1]
 
-            switch (match.type) {
-              case "ArrayMatchingPattern":
-              case "ObjectMatchingPattern":
+            switch (value && value.type) {
+              case "ArrayBindingPattern":
+              case "ObjectBindingPattern":
                 return {
                   ...p,
-                  children: [ws, name, ": ", nonMatcherBindings(match)],
+                  children: [ws, name, ": ", nonMatcherBindings(value)],
                 }
               case "Identifier":
-                switch (name.type) {
-                  case "ComputedPropertyName":
-                  case "Literal":
-                  case "StringLiteral":
-                  case "NumericLiteral":
-                    return {
-                      ...p,
-                      children: [ws, name, ": ", match, sep],
-                    }
-                }
+                return p
               case "Literal":
               case "RegularExpressionLiteral":
               case "StringLiteral":
@@ -7952,7 +7794,6 @@ Init
                 }
             }
           }
-          case "BindingProperty":
           case "BindingRestProperty":
           default:
             return p
@@ -7962,7 +7803,7 @@ Init
 
     function nonMatcherBindings(pattern) {
       switch (pattern.type) {
-        case "ArrayMatchingPattern":
+        case "ArrayBindingPattern":
           return ["[", elideMatchersFromArrayBindings(pattern.elements), "]"]
         case "PostRestBindingElements": {
           const els = elideMatchersFromArrayBindings(pattern.children[1])
@@ -7976,7 +7817,7 @@ Init
             ],
           }
         }
-        case "ObjectMatchingPattern":
+        case "ObjectBindingPattern":
           return ["{", elideMatchersFromPropertyBindings(pattern.properties), "}"]
 
         default:
@@ -7985,15 +7826,15 @@ Init
     }
 
     function aggregateDuplicateBindings(bindings) {
-      const props = gatherRecursiveAll(bindings, n => n.type === "BindingMatchProperty")
+      const props = gatherRecursiveAll(bindings, n => n.type === "BindingProperty")
       const declarations = []
 
       const propsGroupedByName = new Map
 
       for(const p of props) {
-        const { name } = p
+        const { name, value } = p
 
-        const key = name.name
+        const key = value?.name || name.name
         if (propsGroupedByName.has(key)) {
           propsGroupedByName.get(key).push(p)
         } else {
@@ -8107,9 +7948,9 @@ Init
           const prefix = []
 
           switch (pattern.type) {
-            case "ArrayMatchingPattern":
+            case "ArrayBindingPattern":
               if (pattern.length === 0) break
-            case "ObjectMatchingPattern": {
+            case "ObjectBindingPattern": {
               // NOTE: Array matching pattern falls through so we use the null check
               if (pattern.properties?.length === 0) break
 
