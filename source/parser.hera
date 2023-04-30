@@ -1110,10 +1110,19 @@ AtIdentifierRef
       id: id.name,
     }
 
+PinPattern
+  "^" Identifier:identifier ->
+    return {
+      type: "PinPattern",
+      children: $0,
+      identifier,
+    }
+
 # https://262.ecma-international.org/#prod-BindingPattern
 BindingPattern
   ObjectBindingPattern
   ArrayBindingPattern
+  PinPattern
   Literal
   RegularExpressionLiteral
 
@@ -1225,7 +1234,8 @@ BindingProperty
       names: value.names,
     }
 
-  _?:ws BindingIdentifier:binding Initializer?:init ->
+  _?:ws "^"?:pin BindingIdentifier:binding Initializer?:init ->
+    // TODO make this work with pin
     if (binding.type === "AtBinding") {
       return {
         type: "AtBindingProperty",
@@ -1234,6 +1244,18 @@ BindingProperty
         ref: binding.ref,
         init,
         names: [],
+      }
+    }
+
+    if (pin) {
+      return {
+        type: "PinProperty",
+        children: [ws, binding],
+        name: binding,
+        value: {
+          type: "PinPattern",
+          identifier: binding,
+        },
       }
     }
 
@@ -7645,6 +7667,8 @@ Init
     }
 
     function getPatternConditions(pattern, ref, conditions) {
+      if (pattern.rest) return // No conditions for rest elements
+
       switch (pattern.type) {
         case "ArrayBindingPattern": {
           const { elements, length } = pattern,
@@ -7660,18 +7684,7 @@ Init
           // recursively collect nested conditions
           elements.forEach(({children: [,e]}, i) => {
             const subRef = [ref, "[", i.toString(), "]"]
-
-            switch (e.type) {
-              case "ArrayBindingPattern":
-              case "ObjectBindingPattern":
-              case "RegularExpressionLiteral":
-              case "Literal":
-                getPatternConditions(e, subRef, conditions)
-                break
-              case "BindingElement":
-                getPatternConditions(e.match, subRef, conditions)
-                break
-            }
+            getPatternConditions(e, subRef, conditions)
           })
 
           // collect post rest conditions
@@ -7682,18 +7695,7 @@ Init
 
             postElements.forEach(({children: [,e]}, i) => {
               const subRef = [ref, "[", ref, ".length - ", (postLength + i).toString(), "]"]
-
-              switch (e.type) {
-                case "ArrayBindingPattern":
-                case "ObjectBindingPattern":
-                case "RegularExpressionLiteral":
-                case "Literal":
-                  getPatternConditions(e, subRef, conditions)
-                  break
-                case "BindingElement":
-                  getPatternConditions(e.match, subRef, conditions)
-                  break
-              }
+              getPatternConditions(e, subRef, conditions)
             })
           }
 
@@ -7707,6 +7709,7 @@ Init
 
           pattern.properties.forEach((p) => {
             switch(p.type) {
+              case "PinProperty":
               case "BindingProperty": {
                 const {name, value} = p
                 let subRef
@@ -7745,16 +7748,22 @@ Init
 
           break
         }
-        case "Identifier":
-          // Alias adds no conditions
+        case "PinPattern":
+          conditions.push([
+            ref,
+            " === ",
+            pattern.identifier,
+          ])
           break
-        default: {
+        case "Literal":
           conditions.push([
             ref,
             " === ",
             pattern,
           ])
-        }
+          break
+        default:
+          break
       }
     }
 
@@ -7764,6 +7773,7 @@ Init
           case "Literal":
           case "RegularExpressionLiteral":
           case "StringLiteral":
+          case "PinPattern":
             return sep
           default:
             return [ ws, nonMatcherBindings(e), sep ]
@@ -7798,6 +7808,7 @@ Init
                 }
             }
           }
+          case "PinProperty":
           case "BindingRestProperty":
           default:
             return p
