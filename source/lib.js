@@ -516,18 +516,18 @@ function convertMethodToFunction(method) {
   }
 }
 
-// Convert an ObjectExpression (with `content` property)
+// Convert an ObjectExpression (with `properties`)
 // into a set of JSX attributes.
 // {foo} is equivalent to foo={foo}, and
 // {foo, bar: baz} is equivalent to foo={foo} and bar={baz}.
 // {...foo} is a special case.
 function convertObjectToJSXAttributes(obj) {
-  const {content} = obj
+  const {properties} = obj
   const parts = [] // JSX attributes
   const rest = []  // parts that need to be in {...rest} form
-  for (let i = 0; i < content.length; i++) {
+  for (let i = 0; i < properties.length; i++) {
     if (i > 0) parts.push(' ')
-    const part = content[i]
+    const part = properties[i]
     switch (part.type) {
       case 'Identifier':
         parts.push([part.name, '={', part.name, '}'])
