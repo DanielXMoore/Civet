@@ -811,6 +811,44 @@ switch x
     console.log "leading type:", type
 </Playground>
 
+::: info
+You can also use condition fragments as patterns.
+:::
+
+<Playground>
+switch x
+  < 0
+    console.log "it's negative"
+  > 0
+    console.log "it's positive"
+  is 0
+    console.log "it's zero"
+  else
+    console.log "it's something else"
+</Playground>
+
+<Playground>
+switch x
+  % 15 is 0
+    console.log "fizzbuzz"
+  % 3 is 0
+    console.log "fizz"
+  % 5 is 0
+    console.log "buzz"
+  else
+    console.log x
+</Playground>
+
+::: info
+Aliasing object properties works the same as destructuring.
+:::
+
+<Playground>
+switch e
+  {type, key: eventKey}
+    return [type, eventKey]
+</Playground>
+
 ## Loops
 
 ### Loop Expressions
