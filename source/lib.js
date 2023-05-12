@@ -10,16 +10,21 @@
  * Adjust the alias of a binding property, adding an alias if one doesn't exist or
  * replacing an existing alias. This mutates the property in place.
  */
-function aliasBindingProperty(p, ref) {
+function aliasBinding(p, ref) {
   if (p.type === "Identifier") {
+    // Array element binding
     // TODO: This ignores `name` and `names` properties of Identifier and
     // hackily converts it to a container for a Ref.
     p.children[0] = ref
+  } else if (p.type === "BindingRestElement") {
+    aliasBinding(p.binding, ref)
   } else if (p.value?.type === "Identifier") {
+    // aliased property binding
     p.value = ref
     // TODO: nasty
     p.children[5] = ref
   } else {
+    // non-aliased property binding
     p.value = ref
     p.children.push(": ", ref)
   }
@@ -760,7 +765,7 @@ function processUnaryExpression(pre, exp, post) {
 }
 
 module.exports = {
-  aliasBindingProperty,
+  aliasBinding,
   blockWithPrefix,
   clone,
   convertMethodToFunction,
