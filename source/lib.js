@@ -20,9 +20,7 @@ function aliasBinding(p, ref) {
     aliasBinding(p.binding, ref)
   } else if (p.value?.type === "Identifier") {
     // aliased property binding
-    p.value = ref
-    // TODO: nasty
-    p.children[5] = ref
+    aliasBinding(p.value, ref)
   } else {
     // non-aliased property binding
     p.value = ref
