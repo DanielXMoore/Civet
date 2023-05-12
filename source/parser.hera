@@ -6,6 +6,7 @@
 
 ```
 const {
+  aliasBinding,
   blockWithPrefix,
   clone,
   convertMethodToFunction,
@@ -1016,13 +1017,8 @@ NonEmptyParameters
   TypeParameters?:tp OpenParen:open ThisType?:tt ParameterElement*:pes FunctionRestParameter?:rest ParameterElement*:after ( __ CloseParen ):close ->
     const names = pes.flatMap(p => p.names)
     if (rest) {
-      let restIdentifier
-      if (rest.binding.ref) {
-        restIdentifier = rest.binding.ref
-      } else {
-        names.push(...rest.names)
-        restIdentifier = rest.names[0]
-      }
+      const restIdentifier = rest.binding.ref || rest.binding
+      names.push(...rest.names || [])
 
       let blockPrefix
       if (after.length) {
@@ -1063,7 +1059,7 @@ FunctionRestParameter
       type: "FunctionRestParameter",
       children: $0,
       names: id.names,
-      binding: id,
+      binding: id.binding,
     }
 
 # NOTE: Similar to BindingElement but appears in formal parameters list
@@ -1338,14 +1334,21 @@ BindingElement
 BindingRestElement
   _?:ws DotDotDot:dots ( BindingIdentifier / BindingPattern / EmptyBindingPattern ):binding ->
     return {
-      ...binding,
-      children: [...(ws || []), dots, ...binding.children],
+      type: "BindingRestElement",
+      children: [...(ws || []), dots, binding],
+      binding,
+      name: binding.name,
+      names: binding.names,
       rest: true,
     }
+
   _?:ws ( BindingIdentifier / BindingPattern ):binding DotDotDot:dots ->
     return {
-      ...binding,
-      children: [...(ws || []), dots, ...binding.children],
+      type: "BindingRestElement",
+      children: [...(ws || []), dots, binding],
+      binding,
+      name: binding.name,
+      names: binding.names,
       rest: true,
     }
 
@@ -7208,8 +7211,8 @@ Init
         restIndex = -1,
         restCount = 0
 
-      elements.forEach(({rest}, i) => {
-        if (rest) {
+      elements.forEach(({type}, i) => {
+        if (type === "BindingRestElement") {
           if (restIndex < 0) restIndex = i
           restCount++
         }
@@ -7226,13 +7229,8 @@ Init
         const rest = elements[restIndex]
         const after = elements.slice(restIndex + 1)
 
-        let restIdentifier
-        if (rest.ref) {
-          restIdentifier = rest.ref
-        } else {
-          restIdentifier = rest.names[0]
-          names./**/push(...rest.names)
-        }
+        const restIdentifier = rest.binding.ref || rest.binding
+        names./**/push(...rest.names || [])
 
         if (after.length) {
           blockPrefix = {
@@ -7817,7 +7815,12 @@ Init
     }
 
     function elideMatchersFromArrayBindings(elements) {
-      return elements.map(({ children: [ws, e, sep] }) => {
+      return elements.map((el) => {
+        // TODO: this isn't unified with the element [ws, e, sep] tuple yet
+        if (el.type === "BindingRestElement") {
+          return ["", el, undefined]
+        }
+        const { children: [ws, e, sep] } = el
         switch (e.type) {
           case "Literal":
           case "RegularExpressionLiteral":
@@ -7867,8 +7870,15 @@ Init
 
     function nonMatcherBindings(pattern) {
       switch (pattern.type) {
-        case "ArrayBindingPattern":
-          return ["[", elideMatchersFromArrayBindings(pattern.elements), "]"]
+        case "ArrayBindingPattern": {
+          const elements = elideMatchersFromArrayBindings(pattern.elements)
+          const children = ["[", elements, "]"]
+          return {
+            ...pattern,
+            children,
+            elements,
+          }
+        }
         case "PostRestBindingElements": {
           const els = elideMatchersFromArrayBindings(pattern.children[1])
 
@@ -7891,6 +7901,22 @@ Init
 
     function aggregateDuplicateBindings(bindings) {
       const props = gatherRecursiveAll(bindings, n => n.type === "BindingProperty")
+      const arrayBindings = gatherRecursiveAll(bindings, n => n.type === "ArrayBindingPattern")
+
+      arrayBindings.forEach((a) => {
+        const { elements } = a
+        elements.forEach((element) => {
+          if (Array.isArray(element)) {
+            const [,e] = element
+            if (e.type === "Identifier") {
+              props.push(e)
+            } else if (e.type === "BindingRestElement") {
+              props.push(e)
+            }
+          }
+        })
+      })
+
       const declarations = []
 
       const propsGroupedByName = new Map
@@ -7898,7 +7924,8 @@ Init
       for(const p of props) {
         const { name, value } = p
 
-        const key = value?.name || name.name
+        // This is to handle aliased props, non-aliased props, and binding identifiers in arrays
+        const key = value?.name || name?.name || name
         if (propsGroupedByName.has(key)) {
           propsGroupedByName.get(key).push(p)
         } else {
@@ -7920,7 +7947,7 @@ Init
               base: `_${key}`,
               id: key,
             }
-            p.children.push(": ", ref)
+            aliasBinding(p, ref)
           });
           // Don't push declarations for reserved words
           return
@@ -7936,7 +7963,11 @@ Init
             id: key,
           }
 
-          p.children.push(": ", ref)
+          aliasBinding(p, ref)
+
+          if (p.type === "BindingRestElement") {
+            return ["...", ref]
+          }
 
           return ref
         })

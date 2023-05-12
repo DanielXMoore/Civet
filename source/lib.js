@@ -7,6 +7,28 @@
  */
 
 /**
+ * Adjust the alias of a binding property, adding an alias if one doesn't exist or
+ * replacing an existing alias. This mutates the property in place.
+ */
+function aliasBinding(p, ref) {
+  if (p.type === "Identifier") {
+    // Array element binding
+    // TODO: This ignores `name` and `names` properties of Identifier and
+    // hackily converts it to a container for a Ref.
+    p.children[0] = ref
+  } else if (p.type === "BindingRestElement") {
+    aliasBinding(p.binding, ref)
+  } else if (p.value?.type === "Identifier") {
+    // aliased property binding
+    aliasBinding(p.value, ref)
+  } else {
+    // non-aliased property binding
+    p.value = ref
+    p.children.push(": ", ref)
+  }
+}
+
+/**
  * Duplicate a block and attach statements prefixing the block.
  * Adds braces if the block is bare.
  *
@@ -741,6 +763,7 @@ function processUnaryExpression(pre, exp, post) {
 }
 
 module.exports = {
+  aliasBinding,
   blockWithPrefix,
   clone,
   convertMethodToFunction,
