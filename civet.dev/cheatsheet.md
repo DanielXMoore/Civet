@@ -855,8 +855,8 @@ Patterns can aggregate duplicate bindings.
 
 <Playground>
 switch x
-  {a: y, b: y}
-    y
+  [{type}, {type}]
+    type
 </Playground>
 
 ## Loops
