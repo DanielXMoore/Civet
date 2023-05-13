@@ -849,6 +849,16 @@ switch e
     return [type, eventKey]
 </Playground>
 
+::: info
+Patterns can aggregate duplicate bindings.
+:::
+
+<Playground>
+switch x
+  [{type}, {type}]
+    type
+</Playground>
+
 ## Loops
 
 ### Loop Expressions
