@@ -222,6 +222,12 @@ function justDoIt(a, ...args, cb) {
 }
 </Playground>
 
+You can also omit the name of the rest component:
+
+<Playground>
+[first, ..., last] = array
+</Playground>
+
 ### Range Literals
 
 `[x..y]` includes `x` and `y`, while `[x...y]` includes `x` but not `y`.
