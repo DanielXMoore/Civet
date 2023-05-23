@@ -146,7 +146,7 @@ import civetPlugin from '@danielx/civet/esbuild-plugin'
 esbuild.build({
   // ...
   plugins: [
-    civetPlugin
+    civetPlugin()
   ]
 }).catch(() => process.exit(1))
 ```
