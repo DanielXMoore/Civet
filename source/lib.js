@@ -28,6 +28,19 @@ function aliasBinding(p, ref) {
   }
 }
 
+function arrayElementHasTrailingComma(elementNode) {
+  const { children } = elementNode, { length } = children
+
+  const lastChild = children[length - 1]
+  if (lastChild) {
+    const l2 = lastChild.length
+    if (lastChild[l2 - 1]?.token === ",") {
+      return true
+    }
+  }
+  return false
+}
+
 /**
  * Duplicate a block and attach statements prefixing the block.
  * Adds braces if the block is bare.
@@ -764,6 +777,7 @@ function processUnaryExpression(pre, exp, post) {
 
 module.exports = {
   aliasBinding,
+  arrayElementHasTrailingComma,
   blockWithPrefix,
   clone,
   convertMethodToFunction,
