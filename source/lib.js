@@ -189,6 +189,14 @@ function arrayElementHasTrailingComma(elementNode) {
   return false
 }
 
+const assert = {
+  equal(a, b, msg) {
+    if (a !== b) {
+      throw new Error(`Assertion failed [${msg}]: ${a} !== ${b}`)
+    }
+  }
+}
+
 /**
  * Duplicate a block and attach statements prefixing the block.
  * Adds braces if the block is bare.
@@ -1652,6 +1660,1035 @@ function processLetAssignmentDeclaration(l, id, suffix, ws, la, e) {
   }
 }
 
+
+function processFunctions(statements, config) {
+  gatherRecursiveAll(statements, ({ type }) => type === "FunctionExpression" || type === "ArrowFunction")
+    .forEach((f) => {
+      processParams(f)
+      if (!processReturnValue(f) && config.implicitReturns) {
+        const { block, returnType } = f
+        const isVoid = isVoidType(returnType?.t)
+        const isBlock = block?.type === "BlockStatement"
+        if (!isVoid && isBlock) {
+          insertReturn(block)
+        }
+      }
+    })
+
+  gatherRecursiveAll(statements, ({ type }) => type === "MethodDefinition")
+    .forEach((f) => {
+      processParams(f)
+      if (!processReturnValue(f) && config.implicitReturns) {
+        const { signature, block } = f
+        const isConstructor = signature.name === "constructor"
+        const isVoid = isVoidType(signature.returnType?.t)
+        const isSet = signature.modifier?.set
+
+        if (!isConstructor && !isSet && !isVoid) {
+          insertReturn(block)
+        }
+      }
+    })
+}
+
+function processSwitchExpressions(statements) {
+  // switch expressions are wrapped in iife and need returns added
+  gatherRecursiveAll(statements, n => n.type === "SwitchExpression")
+    .forEach(insertSwitchReturns)
+}
+
+function processTryExpressions(statements) {
+  // try expressions are wrapped in iife and need returns added
+  gatherRecursiveAll(statements, n => n.type === "TryExpression")
+    .forEach(({ blocks }) => {
+      blocks.forEach(insertReturn);
+    })
+}
+
+function processBindingPatternLHS(lhs, tail) {
+  // Expand AtBindings first before gathering splices
+  adjustAtBindings(lhs, true)
+  const [splices, thisAssignments] = gatherBindingCode(lhs)
+  // TODO: This isn't quite right for compound assignments, may need to wrap with parens and use comma to return the complete value
+  tail.push(...splices.map(s => [", ", s]), ...thisAssignments.map(a => [", ", a]))
+}
+
+function processAssignments(statements) {
+  gatherRecursiveAll(statements, n => n.type === "AssignmentExpression" && n.names === null)
+    .forEach(exp => {
+      let { lhs: $1, exp: $2 } = exp, tail = [], i = 0, len = $1.length
+
+      // identifier=
+      if ($1.some((left) => left[left.length - 1].special)) {
+        if ($1.length !== 1) {
+          throw new Error("Only one assignment with id= is allowed")
+        }
+        const [, lhs, , op] = $1[0]
+        const { call } = op
+        // Replace id= with =
+        op[op.length - 1] = "="
+        // Wrap right-hand side with call
+        $2 = [call, "(", lhs, ", ", $2, ")"]
+      }
+
+      // Force parens around destructuring object assignments
+      // Walk from left to right the minimal number of parens are added and enclose all destructured assignments
+      // TODO: Could validate some lhs ecmascript rules here if we wanted to
+      let wrapped = false
+      while (i < len) {
+        const lastAssignment = $1[i++]
+        const [, lhs, , op] = lastAssignment
+        if (op.token !== "=") continue
+
+        if (lhs.type === "ObjectExpression" || lhs.type === "ObjectBindingPattern") {
+          // Wrap with parens to distinguish from braced blocks
+          if (!wrapped) {
+            wrapped = true
+            lhs.children./**/splice(0, 0, "(")
+            tail./**/push(")")
+          }
+        }
+      }
+
+      // TODO: Handle optional assignment refs
+
+      // Walk from right to left to handle splices
+      i = len - 1
+      while (i >= 0) {
+        const lastAssignment = $1[i]
+
+        if (lastAssignment[3].token === "=") {
+          const lhs = lastAssignment[1]
+
+          // Splice assignment
+          if (lhs.type === "MemberExpression") {
+            const members = lhs.children
+            const lastMember = members[members.length - 1]
+
+            // TODO: this is kind of bonkers
+            if (lastMember.type === "SliceExpression") {
+              const { start, end, children: c } = lastMember
+              // TODO: don't lose as many source mappings
+              c[0].token = ".splice("
+              c[1] = start
+              c[2] = ", "
+              if (end)
+                c[3] = [end, " - ", start]
+              else
+                c[3] = ["1/0"]
+              c[4] = [", ...", $2]
+              c[5] = ")"
+
+              // Remove assignment token
+              lastAssignment./**/pop()
+              if (isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment./**/pop()
+              // TODO: this only works for the last assignment, not multiple splice assignments, or splice assignments earlier in the chain
+              if ($1.length > 1) {
+                throw new Error("Not implemented yet! TODO: Handle multiple splice assignments")
+              }
+
+              exp.children = [$1]
+              exp.names = []
+              return
+            }
+          } else if (lhs.type === "ObjectBindingPattern" || lhs.type === "ArrayBindingPattern") {
+            processBindingPatternLHS(lhs, tail)
+          }
+          // NOTE: currently not processing any non-binding pattern ObjectExpression or ArrayExpressions
+          // This might not be correct in all situations, esp BindingPatterns nested inside ObjectExpressions
+        }
+        i--
+      }
+
+      // Gather all identifier names from the lhs array
+      const names = $1.flatMap(([, l]) => l.names || [])
+      exp.children = [$1, $2, ...tail]
+      exp.names = names
+    })
+
+  // Move assignments/updates within LHS of assignments/updates
+  // to run earlier via comma operator
+  gatherRecursiveAll(statements, n => n.type === "AssignmentExpression" || n.type === "UpdateExpression")
+    .forEach(exp => {
+      function extractAssignment(lhs) {
+        let expr = lhs
+        while (expr.type === "ParenthesizedExpression") {
+          expr = expr.expression
+        }
+        if (expr.type === "AssignmentExpression" ||
+          expr.type === "UpdateExpression") {
+          if (expr.type === "UpdateExpression" &&
+            expr.children[0] === expr.assigned) {  // postfix update
+            post.push([", ", lhs])
+          } else {
+            pre.push([lhs, ", "])
+          }
+          // TODO: use ref to avoid duplicating function calls
+          return expr.assigned
+        }
+      }
+      const pre = [], post = []
+      switch (exp.type) {
+        case "AssignmentExpression":
+          if (!exp.lhs) return
+          exp.lhs.forEach((lhsPart, i) => {
+            let newLhs = extractAssignment(lhsPart[1])
+            if (newLhs) {
+              lhsPart[1] = newLhs
+            }
+          })
+          break
+        case "UpdateExpression":
+          let newLhs = extractAssignment(exp.assigned)
+          if (newLhs) {
+            const i = exp.children.indexOf(exp.assigned)
+            exp.assigned = exp.children[i] = newLhs
+          }
+          break
+      }
+      if (pre.length) exp.children.unshift(...pre)
+      if (post.length) exp.children.push(...post)
+    })
+}
+
+function attachPostfixStatementAsExpression(exp, post) {
+  let clause
+  switch (post[1].type) {
+    case "ForStatement":
+    case "IterationStatement":
+    case "DoStatement":
+      clause = addPostfixStatement(exp, ...post)
+      return {
+        type: "IterationExpression",
+        children: [clause],
+        block: clause.block,
+      }
+    case "IfStatement":
+      clause = expressionizeIfClause(post[1], exp)
+      return clause
+    default:
+      throw new Error("Unknown postfix statement")
+  }
+}
+
+function getPatternConditions(pattern, ref, conditions) {
+  if (pattern.rest) return // No conditions for rest elements
+
+  switch (pattern.type) {
+    case "ArrayBindingPattern": {
+      const { elements, length } = pattern,
+        hasRest = elements.some(e => e.rest),
+        comparator = hasRest ? " >= " : " === ",
+        l = [comparator, (length - hasRest).toString()]
+
+      conditions.push(
+        ["Array.isArray(", ref, ")"],
+        [ref, ".length", l],
+      )
+
+      // recursively collect nested conditions
+      elements.forEach(({ children: [, e] }, i) => {
+        const subRef = [ref, "[", i.toString(), "]"]
+        getPatternConditions(e, subRef, conditions)
+      })
+
+      // collect post rest conditions
+      const postRest = pattern.children.find((c) => c?.blockPrefix)
+      if (postRest) {
+        const postElements = postRest.blockPrefix.children[1],
+          { length: postLength } = postElements
+
+        postElements.forEach(({ children: [, e] }, i) => {
+          const subRef = [ref, "[", ref, ".length - ", (postLength + i).toString(), "]"]
+          getPatternConditions(e, subRef, conditions)
+        })
+      }
+
+      break
+    }
+    case "ObjectBindingPattern": {
+      conditions.push(
+        ["typeof ", ref, " === 'object'"],
+        [ref, " != null"],
+      )
+
+      pattern.properties.forEach((p) => {
+        switch (p.type) {
+          case "PinProperty":
+          case "BindingProperty": {
+            const { name, value } = p
+            let subRef
+            switch (name.type) {
+              case "ComputedPropertyName":
+                conditions.push([name.expression, " in ", ref])
+                subRef = [ref, name]
+                break
+              case "Literal":
+              case "StringLiteral":
+              case "NumericLiteral":
+                conditions.push([name, " in ", ref])
+                subRef = [ref, "[", name, "]"]
+                break
+              default:
+                conditions.push(["'", name, "' in ", ref])
+                subRef = [ref, ".", name]
+            }
+
+            if (value) {
+              getPatternConditions(value, subRef, conditions)
+            }
+
+            break
+          }
+        }
+      })
+
+      break
+    }
+    case "ConditionFragment":
+      conditions.push(
+        [ref, " ", pattern.children],
+      )
+      break
+    case "RegularExpressionLiteral": {
+      conditions.push(
+        ["typeof ", ref, " === 'string'"],
+        [pattern, ".test(", ref, ")"],
+      )
+
+      break
+    }
+    case "PinPattern":
+      conditions.push([
+        ref,
+        " === ",
+        pattern.identifier,
+      ])
+      break
+    case "Literal":
+      conditions.push([
+        ref,
+        " === ",
+        pattern,
+      ])
+      break
+    default:
+      break
+  }
+}
+
+function elideMatchersFromArrayBindings(elements) {
+  return elements.map((el) => {
+    // TODO: this isn't unified with the element [ws, e, sep] tuple yet
+    if (el.type === "BindingRestElement") {
+      return ["", el, undefined]
+    }
+    const { children: [ws, e, sep] } = el
+    switch (e.type) {
+      case "Literal":
+      case "RegularExpressionLiteral":
+      case "StringLiteral":
+      case "PinPattern":
+        return sep
+      default:
+        return [ws, nonMatcherBindings(e), sep]
+    }
+  })
+}
+
+function elideMatchersFromPropertyBindings(properties) {
+  return properties.map((p) => {
+    switch (p.type) {
+      case "BindingProperty": {
+        const { children, name, value } = p
+        const [ws] = children
+        const sep = children[children.length - 1]
+
+        switch (value && value.type) {
+          case "ArrayBindingPattern":
+          case "ObjectBindingPattern":
+            return {
+              ...p,
+              children: [ws, name, ": ", nonMatcherBindings(value)],
+            }
+          case "Identifier":
+            return p
+          case "Literal":
+          case "RegularExpressionLiteral":
+          case "StringLiteral":
+          default:
+            return {
+              ...p,
+              children: [ws, name, sep],
+            }
+        }
+      }
+      case "PinProperty":
+      case "BindingRestProperty":
+      default:
+        return p
+    }
+  })
+}
+
+function nonMatcherBindings(pattern) {
+  switch (pattern.type) {
+    case "ArrayBindingPattern": {
+      const elements = elideMatchersFromArrayBindings(pattern.elements)
+      const children = ["[", elements, "]"]
+      return {
+        ...pattern,
+        children,
+        elements,
+      }
+    }
+    case "PostRestBindingElements": {
+      const els = elideMatchersFromArrayBindings(pattern.children[1])
+
+      return {
+        ...pattern,
+        children: [
+          pattern.children[0],
+          els,
+          ...pattern.children.slice(2),
+        ],
+      }
+    }
+    case "ObjectBindingPattern":
+      return ["{", elideMatchersFromPropertyBindings(pattern.properties), "}"]
+
+    default:
+      return pattern
+  }
+}
+
+function aggregateDuplicateBindings(bindings, ReservedWord) {
+  const props = gatherRecursiveAll(bindings, n => n.type === "BindingProperty")
+  const arrayBindings = gatherRecursiveAll(bindings, n => n.type === "ArrayBindingPattern")
+
+  arrayBindings.forEach((a) => {
+    const { elements } = a
+    elements.forEach((element) => {
+      if (Array.isArray(element)) {
+        const [, e] = element
+        if (e.type === "Identifier") {
+          props.push(e)
+        } else if (e.type === "BindingRestElement") {
+          props.push(e)
+        }
+      }
+    })
+  })
+
+  const declarations = []
+
+  const propsGroupedByName = new Map
+
+  for (const p of props) {
+    const { name, value } = p
+
+    // This is to handle aliased props, non-aliased props, and binding identifiers in arrays
+    const key = value?.name || name?.name || name
+    if (propsGroupedByName.has(key)) {
+      propsGroupedByName.get(key).push(p)
+    } else {
+      propsGroupedByName.set(key, [p])
+    }
+  }
+
+  propsGroupedByName.forEach((shared, key) => {
+    if (!key) return
+    // NOTE: Allows pattern matching reserved word keys by binding to inaccessible refs
+    // HACK: using the parser's ReservedWord rule here
+    if (ReservedWord({
+      pos: 0,
+      input: key,
+    })) {
+      shared.forEach((p) => {
+        const ref = {
+          type: "Ref",
+          base: `_${key}`,
+          id: key,
+        }
+        aliasBinding(p, ref)
+      });
+      // Don't push declarations for reserved words
+      return
+    }
+
+    if (shared.length === 1) return
+
+    // Create a ref alias for each duplicate binding
+    const refs = shared.map((p) => {
+      const ref = {
+        type: "Ref",
+        base: key,
+        id: key,
+      }
+
+      aliasBinding(p, ref)
+
+      return ref
+    })
+
+    // Gather duplicates in an array
+    declarations.push(["const ", key, " = [", ...refs.map((r, i) => {
+      return i === 0 ? r : [", ", r]
+    }), "]"])
+  })
+
+  return declarations
+}
+
+function processPatternMatching(statements, ReservedWord) {
+  gatherRecursiveAll(statements, n => n.type === "SwitchStatement" || n.type === "SwitchExpression")
+    .forEach((s) => {
+      const { caseBlock } = s
+      const { clauses } = caseBlock
+
+      let errors = false
+      let isPattern = false
+      if (clauses.some((c) => c.type === "PatternClause")) {
+        isPattern = true
+        clauses.forEach((c) => {
+          // else/default clause is ok
+          if (!(c.type === "PatternClause" || c.type === "DefaultClause")) {
+            errors = true
+            c.children.push({
+              type: "Error",
+              message: "Can't mix pattern matching and non-pattern matching clauses",
+            })
+          }
+        })
+      }
+
+      if (errors || !isPattern) return
+
+      let { expression } = s
+      if (expression.type === "ParenthesizedExpression") {
+        // Unwrap parenthesized expression
+        expression = expression.expression
+      }
+
+      let ref = needsRef(expression, "m") || expression
+      let hoistDec = ref !== expression ? [["", ["const ", ref, " = ", expression], ";"]] : undefined
+      let prev = [],
+        root = prev
+
+      const l = clauses.length
+      clauses.forEach((c, i) => {
+        if (c.type === "DefaultClause") {
+          prev.push(c.block)
+          return
+        }
+
+        let { patterns, block } = c
+        let pattern = patterns[0]
+
+        const indent = block.expressions?.[0]?.[0] || ""
+
+        // TODO: multiple binding patterns
+
+        const alternativeConditions = patterns.map((pattern, i) => {
+          const conditions = []
+          getPatternConditions(pattern, ref, conditions)
+          return conditions
+        })
+
+        const conditionExpression = alternativeConditions.map((conditions, i) => {
+          const conditionArray = conditions.map((c, i) => {
+            if (i === 0) return c
+            return [" && ", ...c]
+          })
+
+          if (i === 0) return conditionArray
+          return [" || ", ...conditionArray]
+        })
+
+        const condition = {
+          type: "ParenthesizedExpression",
+          children: ["(", conditionExpression, ")"],
+          expression: conditionExpression,
+        }
+
+        const prefix = []
+
+        switch (pattern.type) {
+          case "ArrayBindingPattern":
+            if (pattern.length === 0) break
+          case "ObjectBindingPattern": {
+            // NOTE: Array matching pattern falls through so we use the null check
+            if (pattern.properties?.length === 0) break
+
+            // Gather bindings
+            let [splices, thisAssignments] = gatherBindingCode(pattern)
+            const patternBindings = nonMatcherBindings(pattern)
+
+            splices = splices.map(s => [", ", nonMatcherBindings(s)])
+            thisAssignments = thisAssignments.map(a => [indent, a, ";"])
+
+            const duplicateDeclarations = aggregateDuplicateBindings([patternBindings, splices], ReservedWord)
+
+            prefix.push([indent, "const ", patternBindings, " = ", ref, splices, ";"])
+            prefix.push(...thisAssignments)
+            prefix.push(...duplicateDeclarations.map(d => [indent, d, ";"]))
+
+            break
+          }
+        }
+
+        block.expressions.unshift(...prefix)
+
+        const next = []
+
+        // Add braces if necessary
+        if (block.bare) {
+          block.children.unshift(" {")
+          block.children.push("}")
+          block.bare = false
+        }
+
+        // Insert else if there are more branches
+        if (i < l - 1) next.push("\n", "else ")
+
+        prev.push(["", {
+          type: "IfStatement",
+          children: ["if", condition, block, next],
+          then: block,
+          else: next,
+          hoistDec,
+        }])
+        hoistDec = undefined
+        prev = next
+      })
+
+      if (s.type === "SwitchExpression") {
+        insertReturn(root[0])
+        root.splice(0, 1, wrapIIFE(root[0]))
+      }
+
+      s.type = "PatternMatchingStatement"
+      s.children = [root]
+      // Update parent pointers
+      addParentPointers(s, s.parent)
+    })
+}
+
+// head: expr
+// body: [ws, pipe, ws, expr][]
+
+function processPipelineExpressions(statements) {
+  gatherRecursiveAll(statements, n => n.type === "PipelineExpression")
+    .forEach((s) => {
+      const [ws, , body] = s.children
+      let [, arg] = s.children
+
+      let i = 0, l = body.length
+
+      const refDec = []
+      const children = [ws, refDec]
+
+      let usingRef = null
+
+      for (i = 0; i < l; i++) {
+        const step = body[i]
+        const [leadingComment, pipe, trailingComment, expr] = step
+        const returns = pipe.token === "||>"
+        let ref, result,
+          returning = returns ? arg : null
+
+        if (pipe.token === "|>=") {
+          let initRef
+          if (i === 0) {
+            outer: switch (arg.type) {
+              case "MemberExpression":
+                // If there is only a single access then we don't need a ref
+                if (arg.children.length <= 2) break
+              case "CallExpression":
+                const access = arg.children.pop()
+
+                switch (access.type) {
+                  case "PropertyAccess":
+                  case "SliceExpression":
+                    break
+                  default:
+                    children.unshift({
+                      type: "Error",
+                      $loc: pipe.token.$loc,
+                      message: `Can't assign to ${access.type}`,
+                    })
+                    arg.children.push(access)
+                    break outer
+                }
+
+                usingRef = needsRef({}) // hacky: using this like a "createRef"
+                initRef = {
+                  type: "AssignmentExpression",
+                  children: [usingRef, " = ", arg, ","],
+                }
+
+                arg = {
+                  type: "MemberExpression",
+                  children: [usingRef, access]
+                }
+
+                break;
+            }
+
+            // remove refDec from children and put it inside lhs of assignment
+            // TODO: should be attached to node to be hoisted
+            children.pop()
+            // assignment node
+            const lhs = [[
+              [refDec, initRef],
+              arg,
+              [],
+              { token: "=", children: [" = "] }
+            ]];
+
+            Object.assign(s, {
+              type: "AssignmentExpression",
+              children: [lhs, children],
+              names: null,
+              lhs,
+              assigned: arg,
+              exp: children,
+            })
+
+            // Clone so that the same node isn't on the left and right because splice manipulation
+            // moves things around and can cause a loop in the graph
+            arg = clone(arg)
+
+            // except keep the ref the same
+            if (arg.children[0].type === "Ref") {
+              arg.children[0] = usingRef
+            }
+
+          } else {
+            children.unshift({
+              type: "Error",
+              $loc: pipe.token.$loc,
+              message: "Can't use |>= in the middle of a pipeline",
+            })
+          }
+        } else {
+          s.children = children
+        }
+
+        if (returns && (ref = needsRef(arg))) {
+          // Use the existing ref if present
+          usingRef = usingRef || ref
+          arg = {
+            type: "ParenthesizedExpression",
+            children: ["(", {
+              type: "AssignmentExpression",
+              children: [usingRef, " = ", arg],
+            }, ")"],
+          }
+          returning = usingRef
+        }
+
+        [result, returning] = constructPipeStep(
+          {
+            leadingComment: skipIfOnlyWS(leadingComment),
+            trailingComment: skipIfOnlyWS(trailingComment),
+            expr
+          },
+          arg,
+          returning,
+        )
+
+        if (result.type === "ReturnStatement") {
+          // Attach errors/warnings if there are more steps
+          if (i < l - 1) {
+            result.children.push({
+              type: "Error",
+              message: "Can't continue a pipeline after returning",
+            })
+          }
+          arg = result
+          if (children[children.length - 1] === ",") {
+            children.pop()
+            children.push(";")
+          }
+          break
+        }
+
+        if (returning) {
+          arg = returning
+          children.push(result, ",")
+        } else {
+          arg = result
+        }
+      }
+
+      // TODO: Hoistable ref declarations
+      if (usingRef) {
+        refDec.unshift("let ", usingRef, ";")
+      }
+
+      children.push(arg)
+      // Update parent pointers
+      addParentPointers(s, s.parent)
+    })
+}
+
+function processProgram(root, config, m, ReservedWord) {
+  // invariants
+  assert.equal(m.forbidClassImplicitCall.length, 1, "forbidClassImplicitCall")
+  assert.equal(m.forbidIndentedApplication.length, 1, "forbidIndentedApplication")
+  assert.equal(m.forbidTrailingMemberProperty.length, 1, "forbidTrailingMemberProperty")
+  assert.equal(m.forbidMultiLineImplicitObjectLiteral.length, 1, "forbidMultiLineImplicitObjectLiteral")
+  assert.equal(m.JSXTagStack.length, 0, "JSXTagStack should be empty")
+
+  addParentPointers(root)
+
+  const { expressions: statements } = root
+
+  processPipelineExpressions(statements)
+  processAssignments(statements)
+  processPatternMatching(statements, ReservedWord)
+  processFunctions(statements, config)
+  processSwitchExpressions(statements)
+  processTryExpressions(statements)
+
+  hoistRefDecs(statements)
+
+  // Modify iteration expressions
+  gatherRecursiveAll(statements, n => n.type === "IterationExpression")
+    .forEach((e) => expressionizeIteration(e))
+
+  // Insert prelude
+  statements.unshift(...m.prelude)
+
+  if (config.autoLet) {
+    createLetDecs(statements, [])
+  } else if (config.autoVar) {
+    createVarDecs(statements, [])
+  }
+
+  populateRefs(statements)
+  adjustAtBindings(statements)
+}
+
+function findDecs(statements) {
+  const declarationNames = gatherNodes(statements, ({ type }) => type === "Declaration")
+    .flatMap(d => d.names)
+
+  return new Set(declarationNames)
+}
+
+function populateRefs(statements) {
+  const refNodes = gatherRecursive(statements, ({ type }) => type === "Ref")
+
+  if (refNodes.length) {
+    // Find all ids within nested scopes
+    const ids = gatherRecursive(statements, (s) => s.type === "Identifier")
+    const names = new Set(ids.flatMap(({ names }) => names || []))
+
+    // Populate each ref
+    refNodes.forEach((ref) => {
+      const { type, base } = ref
+      if (type !== "Ref") return
+
+      ref.type = "Identifier"
+
+      let n = 0
+      let name = base
+
+      // check for name collisions and increment name suffix
+      while (names.has(name)) {
+        n++
+        name = `${base}${n}`
+      }
+
+      names.add(name)
+      ref.children = ref.names = [name]
+    })
+  }
+}
+
+// CoffeeScript compatible automatic var insertion
+function createVarDecs(statements, scopes, pushVar) {
+  // NOTE: var and let/const have different scoping rules
+  // need to keep var scopes when entering functions and within a var scope keep
+  // track of lexical scopes within blocks
+  function hasDec(name) {
+    return scopes.some((s) => s.has(name))
+  }
+
+  function findAssignments(statements, decs) {
+    let assignmentStatements = gatherNodes(statements, (node) => {
+      return node.type === "AssignmentExpression"
+    })
+
+    if (assignmentStatements.length) {
+      // Get nested assignments that could be in expressions
+      assignmentStatements = assignmentStatements
+        .concat(findAssignments(assignmentStatements.map(s => s.children), decs))
+    }
+
+    return assignmentStatements
+  }
+
+  // Let descendent blocks add the var at the outer enclosing function scope
+  if (!pushVar) {
+    pushVar = function (name) {
+      varIds./**/push(name)
+      decs.add(name)
+    }
+  }
+
+  const decs = findDecs(statements)
+  scopes.push(decs)
+  const varIds = []
+  const assignmentStatements = findAssignments(statements, scopes)
+  const undeclaredIdentifiers = assignmentStatements.flatMap(a => a.names)
+
+  // Unique, undeclared identifiers in this scope
+  undeclaredIdentifiers.filter((x, i, a) => {
+    if (!hasDec(x)) return a.indexOf(x) === i
+  }).forEach(pushVar)
+
+  const fnNodes = gatherNodes(statements, (s) => s.type === "FunctionExpression")
+  const forNodes = gatherNodes(statements, (s) => s.type === "ForStatement")
+
+  const blockNodes = new Set(gatherNodes(statements, (s) => s.type === "BlockStatement"))
+  // Remove function blocks and for statements, they get handled separately because they have additional parameter scopes and lexical scopes to add
+  fnNodes.forEach(({ block }) => blockNodes.delete(block))
+  forNodes.forEach(({ block }) => blockNodes.delete(block))
+
+  // recurse into nested blocks
+  blockNodes.forEach((block) => {
+    createVarDecs(block.expressions, scopes, pushVar)
+  })
+
+  // recurse into for loops
+  forNodes.forEach(({ block, declaration }) => {
+    scopes.push(new Set(declaration.names))
+    createVarDecs(block.expressions, scopes, pushVar)
+    scopes.pop()
+  })
+
+  // recurse into nested functions
+  fnNodes.forEach(({ block, parameters }) => {
+    scopes.push(new Set(parameters.names))
+    createVarDecs(block.expressions, scopes)
+    scopes.pop()
+  })
+
+  if (varIds.length) {
+    // get indent from first statement
+    const indent = getIndent(statements[0])
+    let delimiter = ";"
+    if (statements[0][1]?.parent?.root) {
+      delimiter = ";\n"
+    }
+    // TODO: Declaration ast node
+    statements.unshift([indent, "var ", varIds.join(", "), delimiter])
+  }
+
+  scopes.pop()
+}
+
+function createLetDecs(statements, scopes) {
+  function findVarDecs(statements, decs) {
+    const declarationNames = gatherRecursive(statements,
+      (node) =>
+        node.type === "Declaration" &&
+        node.children &&
+        node.children.length > 0 &&
+        node.children[0].token &&
+        node.children[0].token.startsWith('var') ||
+        node.type === "FunctionExpression")
+      .filter(node => node.type === "Declaration")
+      .flatMap(node => node.names)
+
+    return new Set(declarationNames)
+  }
+
+  let declaredIdentifiers = findVarDecs(statements)
+
+  function hasDec(name) {
+    return declaredIdentifiers.has(name) || scopes.some((s) => s.has(name))
+  }
+
+  function gatherBlockOrOther(statement) {
+    return gatherNodes(statement, (s) => s.type === "BlockStatement" || s.type === "AssignmentExpression" || s.type === "Declaration").flatMap((node) => {
+      if (node.type == "BlockStatement")
+        // bare blocks is not a safe position to insert let declaration
+        return node.bare ? gatherBlockOrOther(node.expressions) : node
+      else if (node.children && node.children.length)
+        return [...gatherBlockOrOther(node.children), node]
+      else
+        return []
+    })
+  }
+
+  let currentScope = new Set()
+  scopes.push(currentScope)
+
+  const fnNodes = gatherNodes(statements, (s) => s.type === "FunctionExpression")
+  const forNodes = gatherNodes(statements, (s) => s.type === "ForStatement")
+
+  let targetStatements = []
+  for (const statement of statements) {
+    const nodes = gatherBlockOrOther(statement)
+    let undeclaredIdentifiers = []
+    for (const node of nodes) {
+      if (node.type == "BlockStatement") {
+        let block = node
+        let fnNode = fnNodes.find((fnNode) => fnNode.block === block)
+        let forNode = forNodes.find((forNode) => forNode.block === block)
+        if (fnNode != null) {
+          scopes.push(new Set(fnNode.parameters.names))
+          createLetDecs(block.expressions, scopes)
+          scopes.pop()
+        }
+        else if (forNode != null) {
+          scopes.push(new Set(forNode.declaration.names))
+          createLetDecs(block.expressions, scopes)
+          scopes.pop()
+        }
+        else
+          createLetDecs(block.expressions, scopes)
+        continue
+      }
+      // Assignment and Declaration all use 'names'.
+      if (node.names == null) continue
+      let names = node.names.filter(name => !hasDec(name))
+      if (node.type == "AssignmentExpression")
+        undeclaredIdentifiers.push(...names)
+      names.forEach((name) => currentScope.add(name))
+    }
+
+    if (undeclaredIdentifiers.length > 0) {
+      let indent = statement[0]
+      // Is this statement a simple assingment like 'a = 1'?
+      let firstIdentifier = gatherNodes(statement[1], (node) => node.type == "Identifier")[0]
+      if (undeclaredIdentifiers.length == 1
+        && statement[1].type == 'AssignmentExpression'
+        && statement[1].names.length == 1
+        && statement[1].names[0] == undeclaredIdentifiers[0]
+        && firstIdentifier && firstIdentifier.names == undeclaredIdentifiers[0]
+        && gatherNodes(statement[1], (node) => node.type === "ObjectBindingPattern").length == 0)
+        statement[1].children.unshift(["let "])
+      else {
+        let tail = "\n"
+        // Does this statement start with a newline?
+        if (gatherNodes(indent, (node) => node.token && node.token.endsWith("\n")).length > 0)
+          tail = undefined
+        targetStatements.push([indent, "let ", undeclaredIdentifiers.join(", "), tail])
+      }
+    }
+    targetStatements.push(statement)
+  }
+
+  scopes.pop()
+  statements.splice(0, statements.length, targetStatements)
+}
+
+
 /**
  * Support for `return.value` and `return =`
  * for changing automatic return value of function.
@@ -1901,6 +2938,77 @@ function skipIfOnlyWS(target) {
   return target
 }
 
+function typeOfJSX(node, config, getRef) {
+  switch (node.type) {
+    case "JSXElement":
+      return typeOfJSXElement(node, config, getRef)
+    case "JSXFragment":
+      return typeOfJSXFragment(node, config, getRef)
+  }
+}
+
+function typeOfJSXElement(node, config, getRef) {
+  if (config.solid) {
+    if (config.server && !config.client) {  // server only
+      return ["string"]
+    }
+    let { tag } = node
+    // "An intrinsic element always begins with a lowercase letter,
+    // and a value-based element always begins with an uppercase letter."
+    // [https://www.typescriptlang.org/docs/handbook/jsx.html]
+    const clientType =
+      tag[0] === tag[0].toLowerCase() ?
+        [getRef("IntrinsicElements"), '<"', tag, '">'] :
+        ['ReturnType<typeof ', tag, '>']
+    if (config.server) {  // isomorphic code for client + server
+      return ["string", " | ", clientType]
+    } else {  // client only (default)
+      return clientType
+    }
+  }
+}
+
+function typeOfJSXFragment(node, config, getRef) {
+  if (config.solid) {
+    let type = []
+    let lastType
+    for (let child of node.jsxChildren) {
+      switch (child.type) {
+        case "JSXText":
+          // Solid combines multiple consecutive texts into one string
+          if (lastType !== "JSXText") {
+            type.push("string")
+          }
+          break
+        case "JSXElement":
+          type.push(typeOfJSXElement(child, config, getRef))
+          break
+        case "JSXFragment":
+          // Solid flattens fragments of fragments into one array.
+          type.push(...typeOfJSXFragment(child, config, getRef))
+          break
+        case "JSXChildExpression":
+          // Solid discards empty expressions
+          if (child.expression) {
+            type.push(["typeof ", child.expression])
+          }
+          break
+        default:
+          throw new Error(`unknown child in JSXFragment: ${JSON.stringify(child)}`)
+      }
+      lastType = child.type
+    }
+    // Solid doesn't wrap single fragment child in an array
+    if (type.length === 1) {
+      return type[0]
+    } else {
+      type = type.flatMap((t) => [t, ", "])
+      type.pop() // remove trailing comma
+      return ["[", type, "]"]
+    }
+  }
+}
+
 /**
  * Wrap an expression in an IIFE, adding async/await if expression
  * uses await, or just adding async if specified.
@@ -1943,6 +3051,7 @@ module.exports = {
   adjustBindingElements,
   aliasBinding,
   arrayElementHasTrailingComma,
+  attachPostfixStatementAsExpression,
   blockWithPrefix,
   clone,
   constructInvocation,
@@ -1985,6 +3094,7 @@ module.exports = {
   processConstAssignmentDeclaration,
   processLetAssignmentDeclaration,
   processParams,
+  processProgram,
   processReturnValue,
   processUnaryExpression,
   prune,
@@ -1993,5 +3103,6 @@ module.exports = {
   reorderBindingRestProperty,
   replaceNodes,
   skipIfOnlyWS,
+  typeOfJSX,
   wrapIIFE,
 }
