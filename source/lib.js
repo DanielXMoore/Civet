@@ -239,7 +239,7 @@ function hoistRefDecs(statements) {
       const { hoistDec } = node
 
       // TODO: expand set to include other parents that can have hoistable decs attached
-      const outer = closest(node, ["IfStatement", "IterationStatement"])
+      let outer = closest(node, ["IfStatement", "IterationStatement"])
       if (!outer) {
         node.children.push({
           type: "Error",
@@ -248,7 +248,12 @@ function hoistRefDecs(statements) {
         return
       }
 
-      const block = outer.parent
+      let block = outer.parent
+      // TODO: Hack until the compiler replaces PatternMatchingStatement with IfStatement
+      if (block.type === "PatternMatchingStatement") {
+        outer = block
+        block = block.parent
+      }
 
       // NOTE: This is more accurately 'statements'
       const { expressions } = block
