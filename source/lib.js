@@ -2774,6 +2774,7 @@ function processUnaryExpression(pre, exp, post) {
     switch (exp.type) {
       case "Identifier":
       case "Literal":
+      case "AmpersandRef":
         return {
           ...exp,
           children: [...pre, ...exp.children, post]
