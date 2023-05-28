@@ -546,10 +546,20 @@ function processCallMemberExpression(node) {
   for (let i = 0; i < children.length; i++) {
     const glob = children[i]
     if (glob?.type === "PropertyGlob") {
-      // TODO: add ref to ensure object base evaluated only once
-      const prefix = children.slice(0, i)
-        .concat(glob.dot)
+      let prefix = children.slice(0, i)
       const parts = []
+      let hoistDec
+      // add ref to ensure object base evaluated only once
+      if (prefix.length > 1) {
+        const ref = {
+          type: "Ref",
+          base: "ref",
+        }
+        hoistDec = [["", ["const ", ref, " = ", prefix], ";"]]
+        prefix = [ref]
+      }
+      prefix = prefix.concat(glob.dot)
+
       for (const part of glob.object.properties) {
         if (part.type === "MethodDefinition") {
           throw new Error("Glob pattern cannot have method definition")
@@ -597,6 +607,7 @@ function processCallMemberExpression(node) {
           glob.object.children.at(-1), // whitespace and }
         ],
         properties: parts,
+        hoistDec,
       }
       if (i === children.length - 1) return object
       return processCallMemberExpression({  // in case there are more
@@ -989,7 +1000,21 @@ function hasYield(exp) {
 function hoistRefDecs(statements) {
   gatherRecursiveAll(statements, (s) => s.hoistDec)
     .forEach(node => {
-      const { hoistDec } = node
+      const { hoistDec, type } = node
+
+      switch (type) {
+        case "ObjectExpression":
+          node.hoistDec = null
+          while (node.parent?.type !== "BlockStatement") {
+            node = node.parent
+          }
+          if (node.parent) {
+            insertHoistDec(node.parent, node, hoistDec)
+          } else {
+            throw new Error("Couldn't find block to hoist declaration into.")
+          }
+          return
+      }
 
       // TODO: expand set to include other parents that can have hoistable decs attached
       let outer = closest(node, ["IfStatement", "IterationStatement"])
@@ -1008,16 +1033,20 @@ function hoistRefDecs(statements) {
         block = block.parent
       }
 
-      // NOTE: This is more accurately 'statements'
-      const { expressions } = block
-      const index = expressions.findIndex(([, s]) => outer === s)
-      if (index < 0) throw new Error("Couldn't find expression in block for hoistable declaration.")
-      const indent = expressions[index][0]
-      hoistDec[0][0] = indent
-      expressions.splice(index, 0, hoistDec)
+      insertHoistDec(block, outer, hoistDec)
 
       node.hoistDec = null
     })
+}
+
+function insertHoistDec(block, node, dec) {
+  // NOTE: This is more accurately 'statements'
+  const { expressions } = block
+  const index = expressions.findIndex(([, s]) => node === s)
+  if (index < 0) throw new Error("Couldn't find expression in block for hoistable declaration.")
+  const indent = expressions[index][0]
+  dec[0][0] = indent
+  expressions.splice(index, 0, dec)
 }
 
 // [indent, statement, semicolon]
