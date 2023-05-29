@@ -548,14 +548,22 @@ function processCallMemberExpression(node) {
     if (glob?.type === "PropertyGlob") {
       let prefix = children.slice(0, i)
       const parts = []
-      let hoistDec
+      let hoistDec, refAssignment = []
       // add ref to ensure object base evaluated only once
       if (prefix.length > 1) {
         const ref = {
           type: "Ref",
           base: "ref",
         }
-        hoistDec = [["", ["const ", ref, " = ", prefix], ";"]]
+        hoistDec = {
+          type: "Declaration",
+          children: ["let ", ref],
+          names: [],
+        }
+        refAssignment = [{
+          type: "AssignmentExpression",
+          children: [ref, " = ", prefix],
+        }, ","]
         prefix = [ref]
       }
       prefix = prefix.concat(glob.dot)
@@ -602,6 +610,7 @@ function processCallMemberExpression(node) {
       const object = {
         type: "ObjectExpression",
         children: [
+          ...refAssignment,
           glob.object.children[0], // {
           ...parts,
           glob.object.children.at(-1), // whitespace and }
@@ -1000,42 +1009,19 @@ function hasYield(exp) {
 function hoistRefDecs(statements) {
   gatherRecursiveAll(statements, (s) => s.hoistDec)
     .forEach(node => {
-      const { hoistDec, type } = node
-
-      switch (type) {
-        case "ObjectExpression":
-          node.hoistDec = null
-          while (node.parent?.type !== "BlockStatement") {
-            node = node.parent
-          }
-          if (node.parent) {
-            insertHoistDec(node.parent, node, hoistDec)
-          } else {
-            throw new Error("Couldn't find block to hoist declaration into.")
-          }
-          return
-      }
-
-      // TODO: expand set to include other parents that can have hoistable decs attached
-      let outer = closest(node, ["IfStatement", "IterationStatement"])
-      if (!outer) {
-        node.children.push({
-          type: "Error",
-          message: "Can't hoist declarations inside expressions yet."
-        })
-        return
-      }
-
-      let block = outer.parent
-      // TODO: Hack until the compiler replaces PatternMatchingStatement with IfStatement
-      if (block.type === "PatternMatchingStatement") {
-        outer = block
-        block = block.parent
-      }
-
-      insertHoistDec(block, outer, hoistDec)
+      const { hoistDec } = node
 
       node.hoistDec = null
+      while (node.parent?.type !== "BlockStatement") {
+        node = node.parent
+      }
+      if (node.parent) {
+        insertHoistDec(node.parent, node, hoistDec)
+      } else {
+        throw new Error("Couldn't find block to hoist declaration into.")
+      }
+
+      return
     })
 }
 
@@ -1045,8 +1031,7 @@ function insertHoistDec(block, node, dec) {
   const index = expressions.findIndex(([, s]) => node === s)
   if (index < 0) throw new Error("Couldn't find expression in block for hoistable declaration.")
   const indent = expressions[index][0]
-  dec[0][0] = indent
-  expressions.splice(index, 0, dec)
+  expressions.splice(index, 0, [indent, dec, ";"])
 }
 
 // [indent, statement, semicolon]
@@ -2199,8 +2184,19 @@ function processPatternMatching(statements, ReservedWord) {
         expression = expression.expression
       }
 
-      let ref = needsRef(expression, "m") || expression
-      let hoistDec = ref !== expression ? [["", ["const ", ref, " = ", expression], ";"]] : undefined
+      let hoistDec, refAssignment = [],
+        ref = needsRef(expression, "m") || expression;
+      if (ref !== expression) {
+        hoistDec = {
+          type: "Declaration",
+          children: ["let ", ref],
+          names: [],
+        }
+        refAssignment = [{
+          type: "AssignmentExpression",
+          children: [ref, " = ", expression],
+        }, ","]
+      }
       let prev = [],
         root = prev
 
@@ -2236,7 +2232,7 @@ function processPatternMatching(statements, ReservedWord) {
 
         const condition = {
           type: "ParenthesizedExpression",
-          children: ["(", conditionExpression, ")"],
+          children: ["(", ...refAssignment, conditionExpression, ")"],
           expression: conditionExpression,
         }
 
@@ -2288,6 +2284,7 @@ function processPatternMatching(statements, ReservedWord) {
           hoistDec,
         }])
         hoistDec = undefined
+        refAssignment = []
         prev = next
       })
 
