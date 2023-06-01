@@ -26,6 +26,7 @@ const {
   lastAccessInCallExpression,
   literalValue,
   makeLeftHandSideExpression,
+  maybeRef,
   modifyString,
   processBinaryOpExpression,
   processCallMemberExpression,
@@ -821,10 +822,10 @@ MemberExpressionRest
 
 # Handles indexing and slicing
 MemberBracketContent
-  OpenBracket:open ( SliceParameters / PostfixedExpression ):exp __:ws CloseBracket:close ->
+  OpenBracket:open ( SliceParameters / PostfixedExpression ):expression __:ws CloseBracket:close ->
     // Some kind of slice
-    if (exp.type === "SliceParameters") {
-      const {start, end, children} = exp
+    if (expression.type === "SliceParameters") {
+      const {start, end, children} = expression
 
       return {
         type: "SliceExpression",
@@ -838,10 +839,11 @@ MemberBracketContent
       }
     }
 
-    // Regular index `[exp]`
+    // Regular index `[expression]`
     return {
       type: "Index",
-      children: $0
+      children: $0,
+      expression,
     }
 
   # NOTE: Added shorthand x."string" -> x["string"]
@@ -2208,23 +2210,54 @@ PropertyDefinition
     }
     const last = lastAccessInCallExpression(value)
     if (!last) return $skip
-    let name
-    if (last.type === "Index") {
+
+    let name, hoistDec, ref, refAssignment
+    const { expression, type } = last
+    if (type === "Index") {
       // TODO: If `last` is a suitable string literal, could use it for `name`.
-      // TODO: Should use a ref instead of duplicating the expression.
-      name = {
-        type: "ComputedPropertyName",
-        children: last.children,
+      ref = maybeRef(expression)
+      if (ref !== expression) {
+        hoistDec = {
+          type: "Declaration",
+          children: ["let ", ref],
+        }
+        refAssignment = {
+          type: "Assignment",
+          children: [ref, " = ", expression],
+        }
+
+        name = {
+          type: "ComputedPropertyName",
+          children: [last.children[0], "(", refAssignment, ",", ref, ")", ...last.children.slice(-2)],
+        }
+
+        value = {
+          ...value,
+          children: value.children.map((c) => {
+            if (c === last) return {
+              type: "Index",
+              children: ["[", ref, "]"],
+            }
+            return c
+          })
+        }
+      } else {
+        name = {
+          type: "ComputedPropertyName",
+          children: last.children,
+        }
       }
     } else {
       ({name} = last)
       if (!name) return $skip
     }
+
     return {
       type: "Property",
       children: [ws, name, ": ", value],
       name, value,
       names: [],
+      hoistDec,
     }
   # NOTE: basic identifiers are now part of the rule above
   #__:ws IdentifierReference:id ->

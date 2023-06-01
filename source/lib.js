@@ -3113,6 +3113,7 @@ module.exports = {
   literalValue,
   makeAsConst,
   makeLeftHandSideExpression,
+  maybeRef,
   modifyString,
   needsRef,
   processBinaryOpExpression,
