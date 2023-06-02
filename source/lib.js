@@ -1386,6 +1386,17 @@ function makeAsConst(node) {
   return node
 }
 
+function makeEmptyBlock() {
+  const expressions = []
+  return {
+    type: "BlockStatement",
+    expressions,
+    children: ["{", expressions, "}"],
+    bare: false,
+    empty: true,
+  }
+}
+
 /**
  * Convert general ExtendedExpression into LeftHandSideExpression
  * TODO: Avoid parentheses in more cases by adding more types.
@@ -1691,6 +1702,24 @@ function processFunctions(statements, config) {
 
   gatherRecursiveAll(statements, ({ type }) => type === "MethodDefinition")
     .forEach((f) => {
+      // Add implicit block unless followed by a method of the same name
+      const { abstract, block, signature } = f
+      if (!abstract && !block) {
+        const { name } = signature,
+          { parent } = f,
+          { elements } = parent,
+          currentIndex = elements.findIndex(([, def]) => def === f)
+
+        const following = elements[currentIndex + 1]?.[1]
+
+        if (following?.signature?.name !== name) {
+          const block = makeEmptyBlock()
+          block.parent = f
+          f.block = block
+          f.children.push(block)
+        }
+      }
+
       processParams(f)
       if (!processReturnValue(f) && config.implicitReturns) {
         const { signature, block } = f
@@ -3112,6 +3141,7 @@ module.exports = {
   lastAccessInCallExpression,
   literalValue,
   makeAsConst,
+  makeEmptyBlock,
   makeLeftHandSideExpression,
   maybeRef,
   modifyString,
