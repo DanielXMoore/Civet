@@ -1685,10 +1685,30 @@ function processLetAssignmentDeclaration(l, id, suffix, ws, la, e) {
   }
 }
 
+// Add implicit block unless followed by a method/function of the same name
+function implicitFunctionBlock(f) {
+  if (f.abstract || f.block) return
+
+  const { name, parent } = f
+  const expressions = parent?.expressions ?? parent?.elements
+  const currentIndex = expressions?.findIndex(([, def]) => def === f)
+  const following = currentIndex >= 0 && expressions[currentIndex + 1]?.[1]
+
+  if (f.type === following?.type && name && name === following.name) {
+    f.ts = true
+  } else {
+    const block = makeEmptyBlock()
+    block.parent = f
+    f.block = block
+    f.children.push(block)
+    f.ts = false
+  }
+}
 
 function processFunctions(statements, config) {
   gatherRecursiveAll(statements, ({ type }) => type === "FunctionExpression" || type === "ArrowFunction")
     .forEach((f) => {
+      if (f.type === "FunctionExpression") implicitFunctionBlock(f)
       processParams(f)
       if (!processReturnValue(f) && config.implicitReturns) {
         const { block, returnType } = f
@@ -1702,24 +1722,7 @@ function processFunctions(statements, config) {
 
   gatherRecursiveAll(statements, ({ type }) => type === "MethodDefinition")
     .forEach((f) => {
-      // Add implicit block unless followed by a method of the same name
-      const { abstract, block, signature } = f
-      if (!abstract && !block) {
-        const { name } = signature,
-          { parent } = f,
-          { elements } = parent,
-          currentIndex = elements.findIndex(([, def]) => def === f)
-
-        const following = elements[currentIndex + 1]?.[1]
-
-        if (following?.signature?.name !== name) {
-          const block = makeEmptyBlock()
-          block.parent = f
-          f.block = block
-          f.children.push(block)
-        }
-      }
-
+      implicitFunctionBlock(f)
       processParams(f)
       if (!processReturnValue(f) && config.implicitReturns) {
         const { signature, block } = f
