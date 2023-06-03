@@ -25,6 +25,7 @@ const {
   isWhitespaceOrEmpty,
   lastAccessInCallExpression,
   literalValue,
+  makeEmptyBlock,
   makeLeftHandSideExpression,
   maybeRef,
   modifyString,
@@ -619,8 +620,18 @@ ImplementsTarget
 # https://262.ecma-international.org/#prod-ClassBody
 # NOTE: Nesting and indentation sensitive
 ClassBody
-  __ OpenBrace NestedClassElements? __ CloseBrace
-  InsertOpenBrace NestedClassElements? InsertNewline InsertIndent InsertCloseBrace
+  __ OpenBrace NestedClassElements?:elements __ CloseBrace  ->
+    return {
+      type: "ClassBody",
+      children: $0,
+      elements,
+    }
+  InsertOpenBrace NestedClassElements?:elements InsertNewline InsertIndent InsertCloseBrace ->
+    return {
+      type: "ClassBody",
+      children: $0,
+      elements,
+    }
 
 NestedClassElements
   PushIndent NestedClassElement*:elements PopIndent ->
@@ -633,9 +644,17 @@ NestedClassElement
 # https://262.ecma-international.org/#prod-ClassElement
 ClassElement
   # NOTE: Combined optional static and Method/Field definition
-  Decorators? AccessModifier? ( Static _? )? ClassElementDefinition
+  Decorators? AccessModifier? ( Static _? )? ClassElementDefinition:definition ->
+    return {
+      ...definition,
+      children: [$1, $2, $3, ...definition.children],
+    }
   # ClassStaticBlock
-  Static BracedBlock
+  Static BracedBlock ->
+    return {
+      type: "ClassStaticBlock",
+      children: $0,
+    }
 
 ClassElementDefinition
   ( MethodDefinition / FieldDefinition )
@@ -693,7 +712,10 @@ FieldDefinition
           children,
         }
       default:
-        return [id, " = ", exp]
+        return {
+          type: "FieldDefinition",
+          children: [id, " = ", exp],
+        }
     }
 
   # NOTE: Added readonly semantic equivalent of const field assignment
@@ -704,11 +726,17 @@ FieldDefinition
       pos: ca.$loc.pos - 1,
       length: ca.$loc.length + 1,
     }
-    return $0
+    return {
+      type: "FieldDefinition",
+      children: $0,
+    }
 
   ( Abstract _? )? ( Readonly _? )? ClassElementName TypeSuffix? Initializer? ->
     if ($1) return { children: $0, ts: true }
-    return $0
+    return {
+      type: "FieldDefinition",
+      children: $0,
+    }
 
 ThisLiteral
   This
@@ -2188,7 +2216,7 @@ PropertyDefinition
   # NOTE: Forbidding EmptyBlock in MethodDefinition to allow `foo()` shorthand
   # for `foo: foo()`
   __:ws MethodDefinition:def ->
-    if (def.block.empty) return $skip
+    if (!def.block || def.block.empty) return $skip
     return {
       ...def,
       children: [ws, ...def.children],
@@ -2348,13 +2376,14 @@ MethodDefinition
       type: "MethodDefinition",
       children: $0,
       name: signature.name,
+      abstract: true,
       signature,
       parameters: signature.parameters,
       ts: true
     }
   # NOTE: Not adding extra validation using PropertySetParameterList
   # NOTE: If this node layout changes, be sure to update `convertMethodTOFunction`
-  MethodSignature:signature !PropertyAccess BracedOrEmptyBlock:block ->
+  MethodSignature:signature !PropertyAccess BracedBlock?:block ->
     let children = $0
     let generatorPos = 0
     const { modifier } = signature
@@ -2445,7 +2474,7 @@ MethodSignature
     }
 
   # NOTE: If this node layout changes, be sure to update `convertMethodToFunction`
-  MethodModifier?:modifier ClassElementName:name _? NonEmptyParameters:parameters ReturnTypeSuffix?:suffix ->
+  MethodModifier?:modifier ClassElementName:name _? NonEmptyParameters:parameters ReturnTypeSuffix?:returnType ->
     // Normalize name so we can check if it is `constructor`
     if (name.name) {
       name = name.name
@@ -2456,9 +2485,9 @@ MethodSignature
     return {
       type: "MethodSignature",
       children: $0,
-      name: name,
+      name,
       modifier, // get/set/async/generator
-      returnType: suffix,
+      returnType,
       parameters,
     }
 
@@ -3510,14 +3539,7 @@ ImpliedColon
 TryStatement
   Try:t !":" NoPostfixBracedOrEmptyBlock:b CatchClause?:c FinallyClause?:f ->
     if (!c && !f) {
-      const e = []
-      const emptyCatchBlock = {
-        type: "BlockStatement",
-        expressions: e,
-        children: ["{", e, "}"],
-        bare: false,
-        empty: true,
-      }
+      const emptyCatchBlock = makeEmptyBlock()
 
       c = {
         type: "CatchClause",
