@@ -136,6 +136,17 @@ By contrast, JavaScript would treat the code on
 as three binary operators with an index access (and a member access),
 followed by a code block with a label.
 
+## Keywords
+
+Civet has some additional keywords beyond
+[JavaScript's](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Lexical_grammar#reserved_words)
+and
+[TypeScript's](https://github.com/microsoft/TypeScript/issues/2536#issuecomment-87194347),
+preventing them from being variable names.
+These include `and`, `or`, `is`, `not`, `unless`, and `until`.
+If you use these variables in your code, please rename them,
+e.g., by appending an underscore.
+
 ## Labels
 
 In Civet, labels are written `:label` instead of `label:`.
