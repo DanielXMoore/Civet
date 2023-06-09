@@ -41,6 +41,8 @@ if process.argv.includes "--help"
       --no-cache       Disable compiler caching (slow, for debugging)
 
     You can use - to read from stdin or (prefixed by -o) write to stdout.
+
+
   """
   process.exit(0)
 
