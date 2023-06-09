@@ -158,6 +158,7 @@ export compile = (src, options) ->
   if !options.noCache
     events = makeCache()
 
+  parse.config = options.parseOptions
   ast = prune parse(src, {
     filename
     events

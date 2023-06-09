@@ -1,4 +1,5 @@
 import {parse, compile, generate} from "./main"
+import {findConfig, loadConfig} from "./config"
 {prune} = generate
 
 version = -> require("../package.json").version
@@ -33,14 +34,13 @@ if process.argv.includes "--help"
       --version        Show the version number
       -o / --output XX Specify output directory and/or extension, or filename
       -c / --compile   Compile input files to TypeScript (or JavaScript)
+      --config XX      Specify a config file (default finds the nearest config.civet, .civetconfig or civet.json file)
       --js             Strip out all type annotations; default to .jsx extension
       --ast            Print the AST instead of the compiled code
       --inline-map     Generate a sourcemap
       --no-cache       Disable compiler caching (slow, for debugging)
 
     You can use - to read from stdin or (prefixed by -o) write to stdout.
-
-
   """
   process.exit(0)
 
@@ -78,6 +78,8 @@ parseArgs = (args) ->
         options.compile = true
       when '-o', '--output'
         options.output = args[++i]
+      when '--config'
+        options.config = args[++i]
       when '--ast'
         options.ast = true
       when '--no-cache'
@@ -186,6 +188,16 @@ repl = (options) ->
 cli = ->
   argv = process.argv  # process.argv gets overridden when running scripts
   {filenames, scriptArgs, options} = parseArgs argv[2..]
+
+  if not options.config
+    options.config = await findConfig()
+  
+  if options.config
+    options = {
+      ...(await loadConfig options.config),
+      ...options
+    }
+
   unless filenames.length
     if process.stdin.isTTY
       options.repl = true
