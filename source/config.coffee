@@ -28,7 +28,7 @@ export loadConfig = (path) ->
             exports = await import(pathToFileURL(tmpPath))
         finally
             await fs.unlink tmpPath
-        if typeof exports.default isnt 'object'
-            throw new Error "config.civet must export an object"
+        if typeof exports.default isnt 'object' or exports.default is null
+            throw new Error "civet config file must export an object"
         exports.default
     
