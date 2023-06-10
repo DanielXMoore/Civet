@@ -192,7 +192,7 @@ cli = ->
   {filenames, scriptArgs, options} = parseArgs argv[2..]
 
   if not options.config
-    options.config = await findConfig()
+    options.config = await findConfig(process.cwd())
   
   if options.config
     options = {

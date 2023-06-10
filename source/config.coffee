@@ -11,11 +11,11 @@ findInDir = (dirPath) ->
         if entry.isFile() 
             name = entry.name.replace(/^\./, '') # allow both .civetconfig.civet and civetconfig.civet   
             if name in ['config.civet', 'civet.json', 'civetconfig.civet', 'civetconfig.json']
-                return path.join curr, entry.name 
+                return path.join dirPath, entry.name 
     null
 
-export findConfig = ->
-    curr = process.cwd()
+export findConfig = (startDir) ->
+    curr = startDir
     parent = path.dirname curr
     while curr isnt parent # root directory (/, C:, etc.)
         if configPath = await findInDir curr
