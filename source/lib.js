@@ -1009,14 +1009,16 @@ function hasYield(exp) {
 function hoistRefDecs(statements) {
   gatherRecursiveAll(statements, (s) => s.hoistDec)
     .forEach(node => {
-      const { hoistDec } = node
+      let { hoistDec, parent } = node
 
       node.hoistDec = null
-      while (node.parent?.type !== "BlockStatement") {
-        node = node.parent
+      while (parent?.type !== "BlockStatement" || parent.bare && !parent.root) {
+        node = parent
+        parent = node.parent
       }
-      if (node.parent) {
-        insertHoistDec(node.parent, node, hoistDec)
+
+      if (parent) {
+        insertHoistDec(parent, node, hoistDec)
       } else {
         throw new Error("Couldn't find block to hoist declaration into.")
       }
