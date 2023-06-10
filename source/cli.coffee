@@ -34,7 +34,7 @@ if process.argv.includes "--help"
       --version        Show the version number
       -o / --output XX Specify output directory and/or extension, or filename
       -c / --compile   Compile input files to TypeScript (or JavaScript)
-      --config XX      Specify a config file (default finds the nearest config.civet, .civetconfig or civet.json file)
+      --config XX      Specify a config file (default scans for a config.civet, civet.json, civetconfig.civet or civetconfig.json file, optionally in a .config directory, or starting with a .)
       --js             Strip out all type annotations; default to .jsx extension
       --ast            Print the AST instead of the compiled code
       --inline-map     Generate a sourcemap

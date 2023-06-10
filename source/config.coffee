@@ -3,14 +3,23 @@ import fs from "fs/promises"
 import { compile } from "./main"
 import { pathToFileURL } from "url"
 
+findInDir = (dirPath) ->
+    dir = await fs.opendir dirPath
+    for await entry from dir
+        if entry.isDirectory() and entry.name is '.config' # scan for ./config.civet as well as ./.config/config.civet
+            return findInDir path.join dirPath, entry.name
+        if entry.isFile() 
+            name = entry.name.replace(/^\./, '') # allow both .civetconfig.civet and civetconfig.civet   
+            if name in ['config.civet', 'civet.json', 'civetconfig.civet', 'civetconfig.json']
+                return path.join curr, entry.name 
+    null
+
 export findConfig = ->
     curr = process.cwd()
     parent = path.dirname curr
     while curr isnt parent # root directory (/, C:, etc.)
-        dir = await fs.opendir curr
-        for await entry from dir
-            if entry.name in ['config.civet', '.civetconfig', 'civet.json'] 
-                return path.join curr, entry.name
+        if configPath = await findInDir curr
+            return configPath
         curr = parent
         parent = path.dirname curr
     null
