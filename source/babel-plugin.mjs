@@ -12,7 +12,6 @@ export default function (api, civetOptions) {
 
         config.inlineMap ??= true
         config.js = true
-        opts.sourceFileName = opts.sourceFileName.replace(/\.civet$/, ".tsx")
         src = compile(code, config)
       } else {
         src = code
