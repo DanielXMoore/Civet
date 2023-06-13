@@ -7,17 +7,17 @@ export default function (api, civetOptions) {
       if (opts.sourceFileName.endsWith(".civet")) {
         const config = Object.assign({}, civetOptions, {
           filename: opts.sourceFileName,
-          sourceMap: opts.sourceMaps ?? true,
+          sourceMap: false,
         })
 
-        if (config.sourceMap) {
-          ({ code: src } = compile(code, config))
-        } else {
-          src = compile(code, config)
-        }
+        config.inlineMap ??= true
+        config.js = true
+        opts.sourceFileName = opts.sourceFileName.replace(/\.civet$/, ".tsx")
+        src = compile(code, config)
       } else {
         src = code
       }
+
       const ast = parse(src, opts)
       return ast
     }
