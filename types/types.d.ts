@@ -93,9 +93,11 @@ declare module "@danielx/civet/esbuild-plugin" {
 }
 
 declare module "@danielx/civet/config" {
-  type Config = {
-    findConfig: (path: string) => Promise<string | null>,
-    loadConfig: (path: string) => Promise<import("@danielx/civet").CompileOptions>,
-  }
+  const Config: {
+		findConfig: (path: string) => Promise<string | null>
+		loadConfig: (
+			path: string
+		) => Promise<import("@danielx/civet").CompileOptions>
+	}
   export default Config
 }

@@ -6,6 +6,7 @@ import type {
 	CompileOptions,
 } from "@danielx/civet"
 import BundledCivetModule from "@danielx/civet"
+import BundledCivetConfigModule from "@danielx/civet/config"
 
 import ts, {
   CompilerHost,
@@ -431,10 +432,13 @@ function TSService(projectURL = "./") {
   }
 
   let civetConfig: CompileOptions = {}
-  CivetConfig.findConfig(projectPath).then(async (configPath: string) => {
+  CivetConfig.findConfig(projectPath).then(async configPath => {
     if (configPath) {
       console.info("Loading Civet config @", configPath)
+      const envLsp = process.env.CIVET_LSP
+      process.env.CIVET_LSP = "true"
       const config = await CivetConfig.loadConfig(configPath)
+      process.env.CIVET_LSP = envLsp
       console.info("Found civet config!")
       civetConfig = config
     } else console.info("No Civet config found")
@@ -479,10 +483,10 @@ function TSService(projectURL = "./") {
 
   function transpileCivet(path: string, source: string) {
     return Civet.compile(source, {
-			...civetConfig,
-			filename: path,
-			sourceMap: true,
-		})
+      ...civetConfig,
+      filename: path,
+      sourceMap: true,
+    })
   }
 }
 
