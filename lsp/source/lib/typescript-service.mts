@@ -435,10 +435,7 @@ function TSService(projectURL = "./") {
   CivetConfig.findConfig(projectPath).then(async configPath => {
     if (configPath) {
       console.info("Loading Civet config @", configPath)
-      const envLsp = process.env.CIVET_LSP
-      process.env.CIVET_LSP = "true"
       const config = await CivetConfig.loadConfig(configPath)
-      process.env.CIVET_LSP = envLsp
       console.info("Found civet config!")
       civetConfig = config
     } else console.info("No Civet config found")
