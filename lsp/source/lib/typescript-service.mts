@@ -1,8 +1,12 @@
 import assert from "assert"
 import path from "path"
 
+import type {
+	SourceMap as CivetSourceMap,
+	CompileOptions,
+} from "@danielx/civet"
 import BundledCivetModule from "@danielx/civet"
-import type { SourceMap as CivetSourceMap } from "@danielx/civet"
+import BundledCivetConfigModule from "@danielx/civet/config"
 
 import ts, {
   CompilerHost,
@@ -20,9 +24,9 @@ const {
   sys,
 } = ts
 
-import { TextDocument } from "vscode-languageserver-textdocument"
-import { fileURLToPath, pathToFileURL } from "url"
 import { createRequire } from "module"
+import { fileURLToPath, pathToFileURL } from "url"
+import { TextDocument } from "vscode-languageserver-textdocument"
 // TODO: project Coffee version?
 import { compile as coffeeCompile } from "coffeescript"
 import { convertCoffeeScriptSourceMap } from "./util.mjs"
@@ -416,16 +420,28 @@ function TSService(projectURL = "./") {
   const projectRequire = createRequire(projectURL)
 
   // Use Civet from the project if present
-  let Civet: typeof BundledCivetModule
+  let Civet = BundledCivetModule
+  let CivetConfig = BundledCivetConfigModule
   try {
     const civetPath = "@danielx/civet"
     Civet = projectRequire(civetPath)
-
+    CivetConfig = projectRequire(`${civetPath}/config`)
     console.info(`LOADED PROJECT CIVET: ${path.join(projectURL, civetPath)} \n\n`)
   } catch (e) {
     console.info("USING BUNDLED CIVET")
-    Civet = BundledCivetModule
   }
+
+  let civetConfig: CompileOptions = {}
+  CivetConfig.findConfig(projectPath).then(async configPath => {
+    if (configPath) {
+      console.info("Loading Civet config @", configPath)
+      const config = await CivetConfig.loadConfig(configPath)
+      console.info("Found civet config!")
+      civetConfig = config
+    } else console.info("No Civet config found")
+  }).catch((e: unknown) => {
+    console.error("Error loading Civet config", e)
+  })
 
   return Object.assign({}, service, {
     host,
@@ -464,8 +480,9 @@ function TSService(projectURL = "./") {
 
   function transpileCivet(path: string, source: string) {
     return Civet.compile(source, {
+      ...civetConfig,
       filename: path,
-      sourceMap: true
+      sourceMap: true,
     })
   }
 }

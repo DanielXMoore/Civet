@@ -1,9 +1,38 @@
 declare module "@danielx/civet" {
   export type CivetAST = unknown
+  export type ParseOptions = Partial<{
+    autoVar: boolean
+    autoLet: boolean
+    coffeeBinaryExistential: boolean
+    coffeeBooleans: boolean
+    coffeeClasses: boolean
+    coffeeComment: boolean
+    coffeeDo: boolean
+    coffeeEq: boolean
+    coffeeForLoops: boolean
+    coffeeInterpolation: boolean
+    coffeeIsnt: boolean
+    coffeeJSX: boolean
+    coffeeLineContinuation: boolean
+    coffeeNot: boolean
+    coffeeOf: boolean
+    coffeePrototype: boolean
+    defaultElement: string
+    implicitReturns: boolean
+    objectIs: boolean
+    react: boolean
+    solid: boolean
+    client: boolean
+    rewriteTsImports: boolean
+    server: boolean
+    tab: number
+    verbose: boolean
+  }>
   export type CompileOptions = {
     filename?: string
     js?: boolean
     sourceMap?: boolean
+    parseOptions?: ParseOptions
   }
 
   export type SourceMapping = [number] | [number, number, number, number]
@@ -61,4 +90,14 @@ declare module "@danielx/civet/esbuild-plugin" {
 
   const plugin: ((options: Options) => Plugin) & Plugin
   export default plugin
+}
+
+declare module "@danielx/civet/config" {
+  const Config: {
+    findConfig: (path: string) => Promise<string | null>
+    loadConfig: (
+      path: string
+    ) => Promise<import("@danielx/civet").CompileOptions>
+  }
+  export default Config
 }

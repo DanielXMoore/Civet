@@ -50,6 +50,24 @@ esbuild.build({
   ]
 }).catch -> process.exit 1
 
+esbuild.build({
+  entryPoints: ['source/config.coffee']
+  bundle: false
+  sourcemap
+  minify
+  watch
+  platform: 'node'
+  format: 'cjs'
+  outfile: 'dist/config.js'
+  plugins: [
+    resolveExtensions
+    coffeeScriptPlugin
+      bare: true
+      inlineMap: sourcemap
+    heraPlugin
+  ]
+}).catch -> process.exit 1
+
 for esm in [false, true]
   esbuild.build({
     entryPoints: ['source/main.coffee']
