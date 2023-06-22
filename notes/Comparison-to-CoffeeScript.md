@@ -154,6 +154,7 @@ Civet provides a compatibility prologue directive that aims to be 97+% compatibl
 | Configuration       | What it enables |
 |---------------------|---------------------------------------------------------------------|
 | autoVar             | declare implicit vars based on assignment to undeclared identifiers |
+| coffeeAndOr         | `and` → `&&`, `or` → `||` with same precedence |
 | coffeeBooleans      | `yes`, `no`, `on`, `off` |
 | coffeeComment       | `# single line comments` |
 | coffeeDo            | `do ->`, disables ES6 do/while |
@@ -161,7 +162,7 @@ Civet provides a compatibility prologue directive that aims to be 97+% compatibl
 | coffeeForLoops      | for in, of, from loops behave like they do in CoffeeScript |
 | coffeeInterpolation | `"a string with #{myVar}"` |
 | coffeeIsnt          | `isnt` → `!==` |
-| coffeeNot           | `not` → `!`    |
+| coffeeNot           | `not` → `!` with same precedence |
 | coffeeOf            | `a of b` → `a in b`, `a not of b` → `!(a in b)`, `a in b` → `b.indexOf(a) >= 0`, `a not in b` → `b.indexOf(a) < 0` |
 | coffeePrototype     | enables `x::` -> `x.prototype` and `x::y` -> `x.prototype.y` shorthand.
 

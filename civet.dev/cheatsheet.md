@@ -319,11 +319,23 @@ a + b = c
 <Playground>
 a is b
 a is not b
+not a
 a and b
 a or b
 a not in b
 a not instanceof b
 a?
+</Playground>
+
+### Two Levels of Precedence
+
+Like Perl, Ruby, and LiveScript, `and`/`or`/`not` have lower precedence
+than `&&`/`||`/`!`/comparisons (unless you [explicitly disable via
+`"civet coffeeAndOrNot"`](#coffeescript-operators)).
+
+<Playground>
+not a == b
+a || b and c || d
 </Playground>
 
 ### Includes Operator
@@ -1438,6 +1450,11 @@ x == y != z
 <Playground>
 "civet coffeeIsnt"
 x isnt y
+</Playground>
+
+<Playground>
+"civet coffeeAndOr"
+a || b and c || d
 </Playground>
 
 <Playground>

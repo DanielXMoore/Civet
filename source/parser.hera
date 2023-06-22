@@ -34,6 +34,8 @@ const {
   processCoffeeInterpolation,
   processConstAssignmentDeclaration,
   processLetAssignmentDeclaration,
+  processLowBinaryOpExpression,
+  processLowUnaryExpression,
   processProgram,
   processUnaryExpression,
   quoteString,
@@ -259,10 +261,31 @@ NonPipelineArgumentPart
     }
     return $1
 
+# NOTE: Match low-precedence binary ops first
+LowBinaryOpExpression
+  LowUnaryExpression LowBinaryOpRHS* ->
+    if (!$2.length) return $1
+    return processLowBinaryOpExpression($0)
+
+# NOTE: Excluding low-precedence binary ops
 BinaryOpExpression
   UnaryExpression BinaryOpRHS* ->
-    if ($2.length) return processBinaryOpExpression($0)
-    return $1
+    if (!$2.length) return $1
+    return processBinaryOpExpression($0)
+
+LowBinaryOpRHS
+  # Snug binary ops a+b
+  LowBinaryOp:op LowRHS:rhs ->
+    // Insert empty whitespace placeholder to maintan structure
+    return [[], op, [], rhs]
+  # Spaced binary ops a + b
+  # a
+  # + b
+  # Does not match
+  # a
+  # +b
+  NewlineBinaryOpAllowed ( NotDedented LowBinaryOp ( _ / ( EOS __ ) ) LowRHS ):rhs -> rhs
+  !NewlineBinaryOpAllowed SingleLineLowBinaryOpRHS -> $2
 
 BinaryOpRHS
   # Snug binary ops a+b
@@ -278,11 +301,23 @@ BinaryOpRHS
   NewlineBinaryOpAllowed ( NotDedented BinaryOp ( _ / ( EOS __ ) ) RHS ):rhs -> rhs
   !NewlineBinaryOpAllowed SingleLineBinaryOpRHS -> $2
 
+SingleLineLowBinaryOpRHS
+  # NOTE: It's named single line but that's only for the operator, the RHS can be after a newline
+  # This is to maintain compatibility with CoffeeScript conditions
+  _?:ws1 LowBinaryOp:op ( _ / ( EOS __ ) ):ws2 LowRHS:rhs ->
+    return [ws1 || [], op, ws2, rhs]
+
 SingleLineBinaryOpRHS
   # NOTE: It's named single line but that's only for the operator, the RHS can be after a newline
   # This is to maintain compatibility with CoffeeScript conditions
   _?:ws1 BinaryOp:op ( _ / ( EOS __ ) ):ws2 RHS:rhs ->
     return [ws1 || [], op, ws2, rhs]
+
+LowRHS
+  ParenthesizedAssignment
+  # NOTE: Here is one transition from low precedence to high precedence
+  BinaryOpExpression
+  ExpressionizedStatement
 
 RHS
   ParenthesizedAssignment
@@ -292,7 +327,13 @@ RHS
 ParenthesizedAssignment
   InsertOpenParen ActualAssignment InsertCloseParen
 
+LowUnaryExpression
+  # NOTE: Here is one transition from low precedence to high precedence
+  LowUnaryOp*:pre BinaryOpExpression:exp ->
+    return processLowUnaryExpression(pre, exp)
+
 # https://262.ecma-international.org/#prod-UnaryExpression
+# but excluding low-precedence unary ops
 UnaryExpression
   # NOTE: Merged AwaitExpression with UnaryOp
   # https://262.ecma-international.org/#prod-AwaitExpression
@@ -465,7 +506,7 @@ NestedTernaryRest
 # https://262.ecma-international.org/#prod-ShortCircuitExpression
 ShortCircuitExpression
   # NOTE: We don't need to track the precedence of all the binary operators so they all collapse into this
-  BinaryOpExpression
+  LowBinaryOpExpression
 
 PipelineExpression
   _?:ws PipelineHeadItem:head ( NotDedented Pipe __ PipelineTailItem )+:body ->
@@ -2597,6 +2638,10 @@ CoffeeWordAssignmentOp
   "and=" -> "&&="
   "or=" -> "||="
 
+LowBinaryOp
+  !CoffeeAndOrEnabled "and" NonIdContinue -> "&&"
+  !CoffeeAndOrEnabled "or" NonIdContinue -> "||"
+
 BinaryOp
   BinaryOpSymbol ->
     if (typeof $1 === "string") return { $loc, token: $1 }
@@ -2670,10 +2715,10 @@ BinaryOpSymbol
   "==" ->
     if(module.config.coffeeEq) return "==="
     return $1
-  "and" NonIdContinue -> "&&"
+  CoffeeAndOrEnabled "and" NonIdContinue -> "&&"
   "&&"
   CoffeeOfEnabled "of" NonIdContinue -> "in"
-  "or" NonIdContinue -> "||"
+  CoffeeAndOrEnabled "or" NonIdContinue -> "||"
   "||"
   # NOTE: ^^ must be above ^
   "^^" / ( "xor" NonIdContinue ) ->
@@ -2775,6 +2820,9 @@ Xor
 Xnor
   /!\^\^?/ / "xnor"
 
+LowUnaryOp
+  !CoffeeNotEnabled Not
+
 UnaryOp
   # Lookahead to prevent unary operators from overriding update operators
   # ++/-- or block unary operator shorthand
@@ -2782,7 +2830,7 @@ UnaryOp
     return { $loc, token: $0 }
   AwaitOp
   ( Delete / Void / Typeof ) !":" _?
-  Not # only when CoffeeNotEnabled (see definition of `Not`)
+  CoffeeNotEnabled Not
 
 # https://github.com/tc39/proposal-await.ops
 AwaitOp
@@ -4756,8 +4804,7 @@ New
     return { $loc, token: $1 }
 
 Not
-  # Not keyword only active in compat mode
-  CoffeeNotEnabled "not" NonIdContinue " "? ->
+  "not" NonIdContinue " "? !( _? ":" ) ->
     return { $loc, token: "!" }
 
 Of
@@ -6137,6 +6184,11 @@ InsertVar
   "" ->
     return { $loc, token: "var " }
 
+CoffeeAndOrEnabled
+  "" ->
+    if(module.config.coffeeAndOr) return
+    return $skip
+
 CoffeeBinaryExistentialEnabled
   "" ->
     if(module.config.coffeeBinaryExistential) return
@@ -6276,6 +6328,7 @@ Reset
     module.config = {
       autoVar: false,
       autoLet: false,
+      coffeeAndOr: false,
       coffeeBinaryExistential: false,
       coffeeBooleans: false,
       coffeeClasses: false,
@@ -6419,11 +6472,20 @@ Reset
     // default to deno compatibility if running in deno
     module.config.deno = typeof Deno !== "undefined"
 
+    // coffeeAndOrNot shorthand for coffeeAndOr and coffeeNot
+    Object.defineProperty(module.config, "coffeeAndOrNot", {
+      set(b) {
+        module.config.coffeeAndOr = b
+        module.config.coffeeNot = b
+      }
+    })
+
     // Expand setting coffeeCompat to the individual options
     Object.defineProperty(module.config, "coffeeCompat", {
       set(b) {
         for (const option of [
           "autoVar",
+          "coffeeAndOr",
           "coffeeBinaryExistential",
           "coffeeBooleans",
           "coffeeClasses",

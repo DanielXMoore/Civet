@@ -469,6 +469,18 @@ function expressionizeIteration(exp) {
   )
 }
 
+/**
+* binops is an array of [__, op, __, exp] tuples
+* first is an expression
+*/
+function processLowBinaryOpExpression([first, binops]) {
+  const out = [makeLeftHandSideExpression(first)]
+  binops.forEach(([pre, op, post, exp]) => {
+    out.push(pre, op, post, makeLeftHandSideExpression(exp))
+  })
+  return out
+}
+
 function processBinaryOpExpression($0) {
   const expandedOps = expandChainedComparisons($0)
 
@@ -1412,6 +1424,10 @@ function makeLeftHandSideExpression(expression) {
     case "CallExpression":
     case "MemberExpression":
     case "ParenthesizedExpression":
+    case "DebuggerExpression": // wrapIIFE
+    case "SwitchExpression": // wrapIIFE
+    case "ThrowExpression": // wrapIIFE
+    case "TryExpression": // wrapIIFE
       return expression
     default:
       return {
@@ -2822,6 +2838,14 @@ function processReturnValue(func) {
   return true
 }
 
+function processLowUnaryExpression(pre, exp) {
+  if (!pre.length) return exp
+  return {
+    type: "UnaryExpression",
+    children: [...pre, makeLeftHandSideExpression(exp)],
+  }
+}
+
 function processUnaryExpression(pre, exp, post) {
   if (!(pre.length || post)) return exp
   // Handle "?" postfix
@@ -3156,6 +3180,8 @@ module.exports = {
   processCoffeeInterpolation,
   processConstAssignmentDeclaration,
   processLetAssignmentDeclaration,
+  processLowBinaryOpExpression,
+  processLowUnaryExpression,
   processParams,
   processProgram,
   processReturnValue,
