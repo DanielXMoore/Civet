@@ -1412,6 +1412,10 @@ function makeLeftHandSideExpression(expression) {
     case "CallExpression":
     case "MemberExpression":
     case "ParenthesizedExpression":
+    case "DebuggerExpression": // wrapIIFE
+    case "SwitchExpression": // wrapIIFE
+    case "ThrowExpression": // wrapIIFE
+    case "TryExpression": // wrapIIFE
       return expression
     default:
       return {
