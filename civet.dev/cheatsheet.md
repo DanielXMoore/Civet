@@ -332,6 +332,7 @@ a?
 item is in array
 item is not in array
 substring is in string
+item1 ∈ container ∌ item2  // Unicode
 </Playground>
 
 ### Assignment Operators
@@ -354,6 +355,7 @@ fun?(arg)
 
 <Playground>
 a < b <= c
+a ≤ b ≤ c ≠ d  // Unicode
 a is b is not c
 a instanceof b not instanceof c
 </Playground>
