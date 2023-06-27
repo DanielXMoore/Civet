@@ -355,7 +355,8 @@ fun?(arg)
 
 <Playground>
 a < b <= c
-a ≤ b ≤ c ≠ d  // Unicode
+a ≤ b ≤ c  // Unicode
+a ≡ b ≣ c ≠ d ≢ e
 a is b is not c
 a instanceof b not instanceof c
 </Playground>
