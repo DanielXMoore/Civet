@@ -609,6 +609,12 @@ circle := (degrees: number): {x: number, y: number} =>
   y: Math.sin radians
 </Playground>
 
+You can also use Unicode arrows:
+
+<Playground>
+curryAdd := (a: number) → (b: number) ⇒ a + b
+</Playground>
+
 ### `return.value`
 
 Instead of specifying a function's return value when it returns,
