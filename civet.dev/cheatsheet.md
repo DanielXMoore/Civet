@@ -479,6 +479,12 @@ url |> fetch |> await
 |> callback
 </Playground>
 
+Unicode forms:
+
+<Playground>
+data ▷= func1 |▷ func2 ▷ func3
+</Playground>
+
 ### Await Operators
 
 [TC39 proposal: `await` operations](https://github.com/tc39/proposal-await.ops)
