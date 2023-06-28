@@ -332,6 +332,7 @@ a?
 item is in array
 item is not in array
 substring is in string
+item1 ∈ container ∌ item2  // Unicode
 </Playground>
 
 ### Assignment Operators
@@ -354,6 +355,8 @@ fun?(arg)
 
 <Playground>
 a < b <= c
+a ≤ b ≤ c  // Unicode
+a ≡ b ≣ c ≠ d ≢ e
 a is b is not c
 a instanceof b not instanceof c
 </Playground>
@@ -475,6 +478,12 @@ url |> fetch |> await
 |> .json() |> await
 ||> (json) => console.log "json:", json
 |> callback
+</Playground>
+
+Unicode forms:
+
+<Playground>
+data ▷= func1 |▷ func2 ▷ func3
 </Playground>
 
 ### Await Operators
@@ -599,6 +608,12 @@ circle := (degrees: number): {x: number, y: number} =>
   radians := degrees * Math.PI / 180
   x: Math.cos radians
   y: Math.sin radians
+</Playground>
+
+You can also use Unicode arrows:
+
+<Playground>
+curryAdd := (a: number) → (b: number) ⇒ a + b
 </Playground>
 
 ### `return.value`
