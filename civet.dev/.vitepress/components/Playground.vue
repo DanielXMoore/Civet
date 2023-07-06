@@ -179,7 +179,7 @@ const playgroundUrl = computed(() => {
   background: transparent;
   resize: none;
   color: transparent;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .compilation-info {
