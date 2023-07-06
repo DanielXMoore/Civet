@@ -1478,7 +1478,8 @@ function lastAccessInCallExpression(exp) {
 // Returns undefined if the method is a getter or setter.
 function convertMethodToFunction(method) {
   const { signature, block } = method
-  let { modifier } = signature
+  let { modifier, optional } = signature
+  if (optional) return
   if (modifier) {
     if (modifier.get || modifier.set) {
       return
@@ -1693,7 +1694,7 @@ function processLetAssignmentDeclaration(l, id, suffix, ws, la, e) {
 
 // Add implicit block unless followed by a method/function of the same name
 function implicitFunctionBlock(f) {
-  if (f.abstract || f.block) return
+  if (f.abstract || f.block || f.signature?.optional) return
 
   const { name, parent } = f
   const expressions = parent?.expressions ?? parent?.elements
