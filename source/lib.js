@@ -548,7 +548,7 @@ function processCallMemberExpression(node) {
     if (glob?.type === "PropertyGlob") {
       let prefix = children.slice(0, i)
       const parts = []
-      let hoistDec, refAssignment = []
+      let hoistDec, refAssignment
       // add ref to ensure object base evaluated only once
       if (prefix.length > 1) {
         const ref = {
@@ -607,16 +607,22 @@ function processCallMemberExpression(node) {
           })
         }
       }
-      const object = {
+      let object = {
         type: "ObjectExpression",
         children: [
-          ...refAssignment,
           glob.object.children[0], // {
           ...parts,
           glob.object.children.at(-1), // whitespace and }
         ],
         properties: parts,
         hoistDec,
+      }
+      if (refAssignment) {
+        object = {
+          type: "ParenthesizedExpression",
+          children: ["(", ...refAssignment, object, ")"],
+          expression: object,
+        }
       }
       if (i === children.length - 1) return object
       return processCallMemberExpression({  // in case there are more
