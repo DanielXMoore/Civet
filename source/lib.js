@@ -832,13 +832,13 @@ function expandChainedComparisons([first, binops]) {
           endIndex = i + 1
         }
 
-        results = results.concat(first, ...binops.slice(start, endIndex))
+        results.push(first, ...binops.slice(start, endIndex).flat())
         first = [exp].concat(binops.slice(index + 1, endIndex))
         start = endIndex
       })
     } else {
       // Advance start if there was no chain
-      results = results.concat(first, ...binops.slice(start, i + 1))
+      results.push(first, ...binops.slice(start, i + 1).flat())
       start = i + 1
     }
 
@@ -2004,11 +2004,21 @@ function getPatternConditions(pattern, ref, conditions) {
 
       break
     }
-    case "ConditionFragment":
+    case "ConditionFragment": {
+      let { children } = pattern
+      // Add leading space to first binary operation
+      if (children.length) {
+        let [ first, ...rest ] = children
+        let [ ws, ...op ] = first
+        ws = [" "].concat(ws)
+        first = [ ws, ...op ]
+        children = [ first, ...rest ]
+      }
       conditions.push(
-        [ref, " ", pattern.children],
+        processBinaryOpExpression([ref, children])
       )
       break
+    }
     case "RegularExpressionLiteral": {
       conditions.push(
         ["typeof ", ref, " === 'string'"],
