@@ -351,6 +351,13 @@ obj?[key]
 fun?(arg)
 </Playground>
 
+## Existence Checking
+
+<Playground>
+x?
+x.y[z]?
+</Playground>
+
 ### Chained Comparisons
 
 <Playground>
@@ -359,6 +366,7 @@ a ≤ b ≤ c  // Unicode
 a ≡ b ≣ c ≠ d ≢ e
 a is b is not c
 a instanceof b not instanceof c
+x? instanceof Function
 </Playground>
 
 ### `instanceof` shorthand

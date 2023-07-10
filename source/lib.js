@@ -772,6 +772,15 @@ function wrapWithReturn(expression) {
   }
 }
 
+function isExistence(exp) {
+  if (exp.type === "ParenthesizedExpression" && exp.implicit) {
+    exp = exp.expression
+  }
+  if (exp.type === "Existence") {
+    return exp
+  }
+}
+
 /**
 * binops is an array of [__, op, __, exp] tuples
 * first is an expression
@@ -792,7 +801,7 @@ function expandChainedComparisons([first, binops]) {
   let results = []
 
   let i = 0
-  let l = binops.length
+  const l = binops.length
 
   let start = 0
   // indexes of chainable ops
@@ -817,13 +826,17 @@ function expandChainedComparisons([first, binops]) {
   return results
 
   function processChains() {
+    first = expandExistence(first)
     if (chains.length > 1) {
       chains.forEach((index, k) => {
         if (k > 0) {
           // NOTE: Inserting ws tokens to keep even operator spacing in the resulting array
           results.push(" ", "&&", " ")
         }
-        const [pre, op, post, exp] = binops[index]
+
+        const binop = binops[index]
+        let [pre, op, post, exp] = binop
+        exp = binop[3] = expandExistence(exp)
 
         let endIndex
         if (k < chains.length - 1) {
@@ -843,6 +856,16 @@ function expandChainedComparisons([first, binops]) {
     }
 
     chains.length = 0
+  }
+
+  function expandExistence(exp) {
+    // Expand existence operator like x?
+    const existence = isExistence(exp)
+    if (existence) {
+      results.push(existence, " ", "&&", " ")
+      return existence.expression
+    }
+    return exp
   }
 }
 
