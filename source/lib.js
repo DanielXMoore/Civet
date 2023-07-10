@@ -265,7 +265,7 @@ function constructInvocation(fn, arg) {
 
     return {
       type: "UnwrappedExpression",
-      children: [skipIfOnlyWS(fn.leadingComment), ...body, skipIfOnlyWS(fn.trailingComment)],
+      children: [skipIfOnlyWS(fn.leadingComment), body, skipIfOnlyWS(fn.trailingComment)],
     }
   }
 
@@ -1406,13 +1406,14 @@ function makeEmptyBlock() {
 }
 
 /**
- * Convert general ExtendedExpression into LeftHandSideExpression
- * TODO: Avoid parentheses in more cases by adding more types.
- * by optionally wrapping in parentheses.
+ * Convert general ExtendedExpression into LeftHandSideExpression.
+ * More generally wrap in parentheses if necessary.
+ * (Consider renaming and making parentheses depend on context.)
  */
 function makeLeftHandSideExpression(expression) {
   switch (expression.type) {
     case "Ref":
+    case "AmpersandRef":
     case "Identifier":
     case "Literal":
     case "CallExpression":
@@ -1428,6 +1429,7 @@ function makeLeftHandSideExpression(expression) {
         type: "ParenthesizedExpression",
         children: ["(", expression, ")"],
         expression,
+        implicit: true,
       }
   }
 }
@@ -2849,29 +2851,20 @@ function processUnaryExpression(pre, exp, post) {
   if (post?.token === "?") {
     post = {
       $loc: post.$loc,
-      token: " != null",
+      token: "!=",
     }
-
-    switch (exp.type) {
-      case "Identifier":
-      case "Literal":
-      case "AmpersandRef":
-        return {
-          ...exp,
-          children: [...pre, ...exp.children, post]
-        }
-      default:
-        const expression = {
-          ...exp,
-          children: [...pre, "(", exp.children, ")", post]
-        }
-
-        return {
-          type: "ParenthesizedExpression",
-          children: ["(", expression, ")"],
-          expression,
-        }
+    if (pre.length) {
+      exp = {
+        type: "UnaryExpression",
+        children: [...pre, exp, undefined]
+      }
     }
+    const existence = {
+      type: "Existence",
+      expression: exp,
+      children: [exp, " ", post, " ", "null"],
+    }
+    return makeLeftHandSideExpression(existence)
   }
 
   // Combine unary - to create negative numeric literals
