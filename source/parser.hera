@@ -535,10 +535,20 @@ ParenthesizedExpression
   OpenParen:open AllowAll ( PostfixedExpression __ CloseParen )? RestoreAll ->
     if (!$3) return $skip
     const [exp, ws, close] = $3
-    // Avoid extra parenthetical wrapping in `(for x in y ...)`
     switch (exp.type) {
       case "IterationExpression":
+        // Avoid extra parenthetical wrapping in `(for x in y ...)`
+        // TODO: losing comments in `ws`
         return exp
+      case "ParenthesizedExpression":
+        if (exp.implicit) {
+          return {
+            ...exp,
+            children: [open, exp.expression, ws, close],
+            implicit: false,
+          }
+        }
+        break
     }
     return {
       type: "ParenthesizedExpression",
@@ -1464,18 +1474,32 @@ AmpersandFunctionExpression
 
     // Only unary ops
     if (!rhs) {
-      ref = {
+      body = ref = {
         type: "Ref",
         base: "$",
         id: "$"
       }
-      body = [ prefix, ref ]
     } else {
-      ({ ref } = rhs)
-      body = [ prefix, rhs ]
+      // &? gets wrapped in UnaryExpression and ParenthesizedExpression;
+      // descend into `expression` property until `ref` is defined
+      let exp = rhs
+      while (!exp.ref && exp.expression) {
+        exp = exp.expression
+      }
+      ({ref} = exp)
+      if (!ref) {
+        throw new Error("Could not find ref in ampersand shorthand block")
+      }
+      body = rhs
+    }
+    if (prefix) {
+      body = {
+        type: "UnaryExpression",
+        children: [ prefix, body, undefined ]
+      }
     }
 
-    const children = [ ref, " => ", ...body ]
+    const children = [ ref, " => ", body ]
     if (hasAwait(body)) {
       children.unshift("async ")
     }
@@ -1537,7 +1561,7 @@ AmpersandBlockRHS
 
 AmpersandBlockRHSBody
   (!_ CallExpressionRest+ )?:callExpRest QuestionMark?:unaryPostfix ( ![&] BinaryOpRHS+ )?:binopRHS ->
-    if (!callExpRest && !binopRHS) return $skip
+    if (!callExpRest && !binopRHS && !unaryPostfix) return $skip
     const ref = {
       type: "Ref",
       base: "$",
@@ -2810,7 +2834,7 @@ Xnor
 UnaryOp
   # Lookahead to prevent unary operators from overriding update operators
   # ++/-- or block unary operator shorthand
-  /(?!\+\+|--)[!~+-](?!\s|[!~+-]*&)/ ->
+  /(?!\+\+|--)[!~+-](?!\s|[!~+-]*[&.])/ ->
     return { $loc, token: $0 }
   AwaitOp
   ( Delete / Void / Typeof ) !":" _?
@@ -2951,6 +2975,10 @@ UnlessClause
   Unless:kind Condition:condition ->
     // Rewrite unless to if
     kind = { ...kind, token: "if" }
+
+    // Move leading space to after if
+    kind.token += getTrimmingSpace(condition)
+    condition = insertTrimmingSpace(condition, '')
 
     return {
       type: "IfStatement",

@@ -265,7 +265,7 @@ function constructInvocation(fn, arg) {
 
     return {
       type: "UnwrappedExpression",
-      children: [skipIfOnlyWS(fn.leadingComment), ...body, skipIfOnlyWS(fn.trailingComment)],
+      children: [skipIfOnlyWS(fn.leadingComment), body, skipIfOnlyWS(fn.trailingComment)],
     }
   }
 
@@ -772,6 +772,15 @@ function wrapWithReturn(expression) {
   }
 }
 
+function isExistence(exp) {
+  if (exp.type === "ParenthesizedExpression" && exp.implicit) {
+    exp = exp.expression
+  }
+  if (exp.type === "Existence") {
+    return exp
+  }
+}
+
 /**
 * binops is an array of [__, op, __, exp] tuples
 * first is an expression
@@ -792,7 +801,7 @@ function expandChainedComparisons([first, binops]) {
   let results = []
 
   let i = 0
-  let l = binops.length
+  const l = binops.length
 
   let start = 0
   // indexes of chainable ops
@@ -817,13 +826,17 @@ function expandChainedComparisons([first, binops]) {
   return results
 
   function processChains() {
+    first = expandExistence(first)
     if (chains.length > 1) {
       chains.forEach((index, k) => {
         if (k > 0) {
           // NOTE: Inserting ws tokens to keep even operator spacing in the resulting array
           results.push(" ", "&&", " ")
         }
-        const [pre, op, post, exp] = binops[index]
+
+        const binop = binops[index]
+        let [pre, op, post, exp] = binop
+        exp = binop[3] = expandExistence(exp)
 
         let endIndex
         if (k < chains.length - 1) {
@@ -843,6 +856,16 @@ function expandChainedComparisons([first, binops]) {
     }
 
     chains.length = 0
+  }
+
+  function expandExistence(exp) {
+    // Expand existence operator like x?
+    const existence = isExistence(exp)
+    if (existence) {
+      results.push(existence, " ", "&&", " ")
+      return existence.expression
+    }
+    return exp
   }
 }
 
@@ -1406,13 +1429,14 @@ function makeEmptyBlock() {
 }
 
 /**
- * Convert general ExtendedExpression into LeftHandSideExpression
- * TODO: Avoid parentheses in more cases by adding more types.
- * by optionally wrapping in parentheses.
+ * Convert general ExtendedExpression into LeftHandSideExpression.
+ * More generally wrap in parentheses if necessary.
+ * (Consider renaming and making parentheses depend on context.)
  */
 function makeLeftHandSideExpression(expression) {
   switch (expression.type) {
     case "Ref":
+    case "AmpersandRef":
     case "Identifier":
     case "Literal":
     case "CallExpression":
@@ -1428,6 +1452,7 @@ function makeLeftHandSideExpression(expression) {
         type: "ParenthesizedExpression",
         children: ["(", expression, ")"],
         expression,
+        implicit: true,
       }
   }
 }
@@ -2849,29 +2874,20 @@ function processUnaryExpression(pre, exp, post) {
   if (post?.token === "?") {
     post = {
       $loc: post.$loc,
-      token: " != null",
+      token: "!=",
     }
-
-    switch (exp.type) {
-      case "Identifier":
-      case "Literal":
-      case "AmpersandRef":
-        return {
-          ...exp,
-          children: [...pre, ...exp.children, post]
-        }
-      default:
-        const expression = {
-          ...exp,
-          children: [...pre, "(", exp.children, ")", post]
-        }
-
-        return {
-          type: "ParenthesizedExpression",
-          children: ["(", expression, ")"],
-          expression,
-        }
+    if (pre.length) {
+      exp = {
+        type: "UnaryExpression",
+        children: [...pre, exp, undefined]
+      }
     }
+    const existence = {
+      type: "Existence",
+      expression: exp,
+      children: [exp, " ", post, " ", "null"],
+    }
+    return makeLeftHandSideExpression(existence)
   }
 
   // Combine unary - to create negative numeric literals
