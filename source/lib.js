@@ -1798,6 +1798,50 @@ function processBindingPatternLHS(lhs, tail) {
 }
 
 function processAssignments(statements) {
+  // Move assignments/updates within LHS of assignments/updates
+  // to run earlier via comma operator
+  gatherRecursiveAll(statements, n => n.type === "AssignmentExpression" || n.type === "UpdateExpression")
+    .forEach(exp => {
+      function extractAssignment(lhs) {
+        let expr = lhs
+        while (expr.type === "ParenthesizedExpression") {
+          expr = expr.expression
+        }
+        if (expr.type === "AssignmentExpression" ||
+          expr.type === "UpdateExpression") {
+          if (expr.type === "UpdateExpression" &&
+            expr.children[0] === expr.assigned) {  // postfix update
+            post.push([", ", lhs])
+          } else {
+            pre.push([lhs, ", "])
+          }
+          // TODO: use ref to avoid duplicating function calls
+          return expr.assigned
+        }
+      }
+      const pre = [], post = []
+      switch (exp.type) {
+        case "AssignmentExpression":
+          if (!exp.lhs) return
+          exp.lhs.forEach((lhsPart, i) => {
+            let newLhs = extractAssignment(lhsPart[1])
+            if (newLhs) {
+              lhsPart[1] = newLhs
+            }
+          })
+          break
+        case "UpdateExpression":
+          let newLhs = extractAssignment(exp.assigned)
+          if (newLhs) {
+            const i = exp.children.indexOf(exp.assigned)
+            exp.assigned = exp.children[i] = newLhs
+          }
+          break
+      }
+      if (pre.length) exp.children.unshift(...pre)
+      if (post.length) exp.children.push(...post)
+    })
+
   gatherRecursiveAll(statements, n => n.type === "AssignmentExpression" && n.names === null)
     .forEach(exp => {
       let { lhs: $1, exp: $2 } = exp, tail = [], i = 0, len = $1.length
@@ -1812,7 +1856,10 @@ function processAssignments(statements) {
         // Replace id= with =
         op[op.length - 1] = "="
         // Wrap right-hand side with call
-        $2 = [call, "(", lhs, ", ", $2, ")"]
+        const index = exp.children.indexOf($2)
+        if (index < 0) throw new Error("Assertion error: exp not in AssignmentExpression")
+        exp.children.splice(index, 1,
+          exp.exp = $2 = [call, "(", lhs, ", ", $2, ")"])
       }
 
       // Force parens around destructuring object assignments
@@ -1885,53 +1932,10 @@ function processAssignments(statements) {
       }
 
       // Gather all identifier names from the lhs array
-      const names = $1.flatMap(([, l]) => l.names || [])
-      exp.children = [$1, $2, ...tail]
-      exp.names = names
-    })
-
-  // Move assignments/updates within LHS of assignments/updates
-  // to run earlier via comma operator
-  gatherRecursiveAll(statements, n => n.type === "AssignmentExpression" || n.type === "UpdateExpression")
-    .forEach(exp => {
-      function extractAssignment(lhs) {
-        let expr = lhs
-        while (expr.type === "ParenthesizedExpression") {
-          expr = expr.expression
-        }
-        if (expr.type === "AssignmentExpression" ||
-          expr.type === "UpdateExpression") {
-          if (expr.type === "UpdateExpression" &&
-            expr.children[0] === expr.assigned) {  // postfix update
-            post.push([", ", lhs])
-          } else {
-            pre.push([lhs, ", "])
-          }
-          // TODO: use ref to avoid duplicating function calls
-          return expr.assigned
-        }
-      }
-      const pre = [], post = []
-      switch (exp.type) {
-        case "AssignmentExpression":
-          if (!exp.lhs) return
-          exp.lhs.forEach((lhsPart, i) => {
-            let newLhs = extractAssignment(lhsPart[1])
-            if (newLhs) {
-              lhsPart[1] = newLhs
-            }
-          })
-          break
-        case "UpdateExpression":
-          let newLhs = extractAssignment(exp.assigned)
-          if (newLhs) {
-            const i = exp.children.indexOf(exp.assigned)
-            exp.assigned = exp.children[i] = newLhs
-          }
-          break
-      }
-      if (pre.length) exp.children.unshift(...pre)
-      if (post.length) exp.children.push(...post)
+      exp.names = $1.flatMap(([, l]) => l.names || [])
+      const index = exp.children.indexOf($2)
+      if (index < 0) throw new Error("Assertion error: exp not in AssignmentExpression")
+      exp.children.splice(index + 1, 0, ...tail)
     })
 }
 
@@ -2478,7 +2482,7 @@ function processPipelineExpressions(statements) {
             })
           }
         } else {
-          s.children = children
+          if (i === 0) s.children = children
         }
 
         if (returns && (ref = needsRef(arg))) {
