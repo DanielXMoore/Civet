@@ -1439,6 +1439,7 @@ function makeLeftHandSideExpression(expression) {
     case "AmpersandRef":
     case "Identifier":
     case "Literal":
+    case "IterationExpression": // already a CallExpression
     case "CallExpression":
     case "MemberExpression":
     case "ParenthesizedExpression":
