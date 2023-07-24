@@ -932,14 +932,22 @@ function removeParentPointers(node) {
   }
 }
 
-// Find nearest strict ancestor that satisfies predicate,
-// aborting (and returning undefined) if stopPredicate returns true
+/**
+ * Find nearest strict `ancestor` that satisfies predicate,
+ * aborting (and returning `ancestor: undefined`) if stopPredicate returns true.
+ * Also returns the `child` that we came from (possibly `node`), in an
+ * `{ancestor, child}` object.  If none are found, `ancestor` will be null.
+ */
 function findAncestor(node, predicate, stopPredicate) {
-  node = node.parent
-  while (node && !stopPredicate?.(node)) {
-    if (predicate(node)) return node
-    node = node.parent
+  let { parent } = node
+  while (parent && !stopPredicate?.(parent, node)) {
+    if (predicate(parent, node)) {
+      return { ancestor: parent, child: node }
+    }
+    node = parent
+    parent = node.parent
   }
+  return { ancestor: undefined, child: node }
 }
 
 // Gather child nodes that match a predicate
@@ -1038,16 +1046,14 @@ function hasYield(exp) {
 function hoistRefDecs(statements) {
   gatherRecursiveAll(statements, (s) => s.hoistDec)
     .forEach(node => {
-      let { hoistDec, parent } = node
-
+      let { hoistDec } = node
       node.hoistDec = null
-      while (parent?.type !== "BlockStatement" || parent.bare && !parent.root) {
-        node = parent
-        parent = node.parent
-      }
 
-      if (parent) {
-        insertHoistDec(parent, node, hoistDec)
+      const { ancestor, child } = findAncestor(node, (ancestor) => 
+        ancestor.type === "BlockStatement" && (!ancestor.bare || ancestor.root))
+
+      if (ancestor) {
+        insertHoistDec(ancestor, child, hoistDec)
       } else {
         throw new Error("Couldn't find block to hoist declaration into.")
       }
@@ -1724,11 +1730,13 @@ function processLetAssignmentDeclaration(l, id, suffix, ws, la, e) {
   }
 }
 
-// Add implicit block unless followed by a method/function of the same name
+// Add implicit block unless followed by a method/function of the same name,
+// or block is within an ExportDeclaration.
 function implicitFunctionBlock(f) {
   if (f.abstract || f.block || f.signature?.optional) return
 
   const { name, parent } = f
+  if (parent?.type === "ExportDeclaration") return
   const expressions = parent?.expressions ?? parent?.elements
   const currentIndex = expressions?.findIndex(([, def]) => def === f)
   const following = currentIndex >= 0 && expressions[currentIndex + 1]?.[1]
@@ -2822,7 +2830,7 @@ function processReturnValue(func) {
     value.children = [ref]
 
     // Check whether return.value already declared within this function
-    const ancestor = findAncestor(value,
+    const { ancestor } = findAncestor(value,
       ({ type }) => type === "Declaration",
       isFunction)
     if (ancestor) declared = true
