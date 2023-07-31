@@ -1205,6 +1205,11 @@ function isVoidType(t) {
   return t?.type === "LiteralType" && t.t.type === "VoidType"
 }
 
+function isPromiseVoidType(t) {
+  return t?.type === "IdentifierType" && t.raw === "Promise" &&
+    t.args?.types?.length === 1 && isVoidType(t.args.types[0])
+}
+
 function isWhitespaceOrEmpty(node) {
   if (!node) return true
   if (node.type === "Ref") return false
@@ -1758,8 +1763,9 @@ function processFunctions(statements, config) {
       if (f.type === "FunctionExpression") implicitFunctionBlock(f)
       processParams(f)
       if (!processReturnValue(f) && config.implicitReturns) {
-        const { block, returnType } = f
-        const isVoid = isVoidType(returnType?.t)
+        const { async, block, returnType } = f
+        const isVoid = isVoidType(returnType?.t) ||
+          (async && isPromiseVoidType(returnType?.t))
         const isBlock = block?.type === "BlockStatement"
         if (!isVoid && isBlock) {
           insertReturn(block)
