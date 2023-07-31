@@ -2747,7 +2747,7 @@ function createLetDecs(statements, scopes) {
   let currentScope = new Set()
   scopes.push(currentScope)
 
-  const fnNodes = gatherNodes(statements, (s) => s.type === "FunctionExpression")
+  const fnNodes = gatherNodes(statements, isFunction)
   const forNodes = gatherNodes(statements, (s) => s.type === "ForStatement")
 
   let targetStatements = []
