@@ -547,9 +547,15 @@ function circle(degrees: number): {x: number, y: number}
 
 ::: info
 Implicit return of the last value in a function can be avoided by
-specifying a `void` return type, adding a final semicolon or explicit `return`,
+specifying a `void` return type (or `Promise<void>` for async functions),
+adding a final semicolon or explicit `return`,
 or globally using the directive `"civet -implicitReturns"`.
 :::
+
+<Playground>
+function abort
+  process.exit 1;
+</Playground>
 
 <Playground>
 function abort: void
@@ -557,8 +563,8 @@ function abort: void
 </Playground>
 
 <Playground>
-function abort
-  process.exit 1;
+function run(command: string): Promise<void>
+  await exec command
 </Playground>
 
 ### One-Line Functions
