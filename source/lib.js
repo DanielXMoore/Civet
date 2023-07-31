@@ -2669,7 +2669,7 @@ function createVarDecs(statements, scopes, pushVar) {
     if (!hasDec(x)) return a.indexOf(x) === i
   }).forEach(pushVar)
 
-  const fnNodes = gatherNodes(statements, (s) => s.type === "FunctionExpression")
+  const fnNodes = gatherNodes(statements, isFunction)
   const forNodes = gatherNodes(statements, (s) => s.type === "ForStatement")
 
   const blockNodes = new Set(gatherNodes(statements, (s) => s.type === "BlockStatement"))
