@@ -168,7 +168,7 @@ To specify a blank body, use `;` or `{}`.
 
 ### Property Access
 
-Many more values can appear after a `.` to access an object property:
+Many more literals can appear after a `.` to access an object property:
 
 <Playground>
 json.'long property'
@@ -181,6 +181,7 @@ You can also write property access as an English possessive:
 
 <Playground>
 mario's brother's name
+mario?'s name
 json's "long property"'s `${movie} name`
 </Playground>
 
