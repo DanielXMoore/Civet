@@ -126,6 +126,7 @@ Inspired by
 point = data{x,y}
 point = data.{x,y};
 point.{x,y} = data
+point3D = { point.{x,y}, z: 0 }
 complex := obj.{x:a, b.c()?.y}
 merged := data.{...global, ...user};
 data.{a, b, ...rest} = result
