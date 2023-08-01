@@ -166,13 +166,22 @@ To specify a blank body, use `;` or `{}`.
 
 :::
 
-### Property Access Shorthand
+### Property Access
+
+Many more values can appear after a `.` to access an object property:
 
 <Playground>
 json.'long property'
 json.`${movie} name`
 matrix.0.0
 array.-1
+</Playground>
+
+You can also write property access as an English possessive:
+
+<Playground>
+mario's brother's name
+json's "long property"'s `${movie} name`
 </Playground>
 
 ## Arrays
