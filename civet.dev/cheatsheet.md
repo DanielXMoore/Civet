@@ -177,7 +177,8 @@ matrix.0.0
 array.-1
 </Playground>
 
-You can also write property access as an English possessive:
+You can also write property access as an English possessive
+(inspired by [_hyperscript](https://hyperscript.org/expressions/possessive/)):
 
 <Playground>
 mario's brother's name
