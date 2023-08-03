@@ -1115,7 +1115,12 @@ function insertReturn(node) {
     case "EmptyStatement":
     case "ReturnStatement":
     case "ThrowStatement":
+      return
     case "Declaration":
+      exp.children.push(["", {
+        type: "ReturnStatement",
+        children: [";return ", exp.names.at(-1)],
+      }])
       return
     case "ForStatement":
     case "IterationStatement":
