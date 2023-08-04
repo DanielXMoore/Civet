@@ -722,7 +722,9 @@ function insertPush(node, ref) {
     case "EmptyStatement":
     case "ReturnStatement":
     case "ThrowStatement":
+      return
     case "Declaration":
+      exp.children.push(["", [";", ref, ".push(", exp.names.at(-1), ")"]])
       return
     case "ForStatement":
     case "IterationStatement":
