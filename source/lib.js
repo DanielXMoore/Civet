@@ -1656,37 +1656,41 @@ function processCoffeeInterpolation(s, parts, e, $loc) {
   }
 }
 
-function processConstAssignmentDeclaration(c, id, suffix, ws, ca, e) {
+function processAssignmentDeclaration(decl, id, suffix, ws, assign, e) {
   // Adjust position to space before assignment to make TypeScript remapping happier
-  c = {
-    ...c,
+  decl = {
+    ...decl,
     $loc: {
-      pos: ca.$loc.pos - 1,
-      length: ca.$loc.length + 1,
+      pos: assign.$loc.pos - 1,
+      length: assign.$loc.length + 1,
     }
   }
 
-  let exp
-  if (e.type === "FunctionExpression") {
-    exp = e
-  } else {
-    exp = e[1]
-  }
-
-  // TODO: Better AST nodes so we don't have to adjust for whitespace nodes here
-  if (exp?.children?.[0]?.token?.match(/^\s+$/)) exp.children.shift()
-
-  if (id.type === "Identifier" && exp?.type === "FunctionExpression" && !exp.id) {
-    const i = exp.children.findIndex(c => c?.token === "function") + 1
-    exp = {
-      ...exp,
-      // Insert id, type suffix, spacing
-      children: [...exp.children.slice(0, i), " ", id, suffix, ws, ...exp.children.slice(i)]
+  // `const f = -> ...` -> `function f() { ... }`
+  if (decl.token.startsWith("const")) {
+    let exp
+    if (e.type === "FunctionExpression") {
+      exp = e
+    } else {
+      exp = e[1]
     }
-    return {
-      type: "Declaration",
-      children: [exp],
-      names: id.names,
+
+    // TODO: Better AST nodes so we don't have to adjust for whitespace nodes here
+    if (exp?.children?.[0]?.token?.match(/^\s+$/)) exp.children.shift()
+
+    if (id.type === "Identifier" && exp?.type === "FunctionExpression" && !exp.id) {
+      const i = exp.children.findIndex(c => c?.token === "function") + 1
+      exp = {
+        ...exp,
+        // Insert id, type suffix, spacing
+        children: [...exp.children.slice(0, i), " ", id, suffix, ws, ...exp.children.slice(i)]
+      }
+      return {
+        type: "Declaration",
+        decl,
+        children: [exp],
+        names: id.names,
+      }
     }
   }
 
@@ -1695,50 +1699,27 @@ function processConstAssignmentDeclaration(c, id, suffix, ws, ca, e) {
   splices = splices.map(s => [", ", s])
   thisAssignments = thisAssignments.map(a => ["", a, ";"])
 
-  const binding = [c, id, suffix, ...ws]
-  const initializer = [ca, e]
+  const initializer = [assign, e]
+  const binding = {
+    type: "Binding",
+    pattern: id,
+    initializer,
+    splices,
+    suffix,
+    thisAssignments,
+    children: [id, suffix, ...ws, initializer]
+  }
 
-  const children = [binding, initializer]
+  const children = [decl, binding]
 
   return {
     type: "Declaration",
     names: id.names,
-    children,
-    binding,
-    initializer,
+    decl,
+    bindings: [binding],
     splices,
     thisAssignments,
-  }
-}
-
-function processLetAssignmentDeclaration(l, id, suffix, ws, la, e) {
-  // Adjust position to space before assignment to make TypeScript remapping happier
-  l = {
-    ...l,
-    $loc: {
-      pos: la.$loc.pos - 1,
-      length: la.$loc.length + 1,
-    }
-  }
-
-  let [splices, thisAssignments] = gatherBindingCode(id)
-
-  splices = splices.map(s => [", ", s])
-  thisAssignments = thisAssignments.map(a => ["", a, ";"])
-
-  const binding = [l, id, suffix, ...ws]
-  const initializer = [la, e]
-
-  const children = [binding, initializer]
-
-  return {
-    type: "Declaration",
-    names: id.names,
     children,
-    binding,
-    initializer,
-    splices,
-    thisAssignments,
   }
 }
 
@@ -3217,8 +3198,7 @@ module.exports = {
   processBinaryOpExpression,
   processCallMemberExpression,
   processCoffeeInterpolation,
-  processConstAssignmentDeclaration,
-  processLetAssignmentDeclaration,
+  processAssignmentDeclaration,
   processParams,
   processProgram,
   processReturnValue,

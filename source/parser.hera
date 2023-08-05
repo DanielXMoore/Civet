@@ -32,8 +32,7 @@ const {
   processBinaryOpExpression,
   processCallMemberExpression,
   processCoffeeInterpolation,
-  processConstAssignmentDeclaration,
-  processLetAssignmentDeclaration,
+  processAssignmentDeclaration,
   processProgram,
   processUnaryExpression,
   quoteString,
@@ -3824,18 +3823,21 @@ DeclarationCondition
       base: "ref",
     }
 
-    const { binding, initializer, splices, thisAssignments } = dec
+    const { decl, bindings, suffix } = dec
+    // TODO: Add support for `let` and `const` declarations with multiple bindings in conditions
+    const binding = bindings[0]
+    const { pattern, initializer, splices, thisAssignments } = binding
 
     const initCondition = {
       type: "AssignmentExpression",
-      children: [ref, " ", initializer],
+      children: [ref, (getTrimmingSpace(initializer) ? "" : " "), initializer],
       hoistDec: {
         type: "Declaration",
         children: ["let ", ref],
         names: [],
       },
       blockPrefix: [
-        ["", [ binding, "= ", ref, ...splices ], ";"],
+        ["", [ decl, pattern, " = ", ref, ...splices ], ";"],
         ...thisAssignments
       ],
     }
@@ -4292,30 +4294,27 @@ HoistableDeclaration
 # https://262.ecma-international.org/#prod-LexicalDeclaration
 LexicalDeclaration
   # NOTE: Eliminated left recursion
-  # TODO: Add support for `let` and `const` declarations with multiple bindings in conditions
-  LetOrConst:d LexicalBinding:binding ( __ Comma LexicalBinding )*:tail ->
+  LetOrConst:decl LexicalBinding:binding ( __ Comma __ LexicalBinding )*:tail ->
     const { splices, thisAssignments } = binding
+    const bindings = [binding].concat(tail.map(([,,,b]) => b))
 
     return {
       type: "Declaration",
       children: $0,
-      names: [...binding.names].concat(tail.flatMap(([,,b]) => b.names)),
-      binding: {
-        ...binding.binding,
-        children: [d, ...binding.binding.children],
-      },
-      initializer: binding.initializer,
+      names: bindings.flatMap(b => b.names),
+      bindings,
+      decl,
       splices,
       thisAssignments,
     }
   # NOTE: Added const shorthand
   # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
   InsertConst ( BindingPattern / BindingIdentifier ) TypeSuffix? __ ConstAssignment ExtendedExpression ->
-    return processConstAssignmentDeclaration(...$0)
+    return processAssignmentDeclaration(...$0)
 
   # Note added let shorthand
   InsertLet:l ( BindingPattern / BindingIdentifier ):id TypeSuffix?:suffix __:ws LetAssignment:la ExtendedExpression:e ->
-    return processLetAssignmentDeclaration(...$0)
+    return processAssignmentDeclaration(...$0)
 
 ConstAssignment
   ":=" / "≔" ->
@@ -4326,40 +4325,29 @@ LetAssignment
     return { $loc, token: "=" }
 
 # https://262.ecma-international.org/#prod-LexicalBinding
+# merged with https://262.ecma-international.org/#prod-VariableDeclaration
 LexicalBinding
-  BindingPattern:binding TypeSuffix?:suffix _?:ws Initializer:initializer ->
-    const bindingChildren = [...binding.children]
-    if (suffix) bindingChildren.push(suffix)
-    if (ws) bindingChildren.push(...ws)
-    binding = {
-      ...binding,
-      children: bindingChildren,
-    }
-
-    const [splices, thisAssignments] = gatherBindingCode(binding.children)
+  BindingPattern:pattern TypeSuffix?:suffix Initializer:initializer ->
+    const [splices, thisAssignments] = gatherBindingCode(pattern.children)
 
     return {
-      children: [binding, initializer],
-      names: binding.names,
-      binding,
+      type: "Binding",
+      children: $0,
+      names: pattern.names,
+      pattern,
+      suffix,
       initializer,
       splices: splices.map(s => [",", s]),
       thisAssignments: thisAssignments.map(s => ["", s, ";"]),
     }
 
-  BindingIdentifier:binding TypeSuffix?:suffix _?:ws Initializer?:initializer ->
-    const bindingChildren = [...binding.children]
-    if (suffix) bindingChildren.push(suffix)
-    if (ws) bindingChildren.push(...ws)
-    binding = {
-      ...binding,
-      children: bindingChildren,
-    }
-
+  BindingIdentifier:pattern TypeSuffix?:suffix Initializer?:initializer ->
     return {
-      children: [binding, initializer],
-      names: binding.names,
-      binding,
+      type: "Binding",
+      children: $0,
+      names: pattern.names,
+      pattern,
+      suffix,
       initializer,
       splices: [],
       thisAssignments: [],
@@ -4380,40 +4368,14 @@ VariableStatement
 
 # https://262.ecma-international.org/#prod-VariableDeclarationList
 VariableDeclarationList
-  VariableDeclaration ( __ Comma __ VariableDeclaration )* ->
-    let children
-    let names = $1.names
-    if ($2.length) {
-      children = [$1, ...$2]
-      names = names.concat($2.flatMap(([, , , d]) => d.names))
-    }else {
-      children = [$1]
-    }
+  LexicalBinding:binding ( __ Comma __ LexicalBinding )*:tail ->
+    const bindings = [binding].concat(tail.map(([,,,b]) => b))
 
     return {
       type: "Declaration",
-      children,
-      names,
-    }
-
-# https://262.ecma-international.org/#prod-VariableDeclaration
-VariableDeclaration
-  BindingPattern TypeSuffix? Initializer ->
-    const children = [...$1.children]
-    if ($2) children./**/push($2)
-    children./**/push($3)
-    return {
-      children,
-      names: $1.names,
-    }
-
-  BindingIdentifier TypeSuffix? Initializer? ->
-    const children = [...$1.children]
-    if ($2) children./**/push($2)
-    if ($3) children./**/push($3)
-    return {
-      children,
-      names: $1.names,
+      children: [binding, ...tail],
+      bindings,
+      names: bindings.flatMap(b => b.names),
     }
 
 # https://262.ecma-international.org/#prod-NumericLiteral
