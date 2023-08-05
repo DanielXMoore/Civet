@@ -177,16 +177,8 @@ function aliasBinding(p, ref) {
 }
 
 function arrayElementHasTrailingComma(elementNode) {
-  const { children } = elementNode, { length } = children
-
-  const lastChild = children[length - 1]
-  if (lastChild) {
-    const l2 = lastChild.length
-    if (lastChild[l2 - 1]?.token === ",") {
-      return true
-    }
-  }
-  return false
+  const lastChild = elementNode.children.at(-1)
+  return lastChild && lastChild[lastChild.length - 1]?.token === ","
 }
 
 const assert = {
@@ -724,7 +716,8 @@ function insertPush(node, ref) {
     case "ThrowStatement":
       return
     case "Declaration":
-      exp.children.push(["", [";", ref, ".push(", exp.names.at(-1), ")"]])
+      exp.children.push(["", [";", ref, ".push(",
+        patternAsValue(exp.bindings.at(-1).pattern), ")"]])
       return
     case "ForStatement":
     case "IterationStatement":
@@ -1073,6 +1066,39 @@ function insertHoistDec(block, node, dec) {
   expressions.splice(index, 0, [indent, dec, ";"])
 }
 
+function patternAsValue(pattern) {
+  switch (pattern.type) {
+    case "ArrayBindingPattern": {
+      const children = [...pattern.children]
+      const index = children.indexOf(pattern.elements)
+      if (index < 0) throw new Error("failed to find elements in ArrayBindingPattern")
+      children[index] = pattern.elements.map(el => {
+        const [ws, e, delim] = el.children
+        return { ...el, children: [ws, patternAsValue(e), delim] }
+      })
+      return { ...pattern, children }
+    }
+    case "ObjectBindingPattern": {
+      const children = [...pattern.children]
+      const index = children.indexOf(pattern.properties)
+      if (index < 0) throw new Error("failed to find properties in ArrayBindingPattern")
+      children[index] = pattern.properties.map(patternAsValue)
+      return { ...pattern, children }
+    }
+    case "Identifier":
+    case "BindingProperty": {
+      const children = [pattern.name, pattern.delim]
+      // Check for leading whitespace
+      if (isWhitespaceOrEmpty(pattern.children[0])) {
+        children.unshift(pattern.children[0])
+      }
+      return { ...pattern, children }
+    }
+    default:
+      return pattern
+  }
+}
+
 // [indent, statement, semicolon]
 function insertReturn(node) {
   if (!node) return
@@ -1121,7 +1147,7 @@ function insertReturn(node) {
     case "Declaration":
       exp.children.push(["", {
         type: "ReturnStatement",
-        children: [";return ", exp.names.at(-1)],
+        children: [";return ", patternAsValue(exp.bindings.at(-1).pattern)],
       }])
       return
     case "ForStatement":
@@ -1984,9 +2010,9 @@ function getPatternConditions(pattern, ref, conditions) {
       })
 
       // collect post rest conditions
-      const postRest = pattern.children.find((c) => c?.blockPrefix)
-      if (postRest) {
-        const postElements = postRest.blockPrefix.children[1],
+      const { blockPrefix } = pattern
+      if (blockPrefix) {
+        const postElements = blockPrefix.children[1],
           { length: postLength } = postElements
 
         postElements.forEach(({ children: [, e] }, i) => {
@@ -2084,15 +2110,15 @@ function elideMatchersFromArrayBindings(elements) {
     if (el.type === "BindingRestElement") {
       return ["", el, undefined]
     }
-    const { children: [ws, e, sep] } = el
+    const { children: [ws, e, delim] } = el
     switch (e.type) {
       case "Literal":
       case "RegularExpressionLiteral":
       case "StringLiteral":
       case "PinPattern":
-        return sep
+        return delim
       default:
-        return [ws, nonMatcherBindings(e), sep]
+        return [ws, nonMatcherBindings(e), delim]
     }
   })
 }
@@ -2103,14 +2129,13 @@ function elideMatchersFromPropertyBindings(properties) {
       case "BindingProperty": {
         const { children, name, value } = p
         const [ws] = children
-        const sep = children[children.length - 1]
 
         switch (value && value.type) {
           case "ArrayBindingPattern":
           case "ObjectBindingPattern":
             return {
               ...p,
-              children: [ws, name, ": ", nonMatcherBindings(value)],
+              children: [ws, name, ": ", nonMatcherBindings(value), p.delim],
             }
           case "Identifier":
             return p
@@ -2120,7 +2145,7 @@ function elideMatchersFromPropertyBindings(properties) {
           default:
             return {
               ...p,
-              children: [ws, name, sep],
+              children: [ws, name, p.delim],
             }
         }
       }
@@ -2980,13 +3005,23 @@ function reorderBindingRestProperty(props) {
     // Swap delimiters of last property and rest so that an omitted trailing comma doesn't end up in the middle
     if (after.length) {
       const
-        [restDelim] = rest.children.slice(-1),
+        {delim: restDelim} = rest,
         lastAfterProp = after[after.length - 1],
-        lastAfterChildren = lastAfterProp.children,
-        [lastDelim] = lastAfterChildren.slice(-1)
+        {delim: lastDelim, children: lastAfterChildren} = lastAfterProp
 
-      rest = { ...rest, children: [...rest.children.slice(0, -1), lastDelim] }
-      after = [...after.slice(0, -1), { ...lastAfterProp, children: [...lastAfterChildren.slice(0, -1), restDelim] }]
+      rest = {
+        ...rest,
+        delim: lastDelim,
+        children: [...rest.children.slice(0, -1), lastDelim]
+      }
+      after = [
+        ...after.slice(0, -1),
+        {
+          ...lastAfterProp,
+          delim: restDelim,
+          children: [...lastAfterChildren.slice(0, -1), restDelim]
+        }
+      ]
     }
 
     const children = [...props, ...after, rest]

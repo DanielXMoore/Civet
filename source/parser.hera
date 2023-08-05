@@ -1212,7 +1212,7 @@ ObjectBindingPattern
   _? OpenBrace ObjectBindingPatternContent:c __ CloseBrace ->
     return {
       type: "ObjectBindingPattern",
-      children: $0,
+      children: [$1, $2, c.children, $4, $5],
       names: c.names,
       properties: c.children,
     }
@@ -1230,6 +1230,7 @@ BindingPropertyList
     return props.map(([prop, delim]) => {
       return {
         ...prop,
+        delim,
         children: [...prop.children, delim],
       }
     })
@@ -1239,11 +1240,10 @@ BindingPropertyList
 ArrayBindingPattern
   _? OpenBracket ArrayBindingPatternContent:c __ CloseBracket ->
     return {
+      ...c, // names, blockPrefix, length
       type: "ArrayBindingPattern",
-      children: $0,
-      names: c.names,
       elements: c.children,
-      length: c.length,
+      children: [$1, $2, c.children, $4, $5],
     }
 
 ArrayBindingPatternContent
@@ -1254,23 +1254,25 @@ ArrayBindingPatternContent
 
     return adjustBindingElements(elements)
 
+# children is an array of tuples of the form [ws, element, delim]
 BindingElementList
   ( BindingElement ArrayElementDelimiter )+:elements ->
     return elements.map(([element, delim]) => {
       return {
         ...element,
+        // BindingElement.children is a tuple of the form [ws, element]
         children: [...element.children, delim],
       }
     })
 
 NestedBindingElementList
-  Nested:ws BindingElementList:elements ->
+  Nested:indent BindingElementList:elements ->
     // Attach whitespace to first element
     return elements.map( (element, i) => {
       if (i > 0) return element
       return {
         ...element,
-        children: [ws, ...element.children],
+        children: [indent, ...element.children.slice(1)], // replace ws wth indent
       }
     })
 
@@ -1368,16 +1370,12 @@ NestedBindingElements
   PushIndent NestedBindingElementList*:elements PopIndent ->
     if (!elements.length) return $skip
 
+    // Each item of elements is a list of BindingElements;
+    // combine into one big array
     return adjustBindingElements(elements.flat())
 
-NestedBindingElement
-  Nested:indent BindingElement:element ->
-    return {
-      ...element,
-      children: [indent, ...element.children],
-    }
-
 # https://262.ecma-international.org/#prod-BindingElement
+# children is an array of tuples of the form [ws, element]
 BindingElement
   BindingRestElement
 
@@ -1388,6 +1386,7 @@ BindingElement
     if (binding.children) {
       binding = {
         ...binding,
+        initializer,
         children: [...binding.children, initializer],
       }
     }
@@ -1412,7 +1411,7 @@ BindingRestElement
   _?:ws DotDotDot:dots ( BindingIdentifier / BindingPattern / EmptyBindingPattern ):binding ->
     return {
       type: "BindingRestElement",
-      children: [...(ws || []), dots, binding],
+      children: [ws, [dots, binding]],
       binding,
       name: binding.name,
       names: binding.names,
@@ -4295,7 +4294,6 @@ HoistableDeclaration
 LexicalDeclaration
   # NOTE: Eliminated left recursion
   LetOrConst:decl LexicalBinding:binding ( __ Comma __ LexicalBinding )*:tail ->
-    const { splices, thisAssignments } = binding
     const bindings = [binding].concat(tail.map(([,,,b]) => b))
 
     return {
@@ -4304,8 +4302,8 @@ LexicalDeclaration
       names: bindings.flatMap(b => b.names),
       bindings,
       decl,
-      splices,
-      thisAssignments,
+      splices: bindings.flatMap(b => b.splices),
+      thisAssignments: bindings.flatMap(b => b.thisAssignments),
     }
   # NOTE: Added const shorthand
   # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
@@ -4328,7 +4326,7 @@ LetAssignment
 # merged with https://262.ecma-international.org/#prod-VariableDeclaration
 LexicalBinding
   BindingPattern:pattern TypeSuffix?:suffix Initializer:initializer ->
-    const [splices, thisAssignments] = gatherBindingCode(pattern.children)
+    const [splices, thisAssignments] = gatherBindingCode(pattern)
 
     return {
       type: "Binding",
