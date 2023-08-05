@@ -1699,7 +1699,7 @@ function processAssignmentDeclaration(decl, id, suffix, ws, assign, e) {
   splices = splices.map(s => [", ", s])
   thisAssignments = thisAssignments.map(a => ["", a, ";"])
 
-  const initializer = [assign, e]
+  const initializer = [ws, assign, e]
   const binding = {
     type: "Binding",
     pattern: id,
@@ -1707,7 +1707,7 @@ function processAssignmentDeclaration(decl, id, suffix, ws, assign, e) {
     splices,
     suffix,
     thisAssignments,
-    children: [id, suffix, ...ws, initializer]
+    children: [id, suffix, initializer]
   }
 
   const children = [decl, binding]
