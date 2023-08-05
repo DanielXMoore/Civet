@@ -32,8 +32,7 @@ const {
   processBinaryOpExpression,
   processCallMemberExpression,
   processCoffeeInterpolation,
-  processConstAssignmentDeclaration,
-  processLetAssignmentDeclaration,
+  processAssignmentDeclaration,
   processProgram,
   processUnaryExpression,
   quoteString,
@@ -1213,7 +1212,7 @@ ObjectBindingPattern
   _? OpenBrace ObjectBindingPatternContent:c __ CloseBrace ->
     return {
       type: "ObjectBindingPattern",
-      children: $0,
+      children: [$1, $2, c.children, $4, $5],
       names: c.names,
       properties: c.children,
     }
@@ -1231,6 +1230,7 @@ BindingPropertyList
     return props.map(([prop, delim]) => {
       return {
         ...prop,
+        delim,
         children: [...prop.children, delim],
       }
     })
@@ -1240,11 +1240,10 @@ BindingPropertyList
 ArrayBindingPattern
   _? OpenBracket ArrayBindingPatternContent:c __ CloseBracket ->
     return {
+      ...c, // names, blockPrefix, length
       type: "ArrayBindingPattern",
-      children: $0,
-      names: c.names,
       elements: c.children,
-      length: c.length,
+      children: [$1, $2, c.children, $4, $5],
     }
 
 ArrayBindingPatternContent
@@ -1255,23 +1254,25 @@ ArrayBindingPatternContent
 
     return adjustBindingElements(elements)
 
+# children is an array of tuples of the form [ws, element, delim]
 BindingElementList
   ( BindingElement ArrayElementDelimiter )+:elements ->
     return elements.map(([element, delim]) => {
       return {
         ...element,
+        // BindingElement.children is a tuple of the form [ws, element]
         children: [...element.children, delim],
       }
     })
 
 NestedBindingElementList
-  Nested:ws BindingElementList:elements ->
+  Nested:indent BindingElementList:elements ->
     // Attach whitespace to first element
     return elements.map( (element, i) => {
       if (i > 0) return element
       return {
         ...element,
-        children: [ws, ...element.children],
+        children: [indent, ...element.children.slice(1)], // replace ws wth indent
       }
     })
 
@@ -1304,17 +1305,17 @@ BindingProperty
   # NOTE: Must be checked first to pick up trailing "..." form
   BindingRestProperty
 
-  _? PropertyName:name _? Colon _? ( BindingIdentifier / BindingPattern ):value Initializer?:init ->
+  _? PropertyName:name _? Colon _? ( BindingIdentifier / BindingPattern ):value Initializer?:initializer ->
     return {
       type: "BindingProperty",
       children: $0,
       name,
       value,
-      init,
+      initializer,
       names: value.names,
     }
 
-  _?:ws "^"?:pin BindingIdentifier:binding Initializer?:init ->
+  _?:ws "^"?:pin BindingIdentifier:binding Initializer?:initializer ->
     // TODO make this work with pin
     if (binding.type === "AtBinding") {
       return {
@@ -1322,7 +1323,7 @@ BindingProperty
         children: $0,
         binding,
         ref: binding.ref,
-        init,
+        initializer,
         names: [],
       }
     }
@@ -1344,7 +1345,7 @@ BindingProperty
       children: $0,
       name: binding,
       value: undefined,
-      init,
+      initializer,
       names: binding.names,
       identifier: binding,
     }
@@ -1369,16 +1370,12 @@ NestedBindingElements
   PushIndent NestedBindingElementList*:elements PopIndent ->
     if (!elements.length) return $skip
 
+    // Each item of elements is a list of BindingElements;
+    // combine into one big array
     return adjustBindingElements(elements.flat())
 
-NestedBindingElement
-  Nested:indent BindingElement:element ->
-    return {
-      ...element,
-      children: [indent, ...element.children],
-    }
-
 # https://262.ecma-international.org/#prod-BindingElement
+# children is an array of tuples of the form [ws, element]
 BindingElement
   BindingRestElement
 
@@ -1389,6 +1386,7 @@ BindingElement
     if (binding.children) {
       binding = {
         ...binding,
+        initializer,
         children: [...binding.children, initializer],
       }
     }
@@ -1413,7 +1411,7 @@ BindingRestElement
   _?:ws DotDotDot:dots ( BindingIdentifier / BindingPattern / EmptyBindingPattern ):binding ->
     return {
       type: "BindingRestElement",
-      children: [...(ws || []), dots, binding],
+      children: [ws, [dots, binding]],
       binding,
       name: binding.name,
       names: binding.names,
@@ -3824,18 +3822,21 @@ DeclarationCondition
       base: "ref",
     }
 
-    const { binding, initializer, splices, thisAssignments } = dec
+    const { decl, bindings } = dec
+    // TODO: Add support for `let` and `const` declarations with multiple bindings in conditions
+    const binding = bindings[0]
+    const { pattern, suffix, initializer, splices, thisAssignments } = binding
 
     const initCondition = {
       type: "AssignmentExpression",
-      children: [ref, " ", initializer],
+      children: [ref, initializer],
       hoistDec: {
         type: "Declaration",
-        children: ["let ", ref],
+        children: ["let ", ref, suffix],
         names: [],
       },
       blockPrefix: [
-        ["", [ binding, "= ", ref, ...splices ], ";"],
+        ["", [ decl, pattern, suffix, " = ", ref, ...splices ], ";"],
         ...thisAssignments
       ],
     }
@@ -4292,30 +4293,26 @@ HoistableDeclaration
 # https://262.ecma-international.org/#prod-LexicalDeclaration
 LexicalDeclaration
   # NOTE: Eliminated left recursion
-  # TODO: Add support for `let` and `const` declarations with multiple bindings in conditions
-  LetOrConst:d LexicalBinding:binding ( __ Comma LexicalBinding )*:tail ->
-    const { splices, thisAssignments } = binding
+  LetOrConst:decl LexicalBinding:binding ( __ Comma __ LexicalBinding )*:tail ->
+    const bindings = [binding].concat(tail.map(([,,,b]) => b))
 
     return {
       type: "Declaration",
       children: $0,
-      names: [...binding.names].concat(tail.flatMap(([,,b]) => b.names)),
-      binding: {
-        ...binding.binding,
-        children: [d, ...binding.binding.children],
-      },
-      initializer: binding.initializer,
-      splices,
-      thisAssignments,
+      names: bindings.flatMap(b => b.names),
+      bindings,
+      decl,
+      splices: bindings.flatMap(b => b.splices),
+      thisAssignments: bindings.flatMap(b => b.thisAssignments),
     }
   # NOTE: Added const shorthand
   # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
   InsertConst ( BindingPattern / BindingIdentifier ) TypeSuffix? __ ConstAssignment ExtendedExpression ->
-    return processConstAssignmentDeclaration(...$0)
+    return processAssignmentDeclaration(...$0)
 
   # Note added let shorthand
   InsertLet:l ( BindingPattern / BindingIdentifier ):id TypeSuffix?:suffix __:ws LetAssignment:la ExtendedExpression:e ->
-    return processLetAssignmentDeclaration(...$0)
+    return processAssignmentDeclaration(...$0)
 
 ConstAssignment
   ":=" / "≔" ->
@@ -4326,40 +4323,29 @@ LetAssignment
     return { $loc, token: "=" }
 
 # https://262.ecma-international.org/#prod-LexicalBinding
+# merged with https://262.ecma-international.org/#prod-VariableDeclaration
 LexicalBinding
-  BindingPattern:binding TypeSuffix?:suffix _?:ws Initializer:initializer ->
-    const bindingChildren = [...binding.children]
-    if (suffix) bindingChildren.push(suffix)
-    if (ws) bindingChildren.push(...ws)
-    binding = {
-      ...binding,
-      children: bindingChildren,
-    }
-
-    const [splices, thisAssignments] = gatherBindingCode(binding.children)
+  BindingPattern:pattern TypeSuffix?:suffix Initializer:initializer ->
+    const [splices, thisAssignments] = gatherBindingCode(pattern)
 
     return {
-      children: [binding, initializer],
-      names: binding.names,
-      binding,
+      type: "Binding",
+      children: $0,
+      names: pattern.names,
+      pattern,
+      suffix,
       initializer,
       splices: splices.map(s => [",", s]),
       thisAssignments: thisAssignments.map(s => ["", s, ";"]),
     }
 
-  BindingIdentifier:binding TypeSuffix?:suffix _?:ws Initializer?:initializer ->
-    const bindingChildren = [...binding.children]
-    if (suffix) bindingChildren.push(suffix)
-    if (ws) bindingChildren.push(...ws)
-    binding = {
-      ...binding,
-      children: bindingChildren,
-    }
-
+  BindingIdentifier:pattern TypeSuffix?:suffix Initializer?:initializer ->
     return {
-      children: [binding, initializer],
-      names: binding.names,
-      binding,
+      type: "Binding",
+      children: $0,
+      names: pattern.names,
+      pattern,
+      suffix,
       initializer,
       splices: [],
       thisAssignments: [],
@@ -4373,46 +4359,21 @@ Initializer
 # https://262.ecma-international.org/#prod-VariableStatement
 VariableStatement
   Var __ VariableDeclarationList ->
-    return Object.assign({}, $3, {
+    return {
+      ...$3,
       children: [$1, ...$2, ...$3.children],
-    })
+    }
 
 # https://262.ecma-international.org/#prod-VariableDeclarationList
 VariableDeclarationList
-  VariableDeclaration ( __ Comma __ VariableDeclaration )* ->
-    let children
-    if ($2.length) {
-      children = [$1, ...$2]
-    }else {
-      children = [$1]
-    }
-
-    const names = children.flatMap((c) => c.names || [])
+  LexicalBinding:binding ( __ Comma __ LexicalBinding )*:tail ->
+    const bindings = [binding].concat(tail.map(([,,,b]) => b))
 
     return {
       type: "Declaration",
-      children,
-      names,
-    }
-
-# https://262.ecma-international.org/#prod-VariableDeclaration
-VariableDeclaration
-  BindingPattern TypeSuffix? Initializer ->
-    const children = [...$1.children]
-    if ($2) children./**/push($2)
-    children./**/push($3)
-    return {
-      children,
-      names: $1.names,
-    }
-
-  BindingIdentifier TypeSuffix? Initializer? ->
-    const children = [...$1.children]
-    if ($2) children./**/push($2)
-    if ($3) children./**/push($3)
-    return {
-      children,
-      names: $1.names,
+      children: [binding, ...tail],
+      bindings,
+      names: bindings.flatMap(b => b.names),
     }
 
 # https://262.ecma-international.org/#prod-NumericLiteral
@@ -5911,11 +5872,11 @@ EnumDeclaration
           ["let ", id, " = {};\n"],
           ...block.properties.map((property, i) => {
             let init, isString
-            if (property.init) {
+            if (property.initializer) {
               // Replace references to other enum members.
               // TS further restricts this to past enum members,
               // but we don't need to enforce that here.
-              init = replaceNodes(deepCopy(property.init),
+              init = replaceNodes(deepCopy(property.initializer),
                 n => n.type === "Identifier" && names.has(n.name),
                 n => [id, '["', n.name, '"]'])
               const value = init[init.length - 1]
@@ -5978,11 +5939,11 @@ NestedEnumProperty
     }
 
 EnumProperty
-  Identifier:name ( __ Equals ExtendedExpression )?:init ObjectPropertyDelimiter ->
+  Identifier:name ( __ Equals ExtendedExpression )?:initializer ObjectPropertyDelimiter ->
     return {
       type: "EnumProperty",
       name,
-      init,
+      initializer,
       children: $0,
     }
 

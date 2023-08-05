@@ -177,16 +177,8 @@ function aliasBinding(p, ref) {
 }
 
 function arrayElementHasTrailingComma(elementNode) {
-  const { children } = elementNode, { length } = children
-
-  const lastChild = children[length - 1]
-  if (lastChild) {
-    const l2 = lastChild.length
-    if (lastChild[l2 - 1]?.token === ",") {
-      return true
-    }
-  }
-  return false
+  const lastChild = elementNode.children.at(-1)
+  return lastChild && lastChild[lastChild.length - 1]?.token === ","
 }
 
 const assert = {
@@ -722,7 +714,10 @@ function insertPush(node, ref) {
     case "EmptyStatement":
     case "ReturnStatement":
     case "ThrowStatement":
+      return
     case "Declaration":
+      exp.children.push(["", [";", ref, ".push(",
+        patternAsValue(exp.bindings.at(-1).pattern), ")"]])
       return
     case "ForStatement":
     case "IterationStatement":
@@ -1071,6 +1066,39 @@ function insertHoistDec(block, node, dec) {
   expressions.splice(index, 0, [indent, dec, ";"])
 }
 
+function patternAsValue(pattern) {
+  switch (pattern.type) {
+    case "ArrayBindingPattern": {
+      const children = [...pattern.children]
+      const index = children.indexOf(pattern.elements)
+      if (index < 0) throw new Error("failed to find elements in ArrayBindingPattern")
+      children[index] = pattern.elements.map(el => {
+        const [ws, e, delim] = el.children
+        return { ...el, children: [ws, patternAsValue(e), delim] }
+      })
+      return { ...pattern, children }
+    }
+    case "ObjectBindingPattern": {
+      const children = [...pattern.children]
+      const index = children.indexOf(pattern.properties)
+      if (index < 0) throw new Error("failed to find properties in ArrayBindingPattern")
+      children[index] = pattern.properties.map(patternAsValue)
+      return { ...pattern, children }
+    }
+    case "Identifier":
+    case "BindingProperty": {
+      const children = [pattern.name, pattern.delim]
+      // Check for leading whitespace
+      if (isWhitespaceOrEmpty(pattern.children[0])) {
+        children.unshift(pattern.children[0])
+      }
+      return { ...pattern, children }
+    }
+    default:
+      return pattern
+  }
+}
+
 // [indent, statement, semicolon]
 function insertReturn(node) {
   if (!node) return
@@ -1115,7 +1143,12 @@ function insertReturn(node) {
     case "EmptyStatement":
     case "ReturnStatement":
     case "ThrowStatement":
+      return
     case "Declaration":
+      exp.children.push(["", {
+        type: "ReturnStatement",
+        children: [";return ", patternAsValue(exp.bindings.at(-1).pattern)],
+      }])
       return
     case "ForStatement":
     case "IterationStatement":
@@ -1649,37 +1682,41 @@ function processCoffeeInterpolation(s, parts, e, $loc) {
   }
 }
 
-function processConstAssignmentDeclaration(c, id, suffix, ws, ca, e) {
+function processAssignmentDeclaration(decl, id, suffix, ws, assign, e) {
   // Adjust position to space before assignment to make TypeScript remapping happier
-  c = {
-    ...c,
+  decl = {
+    ...decl,
     $loc: {
-      pos: ca.$loc.pos - 1,
-      length: ca.$loc.length + 1,
+      pos: assign.$loc.pos - 1,
+      length: assign.$loc.length + 1,
     }
   }
 
-  let exp
-  if (e.type === "FunctionExpression") {
-    exp = e
-  } else {
-    exp = e[1]
-  }
-
-  // TODO: Better AST nodes so we don't have to adjust for whitespace nodes here
-  if (exp?.children?.[0]?.token?.match(/^\s+$/)) exp.children.shift()
-
-  if (id.type === "Identifier" && exp?.type === "FunctionExpression" && !exp.id) {
-    const i = exp.children.findIndex(c => c?.token === "function") + 1
-    exp = {
-      ...exp,
-      // Insert id, type suffix, spacing
-      children: [...exp.children.slice(0, i), " ", id, suffix, ws, ...exp.children.slice(i)]
+  // `const f = -> ...` -> `function f() { ... }`
+  if (decl.token.startsWith("const")) {
+    let exp
+    if (e.type === "FunctionExpression") {
+      exp = e
+    } else {
+      exp = e[1]
     }
-    return {
-      type: "Declaration",
-      children: [exp],
-      names: id.names,
+
+    // TODO: Better AST nodes so we don't have to adjust for whitespace nodes here
+    if (exp?.children?.[0]?.token?.match(/^\s+$/)) exp.children.shift()
+
+    if (id.type === "Identifier" && exp?.type === "FunctionExpression" && !exp.id) {
+      const i = exp.children.findIndex(c => c?.token === "function") + 1
+      exp = {
+        ...exp,
+        // Insert id, type suffix, spacing
+        children: [...exp.children.slice(0, i), " ", id, suffix, ws, ...exp.children.slice(i)]
+      }
+      return {
+        type: "Declaration",
+        decl,
+        children: [exp],
+        names: id.names,
+      }
     }
   }
 
@@ -1688,50 +1725,27 @@ function processConstAssignmentDeclaration(c, id, suffix, ws, ca, e) {
   splices = splices.map(s => [", ", s])
   thisAssignments = thisAssignments.map(a => ["", a, ";"])
 
-  const binding = [c, id, suffix, ...ws]
-  const initializer = [ca, e]
+  const initializer = [ws, assign, e]
+  const binding = {
+    type: "Binding",
+    pattern: id,
+    initializer,
+    splices,
+    suffix,
+    thisAssignments,
+    children: [id, suffix, initializer]
+  }
 
-  const children = [binding, initializer]
+  const children = [decl, binding]
 
   return {
     type: "Declaration",
     names: id.names,
-    children,
-    binding,
-    initializer,
+    decl,
+    bindings: [binding],
     splices,
     thisAssignments,
-  }
-}
-
-function processLetAssignmentDeclaration(l, id, suffix, ws, la, e) {
-  // Adjust position to space before assignment to make TypeScript remapping happier
-  l = {
-    ...l,
-    $loc: {
-      pos: la.$loc.pos - 1,
-      length: la.$loc.length + 1,
-    }
-  }
-
-  let [splices, thisAssignments] = gatherBindingCode(id)
-
-  splices = splices.map(s => [", ", s])
-  thisAssignments = thisAssignments.map(a => ["", a, ";"])
-
-  const binding = [l, id, suffix, ...ws]
-  const initializer = [la, e]
-
-  const children = [binding, initializer]
-
-  return {
-    type: "Declaration",
-    names: id.names,
     children,
-    binding,
-    initializer,
-    splices,
-    thisAssignments,
   }
 }
 
@@ -1996,9 +2010,9 @@ function getPatternConditions(pattern, ref, conditions) {
       })
 
       // collect post rest conditions
-      const postRest = pattern.children.find((c) => c?.blockPrefix)
-      if (postRest) {
-        const postElements = postRest.blockPrefix.children[1],
+      const { blockPrefix } = pattern
+      if (blockPrefix) {
+        const postElements = blockPrefix.children[1],
           { length: postLength } = postElements
 
         postElements.forEach(({ children: [, e] }, i) => {
@@ -2096,15 +2110,15 @@ function elideMatchersFromArrayBindings(elements) {
     if (el.type === "BindingRestElement") {
       return ["", el, undefined]
     }
-    const { children: [ws, e, sep] } = el
+    const { children: [ws, e, delim] } = el
     switch (e.type) {
       case "Literal":
       case "RegularExpressionLiteral":
       case "StringLiteral":
       case "PinPattern":
-        return sep
+        return delim
       default:
-        return [ws, nonMatcherBindings(e), sep]
+        return [ws, nonMatcherBindings(e), delim]
     }
   })
 }
@@ -2115,14 +2129,13 @@ function elideMatchersFromPropertyBindings(properties) {
       case "BindingProperty": {
         const { children, name, value } = p
         const [ws] = children
-        const sep = children[children.length - 1]
 
         switch (value && value.type) {
           case "ArrayBindingPattern":
           case "ObjectBindingPattern":
             return {
               ...p,
-              children: [ws, name, ": ", nonMatcherBindings(value)],
+              children: [ws, name, ": ", nonMatcherBindings(value), p.delim],
             }
           case "Identifier":
             return p
@@ -2132,7 +2145,7 @@ function elideMatchersFromPropertyBindings(properties) {
           default:
             return {
               ...p,
-              children: [ws, name, sep],
+              children: [ws, name, p.delim],
             }
         }
       }
@@ -2992,13 +3005,23 @@ function reorderBindingRestProperty(props) {
     // Swap delimiters of last property and rest so that an omitted trailing comma doesn't end up in the middle
     if (after.length) {
       const
-        [restDelim] = rest.children.slice(-1),
+        {delim: restDelim} = rest,
         lastAfterProp = after[after.length - 1],
-        lastAfterChildren = lastAfterProp.children,
-        [lastDelim] = lastAfterChildren.slice(-1)
+        {delim: lastDelim, children: lastAfterChildren} = lastAfterProp
 
-      rest = { ...rest, children: [...rest.children.slice(0, -1), lastDelim] }
-      after = [...after.slice(0, -1), { ...lastAfterProp, children: [...lastAfterChildren.slice(0, -1), restDelim] }]
+      rest = {
+        ...rest,
+        delim: lastDelim,
+        children: [...rest.children.slice(0, -1), lastDelim]
+      }
+      after = [
+        ...after.slice(0, -1),
+        {
+          ...lastAfterProp,
+          delim: restDelim,
+          children: [...lastAfterChildren.slice(0, -1), restDelim]
+        }
+      ]
     }
 
     const children = [...props, ...after, rest]
@@ -3210,8 +3233,7 @@ module.exports = {
   processBinaryOpExpression,
   processCallMemberExpression,
   processCoffeeInterpolation,
-  processConstAssignmentDeclaration,
-  processLetAssignmentDeclaration,
+  processAssignmentDeclaration,
   processParams,
   processProgram,
   processReturnValue,
