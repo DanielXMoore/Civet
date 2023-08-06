@@ -2195,38 +2195,55 @@ ObjectLiteral
   InlineObjectLiteral
 
 BracedObjectLiteral
-  OpenBrace:open AllowAll ( BracedObjectLiteralContent? __ CloseBrace )? RestoreAll ->
+  OpenBrace:open AllowAll ( BracedObjectLiteralContent __ CloseBrace )? RestoreAll ->
     if (!$3) return $skip
     const [ properties, ...close ] = $3
 
-    if(properties) {
-      const children = [open, ...properties, close]
-
-      return {
-        type: "ObjectExpression",
-        children,
-        names: children.flatMap((c) => {
-          return c.names || []
-        }),
-        properties,
-      }
-    }
-
     return {
       type: "ObjectExpression",
-      children: [open, close],
-      names: [],
+      children: [open, properties, close],
+      names: properties.flatMap((c) => c.names || []),
+      properties,
     }
 
 BracedObjectLiteralContent
-  NestedPropertyDefinitions
-  PropertyDefinitionList
+  # Allow unnested comma-separated properties on first line, optionally
+  # followed by nested comma-separated properties on further lines
+  ( PropertyDefinition ObjectPropertyDelimiter )*:line NestedPropertyDefinitions?:nested ->
+    line = line.flatMap(([prop, delim]) => {
+      // Allow each prop to be a single Property object or an array of such
+      prop = Array.isArray(prop) ? prop : [prop]
+      let last = prop[prop.length-1]
+      last = {
+        ...last,
+        delim,
+        children: [ ...last.children, delim ]
+      }
+      return [...prop.slice(0, prop.length-1), last]
+    })
+    return line.concat(nested || [])
+  # As a backup, allow for arbitrary untracked indentation
+  ( __ PropertyDefinition ObjectPropertyDelimiter )+ ->
+    return $0.flatMap(([ws, prop, delim]) => {
+      // Allow each prop to be a single Property object or an array of such
+      prop = Array.isArray(prop) ? prop : [prop]
+      let last = prop[prop.length-1]
+      last = {
+        ...last,
+        delim,
+        // __ will consume all whitespace that _? in PropertyDefinition could,
+        // so replace _? (via slice) with __
+        children: [ ws, ...last.children.slice(1), delim ]
+      }
+      return [...prop.slice(0, prop.length-1), last]
+    })
 
 NestedImplicitObjectLiteral
-  InsertOpenBrace NestedImplicitPropertyDefinitions InsertNewline InsertIndent InsertCloseBrace ->
+  InsertOpenBrace NestedImplicitPropertyDefinitions:properties InsertNewline InsertIndent InsertCloseBrace ->
     return {
       type: "ObjectExpression",
-      children: [$1, ...$2, $3, $4, $5],
+      properties,
+      children: $0,
     }
 
 NestedImplicitPropertyDefinitions
@@ -2287,24 +2304,11 @@ ObjectPropertyDelimiter
   &( __ "}" )
   &EOS InsertComma -> $2
 
-PropertyDefinitionList
-  ( PropertyDefinition ObjectPropertyDelimiter )+ ->
-    return $0.flatMap(([prop, delim]) => {
-      // Allow each prop to be a single Property object or an array of such
-      prop = Array.isArray(prop) ? prop : [prop]
-      let last = prop[prop.length-1]
-      last = {
-        ...last,
-        delim,
-        children: [ ...last.children, delim ]
-      }
-      return [...prop.slice(0, prop.length-1), last]
-    })
-
 # https://262.ecma-international.org/#prod-PropertyDefinition
+# NOTE: Must start on same line
 PropertyDefinition
   # NOTE: Added CoffeeScript {@id} -> {id: this.id} shorthand
-  __:ws AtThis:at IdentifierReference:id ->
+  _?:ws AtThis:at IdentifierReference:id ->
     const value = [at, ".", id]
     return {
       type: "Property",
@@ -2313,7 +2317,7 @@ PropertyDefinition
       names: id.names,
       value,
     }
-  __:ws NamedProperty:prop ->
+  _?:ws NamedProperty:prop ->
     return {
       ...prop,
       children: [ws, ...prop.children],
@@ -2321,7 +2325,7 @@ PropertyDefinition
   # NOTE: Added LiveScript flagging shorthand {+x, -y} -> {x: true, y: false}
   # NOTE: extended to allow {!y} -> {y: false}
   # NOTE: Must be after NamedProperty
-  __:ws $[!+-]:toggle PropertyName:id ->
+  _?:ws $[!+-]:toggle PropertyName:id ->
     const value = toggle === "+" ? "true" : "false"
     return {
       type: "Property",
@@ -2332,13 +2336,13 @@ PropertyDefinition
     }
   # NOTE: Forbidding EmptyBlock in MethodDefinition to allow `foo()` shorthand
   # for `foo: foo()`
-  __:ws MethodDefinition:def ->
+  _?:ws MethodDefinition:def ->
     if (!def.block || def.block.empty) return $skip
     return {
       ...def,
       children: [ws, ...def.children],
     }
-  __:ws DotDotDot:dots ExtendedExpression:exp ->
+  _?:ws DotDotDot:dots ExtendedExpression:exp ->
     return {
       type: "SpreadProperty",
       children: [ws, dots, exp],
@@ -2348,7 +2352,7 @@ PropertyDefinition
     }
   # NOTE: Added `{x.y?.z()}` shorthand for `{z: x.y?.z()}`
   # NOTE: this needs to be at the bottom to prevent shadowing NamedProperty
-  __:ws CallExpression:value ->
+  _?:ws !EOS CallExpression:value ->
     switch (value.type) {
       // `{identifier}` remains `{identifier}`, the one shorthand JS supports
       case "Identifier":
@@ -2418,7 +2422,7 @@ PropertyDefinition
       hoistDec,
     }
   # NOTE: basic identifiers are now part of the rule above
-  #__:ws IdentifierReference:id ->
+  #_?:ws IdentifierReference:id ->
   #  return {...id, children: [...ws, ...id.children]}
 
 NamedProperty
