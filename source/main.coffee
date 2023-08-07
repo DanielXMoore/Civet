@@ -106,6 +106,8 @@ uncacheable = new Set [
   "NestedObject"
   "NestedPropertyDefinitions"
   "NewlineBinaryOpAllowed"
+  "NonPipelineArgumentPart"
+  "NonPipelineArgumentList"
   "NonPipelineAssignmentExpression"
   "NonPipelineExtendedExpression"
   "NonPipelinePostfixedExpression"
