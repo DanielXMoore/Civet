@@ -2573,10 +2573,11 @@ function processPipelineExpressions(statements) {
 
 function processProgram(root, config, m, ReservedWord) {
   // invariants
+  assert.equal(m.forbidBracedApplication.length, 1, "forbidBracedApplication")
   assert.equal(m.forbidClassImplicitCall.length, 1, "forbidClassImplicitCall")
   assert.equal(m.forbidIndentedApplication.length, 1, "forbidIndentedApplication")
+  assert.equal(m.forbidNewlineBinaryOp.length, 1, "forbidNewlineBinaryOp")
   assert.equal(m.forbidTrailingMemberProperty.length, 1, "forbidTrailingMemberProperty")
-  assert.equal(m.forbidMultiLineImplicitObjectLiteral.length, 1, "forbidMultiLineImplicitObjectLiteral")
   assert.equal(m.JSXTagStack.length, 0, "JSXTagStack should be empty")
 
   addParentPointers(root)
