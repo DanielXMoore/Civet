@@ -1982,9 +1982,7 @@ ArrayLiteral
     }
 
     // Gather names when ArrayLiteral is used as a destructuring pattern
-    const names = children.flatMap((c) => {
-      return c.names || []
-    })
+    const names = children.flatMap((c) => c?.names || [])
 
     return {
       type: "ArrayExpression",
@@ -2064,17 +2062,23 @@ RangeExpression
 
 ArrayLiteralContent
   RangeExpression
-  NestedImplicitObjectLiteral ( __ Comma NestedImplicitObjectLiteral )*
-  NestedElementList
-  ElementListWithIndentedApplicationForbidden:list InsertComma:comma NestedElementList?:nested ->
-    if (nested) {
-      // ElementList never ends in comma; otherwise, the next line of elements
-      // would be absorbed into the ElementList.
-      return [...list, comma, ...nested]
-    } else {
-      return list
-    }
+  # NOTE: No longer need to special-case implicit object literals separated
+  # by dedented commas
+  #NestedImplicitObjectLiteral ( __ Comma NestedImplicitObjectLiteral )*
+  # First check for properly indented list items
+  NestedElementList &( __ CloseBracket )
+  # Next check for a line of items followed by properly indented list items;
+  # first line should not use indented applications because they may be
+  # lines of list items
+  ElementListWithIndentedApplicationForbidden:list ArrayElementDelimiter:delimiter NestedElementList?:nested &( __ CloseBracket ) ->
+    if (!nested) return list
+    return [...list, delimiter, ...nested]
+  # As fallback, ignore indentation altogether, forbidding indented applications
+  ( __ ElementListWithIndentedApplicationForbidden ArrayElementDelimiter )* ->
+    return $1.flat()
 
+# "Properly nested" element lists all start at the same indentation,
+# but we allow (via ArrayElementDelimiter) dedented commas between lists.
 NestedElementList
   PushIndent NestedElement*:elements PopIndent ->
     if (elements.length)
@@ -2100,7 +2104,10 @@ NestedElement
       })
     }
 
+# Delimiter after ElementList (not within ElementList which just uses Comma)
 ArrayElementDelimiter
+  # NOTE: Allow arbitrary whitespace before comma to allow for breaking
+  # outside indentation to separate e.g. implicit object literals
   __ Comma
   # NOTE: Don't insert comma before closing bracket
   # Ideally it would be nice to insert a trailing comma before newline followed by closing bracket, but in practice
@@ -2117,7 +2124,8 @@ ElementListWithIndentedApplicationForbidden
 # https://262.ecma-international.org/#prod-ElementList
 # NOTE: Modified and simplified from the spec
 ElementList
-  ArrayElementExpression:first ElementListRest*:rest ->
+  # NOTE: Forbid EOS to prevent eating indentation in Expression
+  !EOS ArrayElementExpression:first ElementListRest*:rest ->
     if (rest.length) {
       return [{
         ...first,
@@ -2134,9 +2142,9 @@ ElementList
     return [first]
 
 ElementListRest
-  # NOTE: This is an explicit comma because we could be in a nested list and we don't want to match
-  # the &EOS delimiter
-  ( __ Comma ) ArrayElementExpression
+  # NOTE: Within ElementList, forbid newlines (EOS) before and after comma,
+  # to correctly handle indentation and nested lists
+  ( _? Comma !EOS ) ArrayElementExpression
 
 # NOTE: Modified and simplified from the spec
 ArrayElementExpression
