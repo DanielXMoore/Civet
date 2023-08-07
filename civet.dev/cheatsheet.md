@@ -1180,8 +1180,13 @@ type ID = number | string
 type Point = x: number, y: number
 </Playground>
 
+The `=` is optional if the content is indented:
+
 <Playground>
-type Point =
+type ID
+  | number
+  | string
+type Point
   x: number
   y: number
 </Playground>
