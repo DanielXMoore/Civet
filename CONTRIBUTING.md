@@ -62,13 +62,30 @@ testCase.only """
 """
 ```
 
-A useful trick is then to add a `debugger` statement inside a rule handler in
-`source/parser.hera`, then run `yarn test --inspect-brk`,
-then open up Chrome dev tools.
-A green node icon will appear in the top left; click on that,
-connect to the node process, press F8 a couple times,
-and you should end up at your breakpoint.
-Then you can step through and see what is going on in practice
+### Debugging
+
+A useful trick is to add a `debugger` statement inside a rule handler in
+`source/parser.hera`, or use the `DebugHere` rule to an expansion,
+and then run Node in debug mode via `yarn test --inspect-brk`.
+You can attach a debugger as follows:
+
+1. In Chrome, open up dev tools.
+   A green Node icon will appear in the top left;
+   click on that, and then connect to the Node process.
+   Press F8 a couple times, and you should end up at your breakpoint.
+
+2. In VSCode, run the
+   [Attach to Node Process command](https://code.visualstudio.com/docs/nodejs/nodejs-debugging#_attaching-to-nodejs)
+   (via the Command Palette / <kbd>Ctrl+Shift+P</kbd>).
+   Then select the correct Node process.
+   Press F5 a couple times, and you should end up at your breakpoint.
+
+   Alternatively, turn on
+   [Auto Attach](https://code.visualstudio.com/docs/nodejs/nodejs-debugging#_auto-attach)
+   and just run `yarn test --inspect` from the VSCode Terminal.
+   You should immediately arrive at your breakpoint.
+
+Then you can step through the parser and see what is going on in practice
 as opposed to in theory.
 
 ### CLI
