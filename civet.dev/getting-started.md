@@ -158,7 +158,7 @@ Even `.coffee` will work if you require `coffeescript/register` or add a loader 
 
 You can also use tools built upon esbuild.  For example, here is a minimal
 configuration for [tsup](https://github.com/egoist/tsup)
-(though it does not currently generate `.dts` output):
+(though it does not currently generate `.d.ts` output):
 
 ```js
 // tsup.config.ts
