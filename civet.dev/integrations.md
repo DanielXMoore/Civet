@@ -10,7 +10,7 @@ title: Integrations
 
 ## Build tools
 
-- [esbuild plugin](https://github.com/DanielXMoore/Civet/blob/main/source/esbuild-plugin.civet) (see [instructions](https://civet.dev/getting-started#building-a-project))
+- [esbuild plugin](https://github.com/DanielXMoore/Civet/blob/main/source/esbuild-plugin.civet) (see [instructions](https://civet.dev/getting-started#building-a-project); also supports tsup)
 - [Vite plugin](https://github.com/lorefnon/vite-plugin-civet)
 - [Gulp plugin](https://github.com/DanielXMoore/Civet/tree/main/integration/gulp)
 - [ESM loader](https://github.com/DanielXMoore/Civet/blob/main/source/esm.civet)

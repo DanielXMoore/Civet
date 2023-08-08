@@ -156,6 +156,21 @@ You can also add `.js` and `.ts` extensions if you want to mix and match!
 Even `.coffee` will work if you require `coffeescript/register` or add a loader for it.
 :::
 
+You can also use tools built upon esbuild.  For example, here is a minimal
+configuration for [tsup](https://github.com/egoist/tsup)
+(though it does not currently generate `.dts` output):
+
+```js
+// tsup.config.ts
+import { defineConfig } from 'tsup';
+import civetPlugin from '@danielx/civet/esbuild-plugin';
+
+export default defineConfig({
+  entryPoints: ['main.civet'],
+  esbuildPlugins: [civetPlugin({})],
+});
+```
+
 ---
 
 If you want to use other bundlers, check out our [integrations page](/integrations) for a suitable plugin.
