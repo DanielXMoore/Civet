@@ -908,6 +908,40 @@ switch x
 
 ## Loops
 
+All JavaScript loops are available, with optional parentheses around the clause
+and iteration variables defaulting to `const`.
+
+<Playground>
+for item of list
+  console.log item
+</Playground>
+
+<Playground>
+for let item of list
+  item *= item
+  console.log item
+</Playground>
+
+<Playground>
+for key in object
+  console.log key
+</Playground>
+
+<Playground>
+for let i = 0; i < 100; i++
+  console.log i
+</Playground>
+
+### Iterator Count
+
+When looping over an iterator via `for..of`, you can get the current index
+by specifying a comma and a second variable (also defaulting to `const`):
+
+<Playground>
+for item, index of list
+  console.log `${index}th item is ${item}`
+</Playground>
+
 ### Loop Expressions
 
 If needed, loops automatically assemble an Array of the last value
