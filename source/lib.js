@@ -1288,6 +1288,52 @@ function getTrimmingSpace(target) {
   if (target.token) return target.token.match(/^ ?/)[0]
 }
 
+function processForInOf($0) {
+  let [awaits, open, declaration, declaration2, ws, inOf, exp, step, close] = $0
+
+  if (exp.type === "RangeExpression" && inOf.token === "of" && !declaration2) {
+    // TODO: add support for `declaration2` to efficient `forRange`
+    return forRange(open, declaration, exp, step, close)
+  } else if (step) {
+    throw new Error("for..of/in cannot use 'by' except with range literals")
+  }
+
+  if (!declaration2) {
+    return {
+      declaration,
+      children: $0,
+    }
+  }
+
+  // for item, index of iter
+  if (inOf.token !== "of") {
+    throw new Error(`for item, index must use 'of' instead of '${inOf.token}'`)
+  }
+
+  const counterRef = {
+    type: "Ref",
+    base: "i",
+    id: "i",
+  }
+  const hoistDec = {
+    type: "Declaration",
+    children: ["let ", counterRef, " = 0"],
+    names: [],
+  }
+  const [, , ws2, decl2] = declaration2  // strip __ Comma __
+  const blockPrefix = [["", {
+    type: "Declaration",
+    children: [insertTrimmingSpace(ws2, ""), decl2, " = ", counterRef, "++"],
+    names: decl2.names,
+  }, ";"]]
+  return {
+    declaration,
+    children: [awaits, open, declaration, ws, inOf, exp, step, close], // omit declaration2
+    blockPrefix,
+    hoistDec,
+  }
+}
+
 // Construct for loop from RangeLiteral
 function forRange(open, forDeclaration, range, stepExp, close) {
   const { start, end, inclusive } = range
@@ -3231,10 +3277,11 @@ module.exports = {
   maybeRef,
   modifyString,
   needsRef,
+  processAssignmentDeclaration,
   processBinaryOpExpression,
   processCallMemberExpression,
   processCoffeeInterpolation,
-  processAssignmentDeclaration,
+  processForInOf,
   processParams,
   processProgram,
   processReturnValue,
