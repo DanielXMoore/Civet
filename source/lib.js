@@ -1278,7 +1278,7 @@ function getTrimmingSpace(target) {
 }
 
 function processForInOf($0) {
-  let [awaits, open, declaration, declaration2, ws, inOf, exp, step, close] = $0
+  let [awaits, each, open, declaration, declaration2, ws, inOf, exp, step, close] = $0
 
   if (exp.type === "RangeExpression" && inOf.token === "of" && !declaration2) {
     // TODO: add support for `declaration2` to efficient `forRange`
@@ -1287,15 +1287,63 @@ function processForInOf($0) {
     throw new Error("for..of/in cannot use 'by' except with range literals")
   }
 
+  let eachError
+  let hoistDec, blockPrefix = []
+
+  // for each item[, index] of array
+  if (each) {
+    if (inOf.token === "of") {
+      const counterRef = makeRef("i")
+      const lenRef = makeRef("len")
+      const expRef = maybeRef(exp)
+
+      const increment = "++"
+      let indexAssignment, assignmentNames = [...declaration.names]
+
+      if (declaration2) {
+        const [, , ws2, decl2] = declaration2  // strip __ Comma __
+        blockPrefix.push(["", [
+          insertTrimmingSpace(ws2, ""), decl2, " = ", counterRef
+        ], ";"])
+        assignmentNames.push(...decl2.names)
+      }
+
+      const expRefDec = (expRef !== exp)
+        // Trim a single leading space if present
+        ? [insertTrimmingSpace(expRef, " "), " = ", insertTrimmingSpace(exp, ""), ", "]
+        : []
+
+      blockPrefix.push(["", {
+        type: "AssignmentExpression",
+        children: [declaration, " = ", insertTrimmingSpace(expRef, ""), "[", counterRef, "]"],
+        names: assignmentNames,
+      }, ";"])
+
+      declaration = {
+        type: "Declaration",
+        children: ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", insertTrimmingSpace(expRef, ""), ".length"],
+        names: []
+      }
+
+      const condition = [counterRef, " < ", lenRef, "; "]
+      const children = [open, declaration, "; ", condition, counterRef, increment, close]
+      return { declaration, children, blockPrefix }
+    } else {
+      eachError = {
+        type: "Error",
+        message: "'each' is only meaningful in for..of loops",
+      }
+    }
+  }
+
   if (!declaration2) {
     return {
       declaration,
-      children: $0,
+      children: [awaits, eachError, open, declaration, ws, inOf, exp, step, close], // omit declaration2, replace each with eachError
     }
   }
 
   const [, , ws2, decl2] = declaration2  // strip __ Comma __
-  let hoistDec, blockPrefix = []
 
   switch (inOf.token) {
     case "of": { // for item, index of iter
@@ -1356,7 +1404,7 @@ function processForInOf($0) {
 
   return {
     declaration,
-    children: [awaits, open, declaration, ws, inOf, exp, step, close], // omit declaration2
+    children: [awaits, eachError, open, declaration, ws, inOf, exp, step, close], // omit declaration2, replace each with eachError
     blockPrefix,
     hoistDec,
   }

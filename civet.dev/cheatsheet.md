@@ -939,6 +939,28 @@ for item, index of list
   console.log `${index}th item is ${item}`
 </Playground>
 
+### for each..of
+
+For Arrays and other objects implementing `.length` and `[i]` indexing,
+you can use `for each..of` as an optimized form of `for..of`
+(without building an iterator):
+
+<Playground>
+for each item of list
+  console.log item
+</Playground>
+
+<Playground>
+for each let item of list
+  item *= item
+  console.log item
+</Playground>
+
+<Playground>
+for each item, index of list
+  console.log `${index}th item is ${item}`
+</Playground>
+
 ### for..in
 
 Looping over properties of an object via `for..in` defaults to `const`:
