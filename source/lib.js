@@ -1305,27 +1305,74 @@ function processForInOf($0) {
     }
   }
 
-  // for item, index of iter
-  if (inOf.token !== "of") {
-    throw new Error(`for item, index must use 'of' instead of '${inOf.token}'`)
+  const [, , ws2, decl2] = declaration2  // strip __ Comma __
+  let hoistDec, blockPrefix = []
+
+  switch (inOf.token) {
+    case "of": { // for item, index of iter
+      const counterRef = {
+        type: "Ref",
+        base: "i",
+        id: "i",
+      }
+      hoistDec = {
+        type: "Declaration",
+        children: ["let ", counterRef, " = 0"],
+        names: [],
+      }
+      blockPrefix.push(["", {
+        type: "Declaration",
+        children: [insertTrimmingSpace(ws2, ""), decl2, " = ", counterRef, "++"],
+        names: decl2.names,
+      }, ";"])
+      break
+    }
+
+    case "in": { // for key, value of object
+      // First, wrap object in ref if complex expression
+      const expRef = maybeRef(exp)
+      if (expRef !== exp) {
+        hoistDec = {
+          type: "Declaration",
+          children: ["let ", expRef],
+          names: [],
+        }
+        exp = {
+          type: "AssignmentExpression",
+          children: [" ", expRef, " =", exp],
+        }
+      }
+      // Replace key with single identifier if it's a pattern,
+      // so that we can use it to dereference value.
+      let { binding } = declaration
+      if (binding?.type !== "Identifier") {
+        const keyRef = {
+          type: "Ref",
+          base: "key",
+          id: "key",
+        }
+        blockPrefix.push(["", [
+          declaration, " = ", keyRef
+        ], ";"])
+        declaration = {
+          type: "ForDeclaration",
+          binding: binding = keyRef,
+          children: ["const ", keyRef],
+          names: [],
+        }
+      }
+      blockPrefix.push(["", {
+        type: "Declaration",
+        children: [insertTrimmingSpace(ws2, ""), decl2, " = ", insertTrimmingSpace(expRef, ""), "[", insertTrimmingSpace(binding, ""), "]"],
+        names: decl2.names,
+      }, ";"])
+      break
+    }
+
+    default:
+      throw new Error(`for item, index must use 'of' or 'in' instead of '${inOf.token}'`)
   }
 
-  const counterRef = {
-    type: "Ref",
-    base: "i",
-    id: "i",
-  }
-  const hoistDec = {
-    type: "Declaration",
-    children: ["let ", counterRef, " = 0"],
-    names: [],
-  }
-  const [, , ws2, decl2] = declaration2  // strip __ Comma __
-  const blockPrefix = [["", {
-    type: "Declaration",
-    children: [insertTrimmingSpace(ws2, ""), decl2, " = ", counterRef, "++"],
-    names: decl2.names,
-  }, ";"]]
   return {
     declaration,
     children: [awaits, open, declaration, ws, inOf, exp, step, close], // omit declaration2
@@ -2342,8 +2389,7 @@ function processPatternMatching(statements, ReservedWord) {
         expression = expression.expression
       }
 
-      let hoistDec, refAssignment = [],
-        ref = needsRef(expression, "m") || expression;
+      let hoistDec, refAssignment = [], ref = maybeRef(expression, "m");
       if (ref !== expression) {
         hoistDec = {
           type: "Declaration",
