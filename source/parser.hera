@@ -27,6 +27,7 @@ const {
   literalValue,
   makeEmptyBlock,
   makeLeftHandSideExpression,
+  makeRef,
   maybeRef,
   modifyString,
   processAssignmentDeclaration,
@@ -510,10 +511,7 @@ ShortCircuitExpression
 PipelineExpression
   _?:ws PipelineHeadItem:head ( NotDedented Pipe __ PipelineTailItem )+:body ->
     if (head.token === "&") {
-      const ref = {
-        type: "Ref",
-        base: "$",
-      }
+      const ref = makeRef("$")
 
       const arrowBody = {
         type: "PipelineExpression",
@@ -1185,11 +1183,7 @@ AtIdentifierRef
       id: r,
     }
   IdentifierName:id ->
-    return {
-      type: "Ref",
-      base: id.name,
-      id: id.name,
-    }
+    return makeRef(id.name)
 
 PinPattern
   "^" Identifier:identifier ->
@@ -1432,11 +1426,7 @@ BindingRestElement
 # NOTE: Allows for empty binding rest pattern like in CoffeeScript
 EmptyBindingPattern
   "" ->
-    const ref = {
-      type: "Ref",
-      base: "ref",
-      id: "ref"
-    }
+    const ref = makeRef()
     return {
       type: "EmptyBinding",
       children: [ref],
@@ -1514,11 +1504,7 @@ AmpersandFunctionExpression
 
     // Only unary ops
     if (!rhs) {
-      body = ref = {
-        type: "Ref",
-        base: "$",
-        id: "$"
-      }
+      body = ref = makeRef("$")
     } else {
       // &? gets wrapped in UnaryExpression and ParenthesizedExpression;
       // descend into `expression` property until `ref` is defined
@@ -1602,11 +1588,7 @@ AmpersandBlockRHS
 AmpersandBlockRHSBody
   (!_ CallExpressionRest+ )?:callExpRest QuestionMark?:unaryPostfix ( ![&] BinaryOpRHS+ )?:binopRHS ->
     if (!callExpRest && !binopRHS && !unaryPostfix) return $skip
-    const ref = {
-      type: "Ref",
-      base: "$",
-      id: "$"
-    }
+    const ref = makeRef("$")
 
     let exp = {
       type: "AmpersandRef",
@@ -2155,12 +2137,7 @@ ArrayElementExpression
   # NOTE: Allow empty exp spread for destructuring
   ExtendedExpression?:exp __:ws DotDotDot:dots &ArrayElementDelimiter ->
     if (!exp) {
-      exp = {
-        type: "Ref",
-        base: "ref",
-        id: "ref",
-        names: [],
-      }
+      exp = { ...makeRef(), names: [] }
     }
 
     return {
@@ -3364,33 +3341,15 @@ CoffeeForStatementParameters
 
       kind.token = "in"
     } else if (kind.token === "in") { // CoffeeScript loop comprehensions
-      const counterRef = {
-        type: "Ref",
-        base: "i",
-        id: "i",
-      }
+      const counterRef = makeRef("i")
+      const lenRef = makeRef("len")
 
-      const lenRef = {
-        type: "Ref",
-        base: "len",
-        id: "len",
+      if (exp.type === "RangeExpression") {
+        return forRange(open, declaration, exp, step?.[2], close)
       }
 
       // If exp isn't a simple identifier use a ref
-      let expRef
-      switch(exp.type) {
-        case "Identifier":
-          expRef = exp
-          break
-        case "RangeExpression":
-          return forRange(open, declaration, exp, step?.[2], close)
-        default:
-          expRef = {
-            type: "Ref",
-            base: "ref",
-            id: "ref",
-          }
-      }
+      const expRef = maybeRef(exp)
 
       const varRef = declaration
       let increment = "++",
@@ -3482,7 +3441,7 @@ CoffeeForDeclaration
 
 ForStatementParameters
   # https://262.ecma-international.org/#prod-ForStatement
-  OpenParen __       ( LexicalDeclaration / VariableStatement / Expression? ):declaration __ Semicolon Expression? Semicolon Expression? __ CloseParen ->
+  OpenParen __ ( LexicalDeclaration / VariableStatement / Expression? ):declaration __ Semicolon Expression? Semicolon Expression? __ CloseParen ->
     return {
       declaration,
       children: $0,
@@ -3497,10 +3456,10 @@ ForStatementParameters
   # https://262.ecma-international.org/#prod-ForInOfStatement
   # NOTE: Consolidated declarations
   # NOTE: Consolidated optional 'await'
-  ( Await __ )? ( OpenParen __ ) ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? ( __ CloseParen ) ->
+  ( Await __ )? ( Each __ )? ( OpenParen __ ) ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? ( __ CloseParen ) ->
     return processForInOf($0)
   # NOTE: Added optional parens
-  ( Await __ )? InsertOpenParen ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? InsertCloseParen ->
+  ( Await __ )? ( Each __ )? InsertOpenParen ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? InsertCloseParen ->
     return processForInOf($0)
   ForRangeParameters
 
@@ -3804,10 +3763,7 @@ Condition
 
 DeclarationCondition
   LexicalDeclaration:dec ->
-    const ref = {
-      type: "Ref",
-      base: "ref",
-    }
+    const ref = makeRef()
 
     const { decl, bindings } = dec
     // TODO: Add support for `let` and `const` declarations with multiple bindings in conditions
@@ -4838,6 +4794,10 @@ DoubleColon
 
 DoubleQuote
   "\"" ->
+    return { $loc, token: $1 }
+
+Each
+  "each" NonIdContinue ->
     return { $loc, token: $1 }
 
 Else
@@ -6594,11 +6554,7 @@ Reset
 
     module.getRef = function (base) {
       if (refs.hasOwnProperty(base)) return refs[base]
-      const ref = {
-        type: "Ref",
-        base,
-        id: base,
-      }
+      const ref = makeRef(base)
       if (declareRef.hasOwnProperty(base)) declareRef[base](ref)
       return refs[base] = ref
     }

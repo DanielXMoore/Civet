@@ -444,11 +444,7 @@ function expressionizeIteration(exp) {
     return
   }
 
-  const resultsRef = {
-    type: "Ref",
-    base: "results",
-    id: "results",
-  }
+  const resultsRef = makeRef("results")
 
   // insert `results.push` to gather results array
   insertPush(exp.block, resultsRef)
@@ -543,10 +539,7 @@ function processCallMemberExpression(node) {
       let hoistDec, refAssignment
       // add ref to ensure object base evaluated only once
       if (prefix.length > 1) {
-        const ref = {
-          type: "Ref",
-          base: "ref",
-        }
+        const ref = makeRef()
         hoistDec = {
           type: "Declaration",
           children: ["let ", ref],
@@ -651,11 +644,7 @@ function wrapIterationReturningResults(statement, outerRef) {
     return
   }
 
-  const resultsRef = {
-    type: "Ref",
-    base: "results",
-    id: "results",
-  }
+  const resultsRef = makeRef("results")
 
   const declaration = {
     type: "Declaration",
@@ -1289,7 +1278,7 @@ function getTrimmingSpace(target) {
 }
 
 function processForInOf($0) {
-  let [awaits, open, declaration, declaration2, ws, inOf, exp, step, close] = $0
+  let [awaits, each, open, declaration, declaration2, ws, inOf, exp, step, close] = $0
 
   if (exp.type === "RangeExpression" && inOf.token === "of" && !declaration2) {
     // TODO: add support for `declaration2` to efficient `forRange`
@@ -1298,23 +1287,67 @@ function processForInOf($0) {
     throw new Error("for..of/in cannot use 'by' except with range literals")
   }
 
+  let eachError
+  let hoistDec, blockPrefix = []
+
+  // for each item[, index] of array
+  if (each) {
+    if (inOf.token === "of") {
+      const counterRef = makeRef("i")
+      const lenRef = makeRef("len")
+      const expRef = maybeRef(exp)
+
+      const increment = "++"
+      let indexAssignment, assignmentNames = [...declaration.names]
+
+      if (declaration2) {
+        const [, , ws2, decl2] = declaration2  // strip __ Comma __
+        blockPrefix.push(["", [
+          insertTrimmingSpace(ws2, ""), decl2, " = ", counterRef
+        ], ";"])
+        assignmentNames.push(...decl2.names)
+      }
+
+      const expRefDec = (expRef !== exp)
+        // Trim a single leading space if present
+        ? [insertTrimmingSpace(expRef, " "), " = ", insertTrimmingSpace(exp, ""), ", "]
+        : []
+
+      blockPrefix.push(["", {
+        type: "AssignmentExpression",
+        children: [declaration, " = ", insertTrimmingSpace(expRef, ""), "[", counterRef, "]"],
+        names: assignmentNames,
+      }, ";"])
+
+      declaration = {
+        type: "Declaration",
+        children: ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", insertTrimmingSpace(expRef, ""), ".length"],
+        names: []
+      }
+
+      const condition = [counterRef, " < ", lenRef, "; "]
+      const children = [open, declaration, "; ", condition, counterRef, increment, close]
+      return { declaration, children, blockPrefix }
+    } else {
+      eachError = {
+        type: "Error",
+        message: "'each' is only meaningful in for..of loops",
+      }
+    }
+  }
+
   if (!declaration2) {
     return {
       declaration,
-      children: $0,
+      children: [awaits, eachError, open, declaration, ws, inOf, exp, step, close], // omit declaration2, replace each with eachError
     }
   }
 
   const [, , ws2, decl2] = declaration2  // strip __ Comma __
-  let hoistDec, blockPrefix = []
 
   switch (inOf.token) {
     case "of": { // for item, index of iter
-      const counterRef = {
-        type: "Ref",
-        base: "i",
-        id: "i",
-      }
+      const counterRef = makeRef("i")
       hoistDec = {
         type: "Declaration",
         children: ["let ", counterRef, " = 0"],
@@ -1346,11 +1379,7 @@ function processForInOf($0) {
       // so that we can use it to dereference value.
       let { binding } = declaration
       if (binding?.type !== "Identifier") {
-        const keyRef = {
-          type: "Ref",
-          base: "key",
-          id: "key",
-        }
+        const keyRef = makeRef("key")
         blockPrefix.push(["", [
           declaration, " = ", keyRef
         ], ";"])
@@ -1375,7 +1404,7 @@ function processForInOf($0) {
 
   return {
     declaration,
-    children: [awaits, open, declaration, ws, inOf, exp, step, close], // omit declaration2
+    children: [awaits, eachError, open, declaration, ws, inOf, exp, step, close], // omit declaration2, replace each with eachError
     blockPrefix,
     hoistDec,
   }
@@ -1385,11 +1414,7 @@ function processForInOf($0) {
 function forRange(open, forDeclaration, range, stepExp, close) {
   const { start, end, inclusive } = range
 
-  const counterRef = {
-    type: "Ref",
-    base: "i",
-    id: "i",
-  }
+  const counterRef = makeRef("i")
 
   let stepRef
   if (stepExp) {
@@ -1411,11 +1436,7 @@ function forRange(open, forDeclaration, range, stepExp, close) {
   } else if (start.type === "Literal" && end.type === "Literal") {
     asc = literalValue(start) <= literalValue(end)
   } else {
-    ascRef = {
-      type: "Ref",
-      base: "asc",
-      id: "asc",
-    }
+    ascRef = makeRef("asc")
     ascDec = [", ", ascRef, " = ", startRef, " <= ", endRef]
   }
 
@@ -1595,16 +1616,6 @@ function makeLeftHandSideExpression(expression) {
   }
 }
 
-// Transform into a ref if needed
-function maybeRef(exp, base = "ref") {
-  if (!needsRef(exp)) return exp
-  return {
-    type: "Ref",
-    base: base,
-    id: base,
-  }
-}
-
 // Adjust a parsed string by escaping newlines
 function modifyString(str) {
   // Replace non-escaped newlines with escaped newlines
@@ -1727,13 +1738,22 @@ function needsRef(expression, base = "ref") {
     case "Identifier":
     case "Literal":
       return
-    default:
-      return {
-        type: "Ref",
-        base,
-        id: base,
-      }
   }
+  return makeRef(base)
+}
+
+function makeRef(base = "ref") {
+  return {
+    type: "Ref",
+    base: base,
+    id: base,
+  }
+}
+
+// Transform into a ref if needed
+function maybeRef(exp, base = "ref") {
+  if (!needsRef(exp)) return exp
+  return makeRef(base)
 }
 
 // Return an array of Rule names that correspond to the current call stack
@@ -2339,11 +2359,7 @@ function aggregateDuplicateBindings(bindings, ReservedWord) {
 
     // Create a ref alias for each duplicate binding
     const refs = shared.map((p) => {
-      const ref = {
-        type: "Ref",
-        base: key,
-        id: key,
-      }
+      const ref = makeRef(key)
 
       aliasBinding(p, ref)
 
@@ -2551,7 +2567,7 @@ function processPipelineExpressions(statements) {
                     break outer
                 }
 
-                usingRef = needsRef({}) // hacky: using this like a "createRef"
+                usingRef = makeRef()
                 initRef = {
                   type: "AssignmentExpression",
                   children: [usingRef, " = ", arg, ","],
@@ -2931,11 +2947,7 @@ function processReturnValue(func) {
     ({ type }) => type === "ReturnValue")
   if (!values.length) return false
 
-  const ref = {
-    type: "Ref",
-    base: "ret",
-    id: "ret",
-  }
+  const ref = makeRef("ret")
 
   let declared
   values.forEach(value => {
@@ -3320,6 +3332,7 @@ module.exports = {
   makeAsConst,
   makeEmptyBlock,
   makeLeftHandSideExpression,
+  makeRef,
   maybeRef,
   modifyString,
   needsRef,
