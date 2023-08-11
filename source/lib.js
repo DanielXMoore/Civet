@@ -444,11 +444,7 @@ function expressionizeIteration(exp) {
     return
   }
 
-  const resultsRef = {
-    type: "Ref",
-    base: "results",
-    id: "results",
-  }
+  const resultsRef = makeRef("results")
 
   // insert `results.push` to gather results array
   insertPush(exp.block, resultsRef)
@@ -543,10 +539,7 @@ function processCallMemberExpression(node) {
       let hoistDec, refAssignment
       // add ref to ensure object base evaluated only once
       if (prefix.length > 1) {
-        const ref = {
-          type: "Ref",
-          base: "ref",
-        }
+        const ref = makeRef()
         hoistDec = {
           type: "Declaration",
           children: ["let ", ref],
@@ -651,11 +644,7 @@ function wrapIterationReturningResults(statement, outerRef) {
     return
   }
 
-  const resultsRef = {
-    type: "Ref",
-    base: "results",
-    id: "results",
-  }
+  const resultsRef = makeRef("results")
 
   const declaration = {
     type: "Declaration",
@@ -1310,11 +1299,7 @@ function processForInOf($0) {
 
   switch (inOf.token) {
     case "of": { // for item, index of iter
-      const counterRef = {
-        type: "Ref",
-        base: "i",
-        id: "i",
-      }
+      const counterRef = makeRef("i")
       hoistDec = {
         type: "Declaration",
         children: ["let ", counterRef, " = 0"],
@@ -1346,11 +1331,7 @@ function processForInOf($0) {
       // so that we can use it to dereference value.
       let { binding } = declaration
       if (binding?.type !== "Identifier") {
-        const keyRef = {
-          type: "Ref",
-          base: "key",
-          id: "key",
-        }
+        const keyRef = makeRef("key")
         blockPrefix.push(["", [
           declaration, " = ", keyRef
         ], ";"])
@@ -1385,11 +1366,7 @@ function processForInOf($0) {
 function forRange(open, forDeclaration, range, stepExp, close) {
   const { start, end, inclusive } = range
 
-  const counterRef = {
-    type: "Ref",
-    base: "i",
-    id: "i",
-  }
+  const counterRef = makeRef("i")
 
   let stepRef
   if (stepExp) {
@@ -1411,11 +1388,7 @@ function forRange(open, forDeclaration, range, stepExp, close) {
   } else if (start.type === "Literal" && end.type === "Literal") {
     asc = literalValue(start) <= literalValue(end)
   } else {
-    ascRef = {
-      type: "Ref",
-      base: "asc",
-      id: "asc",
-    }
+    ascRef = makeRef("asc")
     ascDec = [", ", ascRef, " = ", startRef, " <= ", endRef]
   }
 
@@ -1595,16 +1568,6 @@ function makeLeftHandSideExpression(expression) {
   }
 }
 
-// Transform into a ref if needed
-function maybeRef(exp, base = "ref") {
-  if (!needsRef(exp)) return exp
-  return {
-    type: "Ref",
-    base: base,
-    id: base,
-  }
-}
-
 // Adjust a parsed string by escaping newlines
 function modifyString(str) {
   // Replace non-escaped newlines with escaped newlines
@@ -1727,13 +1690,22 @@ function needsRef(expression, base = "ref") {
     case "Identifier":
     case "Literal":
       return
-    default:
-      return {
-        type: "Ref",
-        base,
-        id: base,
-      }
   }
+  return makeRef(base)
+}
+
+function makeRef(base = "ref") {
+  return {
+    type: "Ref",
+    base: base,
+    id: base,
+  }
+}
+
+// Transform into a ref if needed
+function maybeRef(exp, base = "ref") {
+  if (!needsRef(exp)) return exp
+  return makeRef(base)
 }
 
 // Return an array of Rule names that correspond to the current call stack
@@ -2339,11 +2311,7 @@ function aggregateDuplicateBindings(bindings, ReservedWord) {
 
     // Create a ref alias for each duplicate binding
     const refs = shared.map((p) => {
-      const ref = {
-        type: "Ref",
-        base: key,
-        id: key,
-      }
+      const ref = makeRef(key)
 
       aliasBinding(p, ref)
 
@@ -2551,7 +2519,7 @@ function processPipelineExpressions(statements) {
                     break outer
                 }
 
-                usingRef = needsRef({}) // hacky: using this like a "createRef"
+                usingRef = makeRef()
                 initRef = {
                   type: "AssignmentExpression",
                   children: [usingRef, " = ", arg, ","],
@@ -2931,11 +2899,7 @@ function processReturnValue(func) {
     ({ type }) => type === "ReturnValue")
   if (!values.length) return false
 
-  const ref = {
-    type: "Ref",
-    base: "ret",
-    id: "ret",
-  }
+  const ref = makeRef("ret")
 
   let declared
   values.forEach(value => {
@@ -3320,6 +3284,7 @@ module.exports = {
   makeAsConst,
   makeEmptyBlock,
   makeLeftHandSideExpression,
+  makeRef,
   maybeRef,
   modifyString,
   needsRef,
