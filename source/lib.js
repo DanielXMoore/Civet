@@ -33,7 +33,7 @@ function addParentPointers(node, parent) {
 /**
  * Just update parent pointers for the children of a node,
  * recursing into arrays but not objects.  More efficient version of
- * `addParentPointers` which just injecting one new node.
+ * `addParentPointers` when just injecting one new node.
  */
 function updateParentPointers(node, parent, depth = 1) {
   if (node == null) return
@@ -50,7 +50,7 @@ function updateParentPointers(node, parent, depth = 1) {
   if (parent != null) node.parent = parent
   if (depth && node.children) {
     for (const child of node.children) {
-      addParentPointers(child, node, depth-1)
+      updateParentPointers(child, node, depth-1)
     }
   }
 }
@@ -2739,6 +2739,9 @@ function processProgram(root, config, m, ReservedWord) {
   gatherRecursiveAll(statements, n => n.type === "IterationExpression")
     .forEach((e) => expressionizeIteration(e))
 
+  // Hoist hoistDec attributes to actual declarations.
+  // NOTE: This should come after iteration expressions get processed
+  // into IIFEs.
   hoistRefDecs(statements)
 
   // Insert prelude
