@@ -30,6 +30,31 @@ function addParentPointers(node, parent) {
   }
 }
 
+/**
+ * Just update parent pointers for the children of a node,
+ * recursing into arrays but not objects.  More efficient version of
+ * `addParentPointers` which just injecting one new node.
+ */
+function updateParentPointers(node, parent, depth = 1) {
+  if (node == null) return
+  if (typeof node !== "object") return
+
+  // NOTE: Arrays are transparent and skipped when traversing via parent
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      updateParentPointers(child, parent, depth)
+    }
+    return
+  }
+
+  if (parent != null) node.parent = parent
+  if (depth && node.children) {
+    for (const child of node.children) {
+      addParentPointers(child, node, depth-1)
+    }
+  }
+}
+
 function addPostfixStatement(statement, ws, post) {
   let children, expressions
   if (post.blockPrefix?.length) {
@@ -435,25 +460,31 @@ function expressionizeIfClause(clause, b, e) {
 }
 
 function expressionizeIteration(exp) {
-  const i = exp.children.indexOf(exp.block)
+  const { async, subtype, block, children, statement } = exp
+  const i = children.indexOf(statement)
+  if (i < 0) {
+    throw new Error("Could not find iteration statement in iteration expression")
+  }
 
-  if (exp.subtype === "DoStatement") {
+  if (subtype === "DoStatement") {
     // Just wrap with IIFE
-    insertReturn(exp.block)
-    exp.children.splice(i, 1, ...wrapIIFE(exp.children, exp.async))
+    insertReturn(block)
+    children.splice(i, 1, ...wrapIIFE(statement, async))
     return
   }
 
   const resultsRef = makeRef("results")
 
   // insert `results.push` to gather results array
-  insertPush(exp.block, resultsRef)
+  insertPush(block, resultsRef)
 
   // Wrap with IIFE
-  exp.children.splice(i, 1,
-    wrapIIFE([
-      "const ", resultsRef, "=[];", ...exp.children, "; return ", resultsRef
-    ], exp.async)
+  children.splice(i, 1,
+    ...wrapIIFE([
+      ["", ["const ", resultsRef, "=[]"], ";"],
+      ...children,
+      ["", ["; return ", resultsRef]],
+    ], async)
   )
 }
 
@@ -1049,10 +1080,15 @@ function hoistRefDecs(statements) {
 function insertHoistDec(block, node, dec) {
   // NOTE: This is more accurately 'statements'
   const { expressions } = block
-  const index = expressions.findIndex(([, s]) => node === s)
+  const index = expressions.findIndex(exp => exp === node ||
+    (Array.isArray(exp) && exp[1] === node))
   if (index < 0) throw new Error("Couldn't find expression in block for hoistable declaration.")
-  const indent = expressions[index][0]
-  expressions.splice(index, 0, [indent, dec, ";"])
+  if (expressions[index] === node) {
+    expressions.splice(index, 0, ["", dec, ";"])
+  } else { // [ws, exp, delim] statement
+    const indent = expressions[index][0]
+    expressions.splice(index, 0, [indent, dec, ";"])
+  }
 }
 
 function patternAsValue(pattern) {
@@ -2082,20 +2118,20 @@ function processAssignments(statements) {
 }
 
 function attachPostfixStatementAsExpression(exp, post) {
-  let clause
   switch (post[1].type) {
     case "ForStatement":
     case "IterationStatement":
-    case "DoStatement":
-      clause = addPostfixStatement(exp, ...post)
+    case "DoStatement": {
+      const statement = addPostfixStatement(exp, ...post)
       return {
         type: "IterationExpression",
-        children: [clause],
-        block: clause.block,
+        children: [statement],
+        block: statement.block,
+        statement,
       }
+    }
     case "IfStatement":
-      clause = expressionizeIfClause(post[1], exp)
-      return clause
+      return expressionizeIfClause(post[1], exp)
     default:
       throw new Error("Unknown postfix statement")
   }
@@ -2699,11 +2735,11 @@ function processProgram(root, config, m, ReservedWord) {
   processSwitchExpressions(statements)
   processTryExpressions(statements)
 
-  hoistRefDecs(statements)
-
   // Modify iteration expressions
   gatherRecursiveAll(statements, n => n.type === "IterationExpression")
     .forEach((e) => expressionizeIteration(e))
+
+  hoistRefDecs(statements)
 
   // Insert prelude
   statements.unshift(...m.prelude)
@@ -3273,13 +3309,14 @@ function wrapIIFE(exp, async) {
   }
 
   // TODO: This rest prevents an infinite recursion bug, ideally it wouldn't be necessary
-  const expressions = Array.isArray(exp) ? [[...exp]] : [exp]
+  const expressions = Array.isArray(exp) ? [...exp] : [exp]
   const block = {
     type: "BlockStatement",
     expressions,
     children: ["{", expressions, "}"],
     bare: false,
   }
+  updateParentPointers(block)
 
   // TODO: This should return a call expression ideally
   return [
