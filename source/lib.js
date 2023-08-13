@@ -855,6 +855,8 @@ function expandChainedComparisons([first, binops]) {
 
 function processParams(f) {
   const { type, parameters, block } = f
+  const isConstructor = f.name === 'constructor'
+
   // Check for singleton TypeParameters <Foo> before arrow function,
   // which TypeScript (in tsx mode) treats like JSX; replace with <Foo,>
   if (type === "ArrowFunction" && parameters && parameters.tp && parameters.tp.parameters.length === 1) {
@@ -874,7 +876,7 @@ function processParams(f) {
   }
 
   const [splices, thisAssignments] = gatherBindingCode(parameters, {
-    injectParamProps: f.name === 'constructor'
+    injectParamProps: isConstructor
   })
 
   const delimiter = {
@@ -893,6 +895,22 @@ function processParams(f) {
       : [indent, s, delimiter]
     )
 
+  if (!prefix.length) return
+  // In constructor definition, insert prefix after first super() call
+  if (isConstructor) {
+    const superCalls = gatherNodes(expressions, exp =>
+      exp.type === "CallExpression" && exp.children[0]?.token === "super")
+    if (superCalls.length) {
+      const {child} = findAncestor(superCalls[0],
+        ancestor => ancestor === block)
+      const index = findChildIndex(expressions, child)
+      if (index < 0) {
+        throw new Error("Could not find super call within top-level expressions")
+      }
+      expressions.splice(index + 1, 0, ...prefix)
+      return
+    }
+  }
   expressions.unshift(...prefix)
 }
 
@@ -914,6 +932,31 @@ function removeParentPointers(node) {
       removeParentPointers(child)
     }
   }
+}
+
+/**
+ * If `child.parent === parent`, then this should find the index `i` such that
+ * `parent.children[i]` contains `child`.  This requires looking in
+ * `parent.children` while descending into any arrays.
+ * Also works if you pass an array (such as `parent.children`) as the `parent`,
+ * which is useful for working with e.g. the `expressions` property.
+ * Returns -1 if `child` cannot be found.
+ */
+function findChildIndex(parent, child) {
+  const children = Array.isArray(parent) ? parent : parent.children
+  const len = children.length
+  for (let i = 0; i < len; i++) {
+    const c = children[i]
+    if (c === child || (Array.isArray(c) && arrayRecurse(c))) return i
+  }
+  function arrayRecurse(array) {
+    const len = array.length
+    for (let i = 0; i < len; i++) {
+      const c = array[i]
+      if (c === child || (Array.isArray(c) && arrayRecurse(c))) return true
+    }
+  }
+  return -1
 }
 
 /**
