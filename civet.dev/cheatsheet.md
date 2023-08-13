@@ -961,6 +961,9 @@ for each item, index of list
   console.log `${index}th item is ${item}`
 </Playground>
 
+`for each` loops are similar to `Array.prototype.forEach` (hence the name),
+but are more efficient and allow for e.g. `break` and `continue`.
+
 ### for..in
 
 Looping over properties of an object via `for..in` defaults to `const`:
