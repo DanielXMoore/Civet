@@ -855,6 +855,8 @@ function expandChainedComparisons([first, binops]) {
 
 function processParams(f) {
   const { type, parameters, block } = f
+  const isConstructor = f.name === 'constructor'
+
   // Check for singleton TypeParameters <Foo> before arrow function,
   // which TypeScript (in tsx mode) treats like JSX; replace with <Foo,>
   if (type === "ArrowFunction" && parameters && parameters.tp && parameters.tp.parameters.length === 1) {
@@ -874,7 +876,7 @@ function processParams(f) {
   }
 
   const [splices, thisAssignments] = gatherBindingCode(parameters, {
-    injectParamProps: f.name === 'constructor'
+    injectParamProps: isConstructor
   })
 
   const delimiter = {
@@ -893,6 +895,23 @@ function processParams(f) {
       : [indent, s, delimiter]
     )
 
+  if (!prefix.length) return
+  // In constructor definition, insert prefix after first super() call
+  if (isConstructor) {
+    const superCalls = gatherNodes(expressions, exp =>
+      exp.type === "CallExpression" && exp.children[0]?.token === "super")
+    if (superCalls.length) {
+      const {child} = findAncestor(superCalls[0],
+        ancestor => ancestor === block)
+      const index = expressions.findIndex(e => e === child ||
+        (Array.isArray(e) && e.includes(child)))
+      if (index < 0) {
+        throw new Error("Could not find super call within top-level expressions")
+      }
+      expressions.splice(index + 1, 0, ...prefix)
+      return
+    }
+  }
   expressions.unshift(...prefix)
 }
 
