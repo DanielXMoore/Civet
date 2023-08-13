@@ -903,8 +903,7 @@ function processParams(f) {
     if (superCalls.length) {
       const {child} = findAncestor(superCalls[0],
         ancestor => ancestor === block)
-      const index = expressions.findIndex(e => e === child ||
-        (Array.isArray(e) && e.includes(child)))
+      const index = findChildIndex(expressions, child)
       if (index < 0) {
         throw new Error("Could not find super call within top-level expressions")
       }
@@ -933,6 +932,31 @@ function removeParentPointers(node) {
       removeParentPointers(child)
     }
   }
+}
+
+/**
+ * If `child.parent === parent`, then this should find the index `i` such that
+ * `parent.children[i]` contains `child`.  This requires looking in
+ * `parent.children` while descending into any arrays.
+ * Also works if you pass an array (such as `parent.children`) as the `parent`,
+ * which is useful for working with e.g. the `expressions` property.
+ * Returns -1 if `child` cannot be found.
+ */
+function findChildIndex(parent, child) {
+  const children = Array.isArray(parent) ? parent : parent.children
+  const len = children.length
+  for (let i = 0; i < len; i++) {
+    const c = children[i]
+    if (c === child || (Array.isArray(c) && arrayRecurse(c))) return i
+  }
+  function arrayRecurse(array) {
+    const len = array.length
+    for (let i = 0; i < len; i++) {
+      const c = array[i]
+      if (c === child || (Array.isArray(c) && arrayRecurse(c))) return true
+    }
+  }
+  return -1
 }
 
 /**
