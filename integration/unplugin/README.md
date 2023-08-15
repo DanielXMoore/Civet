@@ -86,7 +86,7 @@ interface PluginOptions {
 }
 ```
 
-- `dts`: `unplugin-civet` also supports generating `.d.ts` type definition files from the civet source, which is useful for building libraries.
-- `outputExtension`: Output filename extension to use. Default: `.civet.jsx`, or `.civet.tsx` if `js` is `false`.
-- `js`: Whether to transpile to JS or TS.
-- `transformOutput`: Replace the `civet.compile` tranformer with a custom transformer. It gets passed the civet source and filename, and should return valid TS/JS code.
+- `dts`: `unplugin-civet` also supports generating `.d.ts` type definition files from the civet source, which is useful for building libraries. Default: `false`.
+- `outputExtension`: Output filename extension to use. Default: `.civet.tsx`, or uses `.civet.jsx` if `js` is `true`.
+- `js`: Whether to transpile to JS or TS. Default: `false`.
+- `transformOutput`: Adds a custom transformer over jsx/tsx code produced by `civet.compile`.
