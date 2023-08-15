@@ -19,5 +19,9 @@ rm dist/cli.js
 # types
 cp types/types.d.ts dist/types.d.ts
 
+# unplugin
+yarn --cwd ./integration/unplugin build
+cp ./integration/unplugin/dist/* ./dist
+
 # create browser build for docs
 terser dist/browser.js --compress --mangle --ecma 2015 --output civet.dev/public/__civet.js
