@@ -13,20 +13,31 @@ const formatHost: ts.FormatDiagnosticsHost = {
     : f => f.toLowerCase(),
 };
 
-export interface PluginOptions {
-  dts?: boolean;
+export type PluginOptions = {
   outputExtension?: string;
-  js?: boolean;
   transformOutput?: (
     code: string,
     id: string
   ) => TransformResult | Promise<TransformResult>;
-}
+} & ( // Eliminates the possibility of having both `dts` and `js` set to `true`
+  | {
+      dts?: false;
+      js?: false | true;
+    }
+  | {
+      dts?: true;
+      js?: false;
+    }
+);
 
 const isCivet = (id: string) => /\.civet$/.test(id);
 const isCivetTranspiled = (id: string) => /\.civet\.(m?)(j|t)s(x?)$/.test(id);
 
 const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
+  if (options.dts && options.js) {
+    throw new Error("Can't have both `dts` and `js` be set to `true`.");
+  }
+
   const transpileToJS = options.js ?? !options.dts;
   const outExt = options.outputExtension ?? (transpileToJS ? '.jsx' : '.tsx');
 
