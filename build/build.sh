@@ -20,6 +20,7 @@ rm dist/cli.js
 cp types/types.d.ts dist/types.d.ts
 
 # unplugin
+yarn --cwd ./integration/unplugin install
 yarn --cwd ./integration/unplugin build
 cp ./integration/unplugin/dist/* ./dist
 
