@@ -1821,11 +1821,11 @@ function needsRef(expression, base = "ref") {
   return makeRef(base)
 }
 
-function makeRef(base = "ref") {
+function makeRef(base = "ref", id = base) {
   return {
     type: "Ref",
-    base: base,
-    id: base,
+    base,
+    id,
   }
 }
 
