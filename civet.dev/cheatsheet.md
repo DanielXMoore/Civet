@@ -1185,6 +1185,7 @@ class Counter
     #count++
   add(other: Counter): void
     #count += other.#count if #count in other
+  set(#count)
 </Playground>
 
 ### Static Fields
