@@ -1173,6 +1173,21 @@ bound := object@method
 bound := @@method
 </Playground>
 
+### Private Fields
+
+[Private class fields](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes/Private_class_fields)
+do not need an explicit `this.` or `@` prefix.
+
+<Playground>
+class Counter
+  #count = 0
+  increment(): void
+    #count++
+  add(other: Counter): void
+    #count += other.#count if #count in other
+  set(#count)
+</Playground>
+
 ### Static Fields
 
 <Playground>
@@ -1369,7 +1384,7 @@ block comment
 ### `#` Comments
 
 If you do not need
-[private class fields](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes/Private_class_fields),
+[private class fields](#private-fields),
 you can enable `#` one-line comments (as in many other languages)
 via a `"civet"` directive at the beginning of your file:
 
@@ -1600,7 +1615,7 @@ no
 
 ### CoffeeScript Comments
 
-If you don't need [private class fields](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes/Private_class_fields),
+If you don't need [private class fields](#private-fields),
 you can enable `#` for single-line comments:
 
 <Playground>
