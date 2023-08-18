@@ -1807,6 +1807,42 @@ function convertObjectToJSXAttributes(obj) {
   return parts
 }
 
+function makeGetterMethod(name, ws, value, kind = "get") {
+  const parameters = {
+    type: "Parameters",
+    children: ["() "],
+    names: [],
+    implicit: true,
+  }
+
+  const returnStatement = {
+    type: "ReturnStatement",
+    expression: value,
+    children: ["return ", value],
+  }
+
+  const expressions = [returnStatement]
+
+  const block = {
+    type: "BlockStatement",
+    expressions,
+    children: ["{ ", expressions, " }"],
+  }
+
+  const children = [kind, ws, name, parameters, block]
+
+  return {
+    type: "MethodDefinition",
+    children,
+    name,
+    signature: {
+      name,
+    },
+    block,
+    parameters,
+  }
+}
+
 /**
  * Returns a new ref if the expression needs a ref (not a simple value).
  * Otherwise returns undefined.
@@ -3414,6 +3450,7 @@ module.exports = {
   literalValue,
   makeAsConst,
   makeEmptyBlock,
+  makeGetterMethod,
   makeLeftHandSideExpression,
   makeRef,
   maybeRef,

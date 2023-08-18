@@ -26,6 +26,7 @@ const {
   lastAccessInCallExpression,
   literalValue,
   makeEmptyBlock,
+  makeGetterMethod,
   makeLeftHandSideExpression,
   makeRef,
   maybeRef,
@@ -790,7 +791,14 @@ ThisLiteral
   # NOTE: Added @identifier shorthand, also works for private identifiers
   # Converts 'IdentifierName' node to string so this won't interfere with refs
   AtThis:at $( Hash? IdentifierName ):id ->
-    return [at, ".", id]
+    return {
+      type: "MemberExpression",
+      children: [at, {
+        type: "PropertyAccess",
+        name: id,
+        children: [".", id],
+      }],
+    }
   AtThis
   PrivateThis
 
@@ -804,7 +812,14 @@ PrivateThis
     return id
 
   PrivateIdentifier:id ->
-    return [ "this.", id ]
+    return {
+      type: "MemberExpression",
+      children: ["this", {
+        type: "PropertyAccess",
+        name: id.name,
+        children: [".", id],
+      }],
+    }
 
 # NOTE: Added '@' as a 'this' shorthand from CoffeeScript
 AtThis
@@ -880,7 +895,7 @@ NonNullAssertion
 MemberExpression
   # NOTE: "new" MemberExpression Arguments seems to be handled fine by other rules already
   # NOTE: Eliminated left recursion
-  ( PrimaryExpression / SuperProperty / MetaProperty ) MemberExpressionRest*:rest ->
+  MemberBase MemberExpressionRest*:rest ->
     if (rest.length || Array.isArray($1)) {
       return processCallMemberExpression({
         type: "MemberExpression",
@@ -888,6 +903,11 @@ MemberExpression
       })
     }
     return $1
+
+MemberBase
+  PrimaryExpression
+  SuperProperty
+  MetaProperty
 
 MemberExpressionRest
   # NOTE: Added shorthand x?[3] -> x?.[3]
@@ -2564,6 +2584,66 @@ MethodDefinition
       parameters: signature.parameters,
     }
 
+  # shorthand get method definition
+  # TODO: set
+  ( "get" NonIdContinue ):kind _?:ws ( MemberBase CallExpressionRest* ):value &EOS ->
+    const rest = value[1]
+
+    if (!rest.length) {
+      const base = value[0]
+      let name
+      if (base.type === "MemberExpression") {
+        const lastAccess = lastAccessInCallExpression(base)
+        if (lastAccess) {
+          ({ name } = lastAccess)
+        }
+      }
+
+      if (!name) ({ name } = base)
+      if (!name) return $skip
+
+      // Remove leading # from private identifier since it makes no
+      // sense for a private getter to point to itself
+      if (name[0] === "#") name = name.slice(1)
+
+      return makeGetterMethod(name, ws, base)
+    }
+
+    const last = rest[rest.length-1]
+
+    switch(last.type) {
+      case "PropertyGlob":
+        return {
+          type: "GetShorthandMethodDefinition",
+          children: last.object.properties.map((p) => {
+            const { name, type } = p
+            let v
+            switch (type) {
+              case "Identifier":
+                v = insertTrimmingSpace(p, "")
+                break
+              case "Property":
+                v = insertTrimmingSpace(p.value, "")
+                break
+            }
+            const exp = processCallMemberExpression({
+              type: "CallExpression",
+              children: [value[0], ...value[1].slice(0, -1), {
+                type: "PropertyAccess",
+                children: [".", v],
+              }],
+            })
+
+            return makeGetterMethod(name, ws, exp)
+          })
+        }
+    }
+
+    const lastAccess = lastAccessInCallExpression({children: rest})
+    const { name } = lastAccess
+
+    return makeGetterMethod(name, ws, value)
+
 MethodModifier
   # NOTE: Merged get/set definitions
   GetOrSet:kind _? &ClassElementName ->
@@ -2634,14 +2714,14 @@ ClassElementName
   PrivateIdentifier
 
 PrivateIdentifier
-  $(Hash IdentifierName) ->
+  $(Hash IdentifierName):id ->
     return {
       type: "Identifier",
-      name: $0,
-      names: [$0],
+      name: id,
+      names: [id],
       children: [{
         $loc: $loc,
-        token: $0,
+        token: id,
       }],
     }
 

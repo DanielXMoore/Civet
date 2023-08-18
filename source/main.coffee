@@ -81,6 +81,7 @@ uncacheable = new Set [
   "JSXOptionalClosingFragment"
   "JSXTag"
   "LeftHandSideExpression"
+  "MemberBase"
   "MemberExpression"
   "MemberExpressionRest"
   "Nested"
