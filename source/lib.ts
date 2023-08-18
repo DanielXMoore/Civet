@@ -6,11 +6,12 @@
  * here eventually.
  */
 
-type ASTString = string & { children: undefined }
-type ASTNode = ASTNodeBase | ASTNodeBase[] | ASTString | undefined
+type ASTString = string & { children: undefined, type: undefined }
+type ASTNode = ASTNodeBase | ASTNode[] | ASTString | undefined
 type ASTNodeBase = {
   type: string
   children: ASTNode[]
+  blockPrefix?: unknown
   parent: ASTNodeBase | undefined
 }
 
@@ -35,6 +36,11 @@ type RefNode = {
   id: string
 }
 
+type AtBinding = {
+  type: "AtBinding"
+  ref: RefNode
+}
+
 type BlockStatement = {
   type: "BlockStatement"
   children: ASTNode[]
@@ -43,6 +49,8 @@ type BlockStatement = {
   root: boolean
   parent: ASTNodeBase | undefined
 }
+
+type Predicate = (node: Exclude<ASTNode, undefined>) => boolean
 
 /**
  * Adds parent pointers to all nodes in the AST. Elements within
@@ -387,7 +395,7 @@ function constructPipeStep(fn, arg, returning) {
 // Split out leading newlines from the first indented line
 const initialSpacingRe = /^(?:\r?\n|\n)*((?:\r?\n|\n)\s+)/
 
-function dedentBlockString({ $loc, token: str }, spacing, trim = true) {
+function dedentBlockString({ $loc, token: str }: LeafNode, spacing, trim = true) {
   // If string begins with a newline then indentation assume that it should be removed for all lines
   if (spacing == null) spacing = str.match(initialSpacingRe)
 
@@ -464,7 +472,7 @@ function dedentBlockSubstitutions($0) {
   }
 }
 
-function deepCopy(node) {
+function deepCopy(node: ASTNode) {
   if (node == null) return node
   if (typeof node !== "object") return node
 
@@ -1035,7 +1043,11 @@ function findChildIndex(parent, child) {
  * Also returns the `child` that we came from (possibly `node`), in an
  * `{ancestor, child}` object.  If none are found, `ancestor` will be null.
  */
-function findAncestor(node, predicate, stopPredicate) {
+function findAncestor(
+  node: ASTNodeBase,
+  predicate: (parent: ASTNode, child: ASTNode) => boolean,
+  stopPredicate?: (parent: ASTNode, child: ASTNode) => boolean
+): { ancestor: ASTNodeBase | undefined, child: ASTNodeBase } {
   let { parent } = node
   while (parent && !stopPredicate?.(parent, node)) {
     if (predicate(parent, node)) {
@@ -1050,7 +1062,7 @@ function findAncestor(node, predicate, stopPredicate) {
 // Gather child nodes that match a predicate
 // while recursing into nested expressions
 // without recursing into nested blocks/for loops
-function gatherNodes(node, predicate) {
+function gatherNodes(node: ASTNode, predicate: Predicate): ASTNode[] {
   if (node == null) return []
 
   if (Array.isArray(node)) {
@@ -1080,7 +1092,7 @@ function gatherNodes(node, predicate) {
 
 // Gather nodes that match a predicate recursing into all unmatched children
 // i.e. if the predicate matches a node it is not recursed into further
-function gatherRecursive(node, predicate, skipPredicate) {
+function gatherRecursive(node: ASTNode, predicate: Predicate, skipPredicate?: Predicate): ASTNode[] {
   if (node == null) return []
 
   if (Array.isArray(node)) {
@@ -1096,7 +1108,7 @@ function gatherRecursive(node, predicate, skipPredicate) {
   return gatherRecursive(node.children, predicate, skipPredicate)
 }
 
-function gatherRecursiveAll(node: ASTNode, predicate: (node: ASTNode) => boolean): ASTNode[] {
+function gatherRecursiveAll(node: ASTNode, predicate: Predicate): Exclude<ASTNode, undefined | ASTNode[]>[] {
   if (node == null) return []
 
   if (Array.isArray(node)) {
@@ -1366,7 +1378,7 @@ function gatherRecursiveWithinFunction(node, predicate) {
 
 // Trims the first single space from the spacing array or node's children if present
 // maintains $loc for source maps
-function insertTrimmingSpace(target, c) {
+function insertTrimmingSpace(target: ASTNode, c: string): ASTNode {
   if (!target) return target
 
   if (Array.isArray(target)) return target.map((e, i) => {
@@ -1603,11 +1615,13 @@ function forRange(open, forDeclaration, range, stepExp, close) {
   }
 }
 
-function gatherBindingCode(statements, opts) {
-  const thisAssignments = []
-  const splices = []
+type ThisAssignments = [string, RefNode][]
 
-  function insertRestSplices(s, p, thisAssignments) {
+function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: boolean }) {
+  const thisAssignments: ThisAssignments = []
+  const splices: unknown[] = []
+
+  function insertRestSplices(s, p: unknown[], thisAssignments: ThisAssignments) {
     gatherRecursiveAll(s, n => n.blockPrefix || (opts?.injectParamProps && n.accessModifier) || n.type === "AtBinding")
       .forEach((n) => {
         // Insert `this` assignments
@@ -1638,7 +1652,7 @@ function gatherBindingCode(statements, opts) {
 
   insertRestSplices(statements, splices, thisAssignments)
 
-  return [splices, thisAssignments]
+  return [splices, thisAssignments] as const
 }
 
 // Convert (non-Template) Literal to actual JavaScript value
@@ -1693,7 +1707,7 @@ function makeAsConst(node) {
   return node
 }
 
-function makeEmptyBlock() {
+function makeEmptyBlock(): BlockStatement {
   const expressions = []
   return {
     type: "BlockStatement",
@@ -1860,7 +1874,7 @@ function needsRef(expression, base = "ref") {
   return makeRef(base)
 }
 
-function makeRef(base = "ref", id = base) {
+function makeRef(base = "ref", id = base): RefNode {
   return {
     type: "Ref",
     base,
@@ -2462,12 +2476,7 @@ function aggregateDuplicateBindings(bindings, ReservedWord) {
       input: key,
     })) {
       shared.forEach((p) => {
-        const ref = {
-          type: "Ref",
-          base: `_${key}`,
-          id: key,
-        }
-        aliasBinding(p, ref)
+        aliasBinding(p, makeRef(`_${key}`, key))
       });
       // Don't push declarations for reserved words
       return
@@ -2846,7 +2855,7 @@ function findDecs(statements) {
   return new Set(declarationNames)
 }
 
-function populateRefs(statements) {
+function populateRefs(statements: ASTNode) {
   const refNodes = gatherRecursive(statements, ({ type }) => type === "Ref")
 
   if (refNodes.length) {
@@ -3183,7 +3192,7 @@ function processUnaryExpression(pre, exp, post) {
   }
 }
 
-function prune(node) {
+function prune(node: ASTNode): ASTNode {
   if (node === null || node === undefined) return
   if (node.length === 0) return
 
