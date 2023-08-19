@@ -1,4 +1,5 @@
 import { TransformResult, createUnplugin } from 'unplugin';
+// @ts-ignore
 import civet from '@danielx/civet';
 import * as fs from 'fs';
 import path from 'path';

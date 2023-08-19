@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# clean build
+rm -rf dist
+
 # normal files
 coffee build/esbuild.coffee
 
@@ -25,3 +28,4 @@ cp ./integration/unplugin/dist/* ./dist
 
 # create browser build for docs
 terser dist/browser.js --compress --mangle --ecma 2015 --output civet.dev/public/__civet.js
+
