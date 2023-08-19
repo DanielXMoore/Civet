@@ -6,11 +6,57 @@
  * here eventually.
  */
 
+type ASTString = string & { children: undefined, type: undefined }
+type ASTNode = ASTNodeBase | ASTNode[] | ASTString | undefined
+type ASTNodeBase = {
+  type: string
+  children: ASTNode[]
+  blockPrefix?: unknown
+  parent: ASTNodeBase | undefined
+}
+
+type Loc = {
+  pos: number
+  length: number
+}
+
+type LeafNode = {
+  $loc: Loc
+  token: string
+}
+
+type StatementDelimiter = ASTNode
+type IndentNode = ASTNode
+
+type StatementTuple = [IndentNode, ASTNode, StatementDelimiter?]
+
+type RefNode = {
+  type: "Ref"
+  base: string
+  id: string
+}
+
+type AtBinding = {
+  type: "AtBinding"
+  ref: RefNode
+}
+
+type BlockStatement = {
+  type: "BlockStatement"
+  children: ASTNode[]
+  expressions: StatementTuple[]
+  bare: boolean
+  root: boolean
+  parent: ASTNodeBase | undefined
+}
+
+type Predicate = (node: Exclude<ASTNode, undefined>) => boolean
+
 /**
  * Adds parent pointers to all nodes in the AST. Elements within
  * arrays of nodes receive the closest non-array object parent.
  */
-function addParentPointers(node, parent) {
+function addParentPointers(node: ASTNode, parent?: ASTNodeBase) {
   if (node == null) return
   if (typeof node !== "object") return
 
@@ -35,7 +81,7 @@ function addParentPointers(node, parent) {
  * recursing into arrays but not objects.  More efficient version of
  * `addParentPointers` when just injecting one new node.
  */
-function updateParentPointers(node, parent, depth = 1) {
+function updateParentPointers(node: ASTNode, parent?: ASTNodeBase, depth = 1) {
   if (node == null) return
   if (typeof node !== "object") return
 
@@ -55,7 +101,7 @@ function updateParentPointers(node, parent, depth = 1) {
   }
 }
 
-function addPostfixStatement(statement, ws, post) {
+function addPostfixStatement(statement: StatementTuple, ws: ASTNode, post) {
   let children, expressions
   if (post.blockPrefix?.length) {
     let indent = post.blockPrefix[0][0]
@@ -89,7 +135,7 @@ function addPostfixStatement(statement, ws, post) {
  * Adjusts `@binding` inside object properties that need to be aliased
  * see test/function.civet binding pattern
  */
-function adjustAtBindings(statements, asThis = false) {
+function adjustAtBindings(statements: ASTNode, asThis = false) {
   gatherRecursiveAll(statements, n => n.type === "AtBindingProperty")
     .forEach(binding => {
       const { ref } = binding
@@ -112,7 +158,7 @@ function adjustAtBindings(statements, asThis = false) {
     })
 }
 
-function adjustBindingElements(elements) {
+function adjustBindingElements(elements: ASTNodeBase[]) {
   const names = elements.flatMap((p) => p.names || []),
     { length } = elements
 
@@ -183,7 +229,7 @@ function adjustBindingElements(elements) {
  * Adjust the alias of a binding property, adding an alias if one doesn't exist or
  * replacing an existing alias. This mutates the property in place.
  */
-function aliasBinding(p, ref) {
+function aliasBinding(p, ref: RefNode) {
   if (p.type === "Identifier") {
     // Array element binding
     // TODO: This ignores `name` and `names` properties of Identifier and
@@ -220,7 +266,7 @@ const assert = {
  *
  * @returns the duplicated block with prefix statements attached or the unchanged block.
  */
-function blockWithPrefix(prefixStatements, block) {
+function blockWithPrefix(prefixStatements, block: BlockStatement) {
   if (prefixStatements && prefixStatements.length) {
     const indent = getIndent(block.expressions[0])
     // Match prefix statements to block indent level
@@ -247,12 +293,13 @@ function blockWithPrefix(prefixStatements, block) {
   return block
 }
 
-function closest(node, types) {
+function closest(node: ASTNodeBase, types: string[]) {
   do {
     if (types.includes(node.type)) {
       return node
     }
-  } while (node = node.parent)
+  } while (node = node.parent!)
+  return
 }
 
 /**
@@ -261,7 +308,7 @@ function closest(node, types) {
  *
  * TODO: preserve ref identities
  */
-function clone(node) {
+function clone(node: ASTNode) {
   removeParentPointers(node)
   return deepCopy(node)
 }
@@ -348,7 +395,7 @@ function constructPipeStep(fn, arg, returning) {
 // Split out leading newlines from the first indented line
 const initialSpacingRe = /^(?:\r?\n|\n)*((?:\r?\n|\n)\s+)/
 
-function dedentBlockString({ $loc, token: str }, spacing, trim = true) {
+function dedentBlockString({ $loc, token: str }: LeafNode, spacing, trim = true) {
   // If string begins with a newline then indentation assume that it should be removed for all lines
   if (spacing == null) spacing = str.match(initialSpacingRe)
 
@@ -425,7 +472,7 @@ function dedentBlockSubstitutions($0) {
   }
 }
 
-function deepCopy(node) {
+function deepCopy(node: ASTNode) {
   if (node == null) return node
   if (typeof node !== "object") return node
 
@@ -996,7 +1043,11 @@ function findChildIndex(parent, child) {
  * Also returns the `child` that we came from (possibly `node`), in an
  * `{ancestor, child}` object.  If none are found, `ancestor` will be null.
  */
-function findAncestor(node, predicate, stopPredicate) {
+function findAncestor(
+  node: ASTNodeBase,
+  predicate: (parent: ASTNode, child: ASTNode) => boolean,
+  stopPredicate?: (parent: ASTNode, child: ASTNode) => boolean
+): { ancestor: ASTNodeBase | undefined, child: ASTNodeBase } {
   let { parent } = node
   while (parent && !stopPredicate?.(parent, node)) {
     if (predicate(parent, node)) {
@@ -1011,7 +1062,7 @@ function findAncestor(node, predicate, stopPredicate) {
 // Gather child nodes that match a predicate
 // while recursing into nested expressions
 // without recursing into nested blocks/for loops
-function gatherNodes(node, predicate) {
+function gatherNodes(node: ASTNode, predicate: Predicate): ASTNode[] {
   if (node == null) return []
 
   if (Array.isArray(node)) {
@@ -1041,7 +1092,7 @@ function gatherNodes(node, predicate) {
 
 // Gather nodes that match a predicate recursing into all unmatched children
 // i.e. if the predicate matches a node it is not recursed into further
-function gatherRecursive(node, predicate, skipPredicate) {
+function gatherRecursive(node: ASTNode, predicate: Predicate, skipPredicate?: Predicate): ASTNode[] {
   if (node == null) return []
 
   if (Array.isArray(node)) {
@@ -1057,7 +1108,7 @@ function gatherRecursive(node, predicate, skipPredicate) {
   return gatherRecursive(node.children, predicate, skipPredicate)
 }
 
-function gatherRecursiveAll(node, predicate) {
+function gatherRecursiveAll(node: ASTNode, predicate: Predicate): Exclude<ASTNode, undefined | ASTNode[]>[] {
   if (node == null) return []
 
   if (Array.isArray(node)) {
@@ -1076,7 +1127,7 @@ function gatherRecursiveAll(node, predicate) {
  * Gets the indentation node from a statement. Includes newline,
  * excludes comments, strips location info.
  */
-function getIndent(statement) {
+function getIndent(statement: StatementTuple) {
   let indent = statement?.[0]
   if (Array.isArray(indent)) {
     indent = indent.flat(Infinity)
@@ -1101,13 +1152,13 @@ function hasYield(exp) {
   return gatherRecursiveWithinFunction(exp, ({ type }) => type === "Yield").length > 0
 }
 
-function hoistRefDecs(statements) {
+function hoistRefDecs(statements: StatementTuple[]) {
   gatherRecursiveAll(statements, (s) => s.hoistDec)
     .forEach(node => {
       let { hoistDec } = node
       node.hoistDec = null
 
-      const { ancestor, child } = findAncestor(node, (ancestor) => 
+      const { ancestor, child } = findAncestor(node, (ancestor) =>
         ancestor.type === "BlockStatement" && (!ancestor.bare || ancestor.root))
 
       if (ancestor) {
@@ -1327,7 +1378,7 @@ function gatherRecursiveWithinFunction(node, predicate) {
 
 // Trims the first single space from the spacing array or node's children if present
 // maintains $loc for source maps
-function insertTrimmingSpace(target, c) {
+function insertTrimmingSpace(target: ASTNode, c: string): ASTNode {
   if (!target) return target
 
   if (Array.isArray(target)) return target.map((e, i) => {
@@ -1349,7 +1400,7 @@ function insertTrimmingSpace(target, c) {
 }
 
 // Returns leading space as a string, or undefined if none
-function getTrimmingSpace(target) {
+function getTrimmingSpace(target: ASTNodeBase) {
   if (!target) return
   if (Array.isArray(target)) return getTrimmingSpace(target[0])
   if (target.children) return getTrimmingSpace(target.children[0])
@@ -1564,11 +1615,13 @@ function forRange(open, forDeclaration, range, stepExp, close) {
   }
 }
 
-function gatherBindingCode(statements, opts) {
-  const thisAssignments = []
-  const splices = []
+type ThisAssignments = [string, RefNode][]
 
-  function insertRestSplices(s, p, thisAssignments) {
+function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: boolean }) {
+  const thisAssignments: ThisAssignments = []
+  const splices: unknown[] = []
+
+  function insertRestSplices(s, p: unknown[], thisAssignments: ThisAssignments) {
     gatherRecursiveAll(s, n => n.blockPrefix || (opts?.injectParamProps && n.accessModifier) || n.type === "AtBinding")
       .forEach((n) => {
         // Insert `this` assignments
@@ -1599,7 +1652,7 @@ function gatherBindingCode(statements, opts) {
 
   insertRestSplices(statements, splices, thisAssignments)
 
-  return [splices, thisAssignments]
+  return [splices, thisAssignments] as const
 }
 
 // Convert (non-Template) Literal to actual JavaScript value
@@ -1654,7 +1707,7 @@ function makeAsConst(node) {
   return node
 }
 
-function makeEmptyBlock() {
+function makeEmptyBlock(): BlockStatement {
   const expressions = []
   return {
     type: "BlockStatement",
@@ -1821,7 +1874,7 @@ function needsRef(expression, base = "ref") {
   return makeRef(base)
 }
 
-function makeRef(base = "ref", id = base) {
+function makeRef(base = "ref", id = base): RefNode {
   return {
     type: "Ref",
     base,
@@ -2423,12 +2476,7 @@ function aggregateDuplicateBindings(bindings, ReservedWord) {
       input: key,
     })) {
       shared.forEach((p) => {
-        const ref = {
-          type: "Ref",
-          base: `_${key}`,
-          id: key,
-        }
-        aliasBinding(p, ref)
+        aliasBinding(p, makeRef(`_${key}`, key))
       });
       // Don't push declarations for reserved words
       return
@@ -2758,7 +2806,7 @@ function processPipelineExpressions(statements) {
     })
 }
 
-function processProgram(root, config, m, ReservedWord) {
+function processProgram(root: BlockStatement, config, m, ReservedWord) {
   // invariants
   assert.equal(m.forbidBracedApplication.length, 1, "forbidBracedApplication")
   assert.equal(m.forbidClassImplicitCall.length, 1, "forbidClassImplicitCall")
@@ -2807,7 +2855,7 @@ function findDecs(statements) {
   return new Set(declarationNames)
 }
 
-function populateRefs(statements) {
+function populateRefs(statements: ASTNode) {
   const refNodes = gatherRecursive(statements, ({ type }) => type === "Ref")
 
   if (refNodes.length) {
@@ -3144,7 +3192,7 @@ function processUnaryExpression(pre, exp, post) {
   }
 }
 
-function prune(node) {
+function prune(node: ASTNode): ASTNode {
   if (node === null || node === undefined) return
   if (node.length === 0) return
 
