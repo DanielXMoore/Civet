@@ -7,12 +7,17 @@
  */
 
 type ASTString = string & { children: undefined, type: undefined }
-type ASTNode = ASTNodeBase | ASTNode[] | ASTString | undefined
+type ASTNode = ASTNodeBase | ASTError | ASTRef | ASTLeaf | ASTNode[] | ASTString | undefined
 type ASTNodeBase = {
   type: string
   children: ASTNode[]
   blockPrefix?: unknown
+  names?: string[]
   parent: ASTNodeBase | undefined
+}
+type ASTError = {
+  type: "Error"
+  message: string
 }
 
 type Loc = {
@@ -20,7 +25,7 @@ type Loc = {
   length: number
 }
 
-type LeafNode = {
+type ASTLeaf = {
   $loc: Loc
   token: string
 }
@@ -30,7 +35,7 @@ type IndentNode = ASTNode
 
 type StatementTuple = [IndentNode, ASTNode, StatementDelimiter?]
 
-type RefNode = {
+type ASTRef = {
   type: "Ref"
   base: string
   id: string
@@ -38,7 +43,7 @@ type RefNode = {
 
 type AtBinding = {
   type: "AtBinding"
-  ref: RefNode
+  ref: ASTRef
 }
 
 type BlockStatement = {
@@ -229,7 +234,7 @@ function adjustBindingElements(elements: ASTNodeBase[]) {
  * Adjust the alias of a binding property, adding an alias if one doesn't exist or
  * replacing an existing alias. This mutates the property in place.
  */
-function aliasBinding(p, ref: RefNode) {
+function aliasBinding(p, ref: ASTRef) {
   if (p.type === "Identifier") {
     // Array element binding
     // TODO: This ignores `name` and `names` properties of Identifier and
@@ -395,7 +400,7 @@ function constructPipeStep(fn, arg, returning) {
 // Split out leading newlines from the first indented line
 const initialSpacingRe = /^(?:\r?\n|\n)*((?:\r?\n|\n)\s+)/
 
-function dedentBlockString({ $loc, token: str }: LeafNode, spacing, trim = true) {
+function dedentBlockString({ $loc, token: str }: ASTLeaf, spacing, trim = true) {
   // If string begins with a newline then indentation assume that it should be removed for all lines
   if (spacing == null) spacing = str.match(initialSpacingRe)
 
@@ -1407,8 +1412,19 @@ function getTrimmingSpace(target: ASTNodeBase) {
   if (target.token) return target.token.match(/^ ?/)[0]
 }
 
-function processForInOf($0) {
-  let [awaits, each, open, declaration, declaration2, ws, inOf, exp, step, close] = $0
+function processForInOf($0: [
+  awaits: ASTNode,
+  eachOwn: undefined | [ASTLeaf, ASTNode],
+  open: ASTNode,
+  declaration: ASTNode,
+  declaration2: [ws1: ASTNode, comma: ASTLeaf, ws2: ASTNode, decl2: ASTNode],
+  ws: ASTNode,
+  inOf: ASTLeaf,
+  exp: ASTNodeBase,
+  step: ASTNode,
+  close: ASTNode
+], getRef) {
+  let [awaits, eachOwn, open, declaration, declaration2, ws, inOf, exp, step, close] = $0
 
   if (exp.type === "RangeExpression" && inOf.token === "of" && !declaration2) {
     // TODO: add support for `declaration2` to efficient `forRange`
@@ -1417,18 +1433,18 @@ function processForInOf($0) {
     throw new Error("for..of/in cannot use 'by' except with range literals")
   }
 
-  let eachError
-  let hoistDec, blockPrefix = []
+  let eachOwnError: ASTError | undefined
+  let hoistDec, blockPrefix: ASTNode[] = []
 
   // for each item[, index] of array
-  if (each) {
+  if (eachOwn && eachOwn[0].token === "each") {
     if (inOf.token === "of") {
       const counterRef = makeRef("i")
       const lenRef = makeRef("len")
       const expRef = maybeRef(exp)
 
       const increment = "++"
-      let indexAssignment, assignmentNames = [...declaration.names]
+      let assignmentNames = [...declaration.names]
 
       if (declaration2) {
         const [, , ws2, decl2] = declaration2  // strip __ Comma __
@@ -1459,21 +1475,34 @@ function processForInOf($0) {
       const children = [open, declaration, "; ", condition, counterRef, increment, close]
       return { declaration, children, blockPrefix }
     } else {
-      eachError = {
+      eachOwnError = {
         type: "Error",
         message: "'each' is only meaningful in for..of loops",
       }
     }
   }
 
-  if (!declaration2) {
-    return {
-      declaration,
-      children: [awaits, eachError, open, declaration, ws, inOf, exp, step, close], // omit declaration2, replace each with eachError
+  // for own..in
+  let own = eachOwn && eachOwn[0].token === "own";
+  let expRef: ASTNode | undefined
+  if (own && inOf.token !== "in") {
+    own = false
+    eachOwnError = {
+      type: "Error",
+      message: "'own' is only meaningful in for..in loops",
     }
   }
 
-  const [, , ws2, decl2] = declaration2  // strip __ Comma __
+  if (!declaration2 && !own) {
+    return {
+      declaration,
+      blockPrefix,
+      children: [awaits, eachOwnError, open, declaration, ws, inOf, expRef ?? exp, step, close], // omit declaration2, replace eachOwn with eachOwnError, replace exp with expRef
+    }
+  }
+
+  let ws2: ASTNode | undefined, decl2: ASTNode | undefined
+  if (declaration2) [, , ws2, decl2] = declaration2  // strip __ Comma __
 
   switch (inOf.token) {
     case "of": { // for item, index of iter
@@ -1520,11 +1549,18 @@ function processForInOf($0) {
           names: [],
         }
       }
-      blockPrefix.push(["", {
-        type: "Declaration",
-        children: [insertTrimmingSpace(ws2, ""), decl2, " = ", insertTrimmingSpace(expRef, ""), "[", insertTrimmingSpace(binding, ""), "]"],
-        names: decl2.names,
-      }, ";"])
+      // for own..in
+      if (own) {
+        const hasPropRef = getRef("hasProp")
+        blockPrefix.push(["", "if (!", hasPropRef, "(", insertTrimmingSpace(expRef, ""), ", ", insertTrimmingSpace(binding, ""), ")) continue", ";"])
+      }
+      if (decl2) {
+        blockPrefix.push(["", {
+          type: "Declaration",
+          children: [insertTrimmingSpace(ws2, ""), decl2, " = ", insertTrimmingSpace(expRef, ""), "[", insertTrimmingSpace(binding, ""), "]"],
+          names: decl2.names,
+        }, ";"])
+      }
       break
     }
 
@@ -1534,7 +1570,7 @@ function processForInOf($0) {
 
   return {
     declaration,
-    children: [awaits, eachError, open, declaration, ws, inOf, exp, step, close], // omit declaration2, replace each with eachError
+    children: [awaits, eachOwnError, open, declaration, ws, inOf, exp, step, close], // omit declaration2, replace each with eachOwnError
     blockPrefix,
     hoistDec,
   }
@@ -1615,7 +1651,7 @@ function forRange(open, forDeclaration, range, stepExp, close) {
   }
 }
 
-type ThisAssignments = [string, RefNode][]
+type ThisAssignments = [string, ASTRef][]
 
 function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: boolean }) {
   const thisAssignments: ThisAssignments = []
@@ -1874,7 +1910,7 @@ function needsRef(expression, base = "ref") {
   return makeRef(base)
 }
 
-function makeRef(base = "ref", id = base): RefNode {
+function makeRef(base = "ref", id = base): ASTRef {
   return {
     type: "Ref",
     base,
@@ -1883,7 +1919,7 @@ function makeRef(base = "ref", id = base): RefNode {
 }
 
 // Transform into a ref if needed
-function maybeRef(exp, base = "ref") {
+function maybeRef(exp: ASTNode, base: string = "ref"): ASTNode {
   if (!needsRef(exp)) return exp
   return makeRef(base)
 }

@@ -987,6 +987,14 @@ for key, value in object
   console.log `${key} maps to ${value}`
 </Playground>
 
+If your object might have a prototype with enumerable properties,
+you can skip them with `own`:
+
+<Playground>
+for own key in object
+  console.log key
+</Playground>
+
 ### Loop Expressions
 
 If needed, loops automatically assemble an Array of the last value
