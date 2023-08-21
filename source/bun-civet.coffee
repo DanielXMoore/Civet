@@ -1,7 +1,7 @@
 ###
 Bun plugin for Civet files. Simply follow the steps below:
 
-1. Create bunconfig.civet if it doesn't exist
+1. Create bunconfig.toml if it doesn't exist
 2. Add the following line:
 preload = ["@danielx/civet/bun-civet"]
 
