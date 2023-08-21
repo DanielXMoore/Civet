@@ -1,9 +1,12 @@
 ###
-Bun plugin for Civet files.  Import this plugin from a .js or .ts file,
-and afterward you'll be able to import .civet files.  For example:
+Bun plugin for Civet files. Simply follow the steps below:
 
-import "@danielx/civet/bun-civet"
-import "./foo.civet"
+1. Create bunconfig.toml if it doesn't exist
+2. Add the following line:
+preload = ["@danielx/civet/bun-civet"]
+
+After that, you can use .civet files with the Bun cli, like:
+$ bun file.civet
 ###
 
 import { plugin } from 'bun'
