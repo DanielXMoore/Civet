@@ -20,7 +20,6 @@ uncacheable = new Set [
   "Reset"
 
   # Indentation
-  "InsertIndent"
   "PushIndent"
   "PopIndent"
   "TrackIndented"
