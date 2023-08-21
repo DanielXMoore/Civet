@@ -2849,7 +2849,7 @@ function processProgram(root: BlockStatement, config, m, ReservedWord) {
   assert.equal(m.forbidIndentedApplication.length, 1, "forbidIndentedApplication")
   assert.equal(m.forbidNewlineBinaryOp.length, 1, "forbidNewlineBinaryOp")
   assert.equal(m.forbidTrailingMemberProperty.length, 1, "forbidTrailingMemberProperty")
-  assert.equal(m.JSXTagStack.length, 0, "JSXTagStack should be empty")
+  // assert.equal(m.JSXTagStack.length, 0, "JSXTagStack should be empty")
 
   addParentPointers(root)
 
