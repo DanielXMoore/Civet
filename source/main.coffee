@@ -7,11 +7,32 @@ import * as util from "./util.coffee"
 { SourceMap } = util
 export { parse, generate, util }
 
-# Rules that are not cacheable
-# Essentially anything that depends on mutable state in the parser like indents and the rules that depend on them
-# One day this will be better supported by Hera
+import StateCache from "./state-cache.mts"
+
+# Need to no-cache any rule that directly modifies parser state
+# indentation stack, jsx stack, etc.
+
 uncacheable = new Set [
-  "ActualAssignment"
+  # Meta
+  "Debugger"
+  "Init"
+  "Program"
+  "Reset"
+
+  # Indentation
+  # We need to no-cache the state modifying rules up to the point where they
+  # balance within a parent so PushIndent needs to be marked no-cache even
+  # though it only calls TrackIndented which does the actual work.
+  "PushIndent"
+  "PopIndent"
+  "TrackIndented"
+
+  # JSX
+  "PushJSXOpeningElement"
+  "PushJSXOpeningFragment"
+  "PopJSXStack"
+
+  # State
   "AllowAll"
   "AllowClassImplicitCall"
   "AllowBracedApplication"
@@ -19,111 +40,14 @@ uncacheable = new Set [
   "AllowMultiLineImplicitObjectLiteral"
   "AllowNewlineBinaryOp"
   "AllowTrailingMemberProperty"
-  "AllowedTrailingMemberExpressions"
-  "ApplicationStart"
-  "Arguments"
-  "ArgumentsWithTrailingMemberExpressions"
-  "ArrowFunction"
-  "ArrowFunctionTail"
-  "AssignmentExpression"
-  "AssignmentExpressionTail"
-  "BinaryOpExpression"
-  "BinaryOpRHS"
-  "BracedApplicationAllowed"
-  "BracedBlock"
-  "BracedObjectLiteralContent"
-  "BracedOrEmptyBlock"
-  "CallExpression"
-  "CallExpressionRest"
-  "ClassImplicitCallForbidden"
-  "CoffeeCommentEnabled"
-  "CommaDelimiter"
-  "ConditionalExpression"
-  "ConditionFragment"
-  "Declaration"
-  "Debugger"
-  "Dedented"
-  "ElementListWithIndentedApplicationForbidden"
-  "ElseClause"
-  "Expression"
-  "ExpressionStatement"
-  "ExpressionWithIndentedApplicationForbidden"
-  "ExpressionWithObjectApplicationForbidden"
-  "ExtendedExpression"
-  "FatArrowBody"
+
   "ForbidClassImplicitCall"
   "ForbidBracedApplication"
   "ForbidIndentedApplication"
   "ForbidMultiLineImplicitObjectLiteral"
   "ForbidNewlineBinaryOp"
   "ForbidTrailingMemberProperty"
-  "FunctionDeclaration"
-  "FunctionExpression"
-  "HoistableDeclaration"
-  "ImplicitArguments"
-  "ImplicitInlineObjectPropertyDelimiter"
-  "ImplicitNestedBlock"
-  "IndentedApplicationAllowed"
-  "IndentedAtLeast"
-  "IndentedFurther"
-  "IndentedJSXChildExpression"
-  "InlineObjectLiteral"
-  "InsertIndent"
-  "JSXChild"
-  "JSXChildren"
-  "JSXElement"
-  "JSXFragment"
-  "JSXImplicitFragment"
-  "JSXMixedChildren"
-  "JSXNested"
-  "JSXNestedChildren"
-  "JSXOptionalClosingElement"
-  "JSXOptionalClosingFragment"
-  "JSXTag"
-  "LeftHandSideExpression"
-  "MemberExpression"
-  "MemberExpressionRest"
-  "Nested"
-  "NestedBindingElement"
-  "NestedBindingElements"
-  "NestedBlockExpression"
-  "NestedBlockExpression"
-  "NestedBlockStatement"
-  "NestedBlockStatements"
-  "NestedClassSignatureElement"
-  "NestedClassSignatureElements"
-  "NestedDeclareElement"
-  "NestedDeclareElements"
-  "NestedElement"
-  "NestedElementList"
-  "NestedImplicitObjectLiteral"
-  "NestedImplicitPropertyDefinition"
-  "NestedImplicitPropertyDefinitions"
-  "NestedInterfaceProperty"
-  "NestedJSXChildExpression"
-  "NestedModuleItem"
-  "NestedModuleItems"
-  "NestedNonAssignmentExtendedExpression"
-  "NestedObject"
-  "NestedPropertyDefinitions"
-  "NewlineBinaryOpAllowed"
-  "NonPipelineArgumentPart"
-  "NonPipelineArgumentList"
-  "NonPipelineAssignmentExpression"
-  "NonPipelineExtendedExpression"
-  "NonPipelinePostfixedExpression"
-  "NonSingleBracedBlock"
-  "NotDedented"
-  "ObjectLiteral"
-  "PatternExpressionList"
-  "PopIndent"
-  "PopJSXStack"
-  "PostfixedExpression"
-  "PostfixedStatement"
-  "PrimaryExpression"
-  "PushIndent"
-  "PushJSXOpeningElement"
-  "PushJSXOpeningFragment"
+
   "RestoreAll"
   "RestoreClassImplicitCall"
   "RestoreMultiLineImplicitObjectLiteral"
@@ -131,25 +55,7 @@ uncacheable = new Set [
   "RestoreIndentedApplication"
   "RestoreTrailingMemberProperty"
   "RestoreNewlineBinaryOp"
-  "RHS"
-  "ShortCircuitExpression"
-  "SingleLineAssignmentExpression"
-  "SingleLineBinaryOpRHS"
-  "SingleLineComment"
-  "SingleLineStatements"
-  "SnugNamedProperty"
-  "Statement"
-  "StatementListItem"
-  "SuffixedExpression"
-  "SuffixedStatement"
-  "ThinArrowFunction"
-  "TrackIndented"
-  "TrailingMemberExpressions"
-  "TrailingMemberPropertyAllowed"
-  "TypedJSXElement"
-  "TypedJSXFragment"
-  "UnaryExpression"
-  "UpdateExpression"
+
 ]
 
 export compile = (src, options) ->
@@ -201,20 +107,24 @@ export compile = (src, options) ->
 
 # logs = []
 makeCache = ->
-  caches = new Map
+  stateCache = new StateCache
+  getStateKey = null
 
   # stack = []
 
   events =
     enter: (ruleName, state) ->
-      cache = caches.get(ruleName)
-      if cache
-        if cache.has(state.pos)
-          # logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "💰"
-          result = cache.get(state.pos)
-          return {
-            cache: if result then { ...result }
-          }
+      return if uncacheable.has(ruleName)
+
+      key = [ruleName, state.pos, ...getStateKey()]
+
+      # We cache `undefined` when a rule fails to match so we need to use `has` here.
+      if stateCache.has(key)
+        # logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "💰"
+        result = stateCache.get(key)
+        return {
+          cache: if result then { ...result }
+        }
 
       # logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "\u2192"
       # stack.push(ruleName)
@@ -222,21 +132,20 @@ makeCache = ->
       return
 
     exit: (ruleName, state, result) ->
-      cache = caches.get(ruleName)
+      # special hack to get access to parser state
+      if ruleName is "Reset"
+        { getStateKey } = result.value
 
-      if !cache and !uncacheable.has(ruleName)
-        cache = new Map
-        caches.set(ruleName, cache)
-
-      if cache
+      if !uncacheable.has(ruleName)
+        key = [ruleName, state.pos, ...getStateKey()]
         if result
-          cache.set(state.pos, {...result})
+          stateCache.set(key, {...result})
         else
-          cache.set(state.pos, result)
+          stateCache.set(key, result)
 
       if parse.config.verbose and result
         console.log "Parsed #{JSON.stringify state.input[state.pos...result.pos]} [pos #{state.pos}-#{result.pos}] as #{ruleName}"#, JSON.stringify(result.value)
-      # stack.pop(ruleName)
+      # stack.pop()
       # logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + " " + (if result then "✅" else "❌")
 
       return
