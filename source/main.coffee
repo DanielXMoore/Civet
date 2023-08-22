@@ -115,6 +115,7 @@ makeCache = ->
 
       key = [ruleName, state.pos, ...getStateKey()]
 
+      # We cache `undefined` when a rule fails to match so we need to use `has` here.
       if stateCache.has(key)
         # logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "💰"
         result = stateCache.get(key)

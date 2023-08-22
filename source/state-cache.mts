@@ -3,6 +3,10 @@ type Position = number;
 type State = number;
 type JSXTag = string;
 
+/**
+ * A multi-layer cache for the state of the parser.
+ * It uses an array of keys as a single compound key.
+ */
 export default class StateCache<T> {
 
   private cache: Map<RuleName, Map<Position, Map<State, Map<JSXTag, T>>>> = new Map();
@@ -11,6 +15,10 @@ export default class StateCache<T> {
     return this.cache.get(key[0])?.get(key[1])?.get(key[2])?.get(key[3]);
   }
 
+  /**
+   * Check if this multi-layer cache has the given key.
+   * Since the intermediate layers are always other maps we only need to check the last layer.
+   */
   has(key: [RuleName, Position, State, JSXTag]): boolean {
     return !!this.cache.get(key[0])?.get(key[1])?.get(key[2])?.has(key[3]);
   }
