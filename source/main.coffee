@@ -20,6 +20,9 @@ uncacheable = new Set [
   "Reset"
 
   # Indentation
+  # We need to no-cache the state modifying rules up to the point where they
+  # balance within a parent so PushIndent needs to be marked no-cache even
+  # though it only calls TrackIndented which does the actual work.
   "PushIndent"
   "PopIndent"
   "TrackIndented"
