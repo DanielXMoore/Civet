@@ -16,7 +16,7 @@ title: Integrations
 - [ESM loader](https://github.com/DanielXMoore/Civet/blob/main/source/esm.civet)
 - [CJS require hook](https://github.com/DanielXMoore/Civet/blob/main/register.js)
 - [Bun plugin](https://github.com/DanielXMoore/Civet/blob/main/source/bun-civet.coffee)
-- [Civetman](https://github.com/zihan-ch/civetman) automatically compiles `.civet` files, making it easy to integrate with arbitrary build chains
+- [Civetman](https://github.com/zihan-ch/civetman) automatically compiles `.civet` files, making it easy to integrate with arbitrary build chains (see also [vite-plugin-civetman](https://github.com/krist7599555/vite-plugin-civetman))
 
 ## Starter Templates
 
