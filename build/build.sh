@@ -16,6 +16,9 @@ rm dist/cli.js
 # esm loader
 ./dist/civet --no-config --js -c source/esm.civet -o dist/esm.mjs
 
+# babel plugin
+cp source/babel-plugin.mjs dist/babel-plugin.mjs
+
 # types
 cp types/types.d.ts dist/types.d.ts
 
