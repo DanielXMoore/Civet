@@ -2875,7 +2875,9 @@ function processProgram(root: BlockStatement, config, m, ReservedWord) {
   statements.unshift(...m.prelude)
 
   if (config.autoLet) {
-    createLetDecs(statements, [])
+    createConstLetDecs(statements, [], "let")
+  } else if(config.autoConst) {
+    createConstLetDecs(statements, [], "const")
   } else if (config.autoVar) {
     createVarDecs(statements, [])
   }
@@ -3004,7 +3006,7 @@ function createVarDecs(statements, scopes, pushVar) {
   scopes.pop()
 }
 
-function createLetDecs(statements, scopes) {
+function createConstLetDecs(statements, scopes, letOrConst: "let" | "const") {
   function findVarDecs(statements, decs) {
     const declarationNames = gatherRecursive(statements,
       (node) =>
@@ -3055,16 +3057,16 @@ function createLetDecs(statements, scopes) {
         let forNode = forNodes.find((forNode) => forNode.block === block)
         if (fnNode != null) {
           scopes.push(new Set(fnNode.parameters.names))
-          createLetDecs(block.expressions, scopes)
+          createConstLetDecs(block.expressions, scopes, letOrConst)
           scopes.pop()
         }
         else if (forNode != null) {
           scopes.push(new Set(forNode.declaration.names))
-          createLetDecs(block.expressions, scopes)
+          createConstLetDecs(block.expressions, scopes, letOrConst)
           scopes.pop()
         }
         else
-          createLetDecs(block.expressions, scopes)
+          createConstLetDecs(block.expressions, scopes, letOrConst)
         continue
       }
       // Assignment and Declaration all use 'names'.
@@ -3085,13 +3087,14 @@ function createLetDecs(statements, scopes) {
         && statement[1].names[0] == undeclaredIdentifiers[0]
         && firstIdentifier && firstIdentifier.names == undeclaredIdentifiers[0]
         && gatherNodes(statement[1], (node) => node.type === "ObjectBindingPattern").length == 0)
-        statement[1].children.unshift(["let "])
+        statement[1].children.unshift([`${letOrConst} `])
       else {
         let tail = "\n"
         // Does this statement start with a newline?
         if (gatherNodes(indent, (node) => node.token && node.token.endsWith("\n")).length > 0)
           tail = undefined
-        targetStatements.push([indent, "let ", undeclaredIdentifiers.join(", "), tail])
+        // Have to use 'let' instead of 'const' if the assignment is inside an expression
+        targetStatements.push([indent, `let `, undeclaredIdentifiers.join(", "), tail])
       }
     }
     targetStatements.push(statement)
