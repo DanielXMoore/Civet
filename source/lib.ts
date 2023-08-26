@@ -2694,8 +2694,7 @@ function processPipelineExpressions(statements) {
 
       let i = 0, l = body.length
 
-      const refDec = []
-      const children = [ws, refDec]
+      const children = [ws]
 
       let usingRef = null
 
@@ -2744,12 +2743,9 @@ function processPipelineExpressions(statements) {
                 break;
             }
 
-            // remove refDec from children and put it inside lhs of assignment
-            // TODO: should be attached to node to be hoisted
-            children.pop()
             // assignment node
             const lhs = [[
-              [refDec, initRef],
+              [initRef],
               arg,
               [],
               { token: "=", children: [" = "] }
@@ -2831,9 +2827,12 @@ function processPipelineExpressions(statements) {
         }
       }
 
-      // TODO: Hoistable ref declarations
       if (usingRef) {
-        refDec.unshift("let ", usingRef, ";")
+        s.hoistDec = {
+          type: "Declaration",
+          children: ["let ", usingRef],
+          names: [],
+        }
       }
 
       children.push(arg)
@@ -2858,7 +2857,7 @@ function processProgram(root: BlockStatement, config, m, ReservedWord) {
   processPipelineExpressions(statements)
   processAssignments(statements)
   processPatternMatching(statements, ReservedWord)
-  processFunctions(statements, config)
+
   processSwitchExpressions(statements)
   processTryExpressions(statements)
 
@@ -2870,6 +2869,10 @@ function processProgram(root: BlockStatement, config, m, ReservedWord) {
   // NOTE: This should come after iteration expressions get processed
   // into IIFEs.
   hoistRefDecs(statements)
+
+  // Adding implicit returns should happen after hoisting any ref declarations
+  // so their target node can be found in the block without being inside a return
+  processFunctions(statements, config)
 
   // Insert prelude
   statements.unshift(...m.prelude)
