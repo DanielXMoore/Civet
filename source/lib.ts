@@ -1992,12 +1992,7 @@ function processAssignmentDeclaration(decl, id, suffix, ws, assign, e) {
         // Insert id, type suffix, spacing
         children: [...exp.children.slice(0, i), " ", id, suffix, ws, ...exp.children.slice(i)]
       }
-      return {
-        type: "Declaration",
-        decl,
-        children: [exp],
-        names: id.names,
-      }
+      return exp
     }
   }
 
