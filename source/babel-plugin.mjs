@@ -1,3 +1,18 @@
+// Babel plugin for compiling .civet files
+
+/* Example babel.config.json:
+
+{
+  "plugins": [
+    [
+      "@danielx/civet/babel-plugin"
+    ]
+  ],
+  "sourceMaps": "inline"
+}
+
+*/
+
 import { compile } from "./main.mjs"
 
 export default function (api, civetOptions) {
