@@ -25,18 +25,4 @@ export findConfig = (startDir) ->
     null
 
 export loadConfig = (path) ->
-    config = await fs.readFile path, 'utf8'
-    if path.endsWith '.json'
-        JSON.parse config
-    else
-        js = compile config, js: true
-
-        tmpPath = path + ".civet-tmp-#{Date.now()}.mjs"
-        await fs.writeFile tmpPath, js
-        try
-            exports = await import(pathToFileURL(tmpPath))
-        finally
-            await fs.unlink tmpPath
-        if typeof exports.default isnt 'object' or exports.default is null
-            throw new Error "civet config file must export an object"
-        exports.default
+    JSON.parse await fs.readFile path, 'utf8'
