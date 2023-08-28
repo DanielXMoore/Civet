@@ -374,6 +374,11 @@ esbuild.build({
 
 It's super fast and works great!
 
+Code Coverage
+---
+
+[![Coverage Status](https://coveralls.io/repos/github/DanielXMoore/Civet/badge.svg?branch=main)](https://coveralls.io/github/DanielXMoore/Civet?branch=main)
+
 Sponsorship
 ---
 If you are so inclined, you can sponsor Civet on [Open Collective](https://opencollective.com/civet).
