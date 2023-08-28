@@ -6,12 +6,12 @@ import { pathToFileURL } from "url"
 findInDir = (dirPath) ->
     dir = await fs.opendir dirPath
     for await entry from dir
-        if entry.isDirectory() and entry.name is '.config' # scan for ./config.civet as well as ./.config/config.civet
+        if entry.isDirectory() and entry.name is '.config' # scan for ./civet.json as well as ./.config/civet.json
             return findInDir path.join dirPath, entry.name
-        if entry.isFile() 
-            name = entry.name.replace(/^\./, '') # allow both .civetconfig.civet and civetconfig.civet   
-            if name in ['config.civet', 'civet.json', 'civetconfig.civet', 'civetconfig.json']
-                return path.join dirPath, entry.name 
+        if entry.isFile()
+            name = entry.name.replace(/^\./, '') # allow both .civetconfig.civet and civetconfig.civet
+            if name in ['🐈.json', 'civet.json', 'civetconfig.json']
+                return path.join dirPath, entry.name
     null
 
 export findConfig = (startDir) ->
@@ -30,7 +30,7 @@ export loadConfig = (path) ->
         JSON.parse config
     else
         js = compile config, js: true
-        
+
         tmpPath = path + ".civet-tmp-#{Date.now()}.mjs"
         await fs.writeFile tmpPath, js
         try
@@ -40,4 +40,3 @@ export loadConfig = (path) ->
         if typeof exports.default isnt 'object' or exports.default is null
             throw new Error "civet config file must export an object"
         exports.default
-    
