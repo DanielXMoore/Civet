@@ -4,6 +4,7 @@ Civet
 [![Build Status](https://img.shields.io/github/actions/workflow/status/DanielXMoore/Civet/build.yml?branch=master&logo=github&style=for-the-badge)](https://github.com/DanielXMoore/Civet/actions/workflows/build.yml)
 [![NPM Version](https://img.shields.io/npm/v/@danielx/civet.svg?style=for-the-badge)](https://www.npmjs.com/package/@danielx/civet)
 [![NPM Downloads](https://img.shields.io/npm/dm/@danielx/civet.svg?style=for-the-badge)](https://www.npmjs.com/package/@danielx/civet)
+[![Coverage Status](https://img.shields.io/coverallsCoverage/github/@danielx/civet?style=for-the-badge)](https://coveralls.io/github/DanielXMoore/Civet?branch=main)
 [![Discord](https://img.shields.io/discord/933472021310996512?style=for-the-badge)](https://discord.com/invite/xkrW9GebBc)
 [![Open Collective](https://img.shields.io/opencollective/all/civet?style=for-the-badge)](https://opencollective.com/civet)
 
