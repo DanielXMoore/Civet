@@ -2502,7 +2502,7 @@ function aggregateDuplicateBindings(bindings, ReservedWord) {
     if (!key) return
     // NOTE: Allows pattern matching reserved word keys by binding to inaccessible refs
     // HACK: using the parser's ReservedWord rule here
-    if (ReservedWord({
+    if (ReservedWord({ fail() { } }, {
       pos: 0,
       input: key,
     })) {
