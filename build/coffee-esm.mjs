@@ -3,9 +3,7 @@
 import { readFile } from 'fs/promises';
 import { pathToFileURL, fileURLToPath } from 'url';
 
-import CoffeeScript, { compile } from "coffeescript";
-// Handle cjs .coffee files
-CoffeeScript.register()
+import { compile } from "coffeescript";
 
 const baseURL = pathToFileURL(process.cwd() + '/').href;
 const extensionsRegex = /\.coffee$/;

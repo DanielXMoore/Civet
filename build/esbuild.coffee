@@ -51,21 +51,25 @@ esbuild.build({
 }).catch -> process.exit 1
 
 esbuild.build({
-  entryPoints: ['source/config.coffee']
-  bundle: false
+  entryPoints: ['source/config.mts']
+  bundle: true
   sourcemap
   minify
   watch
   platform: 'node'
   format: 'cjs'
   outfile: 'dist/config.js'
-  plugins: [
-    resolveExtensions
-    coffeeScriptPlugin
-      bare: true
-      inlineMap: sourcemap
-    heraPlugin
-  ]
+  # To get proper extension resolution for non-bundled files, we need to use
+  # a plugin hack: https://github.com/evanw/esbuild/issues/622#issuecomment-769462611
+  # set bundle: true, then rewrite .coffee -> .js and mark as external
+  plugins: [{
+    name: 'rewrite-coffee',
+    setup: (build) ->
+      build.onResolve { filter: /\.coffee$/ }, (args) ->
+        if (args.importer)
+          path: args.path.replace(/\.coffee$/, ".js")
+          external: true
+  }]
 }).catch -> process.exit 1
 
 for esm in [false, true]

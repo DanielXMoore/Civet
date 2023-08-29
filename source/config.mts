@@ -1,0 +1,72 @@
+import path from "path";
+import fs from "fs/promises";
+import { compile } from "./main.coffee";
+
+const findInDir = async function (dirPath: string): Promise<string | undefined> {
+  const dir = await fs.opendir(dirPath);
+  for await (const entry of dir) {
+    if (
+      entry.isDirectory() &&
+      entry.name === ".config"
+    ) {
+      // scan for ./civet.json as well as ./.config/civet.json
+      const found = await findInDir(
+        path.join(dirPath, entry.name)
+      );
+      if (found) {
+        return found;
+      }
+    }
+    if (entry.isFile()) {
+      const name = entry.name.replace(/^\./, ""); // allow both .civetconfig.civet and civetconfig.civet
+      if ([
+        "🐈.json",
+        "🐈.civet",
+        "civetconfig.json",
+        "civetconfig.civet",
+      ].includes(name)) {
+        return path.join(dirPath, entry.name);
+      }
+    }
+  }
+  return
+};
+
+export var findConfig = async function (startDir: string) {
+  let curr = startDir,
+    parent = path.dirname(curr);
+
+  while (curr !== parent) {
+    // root directory (/, C:, etc.)
+    const configPath = await findInDir(curr);
+    if (configPath) {
+      return configPath;
+    }
+    curr = parent;
+    parent = path.dirname(curr);
+  }
+  return;
+};
+
+export var loadConfig = async function (path: string) {
+  const config = await fs.readFile(path, "utf8");
+  if (path.endsWith(".json")) {
+    return JSON.parse(config);
+  } else {
+    const js = compile(config, { js: true });
+    let exports;
+
+    try {
+      exports = await import(`data:text/javascript,${js}`);
+    } catch (e) {
+      console.error("Error loading config file", path, e);
+    }
+
+    if (typeof exports.default !== "object" || exports.default === null) {
+      throw new Error(
+        "civet config file must export an object"
+      );
+    }
+    return exports.default;
+  }
+};
