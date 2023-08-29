@@ -1262,6 +1262,14 @@ class Civet
 
 ## Types
 
+### Unknown
+
+`???` is shorthand for the type `unknown`.
+
+<Playground>
+declare function jsonParse(json: string): ???
+</Playground>
+
 ### Import
 
 <Playground>
