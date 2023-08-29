@@ -8,6 +8,9 @@ export default defineConfig({
     rollup: 'src/rollup.ts',
     esbuild: 'src/esbuild.ts',
   },
+  esbuildOptions(opts) {
+    opts.chunkNames = 'unplugin-shared';
+  },
   outDir: 'dist',
   format: ['esm', 'cjs'],
   dts: true,
