@@ -1,6 +1,6 @@
 esbuild = require "esbuild"
-coffeeScriptPlugin = require "esbuild-coffeescript"
 heraPlugin = require "@danielx/hera/esbuild-plugin"
+civetPlugin = require "@danielx/civet/esbuild-plugin"
 
 watch = process.argv.includes '--watch'
 minify = false
@@ -30,10 +30,22 @@ extensionResolverPlugin = (extensions) ->
 
       return undefined
 
-resolveExtensions = extensionResolverPlugin(["hera", "coffee"])
+resolveExtensions = extensionResolverPlugin(["civet", "hera"])
+
+# To get proper extension resolution for non-bundled files, we need to use
+# a plugin hack: https://github.com/evanw/esbuild/issues/622#issuecomment-769462611
+# set bundle: true, then rewrite .coffee -> .js and mark as external
+rewriteCivetImports = {
+  name: 'rewrite-civet',
+  setup: (build) ->
+    build.onResolve { filter: /\.civet$/ }, (args) ->
+      if (args.importer)
+        path: args.path.replace(/\.civet$/, ".js")
+        external: true
+}
 
 esbuild.build({
-  entryPoints: ['source/cli.coffee']
+  entryPoints: ['source/cli.civet']
   bundle: false
   sourcemap
   minify
@@ -43,15 +55,13 @@ esbuild.build({
   outfile: 'dist/cli.js'
   plugins: [
     resolveExtensions
-    coffeeScriptPlugin
-      bare: true
-      inlineMap: sourcemap
+    civetPlugin()
     heraPlugin
   ]
 }).catch -> process.exit 1
 
 esbuild.build({
-  entryPoints: ['source/config.mts']
+  entryPoints: ['source/config.civet']
   bundle: true
   sourcemap
   minify
@@ -59,22 +69,15 @@ esbuild.build({
   platform: 'node'
   format: 'cjs'
   outfile: 'dist/config.js'
-  # To get proper extension resolution for non-bundled files, we need to use
-  # a plugin hack: https://github.com/evanw/esbuild/issues/622#issuecomment-769462611
-  # set bundle: true, then rewrite .coffee -> .js and mark as external
-  plugins: [{
-    name: 'rewrite-coffee',
-    setup: (build) ->
-      build.onResolve { filter: /\.coffee$/ }, (args) ->
-        if (args.importer)
-          path: args.path.replace(/\.coffee$/, ".js")
-          external: true
-  }]
+  plugins: [
+    rewriteCivetImports
+    civetPlugin()
+  ]
 }).catch -> process.exit 1
 
 for esm in [false, true]
   esbuild.build({
-    entryPoints: ['source/main.coffee']
+    entryPoints: ['source/main.civet']
     bundle: true
     watch
     platform: 'node'
@@ -82,15 +85,13 @@ for esm in [false, true]
     outfile: "dist/main.#{if esm then 'mjs' else 'js'}"
     plugins: [
       resolveExtensions
-      coffeeScriptPlugin
-        bare: true
-        inlineMap: sourcemap
+      civetPlugin()
       heraPlugin
     ]
   }).catch -> process.exit 1
 
 esbuild.build({
-  entryPoints: ['source/main.coffee']
+  entryPoints: ['source/main.civet']
   globalName: "Civet"
   bundle: true
   sourcemap
@@ -99,15 +100,13 @@ esbuild.build({
   outfile: 'dist/browser.js'
   plugins: [
     resolveExtensions
-    coffeeScriptPlugin
-      bare: true
-      inlineMap: sourcemap
+    civetPlugin()
     heraPlugin
   ]
 }).catch -> process.exit 1
 
 esbuild.build({
-  entryPoints: ['source/bun-civet.coffee']
+  entryPoints: ['source/bun-civet.civet']
   bundle: false
   sourcemap
   minify
@@ -117,8 +116,6 @@ esbuild.build({
   target: "esNext"
   outfile: 'dist/bun-civet.mjs'
   plugins: [
-    coffeeScriptPlugin
-      bare: true
-      inlineMap: sourcemap
+    civetPlugin()
   ]
 }).catch -> process.exit 1
