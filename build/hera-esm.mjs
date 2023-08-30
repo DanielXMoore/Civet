@@ -20,7 +20,7 @@ export async function resolve(specifier, context, defaultResolve) {
 
 export async function load(url, context, next) {
   if (extensionsRegex.test(url)) {
-    return next(url.replace(extensionsRegex, ".cjs"), {
+    return next(url, {
       format: "commonjs"
     });
   }
