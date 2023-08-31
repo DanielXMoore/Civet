@@ -137,7 +137,7 @@ To transpile within a CommonJS NodeJS app
 
 ## Building a project
 
-Use Civet's built-in [unplugin](integration/unplugin) to integrate with many
+Use Civet's built-in [unplugin](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin) to integrate with many
 bundlers: Vite, esbuild, Rollup, Webpack, or Rspack.  For example:
 
 ```js
@@ -162,12 +162,12 @@ You can mix and match `.civet` files with `.js` and `.ts` files.
 Even `.coffee` will work if you require `coffeescript/register` or add a loader for it.
 :::
 
-See the [unplugin documentation](integration/unplugin) for more configurations,
-including [full working examples](integration/unplugin/examples).
+See the [unplugin documentation](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin) for more configurations,
+including [full working examples](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin/examples).
 
 These plugins should support metaframeworks built upon these bundlers.
 For example, the Vite unplugin supports [Astro](https://astro.build/)
-([full example](integration/unplugin/examples/astro)),
+([full example](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin/examples/astro)),
 and the esbuild unplugin supports [tsup](https://github.com/egoist/tsup):
 
 ```js
