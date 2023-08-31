@@ -42,7 +42,7 @@ const {
   replaceNodes,
   typeOfJSX,
   wrapIIFE,
-} = require("./lib.js")
+} = require("./lib.civet")
 ```
 
 Program
@@ -475,11 +475,14 @@ FatArrow
       return " =>"
     return [ $1, "=>" ]
 
+TrailingDeclaration
+  ( _* ( ConstAssignment / LetAssignment ))
+
 # NOTE Different from
 # https://262.ecma-international.org/#prod-ConciseBody
 FatArrowBody
   # If same-line single expression, avoid wrapping in braces
-  !EOS NonPipelinePostfixedExpression:exp !SemicolonDelimiter -> exp
+  !EOS NonPipelinePostfixedExpression:exp !TrailingDeclaration !SemicolonDelimiter -> exp
   # Otherwise, wrap block body in braces and insert returns
   BracedOrEmptyBlock
 
@@ -789,9 +792,22 @@ ThisLiteral
   This
   # NOTE: Added @identifier shorthand, also works for private identifiers
   # Converts 'IdentifierName' node to string so this won't interfere with refs
-  AtThis:at $( "#"? IdentifierName ):id ->
+  AtThis:at $( Hash? IdentifierName ):id ->
     return [at, ".", id]
   AtThis
+  PrivateThis
+
+# Adds a #id -> this.#id shorthand as a "PrivateThis" literal in most cases
+# with the exception of keeping `#a in b` as is for branded in checks.
+# https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/in#using_the_in_operator_to_implement_branded_checks
+# This is slightly different from how https://262.ecma-international.org/#sec-relational-operators handles relational operators
+# grammatically but should be equivalent in practice
+PrivateThis
+  PrivateIdentifier:id &( _+ ( ( Not __ In ) / In ) ) ->
+    return id
+
+  PrivateIdentifier:id ->
+    return [ "this.", id ]
 
 # NOTE: Added '@' as a 'this' shorthand from CoffeeScript
 AtThis
@@ -1170,6 +1186,14 @@ NWBindingIdentifier
       children: [ref],
       ref,
     }
+  # Likewise for private identifiers
+  Hash AtIdentifierRef:ref ->
+    ref = { ...ref, id: `#${ref.id}` }
+    return {
+      type: "AtBinding",
+      children: [ref],
+      ref,
+    }
   Identifier:id
   # NOTE: Support for return := 1 and let return: number
   ReturnValue ->
@@ -1177,11 +1201,7 @@ NWBindingIdentifier
 
 AtIdentifierRef
   ReservedWord:r ->
-    return {
-      type: "Ref",
-      base: `_${r}`,
-      id: r,
-    }
+    return makeRef(`_${r}`, r)
   IdentifierName:id ->
     return makeRef(id.name)
 
@@ -1811,11 +1831,15 @@ NonSingleBracedBlock
       children: [$1, s, $3],
     }
 
+DeclarationOrStatement
+  Declaration
+  Statement
+
 # NOTE: SingleLineStatements includes the empty case
 SingleLineStatements
   # NOTE: Statement can start with __ via AssignmentExpression.
   # Force staying on the same line via !/\n/ assertion.
-  ForbidNewlineBinaryOp ( ( _? !EOS ) Statement SemicolonDelimiter )*:stmts ( ( _? !EOS ) Statement SemicolonDelimiter? )?:last RestoreNewlineBinaryOp ->
+  ForbidNewlineBinaryOp ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter )*:stmts ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter? )?:last RestoreNewlineBinaryOp ->
     const expressions = [...stmts]
     if (last) expressions.push(last)
 
@@ -1827,7 +1851,7 @@ SingleLineStatements
     }
 
 PostfixedSingleLineStatements
-  ( ( _? !EOS ) PostfixedStatement SemicolonDelimiter )*:stmts ( ( _? !EOS ) PostfixedStatement SemicolonDelimiter? )?:last ->
+  ( ( _? !EOS ) StatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) StatementListItem SemicolonDelimiter? )?:last ->
     const children = [...stmts]
     if (last) children.push(last)
 
@@ -1840,13 +1864,7 @@ PostfixedSingleLineStatements
 
 BracedContent
   NestedBlockStatements
-  _? Statement ->
-    const expressions = [["", $2]]
-    return {
-      type: "BlockStatement",
-      expressions,
-      children: [$1, expressions],
-    }
+  SingleLineStatements
   # Empty content
   &( __ "}" ) ->
     const expressions = []
@@ -2617,7 +2635,7 @@ ClassElementName
   PrivateIdentifier
 
 PrivateIdentifier
-  $("#" IdentifierName) ->
+  $(Hash IdentifierName) ->
     return {
       type: "Identifier",
       name: $0,
@@ -3333,7 +3351,7 @@ CoffeeForStatementParameters
       if (declaration.own) {
         const hasPropRef = module.getRef("hasProp")
 
-        blockPrefix./**/push(["", "if (!", hasPropRef, ".call(", exp, ", ", declaration, ")) continue", ";"])
+        blockPrefix./**/push(["", "if (!", hasPropRef, "(", exp, ", ", declaration, ")) continue", ";"])
       }
 
       // index is actually value in Coffee "for of", y = z[x]
@@ -3437,7 +3455,7 @@ CoffeeForIndex
 
 CoffeeForDeclaration
   # NOTE: Coffee doesn't allow expression bindings like `for a.x in b`
-  ( __ "own" NonIdContinue )?:own ForBinding:binding ->
+  ( __ Own )?:own ForBinding:binding ->
     return {
       type: "AssignmentExpression",
       own: Boolean(own),
@@ -3462,11 +3480,11 @@ ForStatementParameters
   # https://262.ecma-international.org/#prod-ForInOfStatement
   # NOTE: Consolidated declarations
   # NOTE: Consolidated optional 'await'
-  ( Await __ )? ( Each __ )? ( OpenParen __ ) ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? ( __ CloseParen ) ->
-    return processForInOf($0)
+  ( Await __ )? ( (Each / Own) __ )? ( OpenParen __ ) ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? ( __ CloseParen ) ->
+    return processForInOf($0, module.getRef)
   # NOTE: Added optional parens
-  ( Await __ )? ( Each __ )? InsertOpenParen ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? InsertCloseParen ->
-    return processForInOf($0)
+  ( Await __ )? ( (Each / Own) __ )? InsertOpenParen ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? InsertCloseParen ->
+    return processForInOf($0, module.getRef)
   ForRangeParameters
 
 ForRangeParameters
@@ -4661,6 +4679,8 @@ StatementDelimiter
   # before value, or parens not actually added around ObjectLiteral).
   &( Nested ( "(" / "[" / "`" / "+" / "-" / "*" / "/" / ObjectLiteral / Arrow / FatArrow / ( Function ( _? Star )? _? "(" ) ) ) InsertSemicolon
   &EOS
+  # Allow for closing a block within the same line as a nested statement
+  &( _* "}" )
 
 SemicolonDelimiter
   _? Semicolon TrailingComment ->
@@ -4842,6 +4862,10 @@ GetOrSet
   ( "get" / "set" ) NonIdContinue ->
     return { $loc, token: $1, type: 'GetOrSet' }
 
+Hash
+  "#" ->
+    return { $loc, token: $1 }
+
 If
   # NOTE: Pull a single space into the 'if ' token so if it is replaced
   # with a ternary in expressions it doesn't add an extra space
@@ -4913,6 +4937,10 @@ OpenParen
 
 Operator
   "operator" NonIdContinue ->
+    return { $loc, token: $1 }
+
+Own
+  "own" NonIdContinue ->
     return { $loc, token: $1 }
 
 Public
@@ -5094,8 +5122,8 @@ JSXElement
   # and closing tags are optional (but still allowed).
   !CoffeeJSXEnabled PushJSXOpeningElement:open JSXMixedChildren?:children JSXOptionalClosingElement:close PopJSXStack ->
     if (!children) return $skip
-    $0 = $0.slice(1)
     let parts
+    $0 = $0.slice(1)
     if (close) {
       parts = $0
     } else if (children.jsxChildren.length) {
@@ -5803,8 +5831,11 @@ EnumDeclaration
       ts: true,
       children: $0,
     }
-    // const enums do not generate any JavaScript code
-    if (isConst) return ts
+    // In TypeScript const enums do not generate any JavaScript code
+    // but we don't yet do the same post-processing to completely
+    // erase the enum from the output. So we just use a simpler
+    // but less optimized output for raw js.
+    // if (isConst) return ts
     // Generate JS output for enum similar to how TypeScript does
     const names = new Set(block.properties.map(p => p.name.name))
     return [ts,
@@ -5984,6 +6015,10 @@ TypeUnaryOp
 TypeIndexedAccess
   OpenBracket Type? __ CloseBracket
 
+UnknownAlias
+  "???" ->
+    return { $loc, token: "unknown" }
+
 TypePrimary
   _? TypeTuple
   InterfaceBlock
@@ -5995,6 +6030,13 @@ TypePrimary
       type: "LiteralType",
       t,
       children: $0,
+    }
+  _? UnknownAlias ->
+    return {
+      type: "IdentifierType",
+      children: $0,
+      raw: $2.token,
+      args: undefined
     }
   _? IdentifierName (Dot IdentifierName)* TypeArguments?:args ->
     return {
@@ -6436,6 +6478,7 @@ Reset
     }
 
     module.config = {
+      autoConst: false,
       autoVar: false,
       autoLet: false,
       coffeeBinaryExistential: false,
@@ -6483,10 +6526,10 @@ Reset
       hasProp(hasPropRef) {
         const typeSuffix = {
           ts: true,
-          children: [": <T>(this: T, prop: keyof T) => boolean"]
+          children: [": <T>(object: T, prop: keyof T) => boolean"]
         }
         // [indent, statement]
-        module.prelude.push(["", [preludeVar, hasPropRef, typeSuffix, " = {}.hasOwnProperty", asAny, ";\n"]])
+        module.prelude.push(["", [preludeVar, hasPropRef, typeSuffix, " = {}.constructor.hasOwn", asAny, ";\n"]])
       },
       is(isRef) {
         // Thanks to @thetarnav for help with this TypeScript magic.
@@ -6605,8 +6648,32 @@ Reset
       }
     })
 
-    Object.assign(module.config, parse.config)
-    parse.config = module.config
+    // Hack to pass in parser config from main
+    Object.assign(module.config, exports.parse.config)
+    exports.parse.config = module.config
+
+    // Hack to pass parser state to cache key
+    return {
+      type: "ParserMeta",
+      children: [],
+      getStateKey() {
+        const stateInt =
+          ((module.currentIndent.level % 256) << 8) |
+          (module.classImplicitCallForbidden << 7) |
+          (module.indentedApplicationForbidden << 6) |
+          (module.bracedApplicationForbidden << 5) |
+          (module.trailingMemberPropertyForbidden << 4) |
+          (module.newlineBinaryOpForbidden << 3) |
+          // This is slightly different than the rest of the state,
+          // since it is affected by the directive prologue and may be hit
+          // by the EOL rule early in the parse. Later if we wanted to
+          // allow block scoping of the compat directives we would need to
+          // add them all here.
+          (module.config.coffeeComment << 2)
+
+        return [stateInt, module.currentJSXTag]
+      },
+    }
 
 Init
   Shebang? DirectivePrologue*:directives "" ->

@@ -12,11 +12,12 @@ title: Integrations
 
 - [esbuild plugin](https://github.com/DanielXMoore/Civet/blob/main/source/esbuild-plugin.civet) (see [instructions](https://civet.dev/getting-started#building-a-project); also supports tsup)
 - [Vite plugin](https://github.com/lorefnon/vite-plugin-civet)
+- [Babel plugin](https://github.com/DanielXMoore/Civet/blob/main/source/babel-plugin.mjs)
 - [Gulp plugin](https://github.com/DanielXMoore/Civet/tree/main/integration/gulp)
 - [ESM loader](https://github.com/DanielXMoore/Civet/blob/main/source/esm.civet)
 - [CJS require hook](https://github.com/DanielXMoore/Civet/blob/main/register.js)
 - [Bun plugin](https://github.com/DanielXMoore/Civet/blob/main/source/bun-civet.coffee)
-- [Civetman](https://github.com/zihan-ch/civetman) automatically compiles `.civet` files, making it easy to integrate with arbitrary build chains
+- [Civetman](https://github.com/zihan-ch/civetman) automatically compiles `.civet` files, making it easy to integrate with arbitrary build chains (see also [vite-plugin-civetman](https://github.com/krist7599555/vite-plugin-civetman))
 
 ## Starter Templates
 

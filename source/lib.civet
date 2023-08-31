@@ -6,11 +6,62 @@
  * here eventually.
  */
 
+type ASTString = string & { children: undefined, type: undefined }
+type ASTNode = ASTNodeBase | ASTError | ASTRef | ASTLeaf | ASTNode[] | ASTString | undefined
+type ASTNodeBase = {
+  type: string
+  children: ASTNode[]
+  blockPrefix?: unknown
+  names?: string[]
+  parent: ASTNodeBase | undefined
+}
+type ASTError = {
+  type: "Error"
+  message: string
+}
+
+type Loc = {
+  pos: number
+  length: number
+}
+
+type ASTLeaf = {
+  $loc: Loc
+  token: string
+}
+
+type StatementDelimiter = ASTNode
+type IndentNode = ASTNode
+
+type StatementTuple = [IndentNode, ASTNode, StatementDelimiter?]
+
+type ASTRef = {
+  type: "Ref"
+  base: string
+  id: string
+}
+
+type AtBinding = {
+  type: "AtBinding"
+  ref: ASTRef
+}
+
+type BlockStatement = {
+  type: "BlockStatement"
+  children: ASTNode[]
+  expressions: StatementTuple[]
+  bare: boolean
+  root: boolean
+  parent: ASTNodeBase | undefined
+}
+
+type Predicate = (node: Exclude<ASTNode, undefined>) => boolean
+
 /**
  * Adds parent pointers to all nodes in the AST. Elements within
  * arrays of nodes receive the closest non-array object parent.
  */
-function addParentPointers(node, parent) {
+function addParentPointers(node: ASTNode, parent?: ASTNodeBase) {
   if (node == null) return
   if (typeof node !== "object") return
 
@@ -35,7 +86,7 @@ function addParentPointers(node, parent) {
  * recursing into arrays but not objects.  More efficient version of
  * `addParentPointers` when just injecting one new node.
  */
-function updateParentPointers(node, parent, depth = 1) {
+function updateParentPointers(node: ASTNode, parent?: ASTNodeBase, depth = 1) {
   if (node == null) return
   if (typeof node !== "object") return
 
@@ -55,7 +106,7 @@ function updateParentPointers(node, parent, depth = 1) {
   }
 }
 
-function addPostfixStatement(statement, ws, post) {
+function addPostfixStatement(statement: StatementTuple, ws: ASTNode, post) {
   let children, expressions
   if (post.blockPrefix?.length) {
     let indent = post.blockPrefix[0][0]
@@ -73,10 +124,10 @@ function addPostfixStatement(statement, ws, post) {
   }
 
   children = [...post.children]
-  children./**/push(block)
+  children.push(block)
 
   // This removes trailing whitespace for easier testing
-  if (!isWhitespaceOrEmpty(ws)) children./**/push(ws)
+  if (!isWhitespaceOrEmpty(ws)) children.push(ws)
 
   post = { ...post, children, block }
   if (post.type === "IfStatement") {
@@ -89,9 +140,9 @@ function addPostfixStatement(statement, ws, post) {
  * Adjusts `@binding` inside object properties that need to be aliased
  * see test/function.civet binding pattern
  */
-function adjustAtBindings(statements, asThis = false) {
-  gatherRecursiveAll(statements, n => n.type === "AtBindingProperty")
-    .forEach(binding => {
+function adjustAtBindings(statements: ASTNode, asThis = false) {
+  gatherRecursiveAll(statements, (n) => n.type === "AtBindingProperty")
+    .forEach((binding) => {
       const { ref } = binding
 
       if (asThis) {
@@ -112,7 +163,7 @@ function adjustAtBindings(statements, asThis = false) {
     })
 }
 
-function adjustBindingElements(elements) {
+function adjustBindingElements(elements: ASTNodeBase[]) {
   const names = elements.flatMap((p) => p.names || []),
     { length } = elements
 
@@ -139,7 +190,7 @@ function adjustBindingElements(elements) {
     const after = elements.slice(restIndex + 1)
 
     const restIdentifier = rest.binding.ref || rest.binding
-    names./**/push(...rest.names || [])
+    names.push(...rest.names || [])
 
     let l = after.length
 
@@ -150,7 +201,7 @@ function adjustBindingElements(elements) {
       blockPrefix = {
         type: "PostRestBindingElements",
         children: ["[", insertTrimmingSpace(after, ""), "] = ", restIdentifier, ".splice(-", l.toString(), ")"],
-        names: after.flatMap(p => p.names),
+        names: after.flatMap((p) => p.names),
       }
     }
 
@@ -183,7 +234,7 @@ function adjustBindingElements(elements) {
  * Adjust the alias of a binding property, adding an alias if one doesn't exist or
  * replacing an existing alias. This mutates the property in place.
  */
-function aliasBinding(p, ref) {
+function aliasBinding(p, ref: ASTRef) {
   if (p.type === "Identifier") {
     // Array element binding
     // TODO: This ignores `name` and `names` properties of Identifier and
@@ -220,7 +271,7 @@ const assert = {
  *
  * @returns the duplicated block with prefix statements attached or the unchanged block.
  */
-function blockWithPrefix(prefixStatements, block) {
+function blockWithPrefix(prefixStatements, block: BlockStatement) {
   if (prefixStatements && prefixStatements.length) {
     const indent = getIndent(block.expressions[0])
     // Match prefix statements to block indent level
@@ -247,12 +298,13 @@ function blockWithPrefix(prefixStatements, block) {
   return block
 }
 
-function closest(node, types) {
+function closest(node: ASTNodeBase, types: string[]) {
   do {
     if (types.includes(node.type)) {
       return node
     }
-  } while (node = node.parent)
+  } while (node = node.parent!)
+  return
 }
 
 /**
@@ -261,7 +313,7 @@ function closest(node, types) {
  *
  * TODO: preserve ref identities
  */
-function clone(node) {
+function clone(node: ASTNode) {
   removeParentPointers(node)
   return deepCopy(node)
 }
@@ -348,7 +400,7 @@ function constructPipeStep(fn, arg, returning) {
 // Split out leading newlines from the first indented line
 const initialSpacingRe = /^(?:\r?\n|\n)*((?:\r?\n|\n)\s+)/
 
-function dedentBlockString({ $loc, token: str }, spacing, trim = true) {
+function dedentBlockString({ $loc, token: str }: ASTLeaf, spacing, trim = true) {
   // If string begins with a newline then indentation assume that it should be removed for all lines
   if (spacing == null) spacing = str.match(initialSpacingRe)
 
@@ -367,7 +419,7 @@ function dedentBlockString({ $loc, token: str }, spacing, trim = true) {
   }
 
   // escape unescaped backticks and `${`
-  str = str.replace(/(\\.|`|\$\{)/g, s => {
+  str = str.replace(/(\\.|`|\$\{)/g, (s) => {
     if (s[0] === "\\") {
       return s
     }
@@ -425,7 +477,7 @@ function dedentBlockSubstitutions($0) {
   }
 }
 
-function deepCopy(node) {
+function deepCopy(node: ASTNode) {
   if (node == null) return node
   if (typeof node !== "object") return node
 
@@ -444,10 +496,10 @@ function deepCopy(node) {
 
 function expressionizeIfClause(clause, b, e) {
   const children = clause.children.slice(1) // Remove 'if'
-  children./**/push("?", b) // Add ternary
+  children.push("?", b) // Add ternary
   if (e) {
     // Remove 'else'
-    children./**/push(e[0], ":", ...e.slice(2))
+    children.push(e[0], ":", ...e.slice(2))
   }
   else {
     children.push(":void 0")
@@ -479,7 +531,8 @@ function expressionizeIteration(exp) {
   insertPush(block, resultsRef)
 
   // Wrap with IIFE
-  children.splice(i, 1,
+  children.splice(i,
+    1,
     ...wrapIIFE([
       ["", ["const ", resultsRef, "=[]"], ";"],
       ...children,
@@ -766,7 +819,7 @@ function insertPush(node, ref) {
       // NOTE: CoffeeScript doesn't add a push to an empty catch block but does add if there is any statement in the catch block
       // we always add a push to the catch block
       // NOTE: does not insert a push in the finally block
-      exp.blocks.forEach(block => insertPush(block, ref))
+      exp.blocks.forEach((block) => insertPush(block, ref))
       return
   }
 
@@ -881,7 +934,7 @@ function expandChainedComparisons([first, binops]) {
       return existence.expression
     }
     return exp
-  }
+  };
 }
 
 function processParams(f) {
@@ -916,7 +969,7 @@ function processParams(f) {
   }
 
   const prefix = splices
-    .map(s => ["let ", s])
+    .map((s) => ["let ", s])
     .concat(thisAssignments)
     .map((s) => s.type
       ? {
@@ -929,11 +982,11 @@ function processParams(f) {
   if (!prefix.length) return
   // In constructor definition, insert prefix after first super() call
   if (isConstructor) {
-    const superCalls = gatherNodes(expressions, exp =>
-      exp.type === "CallExpression" && exp.children[0]?.token === "super")
+    const superCalls = gatherNodes expressions, (exp) =>
+      exp.type === "CallExpression" && exp.children[0]?.token === "super"
     if (superCalls.length) {
       const {child} = findAncestor(superCalls[0],
-        ancestor => ancestor === block)
+        (ancestor) => ancestor === block)
       const index = findChildIndex(expressions, child)
       if (index < 0) {
         throw new Error("Could not find super call within top-level expressions")
@@ -978,13 +1031,15 @@ function findChildIndex(parent, child) {
   const len = children.length
   for (let i = 0; i < len; i++) {
     const c = children[i]
-    if (c === child || (Array.isArray(c) && arrayRecurse(c))) return i
+    if (c === child || (Array.isArray(c) && arrayRecurse(c)))
+      return i
   }
   function arrayRecurse(array) {
     const len = array.length
     for (let i = 0; i < len; i++) {
       const c = array[i]
-      if (c === child || (Array.isArray(c) && arrayRecurse(c))) return true
+      if (c === child || (Array.isArray(c) && arrayRecurse(c)))
+        return true
     }
   }
   return -1
@@ -996,7 +1051,11 @@ function findChildIndex(parent, child) {
  * Also returns the `child` that we came from (possibly `node`), in an
  * `{ancestor, child}` object.  If none are found, `ancestor` will be null.
  */
-function findAncestor(node, predicate, stopPredicate) {
+function findAncestor(
+  node: ASTNodeBase,
+  predicate: (parent: ASTNode, child: ASTNode) => boolean,
+  stopPredicate?: (parent: ASTNode, child: ASTNode) => boolean
+): { ancestor: ASTNodeBase | undefined, child: ASTNodeBase } {
   let { parent } = node
   while (parent && !stopPredicate?.(parent, node)) {
     if (predicate(parent, node)) {
@@ -1011,7 +1070,7 @@ function findAncestor(node, predicate, stopPredicate) {
 // Gather child nodes that match a predicate
 // while recursing into nested expressions
 // without recursing into nested blocks/for loops
-function gatherNodes(node, predicate) {
+function gatherNodes(node: ASTNode, predicate: Predicate): ASTNode[] {
   if (node == null) return []
 
   if (Array.isArray(node)) {
@@ -1041,7 +1100,7 @@ function gatherNodes(node, predicate) {
 
 // Gather nodes that match a predicate recursing into all unmatched children
 // i.e. if the predicate matches a node it is not recursed into further
-function gatherRecursive(node, predicate, skipPredicate) {
+function gatherRecursive(node: ASTNode, predicate: Predicate, skipPredicate?: Predicate): ASTNode[] {
   if (node == null) return []
 
   if (Array.isArray(node)) {
@@ -1057,7 +1116,7 @@ function gatherRecursive(node, predicate, skipPredicate) {
   return gatherRecursive(node.children, predicate, skipPredicate)
 }
 
-function gatherRecursiveAll(node, predicate) {
+function gatherRecursiveAll(node: ASTNode, predicate: Predicate): Exclude<ASTNode, undefined | ASTNode[]>[] {
   if (node == null) return []
 
   if (Array.isArray(node)) {
@@ -1076,7 +1135,7 @@ function gatherRecursiveAll(node, predicate) {
  * Gets the indentation node from a statement. Includes newline,
  * excludes comments, strips location info.
  */
-function getIndent(statement) {
+function getIndent(statement: StatementTuple) {
   let indent = statement?.[0]
   if (Array.isArray(indent)) {
     indent = indent.flat(Infinity)
@@ -1101,14 +1160,14 @@ function hasYield(exp) {
   return gatherRecursiveWithinFunction(exp, ({ type }) => type === "Yield").length > 0
 }
 
-function hoistRefDecs(statements) {
+function hoistRefDecs(statements: StatementTuple[]) {
   gatherRecursiveAll(statements, (s) => s.hoistDec)
-    .forEach(node => {
+    .forEach((node) => {
       let { hoistDec } = node
       node.hoistDec = null
 
-      const { ancestor, child } = findAncestor(node, (ancestor) => 
-        ancestor.type === "BlockStatement" && (!ancestor.bare || ancestor.root))
+      const { ancestor, child } = findAncestor node, (ancestor) =>
+        ancestor.type === "BlockStatement" && (!ancestor.bare || ancestor.root)
 
       if (ancestor) {
         insertHoistDec(ancestor, child, hoistDec)
@@ -1123,7 +1182,7 @@ function hoistRefDecs(statements) {
 function insertHoistDec(block, node, dec) {
   // NOTE: This is more accurately 'statements'
   const { expressions } = block
-  const index = expressions.findIndex(exp => exp === node ||
+  const index = expressions.findIndex((exp) => exp === node ||
     (Array.isArray(exp) && exp[1] === node))
   if (index < 0) throw new Error("Couldn't find expression in block for hoistable declaration.")
   if (expressions[index] === node) {
@@ -1140,7 +1199,7 @@ function patternAsValue(pattern) {
       const children = [...pattern.children]
       const index = children.indexOf(pattern.elements)
       if (index < 0) throw new Error("failed to find elements in ArrayBindingPattern")
-      children[index] = pattern.elements.map(el => {
+      children[index] = pattern.elements.map((el) => {
         const [ws, e, delim] = el.children
         return { ...el, children: [ws, patternAsValue(e), delim] }
       })
@@ -1245,7 +1304,7 @@ function insertReturn(node) {
       insertSwitchReturns(exp)
       return
     case "TryStatement":
-      exp.blocks.forEach(block => insertReturn(block))
+      exp.blocks.forEach((block) => insertReturn(block))
       // NOTE: do not insert a return in the finally block
       return
   }
@@ -1327,7 +1386,7 @@ function gatherRecursiveWithinFunction(node, predicate) {
 
 // Trims the first single space from the spacing array or node's children if present
 // maintains $loc for source maps
-function insertTrimmingSpace(target, c) {
+function insertTrimmingSpace(target: ASTNode, c: string): ASTNode {
   if (!target) return target
 
   if (Array.isArray(target)) return target.map((e, i) => {
@@ -1349,15 +1408,26 @@ function insertTrimmingSpace(target, c) {
 }
 
 // Returns leading space as a string, or undefined if none
-function getTrimmingSpace(target) {
+function getTrimmingSpace(target: ASTNodeBase) {
   if (!target) return
   if (Array.isArray(target)) return getTrimmingSpace(target[0])
   if (target.children) return getTrimmingSpace(target.children[0])
   if (target.token) return target.token.match(/^ ?/)[0]
 }
 
-function processForInOf($0) {
-  let [awaits, each, open, declaration, declaration2, ws, inOf, exp, step, close] = $0
+function processForInOf($0: [
+  awaits: ASTNode,
+  eachOwn: undefined | [ASTLeaf, ASTNode],
+  open: ASTNode,
+  declaration: ASTNode,
+  declaration2: [ws1: ASTNode, comma: ASTLeaf, ws2: ASTNode, decl2: ASTNode],
+  ws: ASTNode,
+  inOf: ASTLeaf,
+  exp: ASTNodeBase,
+  step: ASTNode,
+  close: ASTNode
+], getRef) {
+  let [awaits, eachOwn, open, declaration, declaration2, ws, inOf, exp, step, close] = $0
 
   if (exp.type === "RangeExpression" && inOf.token === "of" && !declaration2) {
     // TODO: add support for `declaration2` to efficient `forRange`
@@ -1366,18 +1436,18 @@ function processForInOf($0) {
     throw new Error("for..of/in cannot use 'by' except with range literals")
   }
 
-  let eachError
-  let hoistDec, blockPrefix = []
+  let eachOwnError: ASTError | undefined
+  let hoistDec, blockPrefix: ASTNode[] = []
 
   // for each item[, index] of array
-  if (each) {
+  if (eachOwn && eachOwn[0].token === "each") {
     if (inOf.token === "of") {
       const counterRef = makeRef("i")
       const lenRef = makeRef("len")
       const expRef = maybeRef(exp)
 
       const increment = "++"
-      let indexAssignment, assignmentNames = [...declaration.names]
+      let assignmentNames = [...declaration.names]
 
       if (declaration2) {
         const [, , ws2, decl2] = declaration2  // strip __ Comma __
@@ -1408,21 +1478,34 @@ function processForInOf($0) {
       const children = [open, declaration, "; ", condition, counterRef, increment, close]
       return { declaration, children, blockPrefix }
     } else {
-      eachError = {
+      eachOwnError = {
         type: "Error",
         message: "'each' is only meaningful in for..of loops",
       }
     }
   }
 
-  if (!declaration2) {
-    return {
-      declaration,
-      children: [awaits, eachError, open, declaration, ws, inOf, exp, step, close], // omit declaration2, replace each with eachError
+  // for own..in
+  let own = eachOwn && eachOwn[0].token === "own";
+  let expRef: ASTNode | undefined
+  if (own && inOf.token !== "in") {
+    own = false
+    eachOwnError = {
+      type: "Error",
+      message: "'own' is only meaningful in for..in loops",
     }
   }
 
-  const [, , ws2, decl2] = declaration2  // strip __ Comma __
+  if (!declaration2 && !own) {
+    return {
+      declaration,
+      blockPrefix,
+      children: [awaits, eachOwnError, open, declaration, ws, inOf, expRef ?? exp, step, close], // omit declaration2, replace eachOwn with eachOwnError, replace exp with expRef
+    }
+  }
+
+  let ws2: ASTNode | undefined, decl2: ASTNode | undefined
+  if (declaration2) [, , ws2, decl2] = declaration2  // strip __ Comma __
 
   switch (inOf.token) {
     case "of": { // for item, index of iter
@@ -1469,11 +1552,18 @@ function processForInOf($0) {
           names: [],
         }
       }
-      blockPrefix.push(["", {
-        type: "Declaration",
-        children: [insertTrimmingSpace(ws2, ""), decl2, " = ", insertTrimmingSpace(expRef, ""), "[", insertTrimmingSpace(binding, ""), "]"],
-        names: decl2.names,
-      }, ";"])
+      // for own..in
+      if (own) {
+        const hasPropRef = getRef("hasProp")
+        blockPrefix.push(["", "if (!", hasPropRef, "(", insertTrimmingSpace(expRef, ""), ", ", insertTrimmingSpace(binding, ""), ")) continue", ";"])
+      }
+      if (decl2) {
+        blockPrefix.push(["", {
+          type: "Declaration",
+          children: [insertTrimmingSpace(ws2, ""), decl2, " = ", insertTrimmingSpace(expRef, ""), "[", insertTrimmingSpace(binding, ""), "]"],
+          names: decl2.names,
+        }, ";"])
+      }
       break
     }
 
@@ -1483,7 +1573,7 @@ function processForInOf($0) {
 
   return {
     declaration,
-    children: [awaits, eachError, open, declaration, ws, inOf, exp, step, close], // omit declaration2, replace each with eachError
+    children: [awaits, eachOwnError, open, declaration, ws, inOf, exp, step, close], // omit declaration2, replace each with eachOwnError
     blockPrefix,
     hoistDec,
   }
@@ -1564,12 +1654,14 @@ function forRange(open, forDeclaration, range, stepExp, close) {
   }
 }
 
-function gatherBindingCode(statements, opts) {
-  const thisAssignments = []
-  const splices = []
+type ThisAssignments = [string, ASTRef][]
 
-  function insertRestSplices(s, p, thisAssignments) {
-    gatherRecursiveAll(s, n => n.blockPrefix || (opts?.injectParamProps && n.accessModifier) || n.type === "AtBinding")
+function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: boolean }) {
+  const thisAssignments: ThisAssignments = []
+  const splices: unknown[] = []
+
+  function insertRestSplices(s, p: unknown[], thisAssignments: ThisAssignments) {
+    gatherRecursiveAll(s, (n) => n.blockPrefix || (opts?.injectParamProps && n.accessModifier) || n.type === "AtBinding")
       .forEach((n) => {
         // Insert `this` assignments
         if (n.type === "AtBinding") {
@@ -1579,7 +1671,7 @@ function gatherBindingCode(statements, opts) {
         }
 
         if (opts?.injectParamProps && n.type === "Parameter" && n.accessModifier) {
-          n.names.forEach(id => {
+          n.names.forEach((id) => {
             thisAssignments.push({
               type: "AssignmentExpression",
               children: [`this.${id} = `, id],
@@ -1599,7 +1691,7 @@ function gatherBindingCode(statements, opts) {
 
   insertRestSplices(statements, splices, thisAssignments)
 
-  return [splices, thisAssignments]
+  return [splices, thisAssignments] as const
 }
 
 // Convert (non-Template) Literal to actual JavaScript value
@@ -1654,7 +1746,7 @@ function makeAsConst(node) {
   return node
 }
 
-function makeEmptyBlock() {
+function makeEmptyBlock(): BlockStatement {
   const expressions = []
   return {
     type: "BlockStatement",
@@ -1821,16 +1913,16 @@ function needsRef(expression, base = "ref") {
   return makeRef(base)
 }
 
-function makeRef(base = "ref") {
+function makeRef(base = "ref", id = base): ASTRef {
   return {
     type: "Ref",
-    base: base,
-    id: base,
+    base,
+    id,
   }
 }
 
 // Transform into a ref if needed
-function maybeRef(exp, base = "ref") {
+function maybeRef(exp: ASTNode, base: string = "ref"): ASTNode {
   if (!needsRef(exp)) return exp
   return makeRef(base)
 }
@@ -1838,7 +1930,7 @@ function maybeRef(exp, base = "ref") {
 // Return an array of Rule names that correspond to the current call stack
 function parsePosition() {
   let s = Error().stack.split(/\n    at /)
-  s./**/shift()
+  s.shift()
   s = s.filter((e) => !e.match(/^eval/)).map((e) => e.split(' ')[0])
   s = s.slice(1, s.indexOf('Program') + 1)
 
@@ -1897,25 +1989,20 @@ function processAssignmentDeclaration(decl, id, suffix, ws, assign, e) {
     if (exp?.children?.[0]?.token?.match(/^\s+$/)) exp.children.shift()
 
     if (id.type === "Identifier" && exp?.type === "FunctionExpression" && !exp.id) {
-      const i = exp.children.findIndex(c => c?.token === "function") + 1
+      const i = exp.children.findIndex((c) => c?.token === "function") + 1
       exp = {
         ...exp,
         // Insert id, type suffix, spacing
         children: [...exp.children.slice(0, i), " ", id, suffix, ws, ...exp.children.slice(i)]
       }
-      return {
-        type: "Declaration",
-        decl,
-        children: [exp],
-        names: id.names,
-      }
+      return exp
     }
   }
 
   let [splices, thisAssignments] = gatherBindingCode(id)
 
-  splices = splices.map(s => [", ", s])
-  thisAssignments = thisAssignments.map(a => ["", a, ";"])
+  splices = splices.map((s) => [", ", s])
+  thisAssignments = thisAssignments.map((a) => ["", a, ";"])
 
   const initializer = [ws, assign, e]
   const binding = {
@@ -1998,13 +2085,13 @@ function processFunctions(statements, config) {
 
 function processSwitchExpressions(statements) {
   // switch expressions are wrapped in iife and need returns added
-  gatherRecursiveAll(statements, n => n.type === "SwitchExpression")
+  gatherRecursiveAll(statements, (n) => n.type === "SwitchExpression")
     .forEach(insertSwitchReturns)
 }
 
 function processTryExpressions(statements) {
   // try expressions are wrapped in iife and need returns added
-  gatherRecursiveAll(statements, n => n.type === "TryExpression")
+  gatherRecursiveAll(statements, (n) => n.type === "TryExpression")
     .forEach(({ blocks }) => {
       blocks.forEach(insertReturn);
     })
@@ -2015,14 +2102,14 @@ function processBindingPatternLHS(lhs, tail) {
   adjustAtBindings(lhs, true)
   const [splices, thisAssignments] = gatherBindingCode(lhs)
   // TODO: This isn't quite right for compound assignments, may need to wrap with parens and use comma to return the complete value
-  tail.push(...splices.map(s => [", ", s]), ...thisAssignments.map(a => [", ", a]))
+  tail.push(...splices.map((s) => [", ", s]), ...thisAssignments.map((a) => [", ", a]))
 }
 
 function processAssignments(statements) {
   // Move assignments/updates within LHS of assignments/updates
   // to run earlier via comma operator
-  gatherRecursiveAll(statements, n => n.type === "AssignmentExpression" || n.type === "UpdateExpression")
-    .forEach(exp => {
+  gatherRecursiveAll(statements, (n) => n.type === "AssignmentExpression" || n.type === "UpdateExpression")
+    .forEach((exp) => {
       function extractAssignment(lhs) {
         let expr = lhs
         while (expr.type === "ParenthesizedExpression") {
@@ -2063,8 +2150,8 @@ function processAssignments(statements) {
       if (post.length) exp.children.push(...post)
     })
 
-  gatherRecursiveAll(statements, n => n.type === "AssignmentExpression" && n.names === null)
-    .forEach(exp => {
+  gatherRecursiveAll(statements, (n) => n.type === "AssignmentExpression" && n.names === null)
+    .forEach((exp) => {
       let { lhs: $1, exp: $2 } = exp, tail = [], i = 0, len = $1.length
 
       // identifier=
@@ -2096,8 +2183,8 @@ function processAssignments(statements) {
           // Wrap with parens to distinguish from braced blocks
           if (!wrapped) {
             wrapped = true
-            lhs.children./**/splice(0, 0, "(")
-            tail./**/push(")")
+            lhs.children.splice(0, 0, "(")
+            tail.push(")")
           }
         }
       }
@@ -2132,8 +2219,8 @@ function processAssignments(statements) {
               c[5] = ")"
 
               // Remove assignment token
-              lastAssignment./**/pop()
-              if (isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment./**/pop()
+              lastAssignment.pop()
+              if (isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment.pop()
               // TODO: this only works for the last assignment, not multiple splice assignments, or splice assignments earlier in the chain
               if ($1.length > 1) {
                 throw new Error("Not implemented yet! TODO: Handle multiple splice assignments")
@@ -2186,7 +2273,7 @@ function getPatternConditions(pattern, ref, conditions) {
   switch (pattern.type) {
     case "ArrayBindingPattern": {
       const { elements, length } = pattern,
-        hasRest = elements.some(e => e.rest),
+        hasRest = elements.some((e) => e.rest),
         comparator = hasRest ? " >= " : " === ",
         l = [comparator, (length - hasRest).toString()]
 
@@ -2381,8 +2468,8 @@ function nonMatcherBindings(pattern) {
 }
 
 function aggregateDuplicateBindings(bindings, ReservedWord) {
-  const props = gatherRecursiveAll(bindings, n => n.type === "BindingProperty")
-  const arrayBindings = gatherRecursiveAll(bindings, n => n.type === "ArrayBindingPattern")
+  const props = gatherRecursiveAll(bindings, (n) => n.type === "BindingProperty")
+  const arrayBindings = gatherRecursiveAll(bindings, (n) => n.type === "ArrayBindingPattern")
 
   arrayBindings.forEach((a) => {
     const { elements } = a
@@ -2418,17 +2505,12 @@ function aggregateDuplicateBindings(bindings, ReservedWord) {
     if (!key) return
     // NOTE: Allows pattern matching reserved word keys by binding to inaccessible refs
     // HACK: using the parser's ReservedWord rule here
-    if (ReservedWord({
+    if (ReservedWord({ fail() { } }, {
       pos: 0,
       input: key,
     })) {
       shared.forEach((p) => {
-        const ref = {
-          type: "Ref",
-          base: `_${key}`,
-          id: key,
-        }
-        aliasBinding(p, ref)
+        aliasBinding(p, makeRef(`_${key}`, key))
       });
       // Don't push declarations for reserved words
       return
@@ -2455,7 +2537,7 @@ function aggregateDuplicateBindings(bindings, ReservedWord) {
 }
 
 function processPatternMatching(statements, ReservedWord) {
-  gatherRecursiveAll(statements, n => n.type === "SwitchStatement" || n.type === "SwitchExpression")
+  gatherRecursiveAll(statements, (n) => n.type === "SwitchStatement" || n.type === "SwitchExpression")
     .forEach((s) => {
       const { caseBlock } = s
       const { clauses } = caseBlock
@@ -2548,14 +2630,14 @@ function processPatternMatching(statements, ReservedWord) {
             let [splices, thisAssignments] = gatherBindingCode(pattern)
             const patternBindings = nonMatcherBindings(pattern)
 
-            splices = splices.map(s => [", ", nonMatcherBindings(s)])
-            thisAssignments = thisAssignments.map(a => [indent, a, ";"])
+            splices = splices.map((s) => [", ", nonMatcherBindings(s)])
+            thisAssignments = thisAssignments.map((a) => [indent, a, ";"])
 
             const duplicateDeclarations = aggregateDuplicateBindings([patternBindings, splices], ReservedWord)
 
             prefix.push([indent, "const ", patternBindings, " = ", ref, splices, ";"])
             prefix.push(...thisAssignments)
-            prefix.push(...duplicateDeclarations.map(d => [indent, d, ";"]))
+            prefix.push(...duplicateDeclarations.map((d) => [indent, d, ";"]))
 
             break
           }
@@ -2603,15 +2685,14 @@ function processPatternMatching(statements, ReservedWord) {
 // body: [ws, pipe, ws, expr][]
 
 function processPipelineExpressions(statements) {
-  gatherRecursiveAll(statements, n => n.type === "PipelineExpression")
+  gatherRecursiveAll(statements, (n) => n.type === "PipelineExpression")
     .forEach((s) => {
       const [ws, , body] = s.children
       let [, arg] = s.children
 
       let i = 0, l = body.length
 
-      const refDec = []
-      const children = [ws, refDec]
+      const children = [ws]
 
       let usingRef = null
 
@@ -2625,7 +2706,7 @@ function processPipelineExpressions(statements) {
         if (pipe.token === "|>=") {
           let initRef
           if (i === 0) {
-            outer: switch (arg.type) {
+            :outer switch (arg.type) {
               case "MemberExpression":
                 // If there is only a single access then we don't need a ref
                 if (arg.children.length <= 2) break
@@ -2660,12 +2741,9 @@ function processPipelineExpressions(statements) {
                 break;
             }
 
-            // remove refDec from children and put it inside lhs of assignment
-            // TODO: should be attached to node to be hoisted
-            children.pop()
             // assignment node
             const lhs = [[
-              [refDec, initRef],
+              [initRef],
               arg,
               [],
               { token: "=", children: [" = "] }
@@ -2747,9 +2825,12 @@ function processPipelineExpressions(statements) {
         }
       }
 
-      // TODO: Hoistable ref declarations
       if (usingRef) {
-        refDec.unshift("let ", usingRef, ";")
+        s.hoistDec = {
+          type: "Declaration",
+          children: ["let ", usingRef],
+          names: [],
+        }
       }
 
       children.push(arg)
@@ -2758,7 +2839,7 @@ function processPipelineExpressions(statements) {
     })
 }
 
-function processProgram(root, config, m, ReservedWord) {
+function processProgram(root: BlockStatement, config, m, ReservedWord) {
   // invariants
   assert.equal(m.forbidBracedApplication.length, 1, "forbidBracedApplication")
   assert.equal(m.forbidClassImplicitCall.length, 1, "forbidClassImplicitCall")
@@ -2774,12 +2855,12 @@ function processProgram(root, config, m, ReservedWord) {
   processPipelineExpressions(statements)
   processAssignments(statements)
   processPatternMatching(statements, ReservedWord)
-  processFunctions(statements, config)
+
   processSwitchExpressions(statements)
   processTryExpressions(statements)
 
   // Modify iteration expressions
-  gatherRecursiveAll(statements, n => n.type === "IterationExpression")
+  gatherRecursiveAll(statements, (n) => n.type === "IterationExpression")
     .forEach((e) => expressionizeIteration(e))
 
   // Hoist hoistDec attributes to actual declarations.
@@ -2787,11 +2868,17 @@ function processProgram(root, config, m, ReservedWord) {
   // into IIFEs.
   hoistRefDecs(statements)
 
+  // Adding implicit returns should happen after hoisting any ref declarations
+  // so their target node can be found in the block without being inside a return
+  processFunctions(statements, config)
+
   // Insert prelude
   statements.unshift(...m.prelude)
 
   if (config.autoLet) {
-    createLetDecs(statements, [])
+    createConstLetDecs(statements, [], "let")
+  } else if(config.autoConst) {
+    createConstLetDecs(statements, [], "const")
   } else if (config.autoVar) {
     createVarDecs(statements, [])
   }
@@ -2802,12 +2889,12 @@ function processProgram(root, config, m, ReservedWord) {
 
 function findDecs(statements) {
   const declarationNames = gatherNodes(statements, ({ type }) => type === "Declaration")
-    .flatMap(d => d.names)
+    .flatMap((d) => d.names)
 
   return new Set(declarationNames)
 }
 
-function populateRefs(statements) {
+function populateRefs(statements: ASTNode) {
   const refNodes = gatherRecursive(statements, ({ type }) => type === "Ref")
 
   if (refNodes.length) {
@@ -2854,7 +2941,7 @@ function createVarDecs(statements, scopes, pushVar) {
     if (assignmentStatements.length) {
       // Get nested assignments that could be in expressions
       assignmentStatements = assignmentStatements
-        .concat(findAssignments(assignmentStatements.map(s => s.children), decs))
+        .concat(findAssignments(assignmentStatements.map((s) => s.children), decs))
     }
 
     return assignmentStatements
@@ -2863,7 +2950,7 @@ function createVarDecs(statements, scopes, pushVar) {
   // Let descendent blocks add the var at the outer enclosing function scope
   if (!pushVar) {
     pushVar = function (name) {
-      varIds./**/push(name)
+      varIds.push(name)
       decs.add(name)
     }
   }
@@ -2872,7 +2959,7 @@ function createVarDecs(statements, scopes, pushVar) {
   scopes.push(decs)
   const varIds = []
   const assignmentStatements = findAssignments(statements, scopes)
-  const undeclaredIdentifiers = assignmentStatements.flatMap(a => a.names)
+  const undeclaredIdentifiers = assignmentStatements.flatMap((a) => a.names)
 
   // Unique, undeclared identifiers in this scope
   undeclaredIdentifiers.filter((x, i, a) => {
@@ -2888,23 +2975,20 @@ function createVarDecs(statements, scopes, pushVar) {
   forNodes.forEach(({ block }) => blockNodes.delete(block))
 
   // recurse into nested blocks
-  blockNodes.forEach((block) => {
+  blockNodes.forEach (block) =>
     createVarDecs(block.expressions, scopes, pushVar)
-  })
 
   // recurse into for loops
-  forNodes.forEach(({ block, declaration }) => {
+  forNodes.forEach ({ block, declaration }) =>
     scopes.push(new Set(declaration.names))
     createVarDecs(block.expressions, scopes, pushVar)
     scopes.pop()
-  })
 
   // recurse into nested functions
-  fnNodes.forEach(({ block, parameters }) => {
+  fnNodes.forEach ({ block, parameters }) =>
     scopes.push(new Set(parameters.names))
     createVarDecs(block.expressions, scopes)
     scopes.pop()
-  })
 
   if (varIds.length) {
     // get indent from first statement
@@ -2920,18 +3004,17 @@ function createVarDecs(statements, scopes, pushVar) {
   scopes.pop()
 }
 
-function createLetDecs(statements, scopes) {
+function createConstLetDecs(statements, scopes, letOrConst: "let" | "const") {
   function findVarDecs(statements, decs) {
-    const declarationNames = gatherRecursive(statements,
-      (node) =>
+    const declarationNames = gatherRecursive statements, (node) =>
         node.type === "Declaration" &&
         node.children &&
         node.children.length > 0 &&
         node.children[0].token &&
         node.children[0].token.startsWith('var') ||
-        node.type === "FunctionExpression")
-      .filter(node => node.type === "Declaration")
-      .flatMap(node => node.names)
+        node.type === "FunctionExpression"
+      .filter((node) => node.type === "Declaration")
+      .flatMap((node) => node.names)
 
     return new Set(declarationNames)
   }
@@ -2971,21 +3054,21 @@ function createLetDecs(statements, scopes) {
         let forNode = forNodes.find((forNode) => forNode.block === block)
         if (fnNode != null) {
           scopes.push(new Set(fnNode.parameters.names))
-          createLetDecs(block.expressions, scopes)
+          createConstLetDecs(block.expressions, scopes, letOrConst)
           scopes.pop()
         }
         else if (forNode != null) {
           scopes.push(new Set(forNode.declaration.names))
-          createLetDecs(block.expressions, scopes)
+          createConstLetDecs(block.expressions, scopes, letOrConst)
           scopes.pop()
         }
         else
-          createLetDecs(block.expressions, scopes)
+          createConstLetDecs(block.expressions, scopes, letOrConst)
         continue
       }
       // Assignment and Declaration all use 'names'.
       if (node.names == null) continue
-      let names = node.names.filter(name => !hasDec(name))
+      let names = node.names.filter((name) => !hasDec(name))
       if (node.type == "AssignmentExpression")
         undeclaredIdentifiers.push(...names)
       names.forEach((name) => currentScope.add(name))
@@ -3001,13 +3084,14 @@ function createLetDecs(statements, scopes) {
         && statement[1].names[0] == undeclaredIdentifiers[0]
         && firstIdentifier && firstIdentifier.names == undeclaredIdentifiers[0]
         && gatherNodes(statement[1], (node) => node.type === "ObjectBindingPattern").length == 0)
-        statement[1].children.unshift(["let "])
+        statement[1].children.unshift([`${letOrConst} `])
       else {
         let tail = "\n"
         // Does this statement start with a newline?
         if (gatherNodes(indent, (node) => node.token && node.token.endsWith("\n")).length > 0)
           tail = undefined
-        targetStatements.push([indent, "let ", undeclaredIdentifiers.join(", "), tail])
+        // Have to use 'let' instead of 'const' if the assignment is inside an expression
+        targetStatements.push([indent, `let `, undeclaredIdentifiers.join(", "), tail])
       }
     }
     targetStatements.push(statement)
@@ -3032,7 +3116,7 @@ function processReturnValue(func) {
   const ref = makeRef("ret")
 
   let declared
-  values.forEach(value => {
+  values.forEach((value) => {
     value.children = [ref]
 
     // Check whether return.value already declared within this function
@@ -3066,7 +3150,7 @@ function processReturnValue(func) {
 
   // Transform existing `return` -> `return ret`
   gatherRecursiveWithinFunction(block,
-    r => r.type === "ReturnStatement" && !r.expression)
+    (r) => r.type === "ReturnStatement" && !r.expression)
     .forEach((r) => {
       r.expression = ref
       r.children.splice(-1, 1, " ", ref)
@@ -3113,7 +3197,7 @@ function processUnaryExpression(pre, exp, post) {
   if (exp.type === "Literal") {
     if (pre.length === 1 && pre[0].token === "-") {
       const children = [pre[0], ...exp.children]
-      if (post) exp.children./**/push(post)
+      if (post) exp.children.push(post)
 
       return {
         type: "Literal",
@@ -3144,7 +3228,7 @@ function processUnaryExpression(pre, exp, post) {
   }
 }
 
-function prune(node) {
+function prune(node: ASTNode): ASTNode {
   if (node === null || node === undefined) return
   if (node.length === 0) return
 
@@ -3167,7 +3251,7 @@ function prune(node) {
 }
 
 function reorderBindingRestProperty(props) {
-  const names = props.flatMap(p => p.names)
+  const names = props.flatMap((p) => p.names)
 
   let restIndex = -1
   let restCount = 0
@@ -3191,8 +3275,7 @@ function reorderBindingRestProperty(props) {
 
     // Swap delimiters of last property and rest so that an omitted trailing comma doesn't end up in the middle
     if (after.length) {
-      const
-        {delim: restDelim} = rest,
+      const {delim: restDelim} = rest,
         lastAfterProp = after[after.length - 1],
         {delim: lastDelim, children: lastAfterChildren} = lastAfterProp
 
@@ -3254,7 +3337,7 @@ function skipIfOnlyWS(target) {
   if (Array.isArray(target)) {
     if (target.length === 1) {
       return skipIfOnlyWS(target[0])
-    } else if (target.every(e => (skipIfOnlyWS(e) === undefined))) {
+    } else if (target.every((e) => (skipIfOnlyWS(e) === undefined))) {
       return undefined
     }
     return target

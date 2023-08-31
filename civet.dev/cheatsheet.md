@@ -987,6 +987,14 @@ for key, value in object
   console.log `${key} maps to ${value}`
 </Playground>
 
+If your object might have a prototype with enumerable properties,
+you can skip them with `own`:
+
+<Playground>
+for own key in object
+  console.log key
+</Playground>
+
 ### Loop Expressions
 
 If needed, loops automatically assemble an Array of the last value
@@ -1173,6 +1181,21 @@ bound := object@method
 bound := @@method
 </Playground>
 
+### Private Fields
+
+[Private class fields](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes/Private_class_fields)
+do not need an explicit `this.` or `@` prefix.
+
+<Playground>
+class Counter
+  #count = 0
+  increment(): void
+    #count++
+  add(other: Counter): void
+    #count += other.#count if #count in other
+  set(#count)
+</Playground>
+
 ### Static Fields
 
 <Playground>
@@ -1238,6 +1261,14 @@ class Civet
 </Playground>
 
 ## Types
+
+### Unknown
+
+`???` is shorthand for the type `unknown`.
+
+<Playground>
+declare function jsonParse(json: string): ???
+</Playground>
 
 ### Import
 
@@ -1369,7 +1400,7 @@ block comment
 ### `#` Comments
 
 If you do not need
-[private class fields](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes/Private_class_fields),
+[private class fields](#private-fields),
 you can enable `#` one-line comments (as in many other languages)
 via a `"civet"` directive at the beginning of your file:
 
@@ -1600,7 +1631,7 @@ no
 
 ### CoffeeScript Comments
 
-If you don't need [private class fields](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes/Private_class_fields),
+If you don't need [private class fields](#private-fields),
 you can enable `#` for single-line comments:
 
 <Playground>
