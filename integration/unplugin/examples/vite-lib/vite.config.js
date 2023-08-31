@@ -1,4 +1,4 @@
-import CivetPlugin from '../../dist/index.js';
+import civetVitePlugin from '@danielx/civet/vite';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
@@ -9,5 +9,5 @@ export default defineConfig({
       formats: ['cjs', 'es'],
     },
   },
-  plugins: [CivetPlugin.vite({ dts: true })],
+  plugins: [civetVitePlugin({ dts: true })],
 });
