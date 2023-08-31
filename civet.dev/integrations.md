@@ -22,6 +22,7 @@ title: Integrations
 
 ## Starter Templates
 
+- [Astro, Rollup, Vite, and Webpack](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin/examples)
 - [Solid](https://github.com/orenelbaum/solid-civet-template)
 - [SolidStart](https://github.com/orenelbaum/solid-start-civet-template)
 

@@ -138,7 +138,7 @@ To transpile within a CommonJS NodeJS app
 ## Building a project
 
 Use Civet's built-in [unplugin](integration/unplugin) to integrate with many
-bundlers: Astro, Vite, esbuild, Rollup, Webpack, or Rspack.  For example:
+bundlers: Vite, esbuild, Rollup, Webpack, or Rspack.  For example:
 
 ```js
 import esbuild from 'esbuild'
@@ -157,28 +157,29 @@ esbuild.build({
 }).catch(() => process.exit(1))
 ```
 
-See the [unplugin documentation](integration/unplugin) for more configurations,
-including [full working examples](integration/unplugin/examples).
-For example, the Vite unplugin
-[supports Astro](integration/unplugin/examples/astro).
-
 ::: info
 You can mix and match `.civet` files with `.js` and `.ts` files.
 Even `.coffee` will work if you require `coffeescript/register` or add a loader for it.
 :::
 
-You can also use tools built upon esbuild.  For example, here is a minimal
-configuration for [tsup](https://github.com/egoist/tsup)
-(though it does not currently generate `.d.ts` output):
+See the [unplugin documentation](integration/unplugin) for more configurations,
+including [full working examples](integration/unplugin/examples).
+
+These plugins should support metaframeworks built upon these bundlers.
+For example, the Vite unplugin supports [Astro](https://astro.build/)
+([full example](integration/unplugin/examples/astro)),
+and the esbuild unplugin supports [tsup](https://github.com/egoist/tsup):
 
 ```js
 // tsup.config.ts
 import { defineConfig } from 'tsup';
-import civetPlugin from '@danielx/civet/esbuild-plugin';
+import civetPlugin from '@danielx/civet/esbuild';
 
 export default defineConfig({
   entryPoints: ['main.civet'],
-  esbuildPlugins: [civetPlugin({})],
+  esbuildPlugins: [civetPlugin({
+    // options
+  })],
 });
 ```
 
