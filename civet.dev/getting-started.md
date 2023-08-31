@@ -137,37 +137,49 @@ To transpile within a CommonJS NodeJS app
 
 ## Building a project
 
-We strongly recommend using [esbuild](https://esbuild.github.io/) as your project bundler:
+Use Civet's built-in [unplugin](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin) to integrate with many
+bundlers: Vite, esbuild, Rollup, Webpack, or Rspack.  For example:
 
 ```js
 import esbuild from 'esbuild'
-import civetPlugin from '@danielx/civet/esbuild-plugin'
+import civetPlugin from '@danielx/civet/esbuild'
 
 esbuild.build({
   // ...
   plugins: [
-    civetPlugin()
+    civetPlugin({
+      // Options and their defaults:
+      // dts: false,                     // generate .d.ts files?
+      // outputExtension: '.civet.tsx',  // replaces .civet in output
+      // js: false,                      // use Civet's TS -> JS transpiler?
+    })
   ]
 }).catch(() => process.exit(1))
 ```
 
 ::: info
-You can also add `.js` and `.ts` extensions if you want to mix and match!
+You can mix and match `.civet` files with `.js` and `.ts` files.
 Even `.coffee` will work if you require `coffeescript/register` or add a loader for it.
 :::
 
-You can also use tools built upon esbuild.  For example, here is a minimal
-configuration for [tsup](https://github.com/egoist/tsup)
-(though it does not currently generate `.d.ts` output):
+See the [unplugin documentation](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin) for more configurations,
+including [full working examples](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin/examples).
+
+These plugins should support metaframeworks built upon these bundlers.
+For example, the Vite unplugin supports [Astro](https://astro.build/)
+([full example](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin/examples/astro)),
+and the esbuild unplugin supports [tsup](https://github.com/egoist/tsup):
 
 ```js
 // tsup.config.ts
 import { defineConfig } from 'tsup';
-import civetPlugin from '@danielx/civet/esbuild-plugin';
+import civetPlugin from '@danielx/civet/esbuild';
 
 export default defineConfig({
   entryPoints: ['main.civet'],
-  esbuildPlugins: [civetPlugin({})],
+  esbuildPlugins: [civetPlugin({
+    // options
+  })],
 });
 ```
 
