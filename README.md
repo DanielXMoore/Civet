@@ -16,8 +16,11 @@ The modern way to write TypeScript.
 - [Civet VSCode Extension](https://marketplace.visualstudio.com/items?itemName=DanielX.civet)
 - [Discord Server](https://discord.gg/xkrW9GebBc)
 - Plugins for
+  [Vite, esbuild, Rollup, Webpack, Rspack, Astro](integration/unplugin),
+  <!--
   [esbuild](source/esbuild-plugin.civet),
   [Vite](https://github.com/lorefnon/vite-plugin-civet),
+  -->
   [Babel](source/babel-plugin.mjs),
   [Gulp](integrations/gulp),
   [ESM module resolution](source/esm.civet),

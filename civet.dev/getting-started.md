@@ -137,22 +137,33 @@ To transpile within a CommonJS NodeJS app
 
 ## Building a project
 
-We strongly recommend using [esbuild](https://esbuild.github.io/) as your project bundler:
+Use Civet's built-in [unplugin](integration/unplugin) to integrate with many
+bundlers: Astro, Vite, esbuild, Rollup, Webpack, or Rspack.  For example:
 
 ```js
 import esbuild from 'esbuild'
-import civetPlugin from '@danielx/civet/esbuild-plugin'
+import civetPlugin from '@danielx/civet/esbuild'
 
 esbuild.build({
   // ...
   plugins: [
-    civetPlugin()
+    civetPlugin({
+      // Options and their defaults:
+      // dts: false,                     // generate .d.ts files?
+      // outputExtension: '.civet.tsx',  // replaces .civet in output
+      // js: false,                      // use Civet's TS -> JS transpiler?
+    })
   ]
 }).catch(() => process.exit(1))
 ```
 
+See the [unplugin documentation](integration/unplugin) for more configurations,
+including [full working examples](integration/unplugin/examples).
+For example, the Vite unplugin
+[supports Astro](integration/unplugin/examples/astro).
+
 ::: info
-You can also add `.js` and `.ts` extensions if you want to mix and match!
+You can mix and match `.civet` files with `.js` and `.ts` files.
 Even `.coffee` will work if you require `coffeescript/register` or add a loader for it.
 :::
 
