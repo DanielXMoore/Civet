@@ -1,5 +1,5 @@
 ---
-title: Cheatsheet
+title: Reference
 aside: false
 ---
 

@@ -165,7 +165,7 @@ $: document.title = title
 ## Decorators
 
 Civet uses `@` as
-[shorthand for `this`, `static`, and `constructor`](/cheatsheet#this).
+[shorthand for `this`, `static`, and `constructor`](/reference#this).
 Decorators need to be written with `@@`:
 
 <Playground>
