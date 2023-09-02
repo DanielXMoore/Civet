@@ -92,6 +92,14 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
           host: host.compilerHost,
         });
 
+        const diagnostics = program.getGlobalDiagnostics();
+
+        if (diagnostics.length > 0) {
+          console.error(
+            ts.formatDiagnosticsWithColorAndContext(diagnostics, formatHost)
+          );
+        }
+
         for (const file of fsMap.keys()) {
           const sourceFile = program.getSourceFile(file)!;
           program.emit(
