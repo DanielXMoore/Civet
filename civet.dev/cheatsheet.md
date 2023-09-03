@@ -111,7 +111,7 @@ x <? "string" // typeof x === "string"
 `````
 
 ```ts
-// conditionals
+// if conditions
 if x < 3
   "it's small"
 
@@ -168,6 +168,39 @@ if [, dir, base] := /^(.*\/)?([^/]*)$/.exec file
 ```
 
 ```ts
+// Switch
+switch dir
+  when '>' then civet.x++
+  when '<'
+    civet.x--
+    civet.x = 0 if civet.x < 0
+  else
+    civet.waiting += 5
+```
+
+```ts
+// Pattern Matching
+switch s
+  ""
+    console.log "nothing"
+  /\s+/
+    console.log "whitespace"
+  "hi"
+    console.log "greeting"
+```
+
+```ts
+// Pattern destructuring
+switch x
+  [{type: "text", content: /\s+/}, ...rest]
+    console.log "leading whitespace"
+  [{type: "text", content}, ...rest]
+    console.log "leading text:", content
+  [{type}, ...rest]
+    console.log "leading type:", type
+```
+
+```ts
 // JSX
 // Better binding
 <button props.click> Click Me </Button>
@@ -180,6 +213,89 @@ if [, dir, base] := /^(.*\/)?([^/]*)$/.exec file
 // class shorthand
 <.items>
   <.item>
+```
+
+```ts
+// Object globs
+point = data{x,y}
+point = data.{x,y};
+point.{x,y} = data
+point3D = { point.{x,y}, z: 0 }
+complex := obj.{x:a, b.c()?.y}
+merged := data.{...global, ...user};
+data.{a, b, ...rest} = result
+```
+
+```ts
+// Property Access
+json.x.y
+json.'long property'
+json.`${movie} name`
+matrix.0.0
+array.-1
+```
+
+```ts
+// Await operators
+await.allSettled promises
+await.all promises
+await.race promises
+```
+
+```ts
+// Range literals
+letters := ['a'..'f']
+numbers := [1..10]
+reversed := [10..1]
+indices := [0...array.length]
+```
+
+```ts
+// slicing and splicing
+start := numbers[..2]
+mid := numbers[3...-2]
+end := numbers[-2..]
+numbers[1...-1] = []
+```
+
+```ts
+// Pipe operator
+data
+|> Object.keys
+|> console.log
+
+x.length
+|> & + 1
+|> .toString()
+
+fetch url
+|> await
+|> .json()
+|> await
+|> return
+
+// Pipe assignment
+data |>= .content
+```
+
+```ts
+// Thick Pipes
+array
+||> .pop()
+||> .push 5
+||> .sort()
+||> .reverse()
+
+count |> & + 1
+||> console.log
+|> & * 2
+||> console.log
+
+url |> fetch |> await
+||> (response) => console.log response.status
+|> .json() |> await
+||> (json) => console.log "json:", json
+|> callback
 ```
 
 </div>
