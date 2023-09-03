@@ -868,14 +868,15 @@ CallExpressionRest
 
 # NOTE: Added shorthand x?(3) -> x?.(3)
 OptionalShorthand
-  QuestionMark OptionalDot ->
+  MultiLineComment* QuestionMark OptionalDot ->
     return {
       type: "Optional",
       children: $0,
     }
 
 OptionalDot
-  ( Dot / InsertDot )
+  MultiLineComment* Dot
+  InsertDot MultiLineComment*
 
 NonNullAssertion
   # NOTE: Prevent shadowing !^ xnor operator
@@ -895,17 +896,25 @@ MemberExpression
     return $1
 
 MemberExpressionRest
+  MultiLineComment*:comments MemberExpressionRestBody:body ->
+    if (Array.isArray(body)) return [...comments, ...body]
+    return {
+      ...body,
+      children: [...comments, ...body.children]
+    }
+
+MemberExpressionRestBody
   # NOTE: Added shorthand x?[3] -> x?.[3]
-  ( OptionalShorthand / NonNullAssertion )? MemberBracketContent ->
-    if ($1) {
+  ( OptionalShorthand / NonNullAssertion )?:dot MultiLineComment*:comments MemberBracketContent:content ->
+    if (dot) {
       // Optional followed by a slice expression
-      if ($1.type === "Optional" && $2.type === "SliceExpression") {
+      if (dot.type === "Optional" && content.type === "SliceExpression") {
         // Remove '.' from optional since it is present in '.slice'
-        return [$1.children[0], $2]
+        return [...dot.children.slice(0, -1), ...comments, content]
       }
       return $0.flat()
     }
-    return $2
+    return content
   # NOTE: Combined Optional and Property access
   PropertyAccess
   PropertyGlob
@@ -1036,8 +1045,8 @@ AccessStart
     return $2
 
 PropertyAccess
-  AccessStart:access ( IdentifierName / PrivateIdentifier ):id ->
-    const children = [access, ...id.children]
+  AccessStart:access MultiLineComment*:comments ( IdentifierName / PrivateIdentifier ):id ->
+    const children = [access, ...comments, ...id.children]
 
     return {
       type: "PropertyAccess",
@@ -1048,15 +1057,22 @@ PropertyAccess
   # NOTE: Added CoffeeScript :: prototype shorthand only when enabled
   CoffeePrototypeEnabled DoubleColon:p IdentifierName?:id ->
     if (id) {
-      p.token = ".prototype."
-      return [p, id]
+      return {
+        type: "PropertyAccess",
+        name: id.name,
+        children: [ {token: ".prototype.", $loc: p.$loc}, id ],
+      }
+    } else {
+      return {
+        type: "PropertyAccess",
+        name: "prototype",
+        children: [ {token: ".prototype", $loc: p.$loc} ],
+      }
     }
-    p.token = ".prototype"
-    return p
 
 PropertyGlob
   # NOTE: Added shorthand obj.{a,b:c} -> {a: obj.a, c: obj.b}
-  OptionalDot:dot BracedObjectLiteral:object ->
+  OptionalDot:dot MultiLineComment* BracedObjectLiteral:object ->
     return {
       type: "PropertyGlob",
       dot,
@@ -1518,10 +1534,28 @@ FunctionExpression
       children: [...signature.children, block],
       block,
     }
-  AmpersandFunctionExpression
+  # Identity function shorthand
+  "(&)" ->
+    const ref = makeRef("$"), body = [ref]
+    return {
+      type: "ArrowFunction",
+      children: [ref, " => ", body],
+      ref,
+      body,
+      ampersandBlock: true,
+    }
 
-AmpersandFunctionExpression
+  AmpersandFunctionExpression
+  Identifier:id __ ConstAssignment _*:ws ThinArrowFunction:fn ->
+    debugger
+    return {
+      ...fn,
+      id,
+      children: [...fn.children.slice(0, 2), insertTrimmingSpace(ws, " "), id, ...fn.children.slice(2)]
+    }
+
   # Ruby/Crystal style block shorthand
+AmpersandFunctionExpression
   # NOTE: !NumericLiteral is so we don't match on `.1` etc.
   AmpersandUnaryPrefix?:prefix ( Ampersand / ( !NumericLiteral &( QuestionMark? Dot ) ) ) AmpersandBlockRHS?:rhs ->
     if (!prefix && !rhs) return $skip
@@ -2224,6 +2258,7 @@ BracedObjectLiteralContent
       // Allow each prop to be a single Property object or an array of such
       prop = Array.isArray(prop) ? prop : [prop]
       let last = prop[prop.length-1]
+      if (!last) return []
       last = {
         ...last,
         delim,
@@ -6220,8 +6255,8 @@ Shebang
   /#![^\r\n]*/ EOL
 
 CivetPrologue
-  [\t ]* DoubleQuote CivetPrologueContent:content DoubleQuote $SimpleStatementDelimiter EOS? -> content
-  [\t ]* SingleQuote CivetPrologueContent:content SingleQuote $SimpleStatementDelimiter EOS? -> content
+  [\t ]* DoubleQuote CivetPrologueContent:content DoubleQuote SimpleStatementDelimiter EOS? -> content
+  [\t ]* SingleQuote CivetPrologueContent:content SingleQuote SimpleStatementDelimiter EOS? -> content
 
 CivetPrologueContent
   "civet" NonIdContinue CivetOption*:options [\s]* ->
@@ -6255,7 +6290,14 @@ UnknownPrologue
   # Can't use $EOS because it will prevent re-writing of coffee style comments
   [\t ]* StringLiteral:s $SimpleStatementDelimiter EOS
 
+TripleSlashDirective
+  # https://www.typescriptlang.org/docs/handbook/triple-slash-directives.html
+  /\/\/\/[^\r\n]*/ EOS?
+
 DirectivePrologue
+  PrologueString
+
+PrologueString
   CivetPrologue
   UnknownPrologue
 
@@ -6691,7 +6733,7 @@ Reset
     }
 
 Init
-  Shebang? DirectivePrologue*:directives "" ->
+  Shebang? TripleSlashDirective* DirectivePrologue*:directives ->
     directives.forEach((directive) => {
       if (directive.type === "CivetPrologue") {
         Object.assign(module.config, directive.config)
