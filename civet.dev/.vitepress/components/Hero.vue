@@ -9,6 +9,11 @@ const actions = [
   },
   {
     theme: 'alt',
+    text: 'Cheatsheet',
+    link: '/cheatsheet',
+  },
+  {
+    theme: 'alt',
     text: 'Civet playground',
     link: '/playground',
   },
