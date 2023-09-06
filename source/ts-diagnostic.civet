@@ -1,0 +1,137 @@
+ts from 'typescript'
+type { Diagnostic, DiagnosticMessageChain, TextSpan } from 'typescript'
+
+vs, { DiagnosticSeverity, Position, Range } from 'vscode-languageserver'
+
+{ TextDocument } from 'vscode-languageserver-textdocument'
+
+{ DiagnosticCategory } := ts
+
+type SourceMapping = [number] | [number, number, number, number]
+
+type SourceMap =
+  updateSourceMap?(outputStr: string, inputPos: number): void
+  json(srcFileName: string, outFileName: string): unknown
+  data:
+    lines: SourceMapping[][]
+
+export type SourcemapLines = SourceMap['data']['lines']
+
+/**
+ * Take a position in generated code and map it into a position in source code.
+ * Reverse mapping.
+ *
+ * Return position as-is if no sourcemap is available.
+ */
+export function remapPosition(
+  position: Position,
+  sourcemapLines?: SourcemapLines
+): Position
+  if !sourcemapLines return position
+
+  { line, character } := position
+
+  textLine := sourcemapLines[line]
+  // Return original position if no mapping at this line
+  if !textLine?.length return position
+
+  let i = 0,
+    p = 0,
+    l = textLine.length,
+    lastMapping,
+    lastMappingPosition = 0
+
+  while i < l
+    mapping := textLine[i]!
+    p += mapping[0]!
+
+    if mapping.length === 4
+      lastMapping = mapping
+      lastMappingPosition = p
+
+    if p >= character
+      break
+
+    i++
+
+  if lastMapping
+    srcLine := lastMapping[2]
+    srcChar := lastMapping[3]
+    newChar := srcChar + character - lastMappingPosition
+
+    return
+      line: srcLine
+      character: newChar
+  else
+    // console.error("no mapping for ", position)
+    return position
+
+/**
+ * Use sourcemap lines to remap the start and end position of a range.
+ */
+export function remapRange(
+  range: Range,
+  sourcemapLines?: SourcemapLines
+): Range
+  return
+    start: remapPosition(range.start, sourcemapLines)
+    end: remapPosition(range.end, sourcemapLines)
+
+export function flattenDiagnosticMessageText(
+  diag: string | DiagnosticMessageChain | undefined,
+  indent = 0
+): string
+  if typeof diag === 'string'
+    return diag
+  else if diag === undefined
+    return ''
+
+  result .= ''
+  if indent
+    result += '\n'
+
+    for i .= 0; i < indent; i++
+      result += '  '
+
+  result += diag.messageText
+  indent++
+  if diag.next
+    for kid of diag.next
+      result += flattenDiagnosticMessageText(kid, indent)
+
+  return result
+
+function rangeFromTextSpan(span: TextSpan, document: TextDocument): Range
+  return
+    start: document.positionAt(span.start)
+    end: document.positionAt(span.start + span.length)
+
+export function convertDiagnostic(
+  diagnostic: Diagnostic,
+  document: TextDocument,
+  sourcemapLines?: SourcemapLines
+): vs.Diagnostic
+  return
+    message: flattenDiagnosticMessageText(diagnostic.messageText)
+    range: remapRange(
+      rangeFromTextSpan(
+        {
+          start: diagnostic.start || 0,
+          length: diagnostic.length ?? 1,
+        },
+        document
+      ),
+      sourcemapLines
+    )
+    severity: diagnosticCategoryToSeverity(diagnostic.category)
+    code: diagnostic.code
+    source: diagnostic.source || 'typescript'
+
+function diagnosticCategoryToSeverity(
+  category: ts.DiagnosticCategory
+): DiagnosticSeverity
+  switch category
+    when DiagnosticCategory.Warning then DiagnosticSeverity.Warning
+    when DiagnosticCategory.Error then DiagnosticSeverity.Error
+    when DiagnosticCategory.Suggestion then DiagnosticSeverity.Hint
+    when DiagnosticCategory.Message then DiagnosticSeverity.Information

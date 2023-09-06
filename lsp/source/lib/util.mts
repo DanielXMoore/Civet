@@ -1,31 +1,31 @@
-import ts from "typescript";
-import type {
-  Diagnostic,
-  DiagnosticMessageChain,
-  NavigationBarItem,
-  NavigationTree,
-  TextSpan,
-} from "typescript"
-const {
-  DiagnosticCategory,
-  ScriptElementKind,
-  ScriptElementKindModifier,
-} = ts
-import vs, {
+import ts from 'typescript';
+import type { NavigationBarItem, NavigationTree } from 'typescript';
+const { ScriptElementKind, ScriptElementKindModifier } = ts;
+import {
   CompletionItemKind,
-  DiagnosticSeverity,
   DocumentSymbol,
   Position,
   Range,
   SymbolKind,
   SymbolTag,
-} from "vscode-languageserver";
+} from 'vscode-languageserver';
 
-import { SourceMap } from "@danielx/civet"
-import { TextDocument } from "vscode-languageserver-textdocument";
-import assert from "assert";
+import { SourceMap } from '@danielx/civet';
+import { TextDocument } from 'vscode-languageserver-textdocument';
+import assert from 'assert';
+import {
+  SourcemapLines,
+  remapRange,
+  rangeFromTextSpan,
+} from '@danielx/civet/ts-diagnostic';
 
-export type SourcemapLines = SourceMap["data"]["lines"]
+export {
+  remapPosition,
+  SourcemapLines,
+  convertDiagnostic,
+  flattenDiagnosticMessageText,
+  diagnosticCategoryToSeverity,
+} from '@danielx/civet/ts-diagnostic';
 
 // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/documentSymbol.ts#L63
 
@@ -196,13 +196,6 @@ function parseKindModifier(kindModifiers: string): Set<string> {
   return new Set(kindModifiers.split(/,|\s+/g));
 }
 
-function rangeFromTextSpan(span: TextSpan, document: TextDocument): Range {
-  return {
-    start: document.positionAt(span.start),
-    end: document.positionAt(span.start + span.length),
-  }
-}
-
 export function makeRange(l1: number, c1: number, l2: number, c2: number) {
   return {
     start: {
@@ -288,55 +281,6 @@ export function containsRange(range: Range, otherRange: Range): boolean {
   return true;
 }
 
-/**
- * Take a position in generated code and map it into a position in source code.
- * Reverse mapping.
- *
- * Return position as-is if no sourcemap is available.
- */
-export function remapPosition(position: Position, sourcemapLines?: SourcemapLines): Position {
-  if (!sourcemapLines) return position
-
-  const { line, character } = position
-
-  const textLine = sourcemapLines[line]
-  // Return original position if no mapping at this line
-  if (!textLine?.length) return position
-
-  let i = 0, p = 0, l = textLine.length,
-    lastMapping, lastMappingPosition = 0
-
-  while (i < l) {
-    const mapping = textLine[i]!
-    p += mapping[0]!
-
-    if (mapping.length === 4) {
-      lastMapping = mapping
-      lastMappingPosition = p
-    }
-
-    if (p >= character) {
-      break
-    }
-
-    i++
-  }
-
-  if (lastMapping) {
-    const srcLine = lastMapping[2]
-    const srcChar = lastMapping[3]
-    const newChar = srcChar + character - lastMappingPosition
-
-    return {
-      line: srcLine,
-      character: newChar,
-    }
-  } else {
-    // console.error("no mapping for ", position)
-    return position
-  }
-}
-
 export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
   assert("line" in position, "position must have line")
   assert("character" in position, "position must have character")
@@ -383,69 +327,6 @@ export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
 
   // console.warn(`couldn't forward map src position: ${[origLine, origOffset]}`)
   return position
-}
-
-/**
- * Use sourcemap lines to remap the start and end position of a range.
- */
-export function remapRange(range: Range, sourcemapLines?: SourcemapLines,): Range {
-  return {
-    start: remapPosition(range.start, sourcemapLines),
-    end: remapPosition(range.end, sourcemapLines)
-  }
-}
-
-export function flattenDiagnosticMessageText(
-  diag: string | DiagnosticMessageChain | undefined,
-  indent = 0
-): string {
-  if (typeof diag === 'string') {
-    return diag;
-  } else if (diag === undefined) {
-    return '';
-  }
-  let result = '';
-  if (indent) {
-    result += "\n";
-
-    for (let i = 0; i < indent; i++) {
-      result += '  ';
-    }
-  }
-  result += diag.messageText;
-  indent++;
-  if (diag.next) {
-    for (const kid of diag.next) {
-      result += flattenDiagnosticMessageText(kid, indent);
-    }
-  }
-  return result;
-}
-
-export function convertDiagnostic(diagnostic: Diagnostic, document: TextDocument, sourcemapLines?: SourcemapLines): vs.Diagnostic {
-  return {
-    message: flattenDiagnosticMessageText(diagnostic.messageText),
-    range: remapRange(rangeFromTextSpan({
-      start: diagnostic.start || 0,
-      length: diagnostic.length ?? 1
-    }, document), sourcemapLines),
-    severity: diagnosticCategoryToSeverity(diagnostic.category),
-    code: diagnostic.code,
-    source: diagnostic.source || "typescript",
-  }
-}
-
-function diagnosticCategoryToSeverity(category: ts.DiagnosticCategory): DiagnosticSeverity {
-  switch (category) {
-    case DiagnosticCategory.Warning:
-      return DiagnosticSeverity.Warning
-    case DiagnosticCategory.Error:
-      return DiagnosticSeverity.Error
-    case DiagnosticCategory.Suggestion:
-      return DiagnosticSeverity.Hint
-    case DiagnosticCategory.Message:
-      return DiagnosticSeverity.Information
-  }
 }
 
 import type { SourceMap as CoffeeSourceMap } from "coffeescript"
