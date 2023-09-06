@@ -13,6 +13,7 @@ import ts, {
   CompilerOptions,
   IScriptSnapshot,
   LanguageServiceHost,
+  version as typescriptVersion
 } from "typescript"
 
 const {
@@ -376,6 +377,7 @@ function TSService(projectURL = "./") {
   const logger = console
 
   logger.info("CIVET", version)
+  logger.info("TYPESCRIPT", typescriptVersion)
 
   const projectPath = fileURLToPath(projectURL)
   const tsConfigPath = `${projectPath}tsconfig.json`
