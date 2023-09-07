@@ -1,5 +1,17 @@
-import { TransformResult, createUnplugin } from 'unplugin';
-import civet from '@danielx/civet';
+import {
+  TransformResult,
+  createUnplugin,
+  SourceMapCompact as UnpluginSourceMap,
+} from 'unplugin';
+import civet, { SourceMap } from '@danielx/civet';
+import {
+  remapRange,
+  flattenDiagnosticMessageText,
+  rangeFromTextSpan,
+  // @ts-ignore
+  // using ts-ignore because the version of @danielx/civet typescript is checking against
+  // is the one published to npm, not the one in the repo
+} from '@danielx/civet/ts-diagnostic';
 import * as fs from 'fs';
 import path from 'path';
 import ts from 'typescript';
@@ -42,6 +54,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
   const outExt = options.outputExtension ?? (transpileToJS ? '.jsx' : '.tsx');
 
   let fsMap: Map<string, string> = new Map();
+  const sourceMaps = new Map<string, SourceMap>();
   let compilerOptions: any;
 
   return {
@@ -92,7 +105,34 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
           host: host.compilerHost,
         });
 
-        const diagnostics = program.getGlobalDiagnostics();
+        const diagnostics: ts.Diagnostic[] = program
+          .getGlobalDiagnostics()
+          .map(diagnostic => {
+            const file = diagnostic.file;
+            if (!file) return diagnostic;
+
+            const sourceMap = sourceMaps.get(file.fileName);
+            if (!sourceMap) return diagnostic;
+
+            const sourcemapLines = sourceMap.data.lines;
+            const range = remapRange(
+              rangeFromTextSpan(
+                {
+                  start: diagnostic.start || 0,
+                  length: diagnostic.length ?? 1,
+                },
+                document
+              ),
+              sourcemapLines
+            );
+
+            return {
+              ...diagnostic,
+              messageText: flattenDiagnosticMessageText(diagnostic.messageText),
+              length: diagnostic.length,
+              start: range.start,
+            };
+          });
 
         if (diagnostics.length > 0) {
           console.error(
@@ -104,7 +144,12 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
           const sourceFile = program.getSourceFile(file)!;
           program.emit(
             sourceFile,
-            (filePath, content) => {
+            async (filePath, content) => {
+              const dir = path.dirname(filePath);
+              if (!pathExists(dir)) {
+                await fs.promises.mkdir(dir, { recursive: true });
+              }
+
               this.emitFile({
                 source: content,
                 fileName: path.relative(process.cwd(), filePath),
@@ -142,13 +187,23 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       // but for some reason, webpack seems to be running them in the order
       // of `resolveId` -> `loadInclude` -> `transform` -> `load`
       // so we have to do transformation here instead
+      const compiled = civet.compile(code, {
+        // inlineMap: true,
+        filename: id,
+        js: transpileToJS,
+        sourceMap: true,
+      });
+
+      sourceMaps.set(path.resolve(process.cwd(), id), compiled.sourceMap);
+
+      const jsonSourceMap = compiled.sourceMap.json(
+        path.basename(id.replace(/\.tsx$/, '')),
+        path.basename(id)
+      );
+
       let transformed: TransformResult = {
-        code: civet.compile(code, {
-          inlineMap: true,
-          filename: id,
-          js: transpileToJS,
-        } as any) as string,
-        map: null,
+        code: compiled.code,
+        map: jsonSourceMap as UnpluginSourceMap,
       };
 
       if (options.transformOutput)
@@ -182,5 +237,14 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     },
   };
 });
+
+async function pathExists(path: string) {
+  try {
+    await fs.promises.access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export default civetUnplugin;
