@@ -561,7 +561,8 @@ function expressionizeIteration(exp): void {
     ...wrapIIFE([
       ["", ["const ", resultsRef, "=[]"], ";"],
       ...children,
-      ["", ["; return ", resultsRef]],
+      ["", "; "],
+      ["", wrapWithReturn(resultsRef)],
     ], async)
   )
 }
@@ -2099,12 +2100,6 @@ function processFunctions(statements, config): void
     processParams(f)
     processReturn(f, config.implicitReturns)
 
-function processSwitchExpressions(statements): void {
-  // switch expressions are wrapped in iife and need returns added
-  gatherRecursiveAll(statements, (n) => n.type === "SwitchExpression")
-    .forEach(insertSwitchReturns)
-}
-
 function processTryExpressions(statements): void {
   // try expressions are wrapped in iife and need returns added
   gatherRecursiveAll(statements, (n) => n.type === "TryExpression")
@@ -2553,7 +2548,7 @@ function aggregateDuplicateBindings(bindings, ReservedWord) {
 }
 
 function processPatternMatching(statements, ReservedWord): void {
-  gatherRecursiveAll(statements, (n) => n.type === "SwitchStatement" || n.type === "SwitchExpression")
+  gatherRecursiveAll(statements, (n) => n.type === "SwitchStatement")
     .forEach((s) => {
       const { caseBlock } = s
       const { clauses } = caseBlock
@@ -2684,11 +2679,6 @@ function processPatternMatching(statements, ReservedWord): void {
         refAssignment = []
         prev = next
       })
-
-      if (s.type === "SwitchExpression") {
-        insertReturn(root[0])
-        root.splice(0, 1, wrapIIFE(root[0]))
-      }
 
       s.type = "PatternMatchingStatement"
       s.children = [root]
@@ -2871,9 +2861,6 @@ function processProgram(root: BlockStatement, config, m, ReservedWord): void {
   processPipelineExpressions(statements)
   processAssignments(statements)
   processPatternMatching(statements, ReservedWord)
-
-  processSwitchExpressions(statements)
-  processTryExpressions(statements)
 
   // Modify iteration expressions
   gatherRecursiveAll(statements, (n) => n.type === "IterationExpression")
@@ -3440,35 +3427,55 @@ function typeOfJSXFragment(node, config, getRef) {
  * uses await, or just adding async if specified.
  * Returns an Array suitable for `children`.
  */
-function wrapIIFE(exp, async) {
-  let prefix, suffix
-  if (async) {
-    prefix = "(async ()=>"
-    suffix = ")()"
-  } else if (hasAwait(exp)) {
-    prefix = "(await (async ()=>"
-    suffix = ")())"
-  } else {
-    prefix = "(()=>"
-    suffix = ")()"
-  }
+function wrapIIFE(expressions: StatementTuple[], async): ASTNode[] {
+  let prefix
 
-  // TODO: This rest prevents an infinite recursion bug, ideally it wouldn't be necessary
-  const expressions = Array.isArray(exp) ? [...exp] : [exp]
-  const block = {
+  if async
+    async = "async "
+  else if hasAwait expressions
+    async = "async "
+    prefix =
+      type: "Await"
+      children: ["await "]
+
+  block := {
     type: "BlockStatement",
     expressions,
     children: ["{", expressions, "}"],
     bare: false,
   }
-  updateParentPointers(block)
 
-  // TODO: This should return a call expression ideally
-  return [
-    prefix,
-    block,
-    suffix,
-  ]
+  parameters :=
+    type: "Parameters"
+    children: ["()"]
+    names: []
+
+  signature :=
+    modifier:
+      async: !!async
+    returnType: undefined
+
+  fn := {
+    type: "ArrowFunction",
+    signature
+    parameters
+    returnType: undefined
+    ts: false
+    async
+    block
+    children: [async, parameters, "=>", block]
+  }
+
+  updateParentPointers(block, fn)
+
+  exp :=
+    type: "CallExpression"
+    children: [ makeLeftHandSideExpression(fn), "()" ]
+
+  if prefix
+    return [ makeLeftHandSideExpression [prefix, exp] ]
+
+  return [ exp ]
 }
 
 module.exports = {
