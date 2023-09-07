@@ -34,10 +34,12 @@ export type PluginOptions = {
 } & ( // Eliminates the possibility of having both `dts` and `js` set to `true`
   | {
       dts?: false;
+      typeCheck?: false;
       js?: false | true;
     }
   | {
       dts?: true;
+      typeCheck?: true;
       js?: false;
     }
 );
@@ -46,11 +48,11 @@ const isCivet = (id: string) => /\.civet$/.test(id);
 const isCivetTranspiled = (id: string) => /\.civet\.(m?)(j|t)s(x?)$/.test(id);
 
 const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
-  if (options.dts && options.js) {
+  if ((options.dts || options.typeCheck) && options.js) {
     throw new Error("Can't have both `dts` and `js` be set to `true`.");
   }
 
-  const transpileToJS = options.js ?? !options.dts;
+  const transpileToJS = options.js ?? !(options.dts || options.typeCheck);
   const outExt = options.outputExtension ?? (transpileToJS ? '.jsx' : '.tsx');
 
   let fsMap: Map<string, string> = new Map();
@@ -61,7 +63,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     name: 'unplugin-civet',
     enforce: 'pre',
     async buildStart() {
-      if (options.dts) {
+      if (options.dts || options.typeCheck) {
         const configPath = ts.findConfigFile(process.cwd(), ts.sys.fileExists);
 
         if (!configPath) {
@@ -92,7 +94,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       }
     },
     buildEnd() {
-      if (options.dts) {
+      if (options.dts || options.typeCheck) {
         const system = tsvfs.createFSBackedSystem(fsMap, process.cwd(), ts);
         const host = tsvfs.createVirtualCompilerHost(
           system,
@@ -140,25 +142,27 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
           );
         }
 
-        for (const file of fsMap.keys()) {
-          const sourceFile = program.getSourceFile(file)!;
-          program.emit(
-            sourceFile,
-            async (filePath, content) => {
-              const dir = path.dirname(filePath);
-              if (!pathExists(dir)) {
-                await fs.promises.mkdir(dir, { recursive: true });
-              }
+        if (options.dts) {
+          for (const file of fsMap.keys()) {
+            const sourceFile = program.getSourceFile(file)!;
+            program.emit(
+              sourceFile,
+              async (filePath, content) => {
+                const dir = path.dirname(filePath);
+                if (!pathExists(dir)) {
+                  await fs.promises.mkdir(dir, { recursive: true });
+                }
 
-              this.emitFile({
-                source: content,
-                fileName: path.relative(process.cwd(), filePath),
-                type: 'asset',
-              });
-            },
-            undefined,
-            true
-          );
+                this.emitFile({
+                  source: content,
+                  fileName: path.relative(process.cwd(), filePath),
+                  type: 'asset',
+                });
+              },
+              undefined,
+              true
+            );
+          }
         }
       }
     },
