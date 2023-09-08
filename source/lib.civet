@@ -281,12 +281,10 @@ function arrayElementHasTrailingComma(elementNode) {
   return lastChild && lastChild[lastChild.length - 1]?.token === ","
 }
 
-const assert = {
-  equal(a, b, msg): void {
-    if (a !== b) {
-      throw new Error(`Assertion failed [${msg}]: ${a} !== ${b}`)
-    }
-  }
+assert := {
+  equal(a, b, msg): void
+    /* c8 ignore next */
+    throw new Error(`Assertion failed [${msg}]: ${a} !== ${b}`) if a !== b
 }
 
 /**
@@ -561,7 +559,8 @@ function expressionizeIteration(exp): void {
     ...wrapIIFE([
       ["", ["const ", resultsRef, "=[]"], ";"],
       ...children,
-      ["", ["; return ", resultsRef]],
+      ["", "; "],
+      ["", wrapWithReturn(resultsRef)],
     ], async)
   )
 }
@@ -1121,8 +1120,6 @@ function gatherNodes(node: ASTNode, predicate: Predicate): ASTNode[] {
     default:
       return gatherNodes(node.children, predicate)
   }
-
-  return []
 }
 
 // Gather nodes that match a predicate recursing into all unmatched children
@@ -1359,21 +1356,9 @@ function insertReturn(node): void {
 // insert a return in each when/else/default block
 // case blocks don't get implicit returns
 // maybe default blocks shouldn't either?
-function insertSwitchReturns(exp): void {
-  switch (exp.type) {
-    case "SwitchStatement":
-      exp.caseBlock.clauses.forEach((clause) => {
-        insertReturn(clause)
-      })
-      return
-    case "SwitchExpression":
-      // TODO: insert IIFE returns
-      // by altering "ReturnStatement" nodes
-      exp.caseBlock.clauses.forEach(insertReturn)
-      return
-  }
-}
-
+function insertSwitchReturns(exp): void
+  exp.caseBlock.clauses.forEach (clause) =>
+    insertReturn clause
 
 function isEmptyBareBlock(node) {
   if (node?.type !== "BlockStatement") return false
@@ -2099,19 +2084,6 @@ function processFunctions(statements, config): void
     processParams(f)
     processReturn(f, config.implicitReturns)
 
-function processSwitchExpressions(statements): void {
-  // switch expressions are wrapped in iife and need returns added
-  gatherRecursiveAll(statements, (n) => n.type === "SwitchExpression")
-    .forEach(insertSwitchReturns)
-}
-
-function processTryExpressions(statements): void {
-  // try expressions are wrapped in iife and need returns added
-  gatherRecursiveAll(statements, (n) => n.type === "TryExpression")
-    .forEach(({ blocks }) => {
-      blocks.forEach(insertReturn);
-    })
-}
 
 function processBindingPatternLHS(lhs, tail): void {
   // Expand AtBindings first before gathering splices
@@ -2553,7 +2525,7 @@ function aggregateDuplicateBindings(bindings, ReservedWord) {
 }
 
 function processPatternMatching(statements, ReservedWord): void {
-  gatherRecursiveAll(statements, (n) => n.type === "SwitchStatement" || n.type === "SwitchExpression")
+  gatherRecursiveAll(statements, (n) => n.type === "SwitchStatement")
     .forEach((s) => {
       const { caseBlock } = s
       const { clauses } = caseBlock
@@ -2684,11 +2656,6 @@ function processPatternMatching(statements, ReservedWord): void {
         refAssignment = []
         prev = next
       })
-
-      if (s.type === "SwitchExpression") {
-        insertReturn(root[0])
-        root.splice(0, 1, wrapIIFE(root[0]))
-      }
 
       s.type = "PatternMatchingStatement"
       s.children = [root]
@@ -2871,9 +2838,6 @@ function processProgram(root: BlockStatement, config, m, ReservedWord): void {
   processPipelineExpressions(statements)
   processAssignments(statements)
   processPatternMatching(statements, ReservedWord)
-
-  processSwitchExpressions(statements)
-  processTryExpressions(statements)
 
   // Modify iteration expressions
   gatherRecursiveAll(statements, (n) => n.type === "IterationExpression")
@@ -3440,35 +3404,55 @@ function typeOfJSXFragment(node, config, getRef) {
  * uses await, or just adding async if specified.
  * Returns an Array suitable for `children`.
  */
-function wrapIIFE(exp, async) {
-  let prefix, suffix
-  if (async) {
-    prefix = "(async ()=>"
-    suffix = ")()"
-  } else if (hasAwait(exp)) {
-    prefix = "(await (async ()=>"
-    suffix = ")())"
-  } else {
-    prefix = "(()=>"
-    suffix = ")()"
-  }
+function wrapIIFE(expressions: StatementTuple[], async): ASTNode[] {
+  let prefix
 
-  // TODO: This rest prevents an infinite recursion bug, ideally it wouldn't be necessary
-  const expressions = Array.isArray(exp) ? [...exp] : [exp]
-  const block = {
+  if async
+    async = "async "
+  else if hasAwait expressions
+    async = "async "
+    prefix =
+      type: "Await"
+      children: ["await "]
+
+  block := {
     type: "BlockStatement",
     expressions,
     children: ["{", expressions, "}"],
     bare: false,
   }
-  updateParentPointers(block)
 
-  // TODO: This should return a call expression ideally
-  return [
-    prefix,
-    block,
-    suffix,
-  ]
+  parameters :=
+    type: "Parameters"
+    children: ["()"]
+    names: []
+
+  signature :=
+    modifier:
+      async: !!async
+    returnType: undefined
+
+  fn := {
+    type: "ArrowFunction",
+    signature
+    parameters
+    returnType: undefined
+    ts: false
+    async
+    block
+    children: [async, parameters, "=>", block]
+  }
+
+  updateParentPointers(block, fn)
+
+  exp :=
+    type: "CallExpression"
+    children: [ makeLeftHandSideExpression(fn), "()" ]
+
+  if prefix
+    return [ makeLeftHandSideExpression [prefix, exp] ]
+
+  return [ exp ]
 }
 
 module.exports = {
