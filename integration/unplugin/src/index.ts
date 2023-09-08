@@ -34,12 +34,12 @@ export type PluginOptions = {
 } & ( // Eliminates the possibility of having both `dts` and `js` set to `true`
   | {
       dts?: false;
-      typeCheck?: false;
+      typecheck?: false;
       js?: false | true;
     }
   | {
       dts?: true;
-      typeCheck?: true;
+      typecheck?: true;
       js?: false;
     }
 );
@@ -48,11 +48,11 @@ const isCivet = (id: string) => /\.civet$/.test(id);
 const isCivetTranspiled = (id: string) => /\.civet\.(m?)(j|t)s(x?)$/.test(id);
 
 const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
-  if ((options.dts || options.typeCheck) && options.js) {
+  if ((options.dts || options.typecheck) && options.js) {
     throw new Error("Can't have both `dts` and `js` be set to `true`.");
   }
 
-  const transpileToJS = options.js ?? !(options.dts || options.typeCheck);
+  const transpileToJS = options.js ?? !(options.dts || options.typecheck);
   const outExt = options.outputExtension ?? (transpileToJS ? '.jsx' : '.tsx');
 
   let fsMap: Map<string, string> = new Map();
@@ -63,7 +63,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     name: 'unplugin-civet',
     enforce: 'pre',
     async buildStart() {
-      if (options.dts || options.typeCheck) {
+      if (options.dts || options.typecheck) {
         const configPath = ts.findConfigFile(process.cwd(), ts.sys.fileExists);
 
         if (!configPath) {
@@ -94,7 +94,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       }
     },
     buildEnd() {
-      if (options.dts || options.typeCheck) {
+      if (options.dts || options.typecheck) {
         const system = tsvfs.createFSBackedSystem(fsMap, process.cwd(), ts);
         const host = tsvfs.createVirtualCompilerHost(
           system,
