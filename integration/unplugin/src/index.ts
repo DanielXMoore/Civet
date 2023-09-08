@@ -149,9 +149,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
               sourceFile,
               async (filePath, content) => {
                 const dir = path.dirname(filePath);
-                if (!pathExists(dir)) {
-                  await fs.promises.mkdir(dir, { recursive: true });
-                }
+                await fs.promises.mkdir(dir, { recursive: true });
 
                 this.emitFile({
                   source: content,
@@ -241,14 +239,5 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     },
   };
 });
-
-async function pathExists(path: string) {
-  try {
-    await fs.promises.access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export default civetUnplugin;
