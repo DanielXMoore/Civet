@@ -1,0 +1,123 @@
+"civet coffeeCompat"
+
+esbuild = require "esbuild"
+heraPlugin = require "@danielx/hera/esbuild-plugin"
+# Need to use the packaged version because we may not have built our own yet
+civetPlugin = require "../node_modules/@danielx/civet/dist/esbuild-plugin.js"
+
+watch = process.argv.includes '--watch'
+minify = false
+sourcemap = false
+
+path = require "path"
+{access} = require "fs/promises"
+exists = (p) ->
+  access(p)
+  .then ->
+    true
+  .catch ->
+    false
+extensionResolverPlugin = (extensions) ->
+  name: "extension-resolve"
+  setup: (build) ->
+    # For relative requires that don't contain a '.'
+    build.onResolve { filter: /\/[^.]*$/ }, (r) ->
+      for extension in extensions
+        {path: resolvePath, resolveDir} = r
+        p = path.join(resolveDir, resolvePath + ".#{extension}")
+
+        # see if a .coffee file exists
+        found = await exists(p)
+        if found
+          return path: p
+
+      return undefined
+
+resolveExtensions = extensionResolverPlugin(["civet", "hera"])
+
+# To get proper extension resolution for non-bundled files, we need to use
+# a plugin hack: https://github.com/evanw/esbuild/issues/622#issuecomment-769462611
+# set bundle: true, then rewrite .coffee -> .js and mark as external
+# Also marking everything else as external since we don't want to bundle anything
+rewriteCivetImports = {
+  name: 'rewrite-civet',
+  setup: (build) ->
+    build.onResolve { filter: /.*/ }, (args) ->
+      if (args.importer)
+        path: args.path.replace(/\.civet$/, ".js")
+        external: true
+}
+
+# Files that need civet imports re-written
+# since they aren't actually bundled
+["cli", "config", "esbuild-plugin"].forEach (name) ->
+  esbuild.build({
+    entryPoints: ["source/#{name}.civet"]
+    bundle: true
+    platform: 'node'
+    format: 'cjs'
+    outfile: "dist/#{name}.js"
+    plugins: [
+      rewriteCivetImports
+      civetPlugin()
+    ]
+  }).catch -> process.exit 1
+
+# esm needs to be a module for import.meta
+["esm"].forEach (name) ->
+  esbuild.build({
+    entryPoints: ["source/#{name}.civet"]
+    bundle: true
+    platform: 'node'
+    format: 'esm'
+    outfile: "dist/#{name}.mjs"
+    plugins: [
+      rewriteCivetImports
+      civetPlugin()
+    ]
+  }).catch -> process.exit 1
+
+for esm in [false, true]
+  esbuild.build({
+    entryPoints: ['source/main.civet']
+    bundle: true
+    watch
+    platform: 'node'
+    format: if esm then 'esm' else 'cjs'
+    outfile: "dist/main.#{if esm then 'mjs' else 'js'}"
+    plugins: [
+      resolveExtensions
+      civetPlugin()
+      heraPlugin
+    ]
+  }).catch -> process.exit 1
+
+esbuild.build({
+  entryPoints: ['source/main.civet']
+  globalName: "Civet"
+  bundle: true
+  sourcemap
+  watch
+  platform: 'browser'
+  outfile: 'dist/browser.js'
+  plugins: [
+    resolveExtensions
+    civetPlugin()
+    heraPlugin
+  ]
+}).catch -> process.exit 1
+
+esbuild.build({
+  entryPoints: ['source/bun-civet.civet']
+  bundle: false
+  sourcemap
+  minify
+  watch
+  platform: 'node'
+  format: 'esm'
+  target: "esNext"
+  outfile: 'dist/bun-civet.mjs'
+  plugins: [
+    civetPlugin()
+  ]
+}).catch -> process.exit 1

@@ -8,7 +8,9 @@ import type {
 import BundledCivetModule from "@danielx/civet"
 import BundledCivetConfigModule from "@danielx/civet/config"
 
-import ts, {
+import ts from "typescript"
+const { version: typescriptVersion } = ts
+import type {
   CompilerHost,
   CompilerOptions,
   IScriptSnapshot,
@@ -376,6 +378,7 @@ function TSService(projectURL = "./") {
   const logger = console
 
   logger.info("CIVET", version)
+  logger.info("TYPESCRIPT", typescriptVersion)
 
   const projectPath = fileURLToPath(projectURL)
   const tsConfigPath = `${projectPath}tsconfig.json`

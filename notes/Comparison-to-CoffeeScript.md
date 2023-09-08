@@ -67,7 +67,8 @@ Civet.
   - NOTE: CoffeeScript `not` precedence is dubious. `not a < b` should be equivalent to `!(a < b)` but it is in fact `!a < b`
 - `do` keyword (replaced with JS `do...while` blocks and new `do` blocks; replace with `((x) -> ...)(x)` syntax or use `"civet coffeeCompat"`, or `"civet coffeeDo"`)
 - `for from` (use JS `for of`, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
-- `for own of` (use JS `for in` and check manually, switch to `Map#keys/values/entries`, or use `Object.create(null)`, or `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
+- `for in` (use `for each of`, or `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
+- `for own of` (use `for own in`, or `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for ... when <condition>` (use `continue if exp` inside loop, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables; `"civet coffeeCompat"`, or `"civet coffeeBinaryExistential"` enables `a ? b` at the cost of losing JS ternary operator)
 - `a of b` (use `a in b` as in JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)

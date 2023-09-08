@@ -4,6 +4,7 @@ Civet
 [![Build Status](https://img.shields.io/github/actions/workflow/status/DanielXMoore/Civet/build.yml?branch=master&logo=github&style=for-the-badge)](https://github.com/DanielXMoore/Civet/actions/workflows/build.yml)
 [![NPM Version](https://img.shields.io/npm/v/@danielx/civet.svg?style=for-the-badge)](https://www.npmjs.com/package/@danielx/civet)
 [![NPM Downloads](https://img.shields.io/npm/dm/@danielx/civet.svg?style=for-the-badge)](https://www.npmjs.com/package/@danielx/civet)
+[![Coverage Status](https://img.shields.io/coverallsCoverage/github/DanielXMoore/Civet?style=for-the-badge)](https://coveralls.io/github/DanielXMoore/Civet?branch=main)
 [![Discord](https://img.shields.io/discord/933472021310996512?style=for-the-badge)](https://discord.com/invite/xkrW9GebBc)
 [![Open Collective](https://img.shields.io/opencollective/all/civet?style=for-the-badge)](https://opencollective.com/civet)
 
@@ -15,9 +16,14 @@ The modern way to write TypeScript.
 - [Civet VSCode Extension](https://marketplace.visualstudio.com/items?itemName=DanielX.civet)
 - [Discord Server](https://discord.gg/xkrW9GebBc)
 - Plugins for
+  [Vite, esbuild, Rollup, Webpack, Rspack](integration/unplugin)
+  (including metaframeworks such as Astro),
+  <!--
   [esbuild](source/esbuild-plugin.civet),
   [Vite](https://github.com/lorefnon/vite-plugin-civet),
-  [Gulp](integrations/gulp),
+  -->
+  [Babel](source/babel-plugin.mjs),
+  [Gulp](integration/gulp),
   [ESM module resolution](source/esm.civet),
   [CJS](register.js),
   [Bun](source/bun-civet.coffee)
@@ -371,6 +377,11 @@ esbuild.build({
 ```
 
 It's super fast and works great!
+
+Code Coverage
+---
+
+[![Coverage Status](https://coveralls.io/repos/github/DanielXMoore/Civet/badge.svg?branch=main)](https://coveralls.io/github/DanielXMoore/Civet?branch=main)
 
 Sponsorship
 ---

@@ -43,7 +43,7 @@ const {
   replaceNodes,
   typeOfJSX,
   wrapIIFE,
-} = require("./lib.js")
+} = require("./lib.civet")
 ```
 
 Program
@@ -193,7 +193,7 @@ ExplicitArguments
 
 # Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
 ApplicationStart
-  IndentedApplicationAllowed &NestedImplicitObjectLiteral
+  IndentedApplicationAllowed &( IndentedFurther !IdentifierBinaryOp !AccessStart )
   !EOS &( _ ( BracedApplicationAllowed / !"{" ) !ForbiddenImplicitCalls )
 
 ForbiddenImplicitCalls
@@ -243,7 +243,8 @@ CommaDelimiter
 
 # https://262.ecma-international.org/#prod-ArgumentList
 ArgumentList
-  ArgumentPart ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+
+  # Check for same line arguments then nested arguments
+  ArgumentPart ( CommaDelimiter !EOS ArgumentPart )* ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+
   # NOTE: Added nested arguments on separate new lines
   NestedImplicitObjectLiteral ->
     return insertTrimmingSpace($1, '')
@@ -254,7 +255,8 @@ ArgumentList
 
 # NOTE: ArgumentList variant that forbids top-level pipeline operators
 NonPipelineArgumentList
-  NonPipelineArgumentPart ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+
+  # Check for same line arguments then nested arguments
+  NonPipelineArgumentPart ( CommaDelimiter !EOS NonPipelineArgumentPart )* ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+
   # NOTE: Added nested arguments on separate new lines
   NestedImplicitObjectLiteral ->
     return insertTrimmingSpace($1, '')
@@ -446,7 +448,7 @@ YieldTail
 # https://262.ecma-international.org/#prod-ArrowFunction
 ArrowFunction
   ThinArrowFunction
-  ( Async _ )?:async Parameters:parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
+  ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
     if (hasAwait(expOrBlock) && !async) {
       async = "async "
     }
@@ -461,6 +463,12 @@ ArrowFunction
 
     return {
       type: "ArrowFunction",
+      signature: {
+        modifier: {
+          async: !!async,
+        },
+        returnType: suffix,
+      },
       parameters,
       returnType: suffix,
       ts: false,
@@ -476,11 +484,14 @@ FatArrow
       return " =>"
     return [ $1, "=>" ]
 
+TrailingDeclaration
+  ( _* ( ConstAssignment / LetAssignment ))
+
 # NOTE Different from
 # https://262.ecma-international.org/#prod-ConciseBody
 FatArrowBody
   # If same-line single expression, avoid wrapping in braces
-  !EOS NonPipelinePostfixedExpression:exp !SemicolonDelimiter -> exp
+  !EOS NonPipelinePostfixedExpression:exp !TrailingDeclaration !SemicolonDelimiter -> exp
   # Otherwise, wrap block body in braces and insert returns
   BracedOrEmptyBlock
 
@@ -521,6 +532,11 @@ PipelineExpression
 
       return {
         type: "ArrowFunction",
+        signature: {
+          modifier: {
+            children: []
+          }
+        },
         children: [ref, " => ", arrowBody],
         ref,
         body: [arrowBody],
@@ -878,14 +894,15 @@ CallExpressionRest
 
 # NOTE: Added shorthand x?(3) -> x?.(3)
 OptionalShorthand
-  QuestionMark OptionalDot ->
+  MultiLineComment* QuestionMark OptionalDot ->
     return {
       type: "Optional",
       children: $0,
     }
 
 OptionalDot
-  ( Dot / InsertDot )
+  MultiLineComment* Dot
+  InsertDot MultiLineComment*
 
 NonNullAssertion
   # NOTE: Prevent shadowing !^ xnor operator
@@ -910,17 +927,25 @@ MemberBase
   MetaProperty
 
 MemberExpressionRest
+  MultiLineComment*:comments MemberExpressionRestBody:body ->
+    if (Array.isArray(body)) return [...comments, ...body]
+    return {
+      ...body,
+      children: [...comments, ...body.children]
+    }
+
+MemberExpressionRestBody
   # NOTE: Added shorthand x?[3] -> x?.[3]
-  ( OptionalShorthand / NonNullAssertion )? MemberBracketContent ->
-    if ($1) {
+  ( OptionalShorthand / NonNullAssertion )?:dot MultiLineComment*:comments MemberBracketContent:content ->
+    if (dot) {
       // Optional followed by a slice expression
-      if ($1.type === "Optional" && $2.type === "SliceExpression") {
+      if (dot.type === "Optional" && content.type === "SliceExpression") {
         // Remove '.' from optional since it is present in '.slice'
-        return [$1.children[0], $2]
+        return [...dot.children.slice(0, -1), ...comments, content]
       }
       return $0.flat()
     }
-    return $2
+    return content
   # NOTE: Combined Optional and Property access
   PropertyAccess
   PropertyGlob
@@ -1045,10 +1070,14 @@ SliceParameters
       children: [start, ws],
     }
 
+AccessStart
+  ( QuestionMark / NonNullAssertion )? Dot !Dot ->
+    if ($1) return [$1, $2]
+    return $2
+
 PropertyAccess
-  ( QuestionMark / NonNullAssertion )? Dot ( IdentifierName / PrivateIdentifier ):id ->
-    const children = [$2, ...id.children]
-    if ($1) children./**/unshift($1)
+  AccessStart:access MultiLineComment*:comments ( IdentifierName / PrivateIdentifier ):id ->
+    const children = [access, ...comments, ...id.children]
 
     return {
       type: "PropertyAccess",
@@ -1059,15 +1088,22 @@ PropertyAccess
   # NOTE: Added CoffeeScript :: prototype shorthand only when enabled
   CoffeePrototypeEnabled DoubleColon:p IdentifierName?:id ->
     if (id) {
-      p.token = ".prototype."
-      return [p, id]
+      return {
+        type: "PropertyAccess",
+        name: id.name,
+        children: [ {token: ".prototype.", $loc: p.$loc}, id ],
+      }
+    } else {
+      return {
+        type: "PropertyAccess",
+        name: "prototype",
+        children: [ {token: ".prototype", $loc: p.$loc} ],
+      }
     }
-    p.token = ".prototype"
-    return p
 
 PropertyGlob
   # NOTE: Added shorthand obj.{a,b:c} -> {a: obj.a, c: obj.b}
-  OptionalDot:dot BracedObjectLiteral:object ->
+  OptionalDot:dot MultiLineComment* BracedObjectLiteral:object ->
     return {
       type: "PropertyGlob",
       dot,
@@ -1120,6 +1156,20 @@ Parameters
       names: [],
       implicit: true,
     }
+
+# Allow for [a, b] => ... or {a, b} -> ...
+ShortArrowParameters
+  ObjectBindingPattern
+  ArrayBindingPattern
+
+ArrowParameters
+  ShortArrowParameters ->
+    return {
+      type: "Parameters",
+      children: ["(", $0, ")"],
+      names: $0.names,
+    }
+  Parameters
 
 NonEmptyParameters
   # NOTE: BindingElement -> ParameterElement
@@ -1494,6 +1544,10 @@ FunctionSignature
       ts: false,
       async,
       generator,
+      modifier: {
+        async: !async.length,
+        generator: !generator.length,
+      },
       block: null,
       children: !parameters.implicit
         ? [ async, func, generator, wid, w, parameters, suffix ]
@@ -1510,6 +1564,7 @@ FunctionExpression
       return {
         ...signature,
         type: "FunctionExpression",
+        signature,
         ts: true,
       }
     }
@@ -1526,13 +1581,34 @@ FunctionExpression
     return {
       ...signature,
       type: "FunctionExpression",
+      signature,
       children: [...signature.children, block],
       block,
     }
-  AmpersandFunctionExpression
+  # Identity function shorthand
+  "(&)" ->
+    const ref = makeRef("$"), body = [ref]
+    return {
+      type: "ArrowFunction",
+      signature: {
+        modifier: {},
+      },
+      children: [ref, " => ", body],
+      ref,
+      body,
+      ampersandBlock: true,
+    }
 
-AmpersandFunctionExpression
+  AmpersandFunctionExpression
+  Identifier:id __ ConstAssignment _*:ws ThinArrowFunction:fn ->
+    return {
+      ...fn,
+      id,
+      children: [...fn.children.slice(0, 2), insertTrimmingSpace(ws, " "), id, ...fn.children.slice(2)]
+    }
+
   # Ruby/Crystal style block shorthand
+AmpersandFunctionExpression
   # NOTE: !NumericLiteral is so we don't match on `.1` etc.
   AmpersandUnaryPrefix?:prefix ( Ampersand / ( !NumericLiteral &( QuestionMark? Dot ) ) ) AmpersandBlockRHS?:rhs ->
     if (!prefix && !rhs) return $skip
@@ -1563,12 +1639,18 @@ AmpersandFunctionExpression
     }
 
     const children = [ ref, " => ", body ]
-    if (hasAwait(body)) {
+    const async = hasAwait(body)
+    if (async) {
       children.unshift("async ")
     }
 
     return {
       type: "ArrowFunction",
+      signature: {
+        modifier: {
+          async,
+        },
+      },
       children,
       ref,
       body,
@@ -1587,6 +1669,7 @@ OperatorDeclaration
     return {
       ...signature,
       type: "FunctionExpression",
+      signature,
       children: [...signature.children, block],
       block,
       operator: true,
@@ -1610,6 +1693,7 @@ OperatorSignature
     return {
       type: "FunctionSignature",
       id,
+      modifier: {},
       parameters,
       returnType: suffix,
       ts: false,
@@ -1655,7 +1739,7 @@ AmpersandUnaryPrefix
   [!~+-]+
 
 ThinArrowFunction
-  ( Async _ )?:async Parameters:parameters ReturnTypeSuffix?:suffix _? Arrow:arrow BracedOrEmptyBlock:block ->
+  ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:suffix _? Arrow:arrow BracedOrEmptyBlock:block ->
     if (hasAwait(block) && !async) {
       async = "async "
     }
@@ -1673,7 +1757,15 @@ ThinArrowFunction
       ts: false,
       async,
       generator,
-      block: block,
+      block,
+      signature: {
+        name: undefined,
+        modifier: {
+          async: !!async,
+          generator: !!generator,
+        },
+        returnType: suffix,
+      },
       children: [
         async,
         { $loc: arrow.$loc, token: "function" },
@@ -1848,11 +1940,15 @@ NonSingleBracedBlock
       children: [$1, s, $3],
     }
 
+DeclarationOrStatement
+  Declaration
+  Statement
+
 # NOTE: SingleLineStatements includes the empty case
 SingleLineStatements
   # NOTE: Statement can start with __ via AssignmentExpression.
   # Force staying on the same line via !/\n/ assertion.
-  ForbidNewlineBinaryOp ( ( _? !EOS ) Statement SemicolonDelimiter )*:stmts ( ( _? !EOS ) Statement SemicolonDelimiter? )?:last RestoreNewlineBinaryOp ->
+  ForbidNewlineBinaryOp ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter )*:stmts ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter? )?:last RestoreNewlineBinaryOp ->
     const expressions = [...stmts]
     if (last) expressions.push(last)
 
@@ -1864,7 +1960,7 @@ SingleLineStatements
     }
 
 PostfixedSingleLineStatements
-  ( ( _? !EOS ) PostfixedStatement SemicolonDelimiter )*:stmts ( ( _? !EOS ) PostfixedStatement SemicolonDelimiter? )?:last ->
+  ( ( _? !EOS ) StatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) StatementListItem SemicolonDelimiter? )?:last ->
     const children = [...stmts]
     if (last) children.push(last)
 
@@ -1877,13 +1973,7 @@ PostfixedSingleLineStatements
 
 BracedContent
   NestedBlockStatements
-  _? Statement ->
-    const expressions = [["", $2]]
-    return {
-      type: "BlockStatement",
-      expressions,
-      children: [$1, expressions],
-    }
+  SingleLineStatements
   # Empty content
   &( __ "}" ) ->
     const expressions = []
@@ -2237,6 +2327,7 @@ BracedObjectLiteralContent
       // Allow each prop to be a single Property object or an array of such
       prop = Array.isArray(prop) ? prop : [prop]
       let last = prop[prop.length-1]
+      if (!last) return []
       last = {
         ...last,
         delim,
@@ -2682,6 +2773,7 @@ MethodSignature
       type: "MethodSignature",
       children: $0,
       name: $1.token,
+      modifier: {},
       returnType: undefined,
       parameters,
     }
@@ -2698,6 +2790,8 @@ MethodSignature
 
     // TypeScript supports optional methods with bodies; remove ? from JS output
     if (optional) $0[3] = optional = { ...optional, ts: true }
+
+    modifier = modifier || {}
 
     return {
       type: "MethodSignature",
@@ -2823,6 +2917,11 @@ NotDedentedBinaryOp
     const ws = [...$1]
     if ($2) ws.push(...$2)
     return [ ws, $4 ]
+
+IdentifierBinaryOp
+  Identifier:id ->
+    if (module.operators.has(id.name)) return id
+    return $skip
 
 BinaryOp
   BinaryOpSymbol ->
@@ -3430,7 +3529,7 @@ CoffeeForStatementParameters
       if (declaration.own) {
         const hasPropRef = module.getRef("hasProp")
 
-        blockPrefix./**/push(["", "if (!", hasPropRef, ".call(", exp, ", ", declaration, ")) continue", ";"])
+        blockPrefix./**/push(["", "if (!", hasPropRef, "(", exp, ", ", declaration, ")) continue", ";"])
       }
 
       // index is actually value in Coffee "for of", y = z[x]
@@ -3534,7 +3633,7 @@ CoffeeForIndex
 
 CoffeeForDeclaration
   # NOTE: Coffee doesn't allow expression bindings like `for a.x in b`
-  ( __ "own" NonIdContinue )?:own ForBinding:binding ->
+  ( __ Own )?:own ForBinding:binding ->
     return {
       type: "AssignmentExpression",
       own: Boolean(own),
@@ -3559,11 +3658,11 @@ ForStatementParameters
   # https://262.ecma-international.org/#prod-ForInOfStatement
   # NOTE: Consolidated declarations
   # NOTE: Consolidated optional 'await'
-  ( Await __ )? ( Each __ )? ( OpenParen __ ) ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? ( __ CloseParen ) ->
-    return processForInOf($0)
+  ( Await __ )? ( (Each / Own) __ )? ( OpenParen __ ) ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? ( __ CloseParen ) ->
+    return processForInOf($0, module.getRef)
   # NOTE: Added optional parens
-  ( Await __ )? ( Each __ )? InsertOpenParen ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? InsertCloseParen ->
-    return processForInOf($0)
+  ( Await __ )? ( (Each / Own) __ )? InsertOpenParen ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? InsertCloseParen ->
+    return processForInOf($0, module.getRef)
   ForRangeParameters
 
 ForRangeParameters
@@ -3655,13 +3754,12 @@ EmptyCondition
 
 # NOTE: Added from CoffeeScript
 SwitchExpression
-  SwitchStatement:e ->
+  SwitchStatement:s ->
     return {
       type: "SwitchExpression",
       // wrap with IIFE
-      children: wrapIIFE(e.children),
-      expression: e.expression,
-      caseBlock: e.caseBlock,
+      children: wrapIIFE([["", s]]),
+      statement: s
     }
 
 # https://262.ecma-international.org/#prod-CaseBlock
@@ -3738,7 +3836,9 @@ PatternExpressionList
 
 ConditionFragment
   BindingPattern
-  SingleLineBinaryOpRHS+:pattern ->
+  ForbidIndentedApplication ( SingleLineBinaryOpRHS+ )?:pattern RestoreIndentedApplication ->
+    if (!pattern) return $skip
+
     return {
       type: "ConditionFragment",
       children: pattern,
@@ -3810,7 +3910,7 @@ TryExpression
     return {
       type: "TryExpression",
       blocks: t.blocks,
-      children: wrapIIFE(t)
+      children: wrapIIFE([["", t]])
     }
 
 # https://262.ecma-international.org/#prod-Catch
@@ -3865,7 +3965,9 @@ Condition
     }
 
 DeclarationCondition
-  LexicalDeclaration:dec ->
+  ForbidIndentedApplication LexicalDeclaration?:dec RestoreIndentedApplication ->
+    if (!dec) return $skip
+
     const ref = makeRef()
 
     const { decl, bindings } = dec
@@ -4033,11 +4135,7 @@ KeywordStatement
                            // omit colon
     }
 
-  # https://262.ecma-international.org/#sec-debugger-statement
-  Debugger -> {
-    type: "DebuggerStatement",
-    children: $0,
-  }
+  DebuggerStatement
 
   # https://262.ecma-international.org/#prod-ReturnStatement
   # NOTE: Modified to leave room for `return.value` and `return =`
@@ -4047,7 +4145,17 @@ KeywordStatement
     children: $0,
   }
 
-  # https://262.ecma-international.org/#prod-ThrowStatement
+  ThrowStatement
+
+# https://262.ecma-international.org/#sec-debugger-statement
+DebuggerStatement
+  Debugger -> {
+    type: "DebuggerStatement",
+    children: $0,
+  }
+
+# https://262.ecma-international.org/#prod-ThrowStatement
+ThrowStatement
   Throw ExtendedExpression -> {
     type: "ThrowStatement",
     children: $0,
@@ -4066,17 +4174,17 @@ Debugger
     return { $loc, token: $1 }
 
 DebuggerExpression
-  Debugger ->
+  DebuggerStatement:s ->
     return {
       type: "DebuggerExpression",
-      children: wrapIIFE($1),
+      children: wrapIIFE([["", s]]),
     }
 
 ThrowExpression
-  Throw ExtendedExpression ->
+  ThrowStatement:s ->
     return {
       type: "ThrowExpression",
-      children: wrapIIFE($0),
+      children: wrapIIFE([["", s]]),
     }
 
 MaybeNestedExpression
@@ -4758,6 +4866,8 @@ StatementDelimiter
   # before value, or parens not actually added around ObjectLiteral).
   &( Nested ( "(" / "[" / "`" / "+" / "-" / "*" / "/" / ObjectLiteral / Arrow / FatArrow / ( Function ( _? Star )? _? "(" ) ) ) InsertSemicolon
   &EOS
+  # Allow for closing a block within the same line as a nested statement
+  &( _* ( "}" / ")" / "]" ) )
 
 SemicolonDelimiter
   _? Semicolon TrailingComment ->
@@ -5016,6 +5126,10 @@ Operator
   "operator" NonIdContinue ->
     return { $loc, token: $1 }
 
+Own
+  "own" NonIdContinue ->
+    return { $loc, token: $1 }
+
 Public
   "public" NonIdContinue ->
     return { $loc, token: $1 }
@@ -5195,8 +5309,8 @@ JSXElement
   # and closing tags are optional (but still allowed).
   !CoffeeJSXEnabled PushJSXOpeningElement:open JSXMixedChildren?:children JSXOptionalClosingElement:close PopJSXStack ->
     if (!children) return $skip
-    $0 = $0.slice(1)
     let parts
+    $0 = $0.slice(1)
     if (close) {
       parts = $0
     } else if (children.jsxChildren.length) {
@@ -5904,8 +6018,11 @@ EnumDeclaration
       ts: true,
       children: $0,
     }
-    // const enums do not generate any JavaScript code
-    if (isConst) return ts
+    // In TypeScript const enums do not generate any JavaScript code
+    // but we don't yet do the same post-processing to completely
+    // erase the enum from the output. So we just use a simpler
+    // but less optimized output for raw js.
+    // if (isConst) return ts
     // Generate JS output for enum similar to how TypeScript does
     const names = new Set(block.properties.map(p => p.name.name))
     return [ts,
@@ -6085,6 +6202,10 @@ TypeUnaryOp
 TypeIndexedAccess
   OpenBracket Type? __ CloseBracket
 
+UnknownAlias
+  "???" ->
+    return { $loc, token: "unknown" }
+
 TypePrimary
   _? TypeTuple
   InterfaceBlock
@@ -6096,6 +6217,13 @@ TypePrimary
       type: "LiteralType",
       t,
       children: $0,
+    }
+  _? UnknownAlias ->
+    return {
+      type: "IdentifierType",
+      children: $0,
+      raw: $2.token,
+      args: undefined
     }
   _? IdentifierName (Dot IdentifierName)* TypeArguments?:args ->
     return {
@@ -6264,8 +6392,8 @@ Shebang
   /#![^\r\n]*/ EOL
 
 CivetPrologue
-  [\t ]* DoubleQuote CivetPrologueContent:content DoubleQuote $SimpleStatementDelimiter EOS? -> content
-  [\t ]* SingleQuote CivetPrologueContent:content SingleQuote $SimpleStatementDelimiter EOS? -> content
+  [\t ]* DoubleQuote CivetPrologueContent:content DoubleQuote SimpleStatementDelimiter EOS? -> content
+  [\t ]* SingleQuote CivetPrologueContent:content SingleQuote SimpleStatementDelimiter EOS? -> content
 
 CivetPrologueContent
   "civet" NonIdContinue CivetOption*:options [\s]* ->
@@ -6299,7 +6427,14 @@ UnknownPrologue
   # Can't use $EOS because it will prevent re-writing of coffee style comments
   [\t ]* StringLiteral:s $SimpleStatementDelimiter EOS
 
+TripleSlashDirective
+  # https://www.typescriptlang.org/docs/handbook/triple-slash-directives.html
+  /\/\/\/[^\r\n]*/ EOS?
+
 DirectivePrologue
+  PrologueString
+
+PrologueString
   CivetPrologue
   UnknownPrologue
 
@@ -6484,7 +6619,7 @@ Reset
     module.forbidBracedApplication = [false]
     module.forbidTrailingMemberProperty = [false]
     module.forbidNewlineBinaryOp = [false]
-    module.JSXTagStack = []
+    module.JSXTagStack = [undefined]
 
     module.operators = new Set
 
@@ -6537,6 +6672,7 @@ Reset
     }
 
     module.config = {
+      autoConst: false,
       autoVar: false,
       autoLet: false,
       coffeeBinaryExistential: false,
@@ -6584,10 +6720,10 @@ Reset
       hasProp(hasPropRef) {
         const typeSuffix = {
           ts: true,
-          children: [": <T>(this: T, prop: keyof T) => boolean"]
+          children: [": <T>(object: T, prop: keyof T) => boolean"]
         }
         // [indent, statement]
-        module.prelude.push(["", [preludeVar, hasPropRef, typeSuffix, " = {}.hasOwnProperty", asAny, ";\n"]])
+        module.prelude.push(["", [preludeVar, hasPropRef, typeSuffix, " = {}.constructor.hasOwn", asAny, ";\n"]])
       },
       is(isRef) {
         // Thanks to @thetarnav for help with this TypeScript magic.
@@ -6706,11 +6842,35 @@ Reset
       }
     })
 
-    Object.assign(module.config, parse.config)
-    parse.config = module.config
+    // Hack to pass in parser config from main
+    Object.assign(module.config, exports.parse.config)
+    exports.parse.config = module.config
+
+    // Hack to pass parser state to cache key
+    return {
+      type: "ParserMeta",
+      children: [],
+      getStateKey() {
+        const stateInt =
+          ((module.currentIndent.level % 256) << 8) |
+          (module.classImplicitCallForbidden << 7) |
+          (module.indentedApplicationForbidden << 6) |
+          (module.bracedApplicationForbidden << 5) |
+          (module.trailingMemberPropertyForbidden << 4) |
+          (module.newlineBinaryOpForbidden << 3) |
+          // This is slightly different than the rest of the state,
+          // since it is affected by the directive prologue and may be hit
+          // by the EOL rule early in the parse. Later if we wanted to
+          // allow block scoping of the compat directives we would need to
+          // add them all here.
+          (module.config.coffeeComment << 2)
+
+        return [stateInt, module.currentJSXTag]
+      },
+    }
 
 Init
-  Shebang? DirectivePrologue*:directives "" ->
+  Shebang? TripleSlashDirective* DirectivePrologue*:directives ->
     directives.forEach((directive) => {
       if (directive.type === "CivetPrologue") {
         Object.assign(module.config, directive.config)
