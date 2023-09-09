@@ -27,10 +27,23 @@ type ASTLeaf =
   $loc: Loc
   token: string
 
+type Children = ASTNode[]
+
 type StatementDelimiter = ASTNode
 type IndentNode = ASTNode
 
 type StatementTuple = [IndentNode, ASTNode, StatementDelimiter?]
+
+type IfStatement =
+  type: "IfStatement"
+  children: Children
+  condition: IfCondition
+  then: BlockStatement
+  else: [ ASTNode, ElseToken, BlockStatement ] | undefined
+  then: block
+  else: e
+
+type ElseToken = { $loc: Loc, token: "else" }
 
 type ASTRef =
   type: "Ref"
@@ -131,26 +144,18 @@ function updateParentPointers(node: ASTNode, parent?: ASTNodeBase, depth = 1): v
 }
 
 function addPostfixStatement(statement: StatementTuple, ws: ASTNode, post)
-  let children, expressions
-
-  prefix := post.blockPrefix or post.condition?.expression.blockPrefix
-
-  if prefix?.length
-    indent := prefix[0][0]
-    expressions = [...prefix, [indent, statement]]
-    children = [" {\n", ...expressions, "\n", indent?.slice?.(0, -2), "}"]
-  else
-    expressions = [["", statement]]
-    children = [" { ", ...expressions, " }"]
+  expressions := [
+    ...post.blockPrefix or []
+    ["", statement]
+  ]
 
   block := {
     type: "BlockStatement"
-    children
+    children: [" { ", expressions, " }"]
     expressions
   }
 
-  children = [...post.children]
-  children.push(block)
+  children := [...post.children, block]
 
   // This removes trailing whitespace for easier testing
   if (!isWhitespaceOrEmpty(ws)) children.push(ws)
@@ -2039,6 +2044,57 @@ function processAssignmentDeclaration(decl, id, suffix, ws, assign, e) {
   }
 }
 
+function processDeclarationCondition(condition): void
+  return unless condition.type is "DeclarationCondition"
+  ref := makeRef()
+
+  { decl, bindings } := condition.declaration
+  // TODO: Add support for `let` and `const` declarations with multiple bindings in conditions
+  binding := bindings[0]
+  { pattern, suffix, initializer, splices, thisAssignments } := binding
+
+  initCondition :=
+    type: "AssignmentExpression"
+    children: [ref, initializer]
+    hoistDec:
+      type: "Declaration"
+      children: ["let ", ref, suffix]
+      names: []
+    blockPrefix: [
+      ["", [ decl, pattern, suffix, " = ", ref, ...splices ], ";"],
+      ...thisAssignments
+    ]
+
+  Object.assign(condition, initCondition)
+
+function processDeclarationConditions(node: ASTNode): void
+  gatherRecursiveAll node, (n) =>
+    n.type is "IfStatement" or n.type is "IterationStatement"
+  .forEach processDeclarationConditionStatement
+
+function processDeclarationConditionStatement(s: IfStatement | WhileStatement): void
+  { condition } := s
+  return unless condition
+  processDeclarationCondition(condition.expression)
+
+  switch s.type
+    when "IfStatement"
+      { else: e} := s
+      block := blockWithPrefix(condition.expression.blockPrefix, s.then)
+      s.then = block
+
+      toAdd := [block]
+
+      if block.bare and e
+        toAdd.push ";"
+
+      s.children.splice(2, 1, ...toAdd)
+
+    when "IterationStatement"
+      { children, block } := s
+      newBlock := blockWithPrefix(condition.expression.blockPrefix, block)
+      s.children = s.children.map (c) -> c.type is "BlockStatement" ? newBlock : c
+
 // Add implicit block unless followed by a method/function of the same name,
 // or block is within an ExportDeclaration.
 function implicitFunctionBlock(f): void {
@@ -2838,6 +2894,7 @@ function processProgram(root: BlockStatement, config, m, ReservedWord): void {
 
   const { expressions: statements } = root
 
+  processDeclarationConditions(statements)
   processPipelineExpressions(statements)
   processAssignments(statements)
   processPatternMatching(statements, ReservedWord)
