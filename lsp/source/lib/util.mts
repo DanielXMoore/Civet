@@ -1,6 +1,6 @@
-import ts from 'typescript';
-import type { NavigationBarItem, NavigationTree } from 'typescript';
-const { ScriptElementKind, ScriptElementKindModifier } = ts;
+import ts from 'typescript'
+import type { NavigationBarItem, NavigationTree } from 'typescript'
+const { ScriptElementKind, ScriptElementKindModifier } = ts
 import {
   CompletionItemKind,
   DocumentSymbol,
@@ -8,16 +8,16 @@ import {
   Range,
   SymbolKind,
   SymbolTag,
-} from 'vscode-languageserver';
+} from 'vscode-languageserver'
 
-import { SourceMap } from '@danielx/civet';
-import { TextDocument } from 'vscode-languageserver-textdocument';
-import assert from 'assert';
+import { SourceMap } from '@danielx/civet'
+import { TextDocument } from 'vscode-languageserver-textdocument'
+import assert from 'assert'
 import {
   SourcemapLines,
   remapRange,
   rangeFromTextSpan,
-} from '@danielx/civet/ts-diagnostic';
+} from '@danielx/civet/ts-diagnostic'
 
 export {
   remapPosition,
