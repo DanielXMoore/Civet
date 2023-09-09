@@ -4,6 +4,11 @@ import VPHero from 'vitepress/dist/client/theme-default/components/VPHero.vue';
 const actions = [
   {
     theme: 'brand',
+    text: 'Reference',
+    link: '/reference',
+  },
+  {
+    theme: 'alt',
     text: 'Cheatsheet',
     link: '/cheatsheet',
   },
