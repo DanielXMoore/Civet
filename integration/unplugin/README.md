@@ -83,7 +83,7 @@ interface PluginOptions {
 }
 ```
 
-- `dts`: This also supports generating `.d.ts` type definition files from the civet source, which is useful for building libraries. Default: `false`
+- `dts`: Whether to generate `.d.ts` type definition files from the Civet source, which is useful for building libraries. Default: `false`
 - `typecheck`: Whether to run type checking on the generated code. Default: `false`.
 - `outputExtension`: Output filename extension to use. Default: `.civet.tsx`, or uses `.civet.jsx` if `js` is `true`.
 - `js`: Whether to transpile to JS or TS. Default: `false`.
