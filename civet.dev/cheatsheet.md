@@ -160,7 +160,7 @@ people.map .name // people.map($ => $.name)
 numbers.filter & % 2 is 0
 // numbers.filter($ => $ % 2 === 0)
 
-// # Conditional declarations
+// Conditional declarations
 throw error if { error } := result
 
 if [, dir, base] := /^(.*\/)?([^/]*)$/.exec file
