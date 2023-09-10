@@ -301,6 +301,28 @@ console.log ```
 ```
 </Playground>
 
+## Regular Expressions
+
+In addition to the usual JavaScript syntax `/.../`, you can use `///...///`
+to write multi-line regular expressions that ignore top-level whitespace and
+single-line comments:
+
+<Playground>
+phoneNumber := ///
+  ^
+  \+? ( \d [\d-. ]+ )?  // country code
+  ( \( [\d-. ]+ \) )?   // area code
+  (?=\d) [\d-. ]+ \d    // start and end with digit
+  $
+///
+</Playground>
+
+:::info
+`///` is treated as a comment if it appears at the top of your file,
+to support [TypeScript triple-slash directives](https://www.typescriptlang.org/docs/handbook/triple-slash-directives.html).
+Keep this in mind when trying examples in the Playground.
+:::
+
 ## Operators
 
 ### All JavaScript/TypeScript Operators
