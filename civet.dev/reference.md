@@ -1256,6 +1256,40 @@ class C
   @root: Element = document.body
 </Playground>
 
+### Getters and Setters
+
+<Playground>
+class C
+  get x
+    @coords?.x ?? 0
+  set x(newX)
+    @moveTo newX, @coords.y
+</Playground>
+
+Shorthand for boilerplate getters and setters that delegate
+(with optional code blocks to run first):
+
+<Playground>
+class C
+  get #secret
+  set #secret
+  get @coords.{x,y}
+    return 0 unless @coords?
+  set @coords.{x,y}
+    @coords ?= {}
+</Playground>
+
+<Playground>
+function makeCounter
+  count .= 0
+  {
+    get count
+    set count
+    increment()
+      ++count
+  }
+</Playground>
+
 ### Constructor
 
 <Playground>
