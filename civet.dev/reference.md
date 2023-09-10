@@ -543,6 +543,19 @@ If present, there should be no space between the function and the open paren.
 console.log x, f(x), (f g x), g f x
 </Playground>
 
+Implicit function application also works via indentation,
+where commas before newlines are optional.
+
+<Playground>
+console.log
+  "Hello"
+  name
+  "!"
+  JSON.stringify
+    id: getId()
+    date: new Date
+</Playground>
+
 ### `function`
 
 <Playground>
