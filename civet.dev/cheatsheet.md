@@ -129,8 +129,11 @@ while x < 10
 for item of items
   update item
 
-for key in object
-  log key
+for item, index of items
+  update item if index > 0
+
+for key, value in object
+  log key, ':', value
 
 for own key in object
   log `my ${key}`
