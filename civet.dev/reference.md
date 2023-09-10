@@ -363,11 +363,13 @@ obj?[key]
 fun?(arg)
 </Playground>
 
-## Existence Checking
+### Existence Checking
 
 <Playground>
-x?
-x.y[z]?
+x?;
+x.y[z]?;
+not x?;
+x? + y?
 </Playground>
 
 ### Chained Comparisons
