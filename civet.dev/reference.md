@@ -686,6 +686,7 @@ x.map &.name
 x.map &.profile?.name[0...3]
 x.map &.callback a, b
 x.map +&
+x.filter (&)
 </Playground>
 
 ::: info
