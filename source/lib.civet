@@ -6,8 +6,7 @@
  * here eventually.
  */
 
-type ASTString = string & { children: undefined, type: undefined }
-type ASTNode = ASTNodeBase | ASTError | ASTRef | ASTLeaf | ASTNode[] | ASTString | undefined
+type ASTNode = ASTNodeBase | ASTError | ASTRef | ASTLeaf | ASTNode[] | string | undefined
 type ASTNodeBase =
   type: string
   children: ASTNode[]
@@ -34,12 +33,34 @@ type IndentNode = ASTNode
 
 type StatementTuple = [IndentNode, ASTNode, StatementDelimiter?]
 
-type IfStatement =
+type Condition = ParenthesizedExpression
+
+type ParenthesizedExpression
+  type: "ParenthesizedExpression"
+  children: Children
+  parent: ASTNodeBase
+  expression: ASTNode
+  implicit?: boolean
+
+type IfStatement
   type: "IfStatement"
   children: Children
-  condition: IfCondition
+  condition: Condition
   then: BlockStatement
   else: [ ASTNode, ElseToken, BlockStatement ] | undefined
+
+type IterationStatement
+  type: "IterationStatement"
+  children: Children
+  parent: ASTNodeBase | undefined
+  block: BlockStatement
+
+type SwitchStatement
+  type: "SwitchStatement"
+  children: Children
+  parent: ASTNodeBase | undefined
+  condition: Condition
+  caseBlock: unknown
 
 type ElseToken = { $loc: Loc, token: "else" }
 
@@ -67,7 +88,7 @@ type MethodDefinition =
   signature: FunctionSignature
   block: BlockStatement
   parameters: ParametersNode
-  parent: ASTNode | undefined
+  parent: ASTNodeBase | undefined
 
 type FunctionSignature =
   type: "MethodSignature" | "FunctionSignature"
@@ -77,7 +98,7 @@ type FunctionSignature =
   modifier: MethodModifier
   returnType: ReturnTypeAnnotation | undefined
   parameters: ParametersNode
-  parent: ASTNode | undefined
+  parent: ASTNodeBase | undefined
 
 type ReturnTypeAnnotation =
   t:
@@ -1060,6 +1081,26 @@ function removeParentPointers(node): void {
     }
   }
 }
+
+/**
+ * Replace `child` with `replacement` in `node.children`.
+ */
+function replaceBlockChild(node: BlockStatement, child: ASTNodeBase, replacement: ASTNodeBase): void
+  found .= false
+
+  { expressions } := node
+
+  for (let i = 0, l = expressions.length; i < l; i++)
+    statement := expressions[i]
+    [, s,] := statement
+
+    if s is child
+      statement[1] = replacement
+      replacement.parent = node
+      found = true
+      break
+
+  throw new Error("Could not find child to replace") unless found
 
 /**
  * If `child.parent === parent`, then this should find the index `i` such that
@@ -2149,12 +2190,16 @@ function processDeclarationCondition(condition): void
 
 function processDeclarationConditions(node: ASTNode): void
   gatherRecursiveAll node, (n) =>
-    n.type is "IfStatement" or n.type is "IterationStatement"
+    n.type is "IfStatement" or n.type is "IterationStatement" or n.type is "SwitchStatement"
   .forEach processDeclarationConditionStatement
 
-function processDeclarationConditionStatement(s: IfStatement | WhileStatement): void
+/**
+ * Processes adding additonal conditions when declarations are used as a condition in IfStatements, WhileStatements, and SwitchStatements.
+ * Also does additional processing for IfStatements that used to be in the parser (inserting semi-colon on bare-block consequent with else).
+ */
+function processDeclarationConditionStatement(s: IfStatement | IterationStatement | SwitchStatement): void
   { condition } := s
-  return unless condition
+  return unless condition?.expression
   processDeclarationCondition(condition.expression)
 
   { ref, pattern } := condition.expression
@@ -2196,6 +2241,28 @@ function processDeclarationConditionStatement(s: IfStatement | WhileStatement): 
 
       // Update parent pointers since declaration conditions have expanded
       updateParentPointers(newBlock, s)
+
+    when "SwitchStatement"
+      { blockPrefix, ref } := condition.expression
+      return unless blockPrefix
+
+      s.condition =
+        type: "ParenthesizedExpression"
+        children: ["(", ref, ")"]
+        expression: ref
+        parent: s
+      s.children[1] = s.condition
+
+      // wraps the entire switch statement
+      block := blockWithPrefix [["", [{
+        type: "Declaration",
+        children: ["let ", ...condition.expression.children],
+      }], ";"], ...blockPrefix], makeEmptyBlock()
+
+      replaceBlockChild(s.parent as BlockStatement, s, block)
+      block.expressions.push ["", s]
+      s.parent = block
+
 
 // Add implicit block unless followed by a method/function of the same name,
 // or block is within an ExportDeclaration.
@@ -2687,7 +2754,7 @@ function aggregateDuplicateBindings(bindings, ReservedWord) {
 
 function processPatternMatching(statements, ReservedWord): void {
   gatherRecursiveAll(statements, (n) => n.type === "SwitchStatement")
-    .forEach((s) => {
+    .forEach((s: SwitchStatement) => {
       const { caseBlock } = s
       const { clauses } = caseBlock
 
@@ -2709,14 +2776,14 @@ function processPatternMatching(statements, ReservedWord): void {
 
       if (errors || !isPattern) return
 
-      let { expression } = s
-      if (expression.type === "ParenthesizedExpression") {
+      let { condition } = s
+      if (condition.type === "ParenthesizedExpression") {
         // Unwrap parenthesized expression
-        expression = expression.expression
+        condition = condition.expression
       }
 
-      let hoistDec, refAssignment = [], ref = maybeRef(expression, "m");
-      if (ref !== expression) {
+      let hoistDec, refAssignment = [], ref = maybeRef(condition, "m");
+      if (ref !== condition) {
         hoistDec = {
           type: "Declaration",
           children: ["let ", ref],
@@ -2724,7 +2791,7 @@ function processPatternMatching(statements, ReservedWord): void {
         }
         refAssignment = [{
           type: "AssignmentExpression",
-          children: [ref, " = ", expression],
+          children: [ref, " = ", condition],
         }, ","]
       }
       let prev = [],
