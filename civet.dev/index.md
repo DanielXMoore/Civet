@@ -18,7 +18,7 @@ so you can [use existing tooling](/integrations)
 but enable concise and powerful syntax.
 In addition to 99% JS/TS [compatibility](/comparison), there are many
 features, with some highlights below and more comprehensive examples
-on the [cheatsheet](/cheatsheet).
+in the [reference](/reference).
 See also Civet's [design philosophy](/philosophy).
 
 ## Highlights: Beyond TC39
@@ -174,7 +174,7 @@ export a, b, c from "./cool.js"
 export x = 3
 </Playground>
 
-### [JSX](/cheatsheet#jsx)
+### [JSX](/reference#jsx)
 
 <Playground>
 function Listing(props)

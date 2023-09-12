@@ -26,6 +26,7 @@ const {
   lastAccessInCallExpression,
   literalValue,
   makeEmptyBlock,
+  makeGetterMethod,
   makeLeftHandSideExpression,
   makeRef,
   maybeRef,
@@ -341,7 +342,7 @@ UnaryExpression
   # NOTE: Merged AwaitExpression with UnaryOp
   # https://262.ecma-international.org/#prod-AwaitExpression
   # NOTE: Eliminated left recursion
-  UnaryOp*:pre ( UpdateExpression / NestedNonAssignmentExtendedExpression ):exp UnaryPostfix?:post ->
+  UnaryOp*:pre UnaryBody:exp UnaryPostfix?:post ->
     return processUnaryExpression(pre, exp, post)
 
   # NOTE: This is a little hacky to match CoffeeScript's behavior
@@ -350,6 +351,21 @@ UnaryExpression
     ws = insertTrimmingSpace(ws, "")
     return ["(", ...ws, exp, ")()"]
 
+UnaryWithoutParenthesizedAssignment
+  UnaryOp*:pre UnaryWithoutParenthesizedAssignmentBody:exp UnaryPostfix?:post ->
+    return processUnaryExpression(pre, exp, post)
+
+UnaryBody
+  ParenthesizedAssignment
+  UpdateExpression
+  ExpressionizedStatementWithTrailingCallExpressions
+  NestedNonAssignmentExtendedExpression
+
+UnaryWithoutParenthesizedAssignmentBody
+  UpdateExpression
+  ExpressionizedStatementWithTrailingCallExpressions
+  NestedNonAssignmentExtendedExpression
+
 UnaryPostfix
   QuestionMark
   ( __ ( As / Satisfies ) Type )+ -> { ts: true, children: $0 }
@@ -357,7 +373,7 @@ UnaryPostfix
 # https://262.ecma-international.org/#prod-UpdateExpression
 UpdateExpression
   # NOTE: Not allowing whitespace betwen prefix and postfix increment operators and operand
-  UpdateExpressionSymbol UnaryExpression ->
+  UpdateExpressionSymbol UnaryWithoutParenthesizedAssignment ->
     return {
       type: "UpdateExpression",
       assigned: $2,
@@ -447,7 +463,7 @@ YieldTail
 # https://262.ecma-international.org/#prod-ArrowFunction
 ArrowFunction
   ThinArrowFunction
-  ( Async _ )?:async Parameters:parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
+  ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:suffix FatArrow FatArrowBody:expOrBlock ->
     if (hasAwait(expOrBlock) && !async) {
       async = "async "
     }
@@ -462,6 +478,12 @@ ArrowFunction
 
     return {
       type: "ArrowFunction",
+      signature: {
+        modifier: {
+          async: !!async,
+        },
+        returnType: suffix,
+      },
       parameters,
       returnType: suffix,
       ts: false,
@@ -525,6 +547,11 @@ PipelineExpression
 
       return {
         type: "ArrowFunction",
+        signature: {
+          modifier: {
+            children: []
+          }
+        },
         children: [ref, " => ", arrowBody],
         ref,
         body: [arrowBody],
@@ -696,10 +723,22 @@ NestedClassElement
 # https://262.ecma-international.org/#prod-ClassElement
 ClassElement
   # NOTE: Combined optional static and Method/Field definition
-  Decorators? AccessModifier? ( Static _? )? ClassElementDefinition:definition ->
+  Decorators?:decorators AccessModifier? ( Static _? )? ClassElementDefinition:definition ->
+    if (definition.type === "ShorthandMethodDefinition") {
+      // If shorthand method definition has multiple expansions each one should get the decorators
+      return {
+        ...definition,
+        children: definition.children.map((c) => {
+          return {
+            ...c,
+            children: [ decorators, ...c.children ],
+          }
+        })
+      }
+    }
     return {
       ...definition,
-      children: [$1, $2, $3, ...definition.children],
+      children: [decorators, $2, $3, ...definition.children],
     }
   # ClassStaticBlock
   Static BracedBlock ->
@@ -795,7 +834,14 @@ ThisLiteral
   # NOTE: Added @identifier shorthand, also works for private identifiers
   # Converts 'IdentifierName' node to string so this won't interfere with refs
   AtThis:at $( Hash? IdentifierName ):id ->
-    return [at, ".", id]
+    return {
+      type: "MemberExpression",
+      children: [at, {
+        type: "PropertyAccess",
+        name: id,
+        children: [".", id],
+      }],
+    }
   AtThis
   PrivateThis
 
@@ -809,7 +855,14 @@ PrivateThis
     return id
 
   PrivateIdentifier:id ->
-    return [ "this.", id ]
+    return {
+      type: "MemberExpression",
+      children: ["this", {
+        type: "PropertyAccess",
+        name: id.name,
+        children: [".", id],
+      }],
+    }
 
 # NOTE: Added '@' as a 'this' shorthand from CoffeeScript
 AtThis
@@ -886,7 +939,7 @@ NonNullAssertion
 MemberExpression
   # NOTE: "new" MemberExpression Arguments seems to be handled fine by other rules already
   # NOTE: Eliminated left recursion
-  ( PrimaryExpression / SuperProperty / MetaProperty ) MemberExpressionRest*:rest ->
+  MemberBase MemberExpressionRest*:rest ->
     if (rest.length || Array.isArray($1)) {
       return processCallMemberExpression({
         type: "MemberExpression",
@@ -894,6 +947,11 @@ MemberExpression
       })
     }
     return $1
+
+MemberBase
+  PrimaryExpression
+  SuperProperty
+  MetaProperty
 
 MemberExpressionRest
   MultiLineComment*:comments MemberExpressionRestBody:body ->
@@ -1072,7 +1130,7 @@ PropertyAccess
 
 PropertyGlob
   # NOTE: Added shorthand obj.{a,b:c} -> {a: obj.a, c: obj.b}
-  OptionalDot:dot MultiLineComment* BracedObjectLiteral:object ->
+  ( ( QuestionMark / NonNullAssertion )? OptionalDot ):dot MultiLineComment* BracedObjectLiteral:object ->
     return {
       type: "PropertyGlob",
       dot,
@@ -1125,6 +1183,20 @@ Parameters
       names: [],
       implicit: true,
     }
+
+# Allow for [a, b] => ... or {a, b} -> ...
+ShortArrowParameters
+  ObjectBindingPattern
+  ArrayBindingPattern
+
+ArrowParameters
+  ShortArrowParameters ->
+    return {
+      type: "Parameters",
+      children: ["(", $0, ")"],
+      names: $0.names,
+    }
+  Parameters
 
 NonEmptyParameters
   # NOTE: BindingElement -> ParameterElement
@@ -1499,6 +1571,10 @@ FunctionSignature
       ts: false,
       async,
       generator,
+      modifier: {
+        async: !async.length,
+        generator: !generator.length,
+      },
       block: null,
       children: !parameters.implicit
         ? [ async, func, generator, wid, w, parameters, suffix ]
@@ -1515,6 +1591,7 @@ FunctionExpression
       return {
         ...signature,
         type: "FunctionExpression",
+        signature,
         ts: true,
       }
     }
@@ -1531,6 +1608,7 @@ FunctionExpression
     return {
       ...signature,
       type: "FunctionExpression",
+      signature,
       children: [...signature.children, block],
       block,
     }
@@ -1539,6 +1617,9 @@ FunctionExpression
     const ref = makeRef("$"), body = [ref]
     return {
       type: "ArrowFunction",
+      signature: {
+        modifier: {},
+      },
       children: [ref, " => ", body],
       ref,
       body,
@@ -1547,7 +1628,6 @@ FunctionExpression
 
   AmpersandFunctionExpression
   Identifier:id __ ConstAssignment _*:ws ThinArrowFunction:fn ->
-    debugger
     return {
       ...fn,
       id,
@@ -1586,12 +1666,18 @@ AmpersandFunctionExpression
     }
 
     const children = [ ref, " => ", body ]
-    if (hasAwait(body)) {
+    const async = hasAwait(body)
+    if (async) {
       children.unshift("async ")
     }
 
     return {
       type: "ArrowFunction",
+      signature: {
+        modifier: {
+          async,
+        },
+      },
       children,
       ref,
       body,
@@ -1610,6 +1696,7 @@ OperatorDeclaration
     return {
       ...signature,
       type: "FunctionExpression",
+      signature,
       children: [...signature.children, block],
       block,
       operator: true,
@@ -1633,6 +1720,7 @@ OperatorSignature
     return {
       type: "FunctionSignature",
       id,
+      modifier: {},
       parameters,
       returnType: suffix,
       ts: false,
@@ -1678,7 +1766,7 @@ AmpersandUnaryPrefix
   [!~+-]+
 
 ThinArrowFunction
-  ( Async _ )?:async Parameters:parameters ReturnTypeSuffix?:suffix _? Arrow:arrow BracedOrEmptyBlock:block ->
+  ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:suffix _? Arrow:arrow BracedOrEmptyBlock:block ->
     if (hasAwait(block) && !async) {
       async = "async "
     }
@@ -1696,7 +1784,15 @@ ThinArrowFunction
       ts: false,
       async,
       generator,
-      block: block,
+      block,
+      signature: {
+        name: undefined,
+        modifier: {
+          async: !!async,
+          generator: !!generator,
+        },
+        returnType: suffix,
+      },
       children: [
         async,
         { $loc: arrow.$loc, token: "function" },
@@ -2606,6 +2702,79 @@ MethodDefinition
       parameters: signature.parameters,
     }
 
+  # shorthand get method definition
+  GetOrSet:kind _?:ws ForbidIndentedApplication ( MemberBase CallExpressionRest* )?:value RestoreIndentedApplication BracedBlock?:block ->
+    if (!value) return $skip
+    const rest = value[1]
+
+    if (!rest.length) {
+      const base = value[0]
+      let name
+      if (base.type === "MemberExpression") {
+        const lastAccess = lastAccessInCallExpression(base)
+        if (lastAccess) {
+          ({ name } = lastAccess)
+        }
+      }
+
+      if (!name) ({ name } = base)
+      if (!name) return $skip
+
+      // Remove leading # from private identifier since it makes no
+      // sense for a private getter to point to itself
+      if (name[0] === "#") name = name.slice(1)
+
+      // Skip autoReturn for identifiers with an explicit block like `get foo { true }`
+      const autoReturn = !block || base.type !== "Identifier"
+      return makeGetterMethod(name, ws, base, block, kind, autoReturn)
+    }
+
+    let last = rest[rest.length-1]
+    while (Array.isArray(last)) {
+      last = last[last.length-1]
+    }
+
+    switch(last.type) {
+      case "Call":
+        return $skip
+      case "PropertyAccess":
+        const { name } = last
+        return makeGetterMethod(name, ws, value, block, kind)
+      case "PropertyGlob":
+        return {
+          type: "ShorthandMethodDefinition",
+          children: last.object.properties.map((p) => {
+            const { name, type } = p
+            let v
+            switch (type) {
+              case "Identifier":
+                v = insertTrimmingSpace(p, "")
+                break
+              case "Property":
+                v = insertTrimmingSpace(p.value, "")
+                break
+            }
+            const exp = processCallMemberExpression({
+              type: "CallExpression",
+              children: [value[0], ...value[1].slice(0, -1), {
+                type: "PropertyAccess",
+                children: [last.dot, {
+                  ...v,
+                  children: [ v.children.slice(0, 2) ] // Remove potential delimiter
+                }],
+              }],
+            })
+
+            return makeGetterMethod(name, ws, exp, block, kind)
+          })
+        }
+    }
+
+    const lastAccess = lastAccessInCallExpression({children: rest})
+    const { name } = lastAccess
+
+    return makeGetterMethod(name, ws, value, block, kind)
+
 MethodModifier
   # NOTE: Merged get/set definitions
   GetOrSet:kind _? &ClassElementName ->
@@ -2644,6 +2813,7 @@ MethodSignature
       type: "MethodSignature",
       children: $0,
       name: $1.token,
+      modifier: {},
       returnType: undefined,
       parameters,
     }
@@ -2661,6 +2831,8 @@ MethodSignature
     // TypeScript supports optional methods with bodies; remove ? from JS output
     if (optional) $0[3] = optional = { ...optional, ts: true }
 
+    modifier = modifier || {}
+
     return {
       type: "MethodSignature",
       children: $0,
@@ -2676,14 +2848,14 @@ ClassElementName
   PrivateIdentifier
 
 PrivateIdentifier
-  $(Hash IdentifierName) ->
+  $(Hash IdentifierName):id ->
     return {
       type: "Identifier",
-      name: $0,
-      names: [$0],
+      name: id,
+      names: [id],
       children: [{
         $loc: $loc,
-        token: $0,
+        token: id,
       }],
     }
 
@@ -3105,16 +3277,11 @@ LabelledItem
 IfStatement
   # NOTE: Added paren-less condition
   # NOTE: Block isn't Statement so we can handle implied braces by nesting
-  (IfClause / UnlessClause):clause Block:block ElseClause?:e ->
-    const children = [...clause.children]
-    block = blockWithPrefix(clause.condition.expression.blockPrefix, block)
-    children.push(block)
-    if (block.bare && e) children./**/push(";")
-    if (e) children./**/push(e)
-
+  ( IfClause / UnlessClause ):clause Block:block ElseClause?:e ->
     return {
-      ...clause,
-      children,
+      type: "IfStatement",
+      children: [...clause.children, block, e],
+      condition: clause.condition,
       then: block,
       else: e,
     }
@@ -3300,7 +3467,6 @@ DoStatement
 WhileStatement
   # NOTE: Condition provides optional parens
   WhileClause:clause Block:block ->
-    block = blockWithPrefix(clause.condition.expression.blockPrefix, block)
     return {
       ...clause,
       children: [...clause.children, block],
@@ -3622,13 +3788,12 @@ EmptyCondition
 
 # NOTE: Added from CoffeeScript
 SwitchExpression
-  SwitchStatement:e ->
+  SwitchStatement:s ->
     return {
       type: "SwitchExpression",
       // wrap with IIFE
-      children: wrapIIFE(e.children),
-      expression: e.expression,
-      caseBlock: e.caseBlock,
+      children: wrapIIFE([["", s]]),
+      statement: s
     }
 
 # https://262.ecma-international.org/#prod-CaseBlock
@@ -3779,7 +3944,7 @@ TryExpression
     return {
       type: "TryExpression",
       blocks: t.blocks,
-      children: wrapIIFE(t)
+      children: wrapIIFE([["", t]])
     }
 
 # https://262.ecma-international.org/#prod-Catch
@@ -3834,31 +3999,13 @@ Condition
     }
 
 DeclarationCondition
-  ForbidIndentedApplication LexicalDeclaration?:dec RestoreIndentedApplication ->
-    if (!dec) return $skip
+  ForbidIndentedApplication LexicalDeclaration?:declaration RestoreIndentedApplication ->
+    if (!declaration) return $skip
 
-    const ref = makeRef()
-
-    const { decl, bindings } = dec
-    // TODO: Add support for `let` and `const` declarations with multiple bindings in conditions
-    const binding = bindings[0]
-    const { pattern, suffix, initializer, splices, thisAssignments } = binding
-
-    const initCondition = {
-      type: "AssignmentExpression",
-      children: [ref, initializer],
-      hoistDec: {
-        type: "Declaration",
-        children: ["let ", ref, suffix],
-        names: [],
-      },
-      blockPrefix: [
-        ["", [ decl, pattern, suffix, " = ", ref, ...splices ], ";"],
-        ...thisAssignments
-      ],
+    return {
+      type: "DeclarationCondition",
+      declaration,
     }
-
-    return initCondition
 
 ExpressionWithIndentedApplicationForbidden
   ForbidIndentedApplication ForbidNewlineBinaryOp ExtendedExpression?:exp RestoreNewlineBinaryOp RestoreIndentedApplication ->
@@ -4004,11 +4151,7 @@ KeywordStatement
                            // omit colon
     }
 
-  # https://262.ecma-international.org/#sec-debugger-statement
-  Debugger -> {
-    type: "DebuggerStatement",
-    children: $0,
-  }
+  DebuggerStatement
 
   # https://262.ecma-international.org/#prod-ReturnStatement
   # NOTE: Modified to leave room for `return.value` and `return =`
@@ -4018,7 +4161,17 @@ KeywordStatement
     children: $0,
   }
 
-  # https://262.ecma-international.org/#prod-ThrowStatement
+  ThrowStatement
+
+# https://262.ecma-international.org/#sec-debugger-statement
+DebuggerStatement
+  Debugger -> {
+    type: "DebuggerStatement",
+    children: $0,
+  }
+
+# https://262.ecma-international.org/#prod-ThrowStatement
+ThrowStatement
   Throw ExtendedExpression -> {
     type: "ThrowStatement",
     children: $0,
@@ -4037,17 +4190,17 @@ Debugger
     return { $loc, token: $1 }
 
 DebuggerExpression
-  Debugger ->
+  DebuggerStatement:s ->
     return {
       type: "DebuggerExpression",
-      children: wrapIIFE($1),
+      children: wrapIIFE([["", s]]),
     }
 
 ThrowExpression
-  Throw ExtendedExpression ->
+  ThrowStatement:s ->
     return {
       type: "ThrowExpression",
-      children: wrapIIFE($0),
+      children: wrapIIFE([["", s]]),
     }
 
 MaybeNestedExpression
@@ -4283,6 +4436,7 @@ Declaration
   TypeDeclaration
   EnumDeclaration
   OperatorDeclaration
+  UsingDeclaration
 
 # https://262.ecma-international.org/#prod-HoistableDeclaration
 HoistableDeclaration
@@ -5116,6 +5270,10 @@ Until
   "until" NonIdContinue ->
     return { $loc, token: $1 }
 
+Using
+  "using" NonIdContinue ->
+    return { $loc, token: $1 }
+
 Var
   "var" NonIdContinue ->
     return { $loc, token: $1 }
@@ -5750,6 +5908,43 @@ IndentedJSXChildExpression
 
 NestedJSXChildExpression
   JSXNested JSXChildExpression
+
+## Using Declaration
+
+UsingDeclaration
+  Using:decl _? UsingBinding:binding ( __ Comma __ UsingBinding )*:tail UsingJSModeError ->
+    const bindings = [binding].concat(tail.map(([,,,b]) => b))
+
+    return {
+      type: "Declaration",
+      children: $0,
+      names: bindings.flatMap(b => b.names),
+      bindings,
+      decl,
+      splices: bindings.flatMap(b => b.splices),
+      thisAssignments: bindings.flatMap(b => b.thisAssignments),
+    }
+
+UsingBinding
+  BindingIdentifier:pattern TypeSuffix?:suffix Initializer:initializer ->
+    return {
+      type: "Binding",
+      children: $0,
+      names: pattern.names,
+      pattern,
+      suffix,
+      initializer,
+      splices: [],
+      thisAssignments: [],
+    }
+
+UsingJSModeError
+  "" ->
+    return {
+      type: "Error",
+      js: true,
+      message: "`using` is not currently transpiled in JS mode."
+    }
 
 ## Type Stuff
 
@@ -6482,7 +6677,7 @@ Reset
     module.forbidBracedApplication = [false]
     module.forbidTrailingMemberProperty = [false]
     module.forbidNewlineBinaryOp = [false]
-    module.JSXTagStack = []
+    module.JSXTagStack = [undefined]
 
     module.operators = new Set
 

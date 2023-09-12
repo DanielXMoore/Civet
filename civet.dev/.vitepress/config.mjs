@@ -1,6 +1,6 @@
 import pkg from '../../package.json';
-import { head } from './head.js';
-import { getContributors } from './utils/getContributors.js';
+import { head } from './head.mjs';
+import { getContributors } from './utils/getContributors.mjs';
 import { defineConfig } from 'vitepress';
 import { compileCivet } from './utils/compileCivet';
 import { getHighlighter } from './utils/getHighlighter';
@@ -26,7 +26,8 @@ export default async function vitePressConfig() {
       siteTitle: 'Civet',
       nav: [
         { text: 'Getting started', link: '/getting-started' },
-        { text: 'Cheatsheet', link: '/cheatsheet' },
+        { text: 'Reference', link: '/reference' },
+        { text: 'Cheatsheet', link: '/cheatsheet'},
         { text: 'Comparison', link: '/comparison' },
         { text: 'Integrations', link: '/integrations' },
         { text: 'Config', link: '/config' },

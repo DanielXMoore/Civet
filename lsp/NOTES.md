@@ -13,7 +13,7 @@ Publishing Open VSX Extension
 https://github.com/eclipse/openvsx/wiki/Publishing-Extensions
 
 ```bash
-ovsx publish -p <token>
+ovsx publish -p $(<open-vsx-token)
 ```
 
 Debugging Extension
