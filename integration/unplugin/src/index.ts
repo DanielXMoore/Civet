@@ -7,7 +7,6 @@ import civet, { SourceMap } from '@danielx/civet';
 import {
   remapRange,
   flattenDiagnosticMessageText,
-  rangeFromTextSpan,
   // @ts-ignore
   // using ts-ignore because the version of @danielx/civet typescript is checking against
   // is the one published to npm, not the one in the repo
@@ -111,8 +110,8 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
           host: host.compilerHost,
         });
 
-        const diagnostics: ts.Diagnostic[] = program
-          .getGlobalDiagnostics()
+        const diagnostics: ts.Diagnostic[] = ts
+          .getPreEmitDiagnostics(program)
           .map(diagnostic => {
             const file = diagnostic.file;
             if (!file) return diagnostic;
@@ -122,13 +121,10 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
             const sourcemapLines = sourceMap.data.lines;
             const range = remapRange(
-              rangeFromTextSpan(
-                {
-                  start: diagnostic.start || 0,
-                  length: diagnostic.length ?? 1,
-                },
-                document
-              ),
+              {
+                start: diagnostic.start || 0,
+                end: (diagnostic.start || 0) + (diagnostic.length || 1),
+              },
               sourcemapLines
             );
 
@@ -155,9 +151,14 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
                 const dir = path.dirname(filePath);
                 await fs.promises.mkdir(dir, { recursive: true });
 
+                const pathFromDistDir = path.relative(
+                  compilerOptions.outDir ?? process.cwd(),
+                  filePath
+                );
+
                 this.emitFile({
                   source: content,
-                  fileName: path.relative(process.cwd(), filePath),
+                  fileName: pathFromDistDir,
                   type: 'asset',
                 });
               },
@@ -220,7 +221,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     transform(code, id) {
       if (!/\.civet\.tsx?$/.test(id)) return null;
 
-      if (options.dts) {
+      if (options.dts || options.typecheck) {
         fsMap.set(path.resolve(process.cwd(), id), code);
       }
 
