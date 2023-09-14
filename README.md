@@ -26,7 +26,7 @@ The modern way to write TypeScript.
   [Gulp](integration/gulp),
   [ESM module resolution](source/esm.civet),
   [CJS](register.js),
-  [Bun](source/bun-civet.coffee)
+  [Bun](source/bun-civet.civet)
 - Starter templates for [Solid](https://github.com/orenelbaum/solid-civet-template) and [Solid Start](https://github.com/orenelbaum/solid-start-civet-template)
 
 Quickstart Guide
