@@ -1,5 +1,16 @@
-import { TransformResult, createUnplugin } from 'unplugin';
-import civet from '@danielx/civet';
+import {
+  TransformResult,
+  createUnplugin,
+  SourceMapCompact as UnpluginSourceMap,
+} from 'unplugin';
+import civet, { SourceMap } from '@danielx/civet';
+import {
+  remapRange,
+  flattenDiagnosticMessageText,
+  // @ts-ignore
+  // using ts-ignore because the version of @danielx/civet typescript is checking against
+  // is the one published to npm, not the one in the repo
+} from '@danielx/civet/ts-diagnostic';
 import * as fs from 'fs';
 import path from 'path';
 import ts from 'typescript';
@@ -22,10 +33,12 @@ export type PluginOptions = {
 } & ( // Eliminates the possibility of having both `dts` and `js` set to `true`
   | {
       dts?: false;
+      typecheck?: false;
       js?: false | true;
     }
   | {
       dts?: true;
+      typecheck?: true;
       js?: false;
     }
 );
@@ -38,17 +51,22 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     throw new Error("Can't have both `dts` and `js` be set to `true`.");
   }
 
-  const transpileToJS = options.js ?? !options.dts;
+  if (options.typecheck && options.js) {
+    throw new Error("Can't have both `typecheck` and `js` be set to `true`.");
+  }
+
+  const transpileToJS = options.js ?? !(options.dts || options.typecheck);
   const outExt = options.outputExtension ?? (transpileToJS ? '.jsx' : '.tsx');
 
   let fsMap: Map<string, string> = new Map();
+  const sourceMaps = new Map<string, SourceMap>();
   let compilerOptions: any;
 
   return {
     name: 'unplugin-civet',
     enforce: 'pre',
     async buildStart() {
-      if (options.dts) {
+      if (options.dts || options.typecheck) {
         const configPath = ts.findConfigFile(process.cwd(), ts.sys.fileExists);
 
         if (!configPath) {
@@ -79,7 +97,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       }
     },
     buildEnd() {
-      if (options.dts) {
+      if (options.dts || options.typecheck) {
         const system = tsvfs.createFSBackedSystem(fsMap, process.cwd(), ts);
         const host = tsvfs.createVirtualCompilerHost(
           system,
@@ -92,20 +110,62 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
           host: host.compilerHost,
         });
 
-        for (const file of fsMap.keys()) {
-          const sourceFile = program.getSourceFile(file)!;
-          program.emit(
-            sourceFile,
-            (filePath, content) => {
-              this.emitFile({
-                source: content,
-                fileName: path.relative(process.cwd(), filePath),
-                type: 'asset',
-              });
-            },
-            undefined,
-            true
+        const diagnostics: ts.Diagnostic[] = ts
+          .getPreEmitDiagnostics(program)
+          .map(diagnostic => {
+            const file = diagnostic.file;
+            if (!file) return diagnostic;
+
+            const sourceMap = sourceMaps.get(file.fileName);
+            if (!sourceMap) return diagnostic;
+
+            const sourcemapLines = sourceMap.data.lines;
+            const range = remapRange(
+              {
+                start: diagnostic.start || 0,
+                end: (diagnostic.start || 0) + (diagnostic.length || 1),
+              },
+              sourcemapLines
+            );
+
+            return {
+              ...diagnostic,
+              messageText: flattenDiagnosticMessageText(diagnostic.messageText),
+              length: diagnostic.length,
+              start: range.start,
+            };
+          });
+
+        if (diagnostics.length > 0) {
+          console.error(
+            ts.formatDiagnosticsWithColorAndContext(diagnostics, formatHost)
           );
+        }
+
+        if (options.dts) {
+          for (const file of fsMap.keys()) {
+            const sourceFile = program.getSourceFile(file)!;
+            program.emit(
+              sourceFile,
+              async (filePath, content) => {
+                const dir = path.dirname(filePath);
+                await fs.promises.mkdir(dir, { recursive: true });
+
+                const pathFromDistDir = path.relative(
+                  compilerOptions.outDir ?? process.cwd(),
+                  filePath
+                );
+
+                this.emitFile({
+                  source: content,
+                  fileName: pathFromDistDir,
+                  type: 'asset',
+                });
+              },
+              undefined,
+              true
+            );
+          }
         }
       }
     },
@@ -134,13 +194,23 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       // but for some reason, webpack seems to be running them in the order
       // of `resolveId` -> `loadInclude` -> `transform` -> `load`
       // so we have to do transformation here instead
+      const compiled = civet.compile(code, {
+        // inlineMap: true,
+        filename: id,
+        js: transpileToJS,
+        sourceMap: true,
+      });
+
+      sourceMaps.set(path.resolve(process.cwd(), id), compiled.sourceMap);
+
+      const jsonSourceMap = compiled.sourceMap.json(
+        path.basename(id.replace(/\.tsx$/, '')),
+        path.basename(id)
+      );
+
       let transformed: TransformResult = {
-        code: civet.compile(code, {
-          inlineMap: true,
-          filename: id,
-          js: transpileToJS,
-        } as any) as string,
-        map: null,
+        code: compiled.code,
+        map: jsonSourceMap as UnpluginSourceMap,
       };
 
       if (options.transformOutput)
@@ -151,8 +221,13 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     transform(code, id) {
       if (!/\.civet\.tsx?$/.test(id)) return null;
 
-      if (options.dts) {
-        fsMap.set(path.resolve(process.cwd(), id), code);
+      if (options.dts || options.typecheck) {
+        const resolved = path.resolve(process.cwd(), id);
+        fsMap.set(resolved, code);
+        // Vite and Rollup normalize filenames to use `/` instad of `\`.
+        // We give the TypeScript VFS both versions just in case.
+        const slash = resolved.replace(/\\/g, '/');
+        if (resolved !== slash) fsMap.set(slash, code);
       }
 
       return null;
