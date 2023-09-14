@@ -222,7 +222,12 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       if (!/\.civet\.tsx?$/.test(id)) return null;
 
       if (options.dts || options.typecheck) {
-        fsMap.set(path.resolve(process.cwd(), id), code);
+        const resolved = path.resolve(process.cwd(), id);
+        fsMap.set(resolved, code);
+        // Vite and Rollup normalize filenames to use `/` instad of `\`.
+        // We give the TypeScript VFS both versions just in case.
+        const slash = resolved.replace(/\\/g, '/');
+        if (resolved !== slash) fsMap.set(slash, code);
       }
 
       return null;
