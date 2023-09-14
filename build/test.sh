@@ -3,4 +3,4 @@
 set -euo pipefail
 
 c8 mocha "$@"
-tsc
+tsc --noEmit

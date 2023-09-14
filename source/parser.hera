@@ -841,6 +841,7 @@ ThisLiteral
         name: id,
         children: [".", id],
       }],
+      thisShorthand: true,
     }
   AtThis
   PrivateThis
@@ -862,6 +863,7 @@ PrivateThis
         name: id.name,
         children: [".", id],
       }],
+      privateShorthand: true,
     }
 
 # NOTE: Added '@' as a 'this' shorthand from CoffeeScript
@@ -1130,7 +1132,7 @@ PropertyAccess
 
 PropertyGlob
   # NOTE: Added shorthand obj.{a,b:c} -> {a: obj.a, c: obj.b}
-  OptionalDot:dot MultiLineComment* BracedObjectLiteral:object ->
+  ( ( QuestionMark / NonNullAssertion )? OptionalDot ):dot MultiLineComment* BracedObjectLiteral:object ->
     return {
       type: "PropertyGlob",
       dot,
@@ -2448,16 +2450,6 @@ ObjectPropertyDelimiter
 # https://262.ecma-international.org/#prod-PropertyDefinition
 # NOTE: Must start on same line
 PropertyDefinition
-  # NOTE: Added CoffeeScript {@id} -> {id: this.id} shorthand
-  _?:ws AtThis:at IdentifierReference:id ->
-    const value = [at, ".", id]
-    return {
-      type: "Property",
-      children: [ws, id, ": ", ...value],
-      name: id,
-      names: id.names,
-      value,
-    }
   _?:ws NamedProperty:prop ->
     return {
       ...prop,
@@ -2555,11 +2547,15 @@ PropertyDefinition
       if (!name) return $skip
     }
 
+    // Private name becomes public
+    if (name[0] === "#") name = name.slice(1)
+
     return {
       type: "Property",
       children: [ws, name, ": ", value],
-      name, value,
+      name,
       names: [],
+      value,
       hoistDec,
     }
   # NOTE: basic identifiers are now part of the rule above
@@ -2758,7 +2754,7 @@ MethodDefinition
               type: "CallExpression",
               children: [value[0], ...value[1].slice(0, -1), {
                 type: "PropertyAccess",
-                children: [".", {
+                children: [last.dot, {
                   ...v,
                   children: [ v.children.slice(0, 2) ] // Remove potential delimiter
                 }],
@@ -3277,16 +3273,11 @@ LabelledItem
 IfStatement
   # NOTE: Added paren-less condition
   # NOTE: Block isn't Statement so we can handle implied braces by nesting
-  (IfClause / UnlessClause):clause Block:block ElseClause?:e ->
-    const children = [...clause.children]
-    block = blockWithPrefix(clause.condition.expression.blockPrefix, block)
-    children.push(block)
-    if (block.bare && e) children./**/push(";")
-    if (e) children./**/push(e)
-
+  ( IfClause / UnlessClause ):clause Block:block ElseClause?:e ->
     return {
-      ...clause,
-      children,
+      type: "IfStatement",
+      children: [...clause.children, block, e],
+      condition: clause.condition,
       then: block,
       else: e,
     }
@@ -3472,7 +3463,6 @@ DoStatement
 WhileStatement
   # NOTE: Condition provides optional parens
   WhileClause:clause Block:block ->
-    block = blockWithPrefix(clause.condition.expression.blockPrefix, block)
     return {
       ...clause,
       children: [...clause.children, block],
@@ -3778,7 +3768,7 @@ SwitchStatement
     return {
       type: "SwitchStatement",
       children: $0,
-      expression: condition,
+      condition,
       caseBlock,
     }
 
@@ -4005,31 +3995,13 @@ Condition
     }
 
 DeclarationCondition
-  ForbidIndentedApplication LexicalDeclaration?:dec RestoreIndentedApplication ->
-    if (!dec) return $skip
+  ForbidIndentedApplication LexicalDeclaration?:declaration RestoreIndentedApplication ->
+    if (!declaration) return $skip
 
-    const ref = makeRef()
-
-    const { decl, bindings } = dec
-    // TODO: Add support for `let` and `const` declarations with multiple bindings in conditions
-    const binding = bindings[0]
-    const { pattern, suffix, initializer, splices, thisAssignments } = binding
-
-    const initCondition = {
-      type: "AssignmentExpression",
-      children: [ref, initializer],
-      hoistDec: {
-        type: "Declaration",
-        children: ["let ", ref, suffix],
-        names: [],
-      },
-      blockPrefix: [
-        ["", [ decl, pattern, suffix, " = ", ref, ...splices ], ";"],
-        ...thisAssignments
-      ],
+    return {
+      type: "DeclarationCondition",
+      declaration,
     }
-
-    return initCondition
 
 ExpressionWithIndentedApplicationForbidden
   ForbidIndentedApplication ForbidNewlineBinaryOp ExtendedExpression?:exp RestoreNewlineBinaryOp RestoreIndentedApplication ->
@@ -4460,6 +4432,7 @@ Declaration
   TypeDeclaration
   EnumDeclaration
   OperatorDeclaration
+  UsingDeclaration
 
 # https://262.ecma-international.org/#prod-HoistableDeclaration
 HoistableDeclaration
@@ -5293,6 +5266,10 @@ Until
   "until" NonIdContinue ->
     return { $loc, token: $1 }
 
+Using
+  "using" NonIdContinue ->
+    return { $loc, token: $1 }
+
 Var
   "var" NonIdContinue ->
     return { $loc, token: $1 }
@@ -5927,6 +5904,43 @@ IndentedJSXChildExpression
 
 NestedJSXChildExpression
   JSXNested JSXChildExpression
+
+## Using Declaration
+
+UsingDeclaration
+  Using:decl _? UsingBinding:binding ( __ Comma __ UsingBinding )*:tail UsingJSModeError ->
+    const bindings = [binding].concat(tail.map(([,,,b]) => b))
+
+    return {
+      type: "Declaration",
+      children: $0,
+      names: bindings.flatMap(b => b.names),
+      bindings,
+      decl,
+      splices: bindings.flatMap(b => b.splices),
+      thisAssignments: bindings.flatMap(b => b.thisAssignments),
+    }
+
+UsingBinding
+  BindingIdentifier:pattern TypeSuffix?:suffix Initializer:initializer ->
+    return {
+      type: "Binding",
+      children: $0,
+      names: pattern.names,
+      pattern,
+      suffix,
+      initializer,
+      splices: [],
+      thisAssignments: [],
+    }
+
+UsingJSModeError
+  "" ->
+    return {
+      type: "Error",
+      js: true,
+      message: "`using` is not currently transpiled in JS mode."
+    }
 
 ## Type Stuff
 

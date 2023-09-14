@@ -6,8 +6,7 @@
  * here eventually.
  */
 
-type ASTString = string & { children: undefined, type: undefined }
-type ASTNode = ASTNodeBase | ASTError | ASTRef | ASTLeaf | ASTNode[] | ASTString | undefined
+type ASTNode = ASTNodeBase | ASTError | ASTRef | ASTLeaf | ASTNode[] | string | undefined
 type ASTNodeBase =
   type: string
   children: ASTNode[]
@@ -27,10 +26,43 @@ type ASTLeaf =
   $loc: Loc
   token: string
 
+type Children = ASTNode[]
+
 type StatementDelimiter = ASTNode
 type IndentNode = ASTNode
 
 type StatementTuple = [IndentNode, ASTNode, StatementDelimiter?]
+
+type Condition = ParenthesizedExpression
+
+type ParenthesizedExpression
+  type: "ParenthesizedExpression"
+  children: Children
+  parent: ASTNodeBase
+  expression: ASTNode
+  implicit?: boolean
+
+type IfStatement
+  type: "IfStatement"
+  children: Children
+  condition: Condition
+  then: BlockStatement
+  else: [ ASTNode, ElseToken, BlockStatement ] | undefined
+
+type IterationStatement
+  type: "IterationStatement"
+  children: Children
+  parent: ASTNodeBase | undefined
+  block: BlockStatement
+
+type SwitchStatement
+  type: "SwitchStatement"
+  children: Children
+  parent: ASTNodeBase | undefined
+  condition: Condition
+  caseBlock: unknown
+
+type ElseToken = { $loc: Loc, token: "else" }
 
 type ASTRef =
   type: "Ref"
@@ -56,7 +88,7 @@ type MethodDefinition =
   signature: FunctionSignature
   block: BlockStatement
   parameters: ParametersNode
-  parent: ASTNode | undefined
+  parent: ASTNodeBase | undefined
 
 type FunctionSignature =
   type: "MethodSignature" | "FunctionSignature"
@@ -66,7 +98,7 @@ type FunctionSignature =
   modifier: MethodModifier
   returnType: ReturnTypeAnnotation | undefined
   parameters: ParametersNode
-  parent: ASTNode | undefined
+  parent: ASTNodeBase | undefined
 
 type ReturnTypeAnnotation =
   t:
@@ -142,26 +174,18 @@ function updateParentPointers(node: ASTNode, parent?: ASTNodeBase, depth = 1): v
 }
 
 function addPostfixStatement(statement: StatementTuple, ws: ASTNode, post)
-  let children, expressions
-
-  prefix := post.blockPrefix or post.condition?.expression.blockPrefix
-
-  if prefix?.length
-    indent := prefix[0][0]
-    expressions = [...prefix, [indent, statement]]
-    children = [" {\n", ...expressions, "\n", indent?.slice?.(0, -2), "}"]
-  else
-    expressions = [["", statement]]
-    children = [" { ", ...expressions, " }"]
+  expressions := [
+    ...post.blockPrefix or []
+    ["", statement]
+  ]
 
   block := {
     type: "BlockStatement"
-    children
+    children: [" { ", expressions, " }"]
     expressions
   }
 
-  children = [...post.children]
-  children.push(block)
+  children := [...post.children, block]
 
   // This removes trailing whitespace for easier testing
   if (!isWhitespaceOrEmpty(ws)) children.push(ws)
@@ -576,8 +600,8 @@ function expressionizeIteration(exp): void {
   )
 }
 
-function processBinaryOpExpression($0) {
-  const expandedOps = expandChainedComparisons($0)
+function processBinaryOpExpression($0)
+  expandedOps := expandChainedComparisons($0)
 
   // Expanded ops is [a, __, op1, __, b, __, op2, __, c, __, op3, __, d], etc.
   // NOTE: all operators of higher precedence than relational have been merged into the operand expressions
@@ -643,12 +667,40 @@ function processBinaryOpExpression($0) {
   }
 
   return expandedOps
-}
+
+/**
+ * This adjusts #x.y().z and @x.y().z when used inside Object glob expressions
+ * to remove `this.` where necessary.
+ *
+ * [See More](../test/object.civet)
+ */
+function handleThisPrivateShorthands(value)
+  if value.privateShorthand
+    value = value.children[1].children[1]
+
+    return [value, false]
+
+  if value.type is "MemberExpression" or value.type is "CallExpression"
+    suppressPrefix .= value.thisShorthand
+    value = {
+      ...value,
+      children: value.children.map (c, i) =>
+        if i is 0
+          let s
+          [c, s] = handleThisPrivateShorthands c
+          suppressPrefix ||= s
+
+        c
+    }
+
+    return [value, suppressPrefix]
+
+  return [value, value.thisShorthand]
 
 /**
  * Process globs and bind shorthand in Call/MemberExpression
  */
-function processCallMemberExpression(node) {
+function processCallMemberExpression(node)
   const { children } = node
   for (let i = 0; i < children.length; i++) {
     const glob = children[i]
@@ -673,15 +725,19 @@ function processCallMemberExpression(node) {
       prefix = prefix.concat(glob.dot)
 
       for (const part of glob.object.properties) {
-        if (part.type === "MethodDefinition") {
+        if part.type is "MethodDefinition"
           throw new Error("Glob pattern cannot have method definition")
-        }
-        if (part.value && !["CallExpression", "MemberExpression", "Identifier"].includes(part.value.type)) {
-          throw new Error("Glob pattern must have call or member expression value")
-        }
-        let value = part.value ?? part.name
-        const wValue = getTrimmingSpace(part.value)
-        value = prefix.concat(insertTrimmingSpace(value, ""))
+        if part.value and !["CallExpression", "MemberExpression", "Identifier"].includes(part.value.type)
+          throw new Error(`Glob pattern must have call or member expression value, found ${JSON.stringify(part.value)}`)
+
+        suppressPrefix .= false
+        value .= part.value ?? part.name
+        wValue := getTrimmingSpace part.value
+
+        [value, suppressPrefix] = handleThisPrivateShorthands value
+
+        if !suppressPrefix // Don't prefix @ shorthand
+          value = prefix.concat(insertTrimmingSpace(value, ""))
         if (wValue) value.unshift(wValue)
         if (part.type === "SpreadProperty") {
           parts.push({
@@ -751,7 +807,6 @@ function processCallMemberExpression(node) {
     }
   }
   return node
-}
 
 function wrapIterationReturningResults(statement, outerRef): void {
   if (statement.type === "DoStatement") {
@@ -896,7 +951,7 @@ function isRelationalOp(op)
 * binops is an array of [__, op, __, exp] tuples
 * first is an expression
 */
-function expandChainedComparisons([first, binops]) {
+function expandChainedComparisons([first, binops]: [unknown, [unknown, ASTLeaf, unknown, unknown][]])
   // TODO: add refs to ensure middle expressions are evaluated only once
 
   // short circuit/bitwise ops have lower precedence than comparison ops
@@ -925,7 +980,7 @@ function expandChainedComparisons([first, binops]) {
     else if lowerPrecedenceOps.includes op.token
       // end of the chain
       processChains op
-      first = []
+      first = undefined
 
     i++
 
@@ -933,17 +988,19 @@ function expandChainedComparisons([first, binops]) {
 
   return results
 
-  function processChains(op) {
-    first = expandExistence(first) if isRelationalOp op
-    if (chains.length > 1) {
-      chains.forEach((index, k) => {
+  function processChains(op): void
+    if first and isRelationalOp op
+      first = expandExistence first
+
+    if chains.length > 1
+      chains.forEach (index, k) =>
         if (k > 0) {
           // NOTE: Inserting ws tokens to keep even operator spacing in the resulting array
           results.push(" ", "&&", " ")
         }
 
-        const binop = binops[index]
-        let [pre, op, post, exp] = binop
+        binop := binops[index]
+        [ , , , exp] .= binop
         exp = binop[3] = expandExistence(exp)
 
         let endIndex
@@ -956,26 +1013,23 @@ function expandChainedComparisons([first, binops]) {
         results.push(first, ...binops.slice(start, endIndex).flat())
         first = [exp].concat(binops.slice(index + 1, endIndex))
         start = endIndex
-      })
-    } else {
+    else
       // Advance start if there was no chain
-      results.push(first, ...binops.slice(start, i + 1).flat())
+      results.push first if first
+      results.push ...binops[start...i + 1].flat()
       start = i + 1
-    }
 
     chains.length = 0
-  }
 
-  function expandExistence(exp) {
+  function expandExistence(exp)
     // Expand existence operator like x?
     const existence = isExistence(exp)
-    if (existence) {
+    if existence
       results.push(existence, " ", "&&", " ")
       return existence.expression
-    }
+
     return exp
-  };
-}
+  ;
 
 function processParams(f): void {
   const { type, parameters, block } = f
@@ -1057,6 +1111,27 @@ function removeParentPointers(node): void {
     }
   }
 }
+
+/**
+ * Replace `child` with `replacement` inside the `block`.
+ * Assumes a `StatementTuple[]` for `block.expressions`
+ */
+function replaceBlockExpression(node: BlockStatement, child: ASTNodeBase, replacement: ASTNodeBase): void
+  found .= false
+
+  { expressions } := node
+
+  for (let i = 0, l = expressions.length; i < l; i++)
+    statement := expressions[i]
+    [, s,] := statement
+
+    if s is child
+      statement[1] = replacement
+      replacement.parent = node
+      found = true
+      break
+
+  throw new Error("Could not find child to replace") unless found
 
 /**
  * If `child.parent === parent`, then this should find the index `i` such that
@@ -2119,6 +2194,107 @@ function processAssignmentDeclaration(decl, id, suffix, ws, assign, e) {
   }
 }
 
+function processDeclarationCondition(condition): void
+  return unless condition.type is "DeclarationCondition"
+  ref := makeRef()
+
+  { decl, bindings } := condition.declaration
+  // TODO: Add support for `let` and `const` declarations with multiple bindings in conditions
+  binding := bindings[0]
+  { pattern, suffix, initializer, splices, thisAssignments } := binding
+
+  initCondition :=
+    type: "AssignmentExpression"
+    children: [ref, initializer]
+    hoistDec:
+      type: "Declaration"
+      children: ["let ", ref, suffix]
+      names: []
+    blockPrefix: [
+      ["", [ decl, pattern, suffix, " = ", ref, ...splices ], ";"],
+      ...thisAssignments
+    ]
+    pattern: pattern
+    ref: ref
+
+  Object.assign(condition, initCondition)
+
+function processDeclarationConditions(node: ASTNode): void
+  gatherRecursiveAll node, (n) =>
+    n.type is "IfStatement" or n.type is "IterationStatement" or n.type is "SwitchStatement"
+  .forEach processDeclarationConditionStatement
+
+/**
+ * Processes adding additional conditions when declarations are used as a condition in IfStatements, WhileStatements, and SwitchStatements.
+ * Also does additional processing for IfStatements that used to be in the parser (inserting semi-colon on bare-block consequent with else).
+ */
+function processDeclarationConditionStatement(s: IfStatement | IterationStatement | SwitchStatement): void
+  { condition } := s
+  return unless condition?.expression
+  processDeclarationCondition(condition.expression)
+
+  { ref, pattern } := condition.expression
+
+  if pattern
+    conditions .= []
+    getPatternConditions(pattern, ref, conditions)
+
+    conditions = conditions.filter (c) =>
+      !(c.length is 3 and c[0] is "typeof " and c[1] is ref and c[2] is " === 'object'") and
+      !(c.length is 2 and c[0] is ref and c[1] is " != null")
+
+    if conditions.length
+      condition.children.unshift "("
+      conditions.forEach (c) ->
+        condition.children.push " && ", c
+      condition.children.push ")"
+
+  switch s.type
+    when "IfStatement"
+      { else: e} := s
+      block := blockWithPrefix(condition.expression.blockPrefix, s.then)
+      s.then = block
+
+      toAdd := [block]
+
+      if block.bare and e
+        toAdd.push ";"
+
+      s.children.splice(2, 1, ...toAdd)
+
+      // Update parent pointers since declaration conditions have expanded
+      updateParentPointers(block, s)
+
+    when "IterationStatement"
+      { children, block } := s
+      newBlock := blockWithPrefix(condition.expression.blockPrefix, block)
+      s.children = children.map (c) -> c.type is "BlockStatement" ? newBlock : c
+
+      // Update parent pointers since declaration conditions have expanded
+      updateParentPointers(newBlock, s)
+
+    when "SwitchStatement"
+      { blockPrefix, ref } := condition.expression
+      return unless blockPrefix
+
+      s.condition =
+        type: "ParenthesizedExpression"
+        children: ["(", ref, ")"]
+        expression: ref
+        parent: s
+      s.children[1] = s.condition
+
+      // wraps the entire switch statement
+      block := blockWithPrefix [["", [{
+        type: "Declaration",
+        children: ["let ", ...condition.expression.children],
+      }], ";"], ...blockPrefix], makeEmptyBlock()
+
+      replaceBlockExpression(s.parent as BlockStatement, s, block)
+      block.expressions.push ["", s]
+      s.parent = block
+
+
 // Add implicit block unless followed by a method/function of the same name,
 // or block is within an ExportDeclaration.
 function implicitFunctionBlock(f): void {
@@ -2609,7 +2785,7 @@ function aggregateDuplicateBindings(bindings, ReservedWord) {
 
 function processPatternMatching(statements, ReservedWord): void {
   gatherRecursiveAll(statements, (n) => n.type === "SwitchStatement")
-    .forEach((s) => {
+    .forEach((s: SwitchStatement) => {
       const { caseBlock } = s
       const { clauses } = caseBlock
 
@@ -2631,14 +2807,14 @@ function processPatternMatching(statements, ReservedWord): void {
 
       if (errors || !isPattern) return
 
-      let { expression } = s
-      if (expression.type === "ParenthesizedExpression") {
+      let { condition } = s
+      if (condition.type === "ParenthesizedExpression") {
         // Unwrap parenthesized expression
-        expression = expression.expression
+        condition = condition.expression
       }
 
-      let hoistDec, refAssignment = [], ref = maybeRef(expression, "m");
-      if (ref !== expression) {
+      let hoistDec, refAssignment = [], ref = maybeRef(condition, "m");
+      if (ref !== condition) {
         hoistDec = {
           type: "Declaration",
           children: ["let ", ref],
@@ -2646,7 +2822,7 @@ function processPatternMatching(statements, ReservedWord): void {
         }
         refAssignment = [{
           type: "AssignmentExpression",
-          children: [ref, " = ", expression],
+          children: [ref, " = ", condition],
         }, ","]
       }
       let prev = [],
@@ -2918,6 +3094,7 @@ function processProgram(root: BlockStatement, config, m, ReservedWord): void {
 
   const { expressions: statements } = root
 
+  processDeclarationConditions(statements)
   processPipelineExpressions(statements)
   processAssignments(statements)
   processPatternMatching(statements, ReservedWord)
