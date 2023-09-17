@@ -10,21 +10,19 @@ import {
   SymbolTag,
 } from 'vscode-languageserver'
 
-import { SourceMap } from '@danielx/civet'
 import { TextDocument } from 'vscode-languageserver-textdocument'
 import assert from 'assert'
 import {
-  SourcemapLines,
+  type SourcemapLines,
   remapRange,
   rangeFromTextSpan,
 } from '@danielx/civet/ts-diagnostic'
 
 export {
   remapPosition,
-  SourcemapLines,
+  type SourcemapLines,
   convertDiagnostic,
   flattenDiagnosticMessageText,
-  diagnosticCategoryToSeverity,
 } from '@danielx/civet/ts-diagnostic';
 
 // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/documentSymbol.ts#L63
@@ -327,35 +325,4 @@ export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
 
   // console.warn(`couldn't forward map src position: ${[origLine, origOffset]}`)
   return position
-}
-
-import type { SourceMap as CoffeeSourceMap } from "coffeescript"
-export function convertCoffeeScriptSourceMap(sourceMap: CoffeeSourceMap): SourceMap["data"]["lines"] {
-  const lines: SourceMap["data"]["lines"] = []
-  let columnDelta = 0
-
-  debugger
-
-  for (const entry of sourceMap.lines) {
-    if (!entry) {
-      lines.push([])
-    } else {
-      let lastColumn = columnDelta = 0
-      let lastSourceColumn = -1
-      lines.push(entry.columns.filter(x => x).map(function ({ column, sourceLine, sourceColumn }) {
-        // Gross Hack to prevent coffeescript mapping punctuation to the start of the line
-        if (sourceColumn <= lastSourceColumn) {
-          return [0]
-        }
-        lastSourceColumn = sourceColumn
-
-        columnDelta = column - lastColumn
-        lastColumn = column
-
-        return [columnDelta, 0, sourceLine, sourceColumn]
-      }))
-    }
-  }
-
-  return lines
 }
