@@ -19,7 +19,9 @@ import {
 } from '@danielx/civet/ts-diagnostic'
 
 export {
+  rangeFromTextSpan,
   remapPosition,
+  remapRange,
   type SourcemapLines,
   convertDiagnostic,
   flattenDiagnosticMessageText,

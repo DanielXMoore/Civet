@@ -56,7 +56,7 @@ interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithF
   failedLookupLocations: string[];
 }
 
-interface FileMeta {
+export interface FileMeta {
   sourcemapLines: SourceMap["data"]["lines"] | undefined
   transpiledDoc: TextDocument | undefined
   parseErrors: Error[] | undefined
