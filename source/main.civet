@@ -63,6 +63,8 @@ export type CompilerOptions
   ast?: boolean
   js?: boolean
   noCache?: boolean
+  hits?: string
+  trace?: string
   parseOptions?:
     coffeeCompat?: boolean
   updateSourceMap?: (output: string, inputPos?: number) => void
@@ -81,16 +83,51 @@ export compile := (src: string, options?: CompilerOptions) ->
   if filename.endsWith('.coffee') and not /^(#![^\r\n]*(\r\n|\n|\r))?\s*['"]civet/.test src
     options.parseOptions.coffeeCompat = true
 
-  let events
-  if !options.noCache
-    events = makeCache()
+  {hits, trace, noCache} := options
 
-  //@ts-ignore
-  parse.config = options.parseOptions or {}
-  ast := prune parse(src, {
-    filename
-    events
-  })
+  let events: CacheEvents | undefined
+  unless noCache
+    events = makeCache {
+      hits: !!hits
+      trace: !!trace
+    }
+
+  let ast
+
+  try
+    //@ts-ignore
+    parse.config = options.parseOptions or {}
+    ast = prune parse(src, {
+      filename
+      events
+    })
+  finally
+    if hits or trace
+      import('fs').then ({ writeFileSync }) ->
+        if { logs } := events?.meta
+          if trace
+            writeFileSync trace, logs.join "\n"
+
+        if hits
+          if hitData := events?.meta.hits
+            total .= 0
+            data := [...hitData.entries()]
+
+            // sort hit count and write to hits.out
+            counts := data
+            .sort ([, a], [, b]) => b - a
+            .map ([k, v]) =>
+              total+=v
+              `${k}: ${v}`
+            .join "\n"
+
+            hitSummary := ```
+              Total: ${total}
+
+              ${counts}
+            ```
+
+            writeFileSync hits, hitSummary
 
   if options.ast
     return ast
@@ -129,29 +166,57 @@ type ParseResult = {
   value: unknown
 } | undefined
 
-// logs = []
-makeCache := ->
-  stateCache := new StateCache
+type MetaData
+  hits?: Map<string, number>
+  logs?: string[]
+
+type CacheOptions
+  hits?: boolean | undefined
+  trace?: boolean | undefined
+
+type CacheEvents
+  meta: MetaData
+  enter: (ruleName: string, state: ParseState) => { cache: ParseResult } | undefined
+  exit: (ruleName: string, state: ParseState, result: ParseResult) => void
+
+makeCache := ({hits, trace}: CacheOptions = {}): CacheEvents ->
+  meta: MetaData := {}
+  let hitCount: Map<string, number>
+  if hits
+    hitCount = new Map
+    meta.hits = hitCount
+
+  let logs: string[]
+  if trace
+    logs = []
+    meta.logs = logs
+
+  stateCache := new StateCache<ParseResult>
   getStateKey: () => [number, string] .= null!
 
-  // stack = []
+  stack: string[] := []
 
-  events :=
+  events := {
+    meta
     enter: (ruleName: string, state: ParseState) ->
+      hitCount.set ruleName, (hitCount.get(ruleName) or 0) + 1 if hits
+
       return if uncacheable.has(ruleName)
 
       key: CacheKey := [ruleName, state.pos, ...getStateKey()]
 
       // We cache `undefined` when a rule fails to match so we need to use `has` here.
       if stateCache.has(key)
-        // logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "💰"
+        if trace
+          logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "💰"
         result := stateCache.get(key)
         return {
           cache: if result then { ...result }
         }
 
-      // logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "\u2192"
-      // stack.push(ruleName)
+      if trace
+        logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "\u2192"
+        stack.push ruleName
 
       return
 
@@ -171,10 +236,13 @@ makeCache := ->
       //@ts-ignore
       if parse.config.verbose and result
         console.log `Parsed ${JSON.stringify state.input[state.pos...result.pos]} [pos ${state.pos}-${result.pos}] as ${ruleName}`//, JSON.stringify(result.value)
-      // stack.pop()
-      // logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + " " + (if result then "✅" else "❌")
+
+      if trace
+        stack.pop()
+        logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + " " + (if result then "✅" else "❌")
 
       return
+  }
 
   return events
 
