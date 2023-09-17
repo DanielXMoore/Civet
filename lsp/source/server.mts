@@ -18,9 +18,9 @@ import {
 import {
   TextDocument
 } from 'vscode-languageserver-textdocument';
-import TSService from './lib/typescript-service.mjs';
+import TSService, { FileMeta } from './lib/typescript-service.mjs';
 import * as Previewer from "./lib/previewer.mjs";
-import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic } from './lib/util.mjs';
+import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition } from './lib/util.mjs';
 import assert from "assert"
 import path from "node:path"
 import ts, {
@@ -276,7 +276,7 @@ connection.onDefinition(async ({ textDocument, position }) => {
   const service = await ensureServiceForSourcePath(sourcePath)
   if (!service) return
 
-  let definitions
+  let definitions, meta: FileMeta | undefined
 
   // Non-transpiled
   if (sourcePath.match(tsSuffix)) {
@@ -287,10 +287,9 @@ connection.onDefinition(async ({ textDocument, position }) => {
   } else {
 
     // need to sourcemap the line/columns
-    const meta = service.host.getMeta(sourcePath)
+    meta = service.host.getMeta(sourcePath)
     if (!meta) return
-    const sourcemapLines = meta.sourcemapLines
-    const transpiledDoc = meta.transpiledDoc
+    const { sourcemapLines, transpiledDoc } = meta
     if (!transpiledDoc) return
 
     // Map input hover position into output TS position
@@ -310,10 +309,22 @@ connection.onDefinition(async ({ textDocument, position }) => {
   assert(program)
 
   return definitions.map<Location | undefined>((definition) => {
-    const { fileName, textSpan } = definition
+    let { fileName, textSpan } = definition
     // TODO: May need to remap fileNames back to sourceFileNames
     const sourceFile = program.getSourceFile(fileName)
     if (!sourceFile) return
+
+    // Reverse map back to .civet source space if we forward mapped earlier
+    if (meta) {
+      const { sourcemapLines } = meta
+      return {
+        uri: service.getSourceFileName(fileName),
+        range: {
+          start: remapPosition(sourceFile.getLineAndCharacterOfPosition(textSpan.start), sourcemapLines),
+          end: remapPosition(sourceFile.getLineAndCharacterOfPosition(textSpan.start + textSpan.length), sourcemapLines),
+        }
+      }
+    }
 
     return {
       uri: service.getSourceFileName(fileName),
