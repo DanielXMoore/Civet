@@ -8,7 +8,7 @@ import type {
 import BundledCivetModule from "@danielx/civet"
 import BundledCivetConfigModule from "@danielx/civet/config"
 
-import ts from "typescript"
+import ts, { JsxEmit } from "typescript"
 const { version: typescriptVersion } = ts
 import type {
   CompilerHost,
@@ -390,6 +390,7 @@ function TSService(projectURL = "./") {
     allowNonTsExtensions: true,
     // Better described as "allow non-ts, non-json extensions"
     allowJs: true,
+    jsx: JsxEmit.Preserve,
   }
 
   const parsedConfig = parseJsonConfigFileContent(
