@@ -1,4 +1,6 @@
 // Rudimentary CoffeeScript plugin
+import { compile as coffeeCompile } from "coffeescript"
+
 function compile(path, source) {
   const { js, sourceMap } = coffeeCompile(source, {
     bare: true,
