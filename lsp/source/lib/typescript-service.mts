@@ -2,8 +2,8 @@ import assert from "assert"
 import path from "path"
 
 import type {
-	SourceMap as CivetSourceMap,
-	CompileOptions,
+  SourceMap as CivetSourceMap,
+  CompileOptions,
 } from "@danielx/civet"
 import BundledCivetModule from "@danielx/civet"
 import BundledCivetConfigModule from "@danielx/civet/config"
@@ -29,9 +29,6 @@ const {
 import { createRequire } from "module"
 import { fileURLToPath, pathToFileURL } from "url"
 import { TextDocument } from "vscode-languageserver-textdocument"
-// TODO: project Coffee version?
-import { compile as coffeeCompile } from "coffeescript"
-import { convertCoffeeScriptSourceMap } from "./util.mjs"
 
 // Import version from package.json
 import * as pkg from "../../package.json" assert { type: 'json' }
@@ -40,7 +37,7 @@ const { version } = pkg
 // HACK to get __dirname working in tests with ts-node
 // ts-node needs everything to be modules for .civet files to work
 // and modules don't have __dirname
-var dir : string
+var dir: string
 try {
   dir = __dirname
 } catch (e) {
@@ -296,7 +293,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
       // The source document is ahead of the transpiled document
       if (source && sourceDocVersion > transpiledDoc.version) {
         const transpiledCode = doTranspileAndUpdateMeta(transpiledDoc, sourceDocVersion, transpiler, sourcePath, source)
-        if(transpiledCode !== undefined) {
+        if (transpiledCode !== undefined) {
           snapshot = ScriptSnapshot.fromString(transpiledCode)
         }
       }
@@ -409,10 +406,6 @@ function TSService(projectURL = "./") {
     extension: ".civet" as const,
     target: ".tsx" as ts.Extension,
     compile: transpileCivet,
-  }, {
-    extension: ".coffee",
-    target: ".js" as ts.Extension,
-    compile: transpileCoffee,
   }].map<[string, Transpiler]>(def => [def.extension, def])
 
   const transpilers = new Map<string, Transpiler>(transpilerDefinitions)
@@ -459,7 +452,7 @@ function TSService(projectURL = "./") {
       // One day it would be nice to load plugins that could be transpiled but that is a whole can of worms.
       // VSCode Node versions, esm loaders, etc.
       const pluginFiles = civetFiles.filter(file => file.endsWith("plugin.mjs"))
-      .map(file => pathToFileURL(file).toString())
+        .map(file => pathToFileURL(file).toString())
 
       for (const filePath of pluginFiles) {
         console.info("Loading plugin", filePath)
@@ -487,28 +480,6 @@ function TSService(projectURL = "./") {
       filename: path,
       sourceMap: true,
     })
-  }
-}
-
-function transpileCoffee(path: string, source: string) {
-  const { js, sourceMap } = coffeeCompile(source, {
-    bare: true,
-    filename: path,
-    header: false,
-    sourceMap: true
-  })
-
-  const convertedSourceMap = convertCoffeeScriptSourceMap(sourceMap)
-
-  console.log("COFFEE SOURCE MAP", sourceMap, convertedSourceMap)
-
-  return {
-    code: js,
-    sourceMap: {
-      data: {
-        lines: convertedSourceMap
-      }
-    }
   }
 }
 
