@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+export NODE_ENV=${1-}
+
 rm -rf dist
 
 node_modules/.bin/civet build/build.civet
