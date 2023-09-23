@@ -173,7 +173,7 @@ const playgroundUrl = computed(() => {
   min-width: 100%;
   height: 100%;
   padding: 16px 18px;
-  caret-color: var(--vp-button-brand-border);
+  caret-color: var(--vp-c-text-1);
   line-height: var(--vp-code-line-height);
   font-size: var(--vp-code-font-size);
   background: transparent;
