@@ -204,7 +204,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       sourceMaps.set(path.resolve(process.cwd(), id), compiled.sourceMap);
 
       const jsonSourceMap = compiled.sourceMap.json(
-        path.basename(id.replace(/\.tsx$/, '')),
+        path.basename(id.replace(/\.[jt]sx$/, '')),
         path.basename(id)
       );
 

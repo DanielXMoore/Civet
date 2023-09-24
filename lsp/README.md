@@ -19,7 +19,7 @@ Plugins
 
 Custom transpilers can be added in your host project root folder under `${projectRoot}/.civet/name-plugin.mjs`.
 
-Ex.
+Ex. Hera Plugin
 
 ```javascript
 import Hera from "@danielx/hera"
@@ -41,3 +41,5 @@ export default {
   }],
 }
 ```
+
+See also: [example CoffeeScript Plugin](integration/project-test/.civet/coffee-plugin.mjs)

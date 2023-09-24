@@ -18,9 +18,9 @@ import {
 import {
   TextDocument
 } from 'vscode-languageserver-textdocument';
-import TSService from './lib/typescript-service.mjs';
+import TSService, { FileMeta } from './lib/typescript-service.mjs';
 import * as Previewer from "./lib/previewer.mjs";
-import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic } from './lib/util.mjs';
+import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition } from './lib/util.mjs';
 import assert from "assert"
 import path from "node:path"
 import ts, {
@@ -289,8 +289,7 @@ connection.onDefinition(async ({ textDocument, position }) => {
     // need to sourcemap the line/columns
     const meta = service.host.getMeta(sourcePath)
     if (!meta) return
-    const sourcemapLines = meta.sourcemapLines
-    const transpiledDoc = meta.transpiledDoc
+    const { sourcemapLines, transpiledDoc } = meta
     if (!transpiledDoc) return
 
     // Map input hover position into output TS position
@@ -310,16 +309,31 @@ connection.onDefinition(async ({ textDocument, position }) => {
   assert(program)
 
   return definitions.map<Location | undefined>((definition) => {
-    const { fileName, textSpan } = definition
-    // TODO: May need to remap fileNames back to sourceFileNames
+    let { fileName, textSpan } = definition
+    // source file as it is known to TSServer
     const sourceFile = program.getSourceFile(fileName)
     if (!sourceFile) return
 
+    let start = sourceFile.getLineAndCharacterOfPosition(textSpan.start)
+    let end = sourceFile.getLineAndCharacterOfPosition(textSpan.start + textSpan.length)
+    const rawSourceName = service.getSourceFileName(fileName)
+
+    // Reverse map back to .civet source space if this definition is in a transpiled file
+    const meta = service.host.getMeta(rawSourceName)
+    if (meta) {
+      const { sourcemapLines } = meta
+
+      if (sourcemapLines) {
+        start = remapPosition(start, sourcemapLines)
+        end = remapPosition(end, sourcemapLines)
+      }
+    }
+
     return {
-      uri: service.getSourceFileName(fileName),
+      uri: pathToFileURL(rawSourceName).toString(),
       range: {
-        start: sourceFile.getLineAndCharacterOfPosition(textSpan.start),
-        end: sourceFile.getLineAndCharacterOfPosition(textSpan.start + textSpan.length)
+        start,
+        end,
       }
     }
   }).filter((d) => !!d) as Location[]

@@ -1,9 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
+export NODE_ENV=${1-}
+
 rm -rf dist
 
-node --loader ts-node/esm --loader ../dist/esm.mjs build/build.civet
+node_modules/.bin/civet build/build.civet
 
-mkdir dist/lib
+mkdir -p dist/lib
 cp node_modules/typescript/lib/lib.*.d.ts dist/lib

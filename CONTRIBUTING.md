@@ -88,6 +88,19 @@ You can attach a debugger as follows:
 Then you can step through the parser and see what is going on in practice
 as opposed to in theory.
 
+### Parser Tracing
+
+Sometimes you may want to check exactly what rules are checked in
+detailed order. You can use `--trace tracefile`.
+
+```sh
+dist/civet --trace trace.out < some-small-test.civet
+```
+
+Since this logs every rule entry and exit as well as cache hit
+it can quickly become quite large so it is best to use on as
+minimal a test case as possible.
+
 ### CLI
 
 A quick way to experiment with the parser (after building it with
@@ -120,6 +133,19 @@ Bugs in the compiler can often be caused by caching (which is done in
 [`source/main.coffee`](source/main.coffee)).  You can temporarily disable
 caching to see whether that's the issue, by adding the `--no-cache`
 command-line option.
+
+## Optimizing
+
+A quick way to get an idea of how much work the parser is doing is to
+use the `--hits hitsfile.txt` to get a count of every rule checked.
+
+```sh
+dist/civet --hits hits.out < source/lib.civet
+```
+
+This will output a sorted list of rules that were checked the most.
+Focusing on the rules that have the most checks should have the most
+impact on performance.
 
 ## Asking for Help
 
