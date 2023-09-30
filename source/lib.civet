@@ -124,6 +124,8 @@ type FunctionNode = FunctionExpression | ArrowFunction | MethodDefinition
 
 type Predicate = (node: Exclude<ASTNode, undefined>) => boolean
 
+type TabConfig = number | undefined
+
 /**
  * Adds parent pointers to all nodes in the AST. Elements within
  * arrays of nodes receive the closest non-array object parent.
@@ -455,87 +457,105 @@ function constructPipeStep(fn, arg, returning) {
   return [constructInvocation(fn, arg), null]
 }
 
-// Split out leading newlines from the first indented line
-const initialSpacingRe = /^(?:\r?\n|\n)*((?:\r?\n|\n)\s+)/
+// Given a string of spaces and tabs, and the current tab size
+// (where `undefined` means "tabs are the same width as 1 space"),
+// compute the indentation level counted as spaces.
+// NOTE: Currently, tabs are treated as the specified number of spaces,
+// no matter their location (no round-to-next-multiple behavior).
+function getIndentLevel(str: string, tab: TabConfig)
+  if tab? and tab != 1
+    tabs := str.match /\t/g
+    numTabs := tabs ? tabs.length : 0
+    numTabs * tab + /*spaces*/ (str.length - numTabs)
+  else
+    str.length
 
-function dedentBlockString({ $loc, token: str }: ASTLeaf, spacing, trim = true) {
+// Given an indentation string (spaces and tabs), reduces the leading
+// indentation by the specified amount of spaces. If removing a tab reduced
+// the indentation too much, replaces it with the appropriate number of spaces.
+function reduceIndentLevel(str: string, dedent: number, tab: TabConfig)
+  if tab? and tab != 1
+    for each char, i of str
+      unless dedent  // finished removing indentation
+        return str[i..]
+      if char == '\t'
+        dedent -= tab  // one tab removed
+        if dedent < 0  // removed too much; add some spaces back
+          return ''.padStart(-dedent, ' ') + str[i+1..]
+      else
+        dedent--  // one space removed
+    ''  // removed all indentation (and maybe wanted to remove more)
+  else
+    str[dedent..]
+
+indentRe := ///
+  \n        // indent starts after newline (possibly preceded by \r)
+  ([ \t]*)  // capture indentation as $1
+  (?! [ \t] | \r?\n | $ )  // ignore blank lines
+///g
+
+// Gets the indentation level (number of spaces) shared by all indentations
+// after the first newline.
+function getIndentOfBlockString(str: string, tab: TabConfig)
+  minLevel .= Infinity
+  while match := indentRe.exec str
+    level := getIndentLevel match[1], tab
+    minLevel = level if level < minLevel
+  minLevel = 0 if minLevel == Infinity
+  minLevel
+
+function dedentBlockString({ $loc, token: str }: ASTLeaf, tab: TabConfig, dedent: number | undefined, trimStart = true, trimEnd = true)
   // If string begins with a newline then indentation assume that it should be removed for all lines
-  if (spacing == null) spacing = str.match(initialSpacingRe)
+  if not dedent? and /^[ \t]*\r?\n/.test str
+    // Remove remaining shared indentation
+    dedent = getIndentOfBlockString str, tab
+  if dedent
+    str = str.replace /(\n)([ \t]*)/g, (_, newline, indent) =>
+      newline + reduceIndentLevel indent, dedent as number, tab
 
-  if (spacing) {
-    str = str.replaceAll(spacing[1], "\n")
-    const l = spacing.length
-    $loc.pos += l
-    $loc.length -= l
-  }
-
-  if (trim) {
-    // Remove leading newline
-    str = str.replace(/^(\r?\n|\n)/, "")
-      // Remove trailing newline
-      .replace(/(\r?\n|\n)[ \t]*$/, "")
-  }
+  // Remove leading newline
+  str = str.replace /^[ \t]*\r?\n/, "" if trimStart
+  // Remove trailing newline
+  str = str.replace /(\r?\n|\n)[ \t]*$/, "" if trimEnd
 
   // escape unescaped backticks and `${`
-  str = str.replace(/(\\.|`|\$\{)/g, (s) => {
-    if (s[0] === "\\") {
-      return s
-    }
-    return `\\${s}`
-  })
+  str = str.replace /(\\.|`|\$\{)/g, (s) =>
+    if s[0] === "\\"
+      s
+    else
+      `\\${s}`
 
-  return {
-    $loc,
-    token: str,
-  }
-}
+  { $loc, token: str }
 
-function dedentBlockSubstitutions($0) {
-  const [s, strWithSubstitutions, e] = $0
+function dedentBlockSubstitutions($0: [ASTLeaf, (ASTLeaf | (ASTNode[] & {token: never}))[], ASTLeaf], tab: TabConfig)
+  [s, strWithSubstitutions, e] := $0
 
-  if (strWithSubstitutions.length === 0) {
-    return $0
-  }
+  return $0 unless strWithSubstitutions.length
 
-  let initialSpacing, i = 0, l = strWithSubstitutions.length, results = [s]
-  // Get initial spacing from the first string token if it is not a substitution
-  const { token } = strWithSubstitutions[0]
+  // Compute shared indentation of all string parts, concatenated
+  stringPart :=
+    for each part of strWithSubstitutions
+      part.token ?? "s"  // put "s" in place of substitutions
+  .join ''
+  dedent :=
+    if /^[ \t]*\r?\n/.test stringPart
+      getIndentOfBlockString stringPart, tab
+    else
+      false
 
-  if (token) {
-    initialSpacing = token.match(initialSpacingRe)
-  } else {
-    initialSpacing = false
-  }
+  // Dedent the string parts
+  results: ASTNode[] .= [s]
+  for each let part, i of strWithSubstitutions
+    if part.token?
+      part = dedentBlockString part as ASTLeaf, tab, dedent,
+        i === 0, i === strWithSubstitutions.length - 1
+    results.push part
+  results.push e
 
-  while (i < l) {
-    let segment = strWithSubstitutions[i]
+  type: "TemplateLiteral"
+  children: results
 
-    if (segment.token) {
-      segment = dedentBlockString(segment, initialSpacing, false)
-      if (i === 0) {
-        // Trim leading newline
-        segment.token = segment.token.replace(/^(\r?\n|\n)/, "")
-      }
-      if (i === l - 1) {
-        // Trim trailing newline
-        segment.token = segment.token.replace(/(\r?\n|\n)[ \t]*$/, "")
-      }
-      results.push(segment)
-    } else {
-      results.push(segment)
-    }
-
-    i++
-  }
-
-  results.push(e)
-  return {
-    type: "TemplateLiteral",
-    children: results,
-  }
-}
-
-function deepCopy(node: ASTNode) {
+function deepCopy(node: ASTNode): ASTNode {
   if (node == null) return node
   if (typeof node !== "object") return node
 
@@ -549,7 +569,7 @@ function deepCopy(node: ASTNode) {
     Object.entries(node).map(([key, value]) => {
       return [key, deepCopy(value)]
     })
-  )
+  ) as any
 }
 
 function expressionizeIfClause(clause, b, e) {
@@ -3757,7 +3777,7 @@ module.exports = {
   gatherRecursive,
   gatherRecursiveAll,
   gatherRecursiveWithinFunction,
-  getIndent,
+  getIndentLevel,
   getTrimmingSpace,
   hasAwait,
   hasYield,
