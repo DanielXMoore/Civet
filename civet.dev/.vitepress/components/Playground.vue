@@ -77,7 +77,7 @@ const playgroundUrl = computed(() => {
 <template>
   <div v-if="props.compileAtStart && loading">Loading playground...</div>
   <div v-else :class="{ wrapper: true,  ligatures: ligatures}">
-    <div class="col" @click="textareaEl?.focus()">
+    <div class="col scroll" @click="textareaEl?.focus()">
       <div class="code code--user">
         <textarea
           :value="userCode"
@@ -144,6 +144,10 @@ const playgroundUrl = computed(() => {
   border: 1px solid var(--vp-c-red-dimm-1);
 }
 
+.scroll {
+  overflow-x: auto;
+}
+
 @media (max-width: 767px) {
   .col {
     width: 100%;
@@ -179,7 +183,8 @@ const playgroundUrl = computed(() => {
   background: transparent;
   resize: none;
   color: transparent;
-  overflow: hidden;
+  overflow-x: visible;
+  overflow-y: hidden;
 }
 
 .compilation-info {
