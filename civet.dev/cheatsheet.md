@@ -13,6 +13,11 @@ Here's a quick overview of the language. For more detailed information take a lo
     gap: 8px;
     grid-template-columns: 1fr 1fr
   }
+  @media (max-width: 767px) {
+    .cheatsheet {
+      grid-template-columns: 1fr
+    }
+  }
   .cheatsheet > div.language-ts {
     margin: 0 !important
   }
