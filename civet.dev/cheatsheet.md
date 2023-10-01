@@ -26,7 +26,7 @@ Here's a quick overview of the language. For more detailed information take a lo
   }
 </style>
 
-<div className="cheatsheet">
+<div class="cheatsheet">
 
 ```ts
 // Declarations
