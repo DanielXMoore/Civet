@@ -1,30 +1,35 @@
-import ts from 'typescript'
-import type { NavigationBarItem, NavigationTree } from 'typescript'
-const { ScriptElementKind, ScriptElementKindModifier } = ts
-import {
+import ts from 'typescript';
+import type {
+  Diagnostic,
+  NavigationBarItem,
+  NavigationTree,
+  TextSpan,
+} from 'typescript';
+const { DiagnosticCategory, ScriptElementKind, ScriptElementKindModifier } = ts;
+import vs, {
   CompletionItemKind,
+  DiagnosticSeverity,
   DocumentSymbol,
   Position,
   Range,
   SymbolKind,
   SymbolTag,
-} from 'vscode-languageserver'
+} from 'vscode-languageserver';
 
-import { TextDocument } from 'vscode-languageserver-textdocument'
-import assert from 'assert'
+import { TextDocument } from 'vscode-languageserver-textdocument';
+import assert from 'assert';
+import { SourceMap } from '@danielx/civet';
 import {
-  type SourcemapLines,
+  flattenDiagnosticMessageText,
   remapRange,
-  rangeFromTextSpan,
-} from '@danielx/civet/ts-diagnostic'
+} from '@danielx/civet/ts-diagnostic';
+
+export type SourcemapLines = SourceMap['data']['lines'];
 
 export {
-  rangeFromTextSpan,
+  flattenDiagnosticMessageText,
   remapPosition,
   remapRange,
-  type SourcemapLines,
-  convertDiagnostic,
-  flattenDiagnosticMessageText,
 } from '@danielx/civet/ts-diagnostic';
 
 // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/documentSymbol.ts#L63
@@ -196,6 +201,14 @@ function parseKindModifier(kindModifiers: string): Set<string> {
   return new Set(kindModifiers.split(/,|\s+/g));
 }
 
+function rangeFromTextSpan(span: TextSpan, document: TextDocument): Range {
+  return {
+    start: document.positionAt(span.start),
+    end: document.positionAt(span.start + span.length),
+  }
+}
+
+
 export function makeRange(l1: number, c1: number, l2: number, c2: number) {
   return {
     start: {
@@ -327,4 +340,42 @@ export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
 
   // console.warn(`couldn't forward map src position: ${[origLine, origOffset]}`)
   return position
+}
+
+export function convertDiagnostic(
+  diagnostic: Diagnostic,
+  document: TextDocument,
+  sourcemapLines?: SourcemapLines
+): vs.Diagnostic {
+  return {
+    message: flattenDiagnosticMessageText(diagnostic.messageText),
+    range: remapRange(
+      rangeFromTextSpan(
+        {
+          start: diagnostic.start || 0,
+          length: diagnostic.length ?? 1,
+        },
+        document
+      ),
+      sourcemapLines
+    ),
+    severity: diagnosticCategoryToSeverity(diagnostic.category),
+    code: diagnostic.code,
+    source: diagnostic.source || 'typescript',
+  };
+}
+
+function diagnosticCategoryToSeverity(
+  category: ts.DiagnosticCategory
+): DiagnosticSeverity {
+  switch (category) {
+    case DiagnosticCategory.Warning:
+      return DiagnosticSeverity.Warning;
+    case DiagnosticCategory.Error:
+      return DiagnosticSeverity.Error;
+    case DiagnosticCategory.Suggestion:
+      return DiagnosticSeverity.Hint;
+    case DiagnosticCategory.Message:
+      return DiagnosticSeverity.Information;
+  }
 }
