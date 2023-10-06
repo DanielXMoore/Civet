@@ -502,7 +502,7 @@ FatArrow
     return [ $1, "=>" ]
 
 TrailingDeclaration
-  ( _* ( ConstAssignment / LetAssignment ))
+  ( _? ( ConstAssignment / LetAssignment ) )
 
 # NOTE Different from
 # https://262.ecma-international.org/#prod-ConciseBody
@@ -524,8 +524,8 @@ ConditionalExpression
 TernaryRest
   NestedTernaryRest
   # NOTE: Ternary `a ? b : c` is disabled if CoffeeScript binary existential `a ? b` is enabled
-  !CoffeeBinaryExistentialEnabled &" " _? QuestionMark ExtendedExpression __ Colon ExtendedExpression ->
-    return $0.slice(2)
+  !CoffeeBinaryExistentialEnabled _ QuestionMark ExtendedExpression __ Colon ExtendedExpression ->
+    return $0.slice(1)
 
 NestedTernaryRest
   PushIndent (Nested QuestionMark ExtendedExpression Nested Colon ExtendedExpression)? PopIndent ->
@@ -925,7 +925,8 @@ CallExpressionRest
 
 # NOTE: Added shorthand x?(3) -> x?.(3)
 OptionalShorthand
-  InlineComment* QuestionMark OptionalDot ->
+  # perf: assertion to exit early
+  /(?=[\/?!])/ InlineComment* QuestionMark OptionalDot ->
     return {
       type: "Optional",
       children: $0,
@@ -3049,7 +3050,6 @@ BinaryOpSymbol
     return "=="
   "and" NonIdContinue -> "&&"
   "&&"
-  CoffeeOfEnabled "of" NonIdContinue -> "in"
   "or" NonIdContinue -> "||"
   "||"
   "‖" -> "||"
@@ -3066,7 +3066,7 @@ BinaryOpSymbol
     }
   "??"
   "⁇" -> "??"
-  CoffeeBinaryExistentialEnabled "?" -> "??"
+  "?" CoffeeBinaryExistentialEnabled -> "??"
   "instanceof" NonIdContinue ->
     return {
       $loc,
@@ -3074,21 +3074,9 @@ BinaryOpSymbol
       relational: true,
       special: true, // for typeof shorthand
     }
-  Not __ "instanceof" NonIdContinue ->
-    return {
-      $loc,
-      token: "instanceof",
-      relational: true,
-      special: true,
-      negated: true,
-    }
-  ( !CoffeeOfEnabled Not __ In ) / ( CoffeeOfEnabled Not __ "of" NonIdContinue ) ->
-    return {
-      $loc,
-      token: "in",
-      special: true,
-      negated: true,
-    }
+  CoffeeOfEnabled CoffeeOfOp:op -> op
+  Not __ NotOp:op ->
+    return { ...op, $loc }
   ( Is __ In ) / "∈" ->
     return {
       method: "includes",
@@ -3109,14 +3097,6 @@ BinaryOpSymbol
       special: true,
       negated: true,
     }
-  CoffeeOfEnabled In ->
-    return {
-      call: [module.getRef("indexOf"), ".call"],
-      relational: true,
-      reversed: true,
-      suffix: " >= 0",
-      special: true,
-    }
   ( Is __ Not __ In ) / "∉" ->
     return {
       method: "includes",
@@ -3124,14 +3104,6 @@ BinaryOpSymbol
       reversed: true,
       special: true,
       negated: true,
-    }
-  CoffeeOfEnabled Not __ In ->
-    return {
-      call: [module.getRef("indexOf"), ".call"],
-      relational: true,
-      reversed: true,
-      suffix: " < 0",
-      special: true,
     }
   # NOTE: "is not" must come after "is not in"
   !CoffeeNotEnabled Is __ Not ->
@@ -3156,11 +3128,53 @@ BinaryOpSymbol
       }
     }
     return "==="
-  In ->
-    return "in"
+  In
   "&"
   "^"
   "|"
+
+CoffeeOfOp
+  Of -> "in"
+  In ->
+    return {
+      call: [module.getRef("indexOf"), ".call"],
+      relational: true,
+      reversed: true,
+      suffix: " >= 0",
+      special: true,
+    }
+  Not __ Of NonIdContinue ->
+    return {
+      $loc,
+      token: "in",
+      special: true,
+      negated: true,
+    }
+  Not __ In ->
+    return {
+      call: [module.getRef("indexOf"), ".call"],
+      relational: true,
+      reversed: true,
+      suffix: " < 0",
+      special: true,
+    }
+
+NotOp
+  "instanceof" NonIdContinue ->
+    return {
+      $loc,
+      token: "instanceof",
+      relational: true,
+      special: true,
+      negated: true,
+    }
+  In ->
+    return {
+      $loc,
+      token: "in",
+      special: true,
+      negated: true,
+    }
 
 Xor
   "^^" / ( "xor" NonIdContinue )
@@ -4857,10 +4871,9 @@ Trimmed_
 
 # Optional whitespace including newlines and comments
 __
-  # Fast path for whitespace without comments
-  # /(?!(?=\s|#|\/\/|\/\*))|[\s]+(?!(?:#|\/\/|\/\*))/ ->
-  #   return [{ $loc, token: $0 }]
-  ( Whitespace / Comment )*
+  # perf: assertion to skip checking
+  /(?=\s|\/|#)/ ( Whitespace / Comment )* -> $2
+  ""
 
 Whitespace
   [\s]+ ->
