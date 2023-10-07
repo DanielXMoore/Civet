@@ -150,6 +150,10 @@ ExpressionizedStatementWithTrailingCallExpressions
     }
 
 ExpressionizedStatement
+  # perf: assertion to exit early
+  /(?=debugger|if|unless|do|for|loop|until|while|switch|throw|try)/ _ExpressionizedStatement -> $2
+
+_ExpressionizedStatement
   DebuggerExpression
   IfExpression
   UnlessExpression
@@ -913,11 +917,12 @@ CallExpression
 
 CallExpressionRest
   MemberExpressionRest
-  TemplateLiteral / StringLiteral ->
-    if ($1.type === "StringLiteral") {
-      return "`" + $1.token.slice(1, -1).replace(/(`|\$\{)/g, "\\$1") + "`"
+  # perf: assertion to exit early
+  /(?=['"`])/ ( TemplateLiteral / StringLiteral ):literal ->
+    if (literal.type === "StringLiteral") {
+      return "`" + literal.token.slice(1, -1).replace(/(`|\$\{)/g, "\\$1") + "`"
     }
-    return $1
+    return literal
   # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
   OptionalShorthand? ArgumentsWithTrailingMemberExpressions ->
     if (!$1) return $2
@@ -1013,27 +1018,15 @@ MemberBracketContent
     }
 
   # NOTE: Added shorthand x."string" -> x["string"]
-  Dot:dot ( TemplateLiteral / StringLiteral ):str ->
-    // Possessive dots are arrays where the first item is the dot
-    if (Array.isArray(dot)) dot = dot[0]
-    return {
-      type: "Index",
-      children: [
-        { token: "[", $loc: dot.$loc },
-        str,
-        "]",
-      ]
-    }
-
   # NOTE: Added shorthand x.3 -> x[3]
-  Dot:dot IntegerLiteral:num ->
+  Dot:dot ( TemplateLiteral / StringLiteral / IntegerLiteral ):literal ->
     // Possessive dots are arrays where the first item is the dot
     if (Array.isArray(dot)) dot = dot[0]
     return {
       type: "Index",
       children: [
         { token: "[", $loc: dot.$loc },
-        num,
+        literal,
         "]",
       ]
     }
@@ -1328,10 +1321,10 @@ BindingPattern
 # https://262.ecma-international.org/#prod-ObjectBindingPattern
 # NOTE: Simplified from spec
 ObjectBindingPattern
-  _? OpenBrace ObjectBindingPatternContent:c __ CloseBrace ->
+  _?:ws1 OpenBrace:open ObjectBindingPatternContent:c __:ws2 CloseBrace:close ->
     return {
       type: "ObjectBindingPattern",
-      children: [$1, $2, c.children, $4, $5],
+      children: [ws1, open, c.children, ws2, close],
       names: c.names,
       properties: c.children,
     }
@@ -1357,12 +1350,12 @@ BindingPropertyList
 # https://262.ecma-international.org/#prod-ArrayBindingPattern
 # NOTE: Simplified from spec
 ArrayBindingPattern
-  _? OpenBracket ArrayBindingPatternContent:c __ CloseBracket ->
+  _?:ws1 OpenBracket:open ArrayBindingPatternContent:c __:ws2 CloseBracket:close ->
     return {
       ...c, // names, blockPrefix, length
       type: "ArrayBindingPattern",
       elements: c.children,
-      children: [$1, $2, c.children, $4, $5],
+      children: [ws1, open, c.children, ws2, close],
     }
 
 ArrayBindingPatternContent
@@ -2052,12 +2045,12 @@ BlockStatementPart
 
 # https://262.ecma-international.org/#prod-Literal
 Literal
-  LiteralContent ->
+  /(?=[0-9.'"tfyno])/ LiteralContent:literal ->
     return {
       type: "Literal",
-      subtype: $1.type,
-      children: $0,
-      raw: $1.token,
+      subtype: literal.type,
+      children: [ literal ],
+      raw: literal.token,
     }
 
 LiteralContent
@@ -2073,6 +2066,10 @@ NullLiteral
 
 # https://262.ecma-international.org/#prod-BooleanLiteral
 BooleanLiteral
+  # perf: assertion to exit early
+  /(?=true|false|yes|no|on|off)/ _BooleanLiteral -> $2
+
+_BooleanLiteral
   CoffeeBooleansEnabled CoffeeScriptBooleanLiteral -> $2
   ( "true" / "false" ) NonIdContinue ->
     return { $loc, token: $1 }
@@ -2085,7 +2082,8 @@ CoffeeScriptBooleanLiteral
 
 # https://262.ecma-international.org/#prod-Identifier
 Identifier
-  !ReservedWord IdentifierName -> $2
+  # perf: assertion to exit early
+  /(?=\p{ID_Start}|[_$])/ !ReservedWord IdentifierName:id -> id
 
 # https://262.ecma-international.org/#prod-IdentifierName
 IdentifierName
@@ -2109,6 +2107,10 @@ UpcomingAssignment
 
 # https://262.ecma-international.org/#prod-ArrayLiteral
 ArrayLiteral
+  # perf: assertion to exit early
+  /(?=\[)/ _ArrayLiteral -> $2
+
+_ArrayLiteral
   # NOTE: Check ArrayBindingPattern case of lhs destructuring
   ArrayBindingPattern UpcomingAssignment -> $1
   OpenBracket:open AllowAll ( ArrayLiteralContent __ CloseBracket )? RestoreAll ->
@@ -3230,6 +3232,9 @@ NonPipelinePostfixedExpression
     return expression
 
 PostfixStatement
+  /(?=for|if|loop|unless|until|while)/ _PostfixStatement -> $2
+
+_PostfixStatement
   ForClause
   IfClause
   LoopClause
@@ -3430,6 +3435,9 @@ BlockExpressionPart
 
 # https://262.ecma-international.org/#prod-IterationStatement
 IterationStatement
+  /(?=loop|do|for|until|while)/ _IterationStatement -> $2
+
+_IterationStatement
   # NOTE: Added `loop` from CoffeeScript
   LoopStatement
   !CoffeeDoEnabled DoWhileStatement -> $2
@@ -4544,8 +4552,9 @@ VariableDeclarationList
 # https://262.ecma-international.org/#prod-NumericLiteral
 # NOTE: No leading minus sign
 NumericLiteral
-  NumericLiteralKind ->
-    return { type: "NumericLiteral", $loc, token: $1 }
+  # perf: short circuit if no possibility of being a number
+  /(?=[0-9.])/ NumericLiteralKind:token ->
+    return { type: "NumericLiteral", $loc, token }
 
 NumericLiteralKind
   DecimalBigIntegerLiteral
@@ -4585,8 +4594,9 @@ HexIntegerLiteral
 
 # NOTE: Integer variation of NumericLiteral
 IntegerLiteral
-  IntegerLiteralKind ->
-    return { $loc, token: $1 }
+  # perf: short circuit if no possibility of being an integer
+  /(?=[0-9])/ IntegerLiteralKind:token ->
+    return { $loc, token }
 
 IntegerLiteralKind
   DecimalBigIntegerLiteral
@@ -4748,6 +4758,10 @@ RegularExpressionFlags
 # https://262.ecma-international.org/#prod-TemplateLiteral
 # NOTE: Simplified template grammar
 TemplateLiteral
+  # perf: assertion to exit early
+  /(?=[`'"])/ _TemplateLiteral -> $2
+
+_TemplateLiteral
   TripleTick ( TemplateBlockCharacters / TemplateSubstitution )* TripleTick ->
     return dedentBlockSubstitutions($0, module.config.tab)
 
@@ -4789,10 +4803,10 @@ TemplateBlockCharacters
 
 # https://262.ecma-international.org/#sec-comments
 ReservedWord
-  CoffeeBooleansEnabled /(?:on|off|yes|no)(?!\p{ID_Continue})/
-  CoffeeIsntEnabled /(?:isnt)(?!\p{ID_Continue})/
-  CoffeeForLoopsEnabled /(?:by)(?!\p{ID_Continue})/
-  CoffeeOfEnabled /(?:of)(?!\p{ID_Continue})/
+  /(?:on|off|yes|no)(?!\p{ID_Continue})/ CoffeeBooleansEnabled
+  /(?:isnt)(?!\p{ID_Continue})/ CoffeeIsntEnabled
+  /(?:by)(?!\p{ID_Continue})/ CoffeeForLoopsEnabled
+  /(?:of)(?!\p{ID_Continue})/ CoffeeOfEnabled
   # NOTE: Added `let`, Civet assumes strict mode
   /(?:and|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|interface|is|let|loop|new|not|null|or|private|protected|public|return|static|super|switch|this|throw|true|try|typeof|unless|until|var|void|while|with|yield)(?!\p{ID_Continue})/
 
