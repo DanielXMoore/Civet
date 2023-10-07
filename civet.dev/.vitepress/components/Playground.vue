@@ -146,6 +146,7 @@ const playgroundUrl = computed(() => {
 
 .scroll {
   overflow-x: auto;
+  overflow-y: hidden;
 }
 
 @media (max-width: 767px) {
