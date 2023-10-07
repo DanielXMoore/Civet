@@ -147,6 +147,20 @@ This will output a sorted list of rules that were checked the most.
 Focusing on the rules that have the most checks should have the most
 impact on performance.
 
+By making changes to the parser and comparing the total hit counts
+the overall performance of the parser can be improved.
+
+### Performance Comparison
+
+To compare local changes to the previously used version of civet
+
+```sh
+bash build/perf-compare.sh
+```
+
+This will time 10 runs each of `dist/civet` and `./node_modules/.bin/civet`
+and print out each time as well as the average time.
+
 ## Asking for Help
 
 Feel free to ask us questions you have!
