@@ -177,6 +177,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         process.cwd(),
         path.resolve(path.dirname(importer ?? ''), id)
       );
+      this.addWatchFile(relativeId);
       const relativePath = relativeId + outExt;
 
       return relativePath;
