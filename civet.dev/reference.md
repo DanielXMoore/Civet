@@ -124,11 +124,11 @@ Inspired by
 
 <Playground>
 point = data{x,y}
-point = data.{x,y};
+point = data.{x,y}
 point.{x,y} = data
 point3D = { point.{x,y}, z: 0 }
 complex := obj.{x:a, b.c()?.y}
-merged := data.{...global, ...user};
+merged := data.{...global, ...user}
 data.{a, b, ...rest} = result
 </Playground>
 
@@ -388,9 +388,9 @@ fun?(arg)
 ### Existence Checking
 
 <Playground>
-x?;
-x.y[z]?;
-not x?;
+x?
+x.y[z]?
+not x?
 x? + y?
 </Playground>
 
