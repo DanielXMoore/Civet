@@ -55,7 +55,9 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     throw new Error("Can't have both `typecheck` and `js` be set to `true`.");
   }
 
-  const transpileToJS = options.js ?? !(options.dts || options.typecheck);
+  const transpileToJS = options.js ?? false;
+  // When Civet's js option is better, we could consider a different default:
+  //const transpileToJS = options.js ?? !(options.dts || options.typecheck);
   const outExt = options.outputExtension ?? (transpileToJS ? '.jsx' : '.tsx');
 
   let fsMap: Map<string, string> = new Map();
