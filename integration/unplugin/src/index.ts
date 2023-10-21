@@ -45,6 +45,7 @@ export type PluginOptions = {
 
 const isCivet = (id: string) => /\.civet$/.test(id);
 const isCivetTranspiled = (id: string) => /\.civet\.(m?)(j|t)s(x?)$/.test(id);
+const isCivetTranspiledTS = (id: string) => /\.civet\.(m?)ts(x?)$/.test(id);
 
 const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
   if (options.dts && options.js) {
@@ -220,13 +221,16 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
       return transformed;
     },
+    transformInclude(id) {
+      return isCivetTranspiledTS(id);
+    },
     transform(code, id) {
-      if (!/\.civet\.tsx?$/.test(id)) return null;
+      if (!isCivetTranspiledTS(id)) return null;
 
       if (options.dts || options.typecheck) {
         const resolved = path.resolve(process.cwd(), id);
         fsMap.set(resolved, code);
-        // Vite and Rollup normalize filenames to use `/` instad of `\`.
+        // Vite and Rollup normalize filenames to use `/` instead of `\`.
         // We give the TypeScript VFS both versions just in case.
         const slash = resolved.replace(/\\/g, '/');
         if (resolved !== slash) fsMap.set(slash, code);
