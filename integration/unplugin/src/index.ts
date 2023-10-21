@@ -44,7 +44,8 @@ export type PluginOptions = {
 );
 
 const isCivet = (id: string) => /\.civet$/.test(id);
-const isCivetTranspiled = (id: string) => /\.civet\.(m?)(j|t)s(x?)$/.test(id);
+const isCivetTranspiled = (id: string) =>
+  /\.civet\.(m?)(j|t)s(x?)(\?transform)?$/.test(id);
 const isCivetTranspiledTS = (id: string) => /\.civet\.(m?)ts(x?)$/.test(id);
 
 const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
@@ -174,12 +175,15 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     },
     resolveId(id, importer) {
       if (/\0/.test(id)) return null;
-      if (!isCivet(id)) return null;
+      if (!isCivet(id) && !isCivetTranspiled(id)) return null;
 
       const relativeId = path.relative(
         process.cwd(),
         path.resolve(path.dirname(importer ?? ''), id)
       );
+
+      if (isCivetTranspiled(id)) return relativeId.replace(/\?transform$/, '');
+
       const relativePath = relativeId + outExt;
 
       return relativePath;
@@ -260,8 +264,8 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
           const src = script.attr('src');
           if (src?.endsWith('.civet')) {
             script.attr('type', 'module');
-            script.attr('src', null);
-            script.append(`import "${src}"`);
+            script.attr('src', `${src}${outExt}?transform`);
+            // script.append(`import "${src}"`);
           }
         });
         return $.html();
