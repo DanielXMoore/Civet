@@ -252,6 +252,20 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
         return null;
       },
+      async transformIndexHtml(html) {
+        const cheerio = await import('cheerio');
+        const $ = cheerio.load(html);
+        $('script').each((_, scriptEl) => {
+          const script = $(scriptEl);
+          const src = script.attr('src');
+          if (src?.endsWith('.civet')) {
+            script.attr('type', 'module');
+            script.attr('src', null);
+            script.append(`import "${src}"`);
+          }
+        });
+        return $.html();
+      },
     },
   };
 });
