@@ -257,18 +257,18 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         return null;
       },
       async transformIndexHtml(html) {
-        const cheerio = await import('cheerio');
-        const $ = cheerio.load(html);
-        $('script').each((_, scriptEl) => {
-          const script = $(scriptEl);
-          const src = script.attr('src');
-          if (src?.endsWith('.civet')) {
-            script.attr('type', 'module');
-            script.attr('src', `${src}${outExt}?transform`);
-            // script.append(`import "${src}"`);
-          }
-        });
-        return $.html();
+        return html.replace(/<!--[^]*?-->|<[^<>]*>/g, tag =>
+          tag.replace(/<\s*script\b[^<>]*>/gi, script =>
+            // https://html.spec.whatwg.org/multipage/syntax.html#attributes-2
+            script.replace(/([:_\p{ID_Start}][:\p{ID_Continue}]*)(\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]*))?/gu, (attr, name, value) =>
+              name.toLowerCase() === 'src' && value
+              ? attr.replace(/(\.civet)(['"]?)$/, (_, extension, endQuote) =>
+                `${extension}${outExt}?transform${endQuote}`
+              )
+              : attr
+            )
+          )
+        )
       },
     },
   };
