@@ -178,7 +178,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
       const relativeId = path.relative(
         process.cwd(),
-        path.resolve(path.dirname(importer ?? ''), id)
+        path.join(path.dirname(importer ?? ''), id)
       );
       const relativePath = relativeId + outExt;
 
@@ -190,7 +190,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     async load(id) {
       if (!isCivetTranspiled(id)) return null;
 
-      const filename = path.resolve(process.cwd(), id.slice(0, -outExt.length));
+      const filename = path.join(process.cwd(), id.slice(0, -outExt.length));
       const code = await fs.promises.readFile(filename, 'utf-8');
 
       // Ideally this should have been done in a `transform` step
@@ -204,7 +204,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         sourceMap: true,
       });
 
-      sourceMaps.set(path.resolve(process.cwd(), id), compiled.sourceMap);
+      sourceMaps.set(path.join(process.cwd(), id), compiled.sourceMap);
 
       const jsonSourceMap = compiled.sourceMap.json(
         path.basename(id.replace(/\.[jt]sx$/, '')),
@@ -228,7 +228,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       if (!isCivetTranspiledTS(id)) return null;
 
       if (options.dts || options.typecheck) {
-        const resolved = path.resolve(process.cwd(), id);
+        const resolved = path.join(process.cwd(), id);
         fsMap.set(resolved, code);
         // Vite and Rollup normalize filenames to use `/` instead of `\`.
         // We give the TypeScript VFS both versions just in case.
