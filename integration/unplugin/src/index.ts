@@ -44,7 +44,8 @@ export type PluginOptions = {
 );
 
 const isCivet = (id: string) => /\.civet$/.test(id);
-const isCivetTranspiled = (id: string) => /\.civet\.(m?)(j|t)s(x?)$/.test(id);
+const isCivetTranspiled = (id: string) =>
+  /\.civet\.(m?)(j|t)s(x?)(\?transform)?$/.test(id);
 const isCivetTranspiledTS = (id: string) => /\.civet\.(m?)ts(x?)$/.test(id);
 
 const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
@@ -175,13 +176,16 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     },
     resolveId(id, importer) {
       if (/\0/.test(id)) return null;
-      if (!isCivet(id)) return null;
+      if (!isCivet(id) && !isCivetTranspiled(id)) return null;
 
       const absolutePath = rootDir != null && path.isAbsolute(id)
         ? path.join(rootDir, id)
         : path.resolve(path.dirname(importer ?? ''), id);
 
       const relativeId = path.relative(process.cwd(), absolutePath);
+
+      if (isCivetTranspiled(id)) return relativeId.replace(/\?transform$/, '');
+
       const relativePath = relativeId + outExt;
 
       return relativePath;
@@ -254,6 +258,20 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         }
 
         return null;
+      },
+      async transformIndexHtml(html) {
+        return html.replace(/<!--[^]*?-->|<[^<>]*>/g, tag =>
+          tag.replace(/<\s*script\b[^<>]*>/gi, script =>
+            // https://html.spec.whatwg.org/multipage/syntax.html#attributes-2
+            script.replace(/([:_\p{ID_Start}][:\p{ID_Continue}]*)(\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]*))?/gu, (attr, name, value) =>
+              name.toLowerCase() === 'src' && value
+              ? attr.replace(/(\.civet)(['"]?)$/, (_, extension, endQuote) =>
+                `${extension}${outExt}?transform${endQuote}`
+              )
+              : attr
+            )
+          )
+        )
       },
     },
   };
