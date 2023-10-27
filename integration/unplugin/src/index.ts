@@ -15,6 +15,7 @@ import * as fs from 'fs';
 import path from 'path';
 import ts from 'typescript';
 import * as tsvfs from '@typescript/vfs';
+import { UserConfig } from 'vite';
 
 const formatHost: ts.FormatDiagnosticsHost = {
   getCurrentDirectory: () => ts.sys.getCurrentDirectory(),
@@ -64,6 +65,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
   let fsMap: Map<string, string> = new Map();
   const sourceMaps = new Map<string, SourceMap>();
   let compilerOptions: any;
+  let viteConfig: UserConfig;
 
   return {
     name: 'unplugin-civet',
@@ -178,7 +180,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
       const relativeId = path.relative(
         process.cwd(),
-        path.join(path.dirname(importer ?? ''), id)
+        path.resolve(path.dirname(importer ?? ''), id)
       );
       const relativePath = relativeId + outExt;
 
@@ -239,7 +241,8 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       return null;
     },
     vite: {
-      config(_config, { command }) {
+      config(config, { command }) {
+        viteConfig = config;
         // Ensure esbuild runs on .civet files
         if (command === 'build') {
           return {
@@ -251,6 +254,19 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         }
 
         return null;
+      },
+      resolveId(id, importer) {
+        if (/\0/.test(id)) return null;
+        if (!isCivet(id)) return null;
+
+        const absolutePath = path.isAbsolute(id)
+          ? path.join(path.join(process.cwd(), viteConfig.root ?? ''), id)
+          : path.join(path.dirname(importer ?? ''), id);
+
+        const relativeId = path.relative(process.cwd(), absolutePath);
+        const relativePath = relativeId + outExt;
+
+        return relativePath;
       },
     },
   };
