@@ -20,7 +20,7 @@ The modern way to write TypeScript.
   (including metaframeworks such as Astro),
   <!--
   [esbuild](source/esbuild-plugin.civet),
-  [Vite](https://github.com/lorefnon/vite-plugin-civet),
+  [Vite](https://github.com/edemaine/vite-plugin-civet),
   -->
   [Babel](source/babel-plugin.mjs),
   [Gulp](integration/gulp),

@@ -65,6 +65,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
   let fsMap: Map<string, string> = new Map();
   const sourceMaps = new Map<string, SourceMap>();
   let compilerOptions: any;
+  let rootDir: string | undefined;
 
   return {
     name: 'unplugin-civet',
@@ -177,10 +178,11 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       if (/\0/.test(id)) return null;
       if (!isCivet(id) && !isCivetTranspiled(id)) return null;
 
-      const relativeId = path.relative(
-        process.cwd(),
-        path.resolve(path.dirname(importer ?? ''), id)
-      );
+      const absolutePath = rootDir != null && path.isAbsolute(id)
+        ? path.join(rootDir, id)
+        : path.resolve(path.dirname(importer ?? ''), id);
+
+      const relativeId = path.relative(process.cwd(), absolutePath);
 
       if (isCivetTranspiled(id)) return relativeId.replace(/\?transform$/, '');
 
@@ -243,7 +245,8 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       return null;
     },
     vite: {
-      config(_config, { command }) {
+      config(config, { command }) {
+        rootDir = path.resolve(process.cwd(), config.root ?? '');
         // Ensure esbuild runs on .civet files
         if (command === 'build') {
           return {
