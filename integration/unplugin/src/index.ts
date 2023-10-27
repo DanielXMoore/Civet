@@ -15,6 +15,7 @@ import * as fs from 'fs';
 import path from 'path';
 import ts from 'typescript';
 import * as tsvfs from '@typescript/vfs';
+import type { UserConfig } from 'vite';
 
 const formatHost: ts.FormatDiagnosticsHost = {
   getCurrentDirectory: () => ts.sys.getCurrentDirectory(),
@@ -245,7 +246,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       return null;
     },
     vite: {
-      config(config, { command }) {
+      config(config: UserConfig, { command }: { command: string }) {
         rootDir = path.resolve(process.cwd(), config.root ?? '');
         // Ensure esbuild runs on .civet files
         if (command === 'build') {
