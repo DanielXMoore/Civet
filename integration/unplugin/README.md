@@ -74,7 +74,6 @@ module.exports = {
 interface PluginOptions {
   dts?: boolean;
   outputExtension?: string;
-  js?: boolean;
   typecheck?: boolean;
   transformOutput?: (
     code: string,
@@ -86,5 +85,4 @@ interface PluginOptions {
 - `dts`: Whether to generate `.d.ts` type definition files from the Civet source, which is useful for building libraries. Default: `false`
 - `typecheck`: Whether to run type checking on the generated code. Default: `false`.
 - `outputExtension`: Output filename extension to use. Default: `.civet.tsx`, or uses `.civet.jsx` if `js` is `true`.
-- `js`: Whether to transpile to JS or TS. Default: `false`.
 - `transformOutput(code, id)`: Adds a custom transformer over jsx/tsx code produced by `civet.compile`. It gets passed the jsx/tsx source (`code`) and filename (`id`), and should return valid jsx/tsx code.
