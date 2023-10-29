@@ -187,7 +187,6 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
       if (isCivetTranspiled(id)) return relativeId.replace(/\?transform$/, '');
 
-      this.addWatchFile(relativeId);
       const relativePath = relativeId + outExt;
 
       return relativePath;
@@ -200,6 +199,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
       const filename = path.resolve(process.cwd(), id.slice(0, -outExt.length));
       const code = await fs.promises.readFile(filename, 'utf-8');
+      this.addWatchFile(filename);
 
       // Ideally this should have been done in a `transform` step
       // but for some reason, webpack seems to be running them in the order
