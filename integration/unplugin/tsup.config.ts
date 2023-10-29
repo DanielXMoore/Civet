@@ -16,5 +16,10 @@ export default defineConfig({
   dts: true,
   platform: 'node',
   clean: true,
-  external: ['@danielx/civet', 'typescript', '@typescript/vfs', 'unplugin'],
+  external: [
+    '@danielx/civet',
+    'typescript',
+    '@typescript/vfs',
+    'unplugin',
+  ],
 });

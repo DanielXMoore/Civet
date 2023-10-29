@@ -15,6 +15,7 @@ import * as fs from 'fs';
 import path from 'path';
 import ts from 'typescript';
 import * as tsvfs from '@typescript/vfs';
+import type { UserConfig } from 'vite';
 
 const formatHost: ts.FormatDiagnosticsHost = {
   getCurrentDirectory: () => ts.sys.getCurrentDirectory(),
@@ -44,7 +45,9 @@ export type PluginOptions = {
 );
 
 const isCivet = (id: string) => /\.civet$/.test(id);
-const isCivetTranspiled = (id: string) => /\.civet\.(m?)(j|t)s(x?)$/.test(id);
+const isCivetTranspiled = (id: string) =>
+  /\.civet\.(m?)(j|t)s(x?)(\?transform)?$/.test(id);
+const isCivetTranspiledTS = (id: string) => /\.civet\.(m?)ts(x?)$/.test(id);
 
 const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
   if (options.dts && options.js) {
@@ -55,12 +58,15 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     throw new Error("Can't have both `typecheck` and `js` be set to `true`.");
   }
 
-  const transpileToJS = options.js ?? !(options.dts || options.typecheck);
+  const transpileToJS = options.js ?? false;
+  // When Civet's js option is better, we could consider a different default:
+  //const transpileToJS = options.js ?? !(options.dts || options.typecheck);
   const outExt = options.outputExtension ?? (transpileToJS ? '.jsx' : '.tsx');
 
   let fsMap: Map<string, string> = new Map();
   const sourceMaps = new Map<string, SourceMap>();
   let compilerOptions: any;
+  let rootDir: string | undefined;
 
   return {
     name: 'unplugin-civet',
@@ -171,12 +177,16 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     },
     resolveId(id, importer) {
       if (/\0/.test(id)) return null;
-      if (!isCivet(id)) return null;
+      if (!isCivet(id) && !isCivetTranspiled(id)) return null;
 
-      const relativeId = path.relative(
-        process.cwd(),
-        path.resolve(path.dirname(importer ?? ''), id)
-      );
+      const absolutePath = rootDir != null && path.isAbsolute(id)
+        ? path.join(rootDir, id)
+        : path.resolve(path.dirname(importer ?? ''), id);
+
+      const relativeId = path.relative(process.cwd(), absolutePath);
+
+      if (isCivetTranspiled(id)) return relativeId.replace(/\?transform$/, '');
+
       this.addWatchFile(relativeId);
       const relativePath = relativeId + outExt;
 
@@ -219,13 +229,16 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
       return transformed;
     },
+    transformInclude(id) {
+      return isCivetTranspiledTS(id);
+    },
     transform(code, id) {
-      if (!/\.civet\.tsx?$/.test(id)) return null;
+      if (!isCivetTranspiledTS(id)) return null;
 
       if (options.dts || options.typecheck) {
         const resolved = path.resolve(process.cwd(), id);
         fsMap.set(resolved, code);
-        // Vite and Rollup normalize filenames to use `/` instad of `\`.
+        // Vite and Rollup normalize filenames to use `/` instead of `\`.
         // We give the TypeScript VFS both versions just in case.
         const slash = resolved.replace(/\\/g, '/');
         if (resolved !== slash) fsMap.set(slash, code);
@@ -234,7 +247,8 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       return null;
     },
     vite: {
-      config(_config, { command }) {
+      config(config: UserConfig, { command }: { command: string }) {
+        rootDir = path.resolve(process.cwd(), config.root ?? '');
         // Ensure esbuild runs on .civet files
         if (command === 'build') {
           return {
@@ -246,6 +260,20 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         }
 
         return null;
+      },
+      async transformIndexHtml(html) {
+        return html.replace(/<!--[^]*?-->|<[^<>]*>/g, tag =>
+          tag.replace(/<\s*script\b[^<>]*>/gi, script =>
+            // https://html.spec.whatwg.org/multipage/syntax.html#attributes-2
+            script.replace(/([:_\p{ID_Start}][:\p{ID_Continue}]*)(\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]*))?/gu, (attr, name, value) =>
+              name.toLowerCase() === 'src' && value
+              ? attr.replace(/(\.civet)(['"]?)$/, (_, extension, endQuote) =>
+                `${extension}${outExt}?transform${endQuote}`
+              )
+              : attr
+            )
+          )
+        )
       },
     },
   };

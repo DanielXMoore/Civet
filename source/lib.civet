@@ -617,7 +617,7 @@ function expressionizeIteration(exp): void {
   if (subtype === "DoStatement") {
     // Just wrap with IIFE
     insertReturn(block)
-    children.splice(i, 1, ...wrapIIFE(statement, async))
+    children.splice(i, 1, ...wrapIIFE(["", statement, undefined], async))
     return
   }
 
@@ -625,14 +625,14 @@ function expressionizeIteration(exp): void {
 
   // insert `results.push` to gather results array
   insertPush(block, resultsRef)
+  braceBlock(block)
 
   // Wrap with IIFE
   children.splice(i,
     1,
     ...wrapIIFE([
       ["", ["const ", resultsRef, "=[]"], ";"],
-      ...children,
-      ["", "; "],
+      ...children.map((c) => ["", c, undefined]),
       ["", wrapWithReturn(resultsRef)],
     ], async)
   )
@@ -1084,7 +1084,7 @@ function processParams(f): void {
   if (!expressions) return
   const { blockPrefix } = parameters
 
-  let indent
+  let indent: string
   if (!expressions.length) {
     indent = ""
   } else {
@@ -1101,10 +1101,11 @@ function processParams(f): void {
   }
 
   const prefix = splices
-    .map((s) => ["let ", s])
+    .map (s) => ["let ", s]
     .concat(thisAssignments)
     .map((s) => s.type
       ? {
+        // TODO: figure out how to get JS only statement tuples
         ...s,
         children: [indent, ...s.children, delimiter]
       }
@@ -1571,6 +1572,21 @@ function getTrimmingSpace(target: ASTNodeBase) {
   if (target.token) return target.token.match(/^ ?/)[0]
 }
 
+function startsWith(target: ASTNodeBase, value: RegExp)
+  if (!target) return
+  if Array.isArray target
+    let i = 0
+    let l = target.length
+    while i < l
+      const t = target[i]
+      break if t && (t.length || t.token || t.children)
+      i++
+    if i < l
+      return startsWith target[i], value
+  if (target.children) return startsWith target.children, value
+  if (target.token) return value.test target.token
+  if (typeof target === "string") return value.test target
+
 function processForInOf($0: [
   awaits: ASTNode,
   eachOwn: undefined | [ASTLeaf, ASTNode],
@@ -1711,7 +1727,7 @@ function processForInOf($0: [
       // for own..in
       if (own) {
         const hasPropRef = getRef("hasProp")
-        blockPrefix.push(["", "if (!", hasPropRef, "(", insertTrimmingSpace(expRef, ""), ", ", insertTrimmingSpace(binding, ""), ")) continue", ";"])
+        blockPrefix.push(["", ["if (!", hasPropRef, "(", insertTrimmingSpace(expRef, ""), ", ", insertTrimmingSpace(binding, ""), ")) continue"], ";"])
       }
       if (decl2) {
         blockPrefix.push(["", {
@@ -1912,6 +1928,12 @@ function makeEmptyBlock(): BlockStatement {
     empty: true,
   }
 }
+
+function braceBlock(block: BlockStatement)
+  if block.bare
+    block.children.unshift(" {")
+    block.children.push("}")
+    block.bare = false
 
 /**
  * Convert general ExtendedExpression into LeftHandSideExpression.
@@ -2439,6 +2461,7 @@ function processAssignments(statements): void {
       }
       if (pre.length) exp.children.unshift(...pre)
       if (post.length) exp.children.push(...post)
+      // TODO: need to make this a parenthesized expression when when we add parens
     })
 
   gatherRecursiveAll(statements, (n) => n.type === "AssignmentExpression" && n.names === null)
@@ -2537,6 +2560,59 @@ function processAssignments(statements): void {
       exp.children.splice(index + 1, 0, ...tail)
     })
 }
+
+function processBlocks(statements): void
+  insertSemicolon(statements)
+  gatherRecursive statements, .type is "BlockStatement"
+  .forEach ({ expressions }) ->
+    processBlocks expressions
+
+/**
+* Avoid automatic continuation onto lines that start with
+* certain characters by adding an explicit semicolon. See
+* https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Lexical_grammar#automatic_semicolon_insertion
+*/
+function insertSemicolon(statements: StatementTuple[]): void
+  l := statements.length
+  statements.forEach (s, i) ->
+    if i < l - 1
+      if needsPrecedingSemicolon(statements[i + 1])
+        delim := s[2]
+        if !delim
+          s[2] = ";"
+        // If delim is an object assume it already has a semicolon
+        // TODO: trailing comments might violate this assumption
+        else if typeof delim is "string" and !delim.match(/;/)
+          s[2] = `;${delim}`
+
+function needsPrecedingSemicolon(exp)
+  let following: ASTNode
+  if Array.isArray exp
+    [,following] = exp
+  else
+    // Ideally this would be a StatementTuple but js only public/protected param items don't quite fit into that yet
+    // since the js: true is on the AST node the semicolon delimiters will stack up with empty nodes in between
+    following = exp
+
+  return false unless following
+
+  if Array.isArray following // for chained conditionals
+    return needsPrecedingSemicolon following[0]
+
+  switch following.type
+    when "ParenthesizedExpression", "ArrayExpression", "ArrowFunction", "TemplateLiteral", "RegularExpressionLiteral"
+      true
+    when "AssignmentExpression"
+      startsWith(following, /^(\[|\()/)
+    when "Literal"
+      following.raw?.startsWith('-') || following.raw?.startsWith('+')
+    else
+      // descend into first child for things like:
+      // IterationExpression
+      //   CallExpression
+      //     ParenthesizedExpression
+      if following.children
+        return needsPrecedingSemicolon following.children[0]
 
 function attachPostfixStatementAsExpression(exp, post): void {
   switch (post[1].type) {
@@ -2939,11 +3015,7 @@ function processPatternMatching(statements, ReservedWord): void {
         const next = []
 
         // Add braces if necessary
-        if (block.bare) {
-          block.children.unshift(" {")
-          block.children.push("}")
-          block.bare = false
-        }
+        braceBlock(block)
 
         // Insert else if there are more branches
         if (i < l - 1) next.push("\n", "else ")
@@ -3167,6 +3239,8 @@ function processProgram(root: BlockStatement, config, m, ReservedWord): void {
     createVarDecs(statements, [])
   }
 
+  processBlocks(statements)
+
   populateRefs(statements)
   adjustAtBindings(statements)
 }
@@ -3282,7 +3356,10 @@ function createVarDecs(statements, scopes, pushVar) {
       delimiter = ";\n"
     }
     // TODO: Declaration ast node
-    statements.unshift([indent, "var ", varIds.join(", "), delimiter])
+    statements.unshift([indent, {
+      type: "Declaration"
+      children: ["var ", varIds.join(", ")]
+    }, delimiter])
   }
 
   scopes.pop()
@@ -3327,7 +3404,7 @@ function createConstLetDecs(statements, scopes, letOrConst: "let" | "const"): vo
   const fnNodes = gatherNodes(statements, isFunction)
   const forNodes = gatherNodes(statements, (s) => s.type === "ForStatement")
 
-  let targetStatements = []
+  let targetStatements: StatementTuple[] = []
   for (const statement of statements) {
     const nodes = gatherBlockOrOther(statement)
     let undeclaredIdentifiers = []
@@ -3375,14 +3452,18 @@ function createConstLetDecs(statements, scopes, letOrConst: "let" | "const"): vo
         if (gatherNodes(indent, (node) => node.token && node.token.endsWith("\n")).length > 0)
           tail = undefined
         // Have to use 'let' instead of 'const' if the assignment is inside an expression
-        targetStatements.push([indent, `let `, undeclaredIdentifiers.join(", "), tail])
+        targetStatements.push [indent, {
+          type: "Declaration",
+          children: ["let ", ...undeclaredIdentifiers.join(", ")],
+          names: undeclaredIdentifiers,
+        }, tail]
       }
     }
     targetStatements.push(statement)
   }
 
   scopes.pop()
-  statements.splice(0, statements.length, targetStatements)
+  statements.splice(0, statements.length, ...targetStatements)
 }
 
 
@@ -3489,19 +3570,19 @@ function processUnaryExpression(pre, exp, post) {
     return exp
   }
 
-  // Combine unary - to create negative numeric literals
-  if (exp.type === "Literal") {
-    if (pre.length === 1 && pre[0].token === "-") {
-      const children = [pre[0], ...exp.children]
-      if (post) exp.children.push(post)
+  // Combine unary -/+ to become numeric literals
+  if exp.type is "Literal"
+    if pre.length is 1
+      {token} := pre[0]
+      if token is "-" or token is "+"
+        children := [pre[0], ...exp.children]
+        if (post) exp.children.push(post)
 
-      return {
-        type: "Literal",
-        children,
-        raw: `-${exp.raw}`
-      }
-    }
-  }
+        return {
+          type: "Literal",
+          children,
+          raw: `${token}${exp.raw}`
+        }
 
   // Await ops
   const l = pre.length
@@ -3789,7 +3870,6 @@ module.exports = {
   dedentBlockSubstitutions,
   deepCopy,
   expressionizeIfClause,
-  expressionizeIteration,
   findAncestor,
   forRange,
   gatherBindingCode,
