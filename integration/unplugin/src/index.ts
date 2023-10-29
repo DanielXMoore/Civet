@@ -50,18 +50,8 @@ const isCivetTranspiled = (id: string) =>
 const isCivetTranspiledTS = (id: string) => /\.civet\.(m?)ts(x?)$/.test(id);
 
 const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
-  if (options.dts && options.js) {
-    throw new Error("Can't have both `dts` and `js` be set to `true`.");
-  }
-
-  if (options.typecheck && options.js) {
-    throw new Error("Can't have both `typecheck` and `js` be set to `true`.");
-  }
-
-  const transpileToJS = options.js ?? false;
-  // When Civet's js option is better, we could consider a different default:
-  //const transpileToJS = options.js ?? !(options.dts || options.typecheck);
-  const outExt = options.outputExtension ?? (transpileToJS ? '.jsx' : '.tsx');
+  const requiresTS = options.dts || options.typecheck;
+  const outExt = options.outputExtension ?? (requiresTS ? '.tsx' : '.jsx');
 
   let fsMap: Map<string, string> = new Map();
   const sourceMaps = new Map<string, SourceMap>();
@@ -72,7 +62,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     name: 'unplugin-civet',
     enforce: 'pre',
     async buildStart() {
-      if (options.dts || options.typecheck) {
+      if (requiresTS) {
         const configPath = ts.findConfigFile(process.cwd(), ts.sys.fileExists);
 
         if (!configPath) {
@@ -103,7 +93,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       }
     },
     buildEnd() {
-      if (options.dts || options.typecheck) {
+      if (requiresTS) {
         const system = tsvfs.createFSBackedSystem(fsMap, process.cwd(), ts);
         const host = tsvfs.createVirtualCompilerHost(
           system,
@@ -179,9 +169,10 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       if (/\0/.test(id)) return null;
       if (!isCivet(id) && !isCivetTranspiled(id)) return null;
 
-      const absolutePath = rootDir != null && path.isAbsolute(id)
-        ? path.join(rootDir, id)
-        : path.resolve(path.dirname(importer ?? ''), id);
+      const absolutePath =
+        rootDir != null && path.isAbsolute(id)
+          ? path.join(rootDir, id)
+          : path.resolve(path.dirname(importer ?? ''), id);
 
       const relativeId = path.relative(process.cwd(), absolutePath);
 
@@ -204,46 +195,42 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       // but for some reason, webpack seems to be running them in the order
       // of `resolveId` -> `loadInclude` -> `transform` -> `load`
       // so we have to do transformation here instead
-      const compiled = civet.compile(code, {
-        // inlineMap: true,
+      const compiledJS = civet.compile(code, {
         filename: id,
-        js: transpileToJS,
+        js: true,
         sourceMap: true,
       });
 
-      sourceMaps.set(path.resolve(process.cwd(), id), compiled.sourceMap);
-
-      const jsonSourceMap = compiled.sourceMap.json(
+      const jsonSourceMap = compiledJS.sourceMap.json(
         path.basename(id.replace(/\.[jt]sx$/, '')),
         path.basename(id)
       );
-
       let transformed: TransformResult = {
-        code: compiled.code,
+        code: compiledJS.code,
         map: jsonSourceMap as UnpluginSourceMap,
       };
 
-      if (options.transformOutput)
+      if (options.transformOutput) {
         transformed = await options.transformOutput(transformed.code, id);
+      }
 
-      return transformed;
-    },
-    transformInclude(id) {
-      return isCivetTranspiledTS(id);
-    },
-    transform(code, id) {
-      if (!isCivetTranspiledTS(id)) return null;
+      if (requiresTS) {
+        const compiledTS = civet.compile(code, {
+          filename: id,
+          js: false,
+          sourceMap: true,
+        });
+        sourceMaps.set(path.resolve(process.cwd(), id), compiledTS.sourceMap);
 
-      if (options.dts || options.typecheck) {
         const resolved = path.resolve(process.cwd(), id);
-        fsMap.set(resolved, code);
+        fsMap.set(resolved, compiledTS.code);
         // Vite and Rollup normalize filenames to use `/` instead of `\`.
         // We give the TypeScript VFS both versions just in case.
         const slash = resolved.replace(/\\/g, '/');
-        if (resolved !== slash) fsMap.set(slash, code);
+        if (resolved !== slash) fsMap.set(slash, compiledTS.code);
       }
 
-      return null;
+      return transformed;
     },
     vite: {
       config(config: UserConfig, { command }: { command: string }) {
@@ -264,15 +251,19 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         return html.replace(/<!--[^]*?-->|<[^<>]*>/g, tag =>
           tag.replace(/<\s*script\b[^<>]*>/gi, script =>
             // https://html.spec.whatwg.org/multipage/syntax.html#attributes-2
-            script.replace(/([:_\p{ID_Start}][:\p{ID_Continue}]*)(\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]*))?/gu, (attr, name, value) =>
-              name.toLowerCase() === 'src' && value
-              ? attr.replace(/(\.civet)(['"]?)$/, (_, extension, endQuote) =>
-                `${extension}${outExt}?transform${endQuote}`
-              )
-              : attr
+            script.replace(
+              /([:_\p{ID_Start}][:\p{ID_Continue}]*)(\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]*))?/gu,
+              (attr, name, value) =>
+                name.toLowerCase() === 'src' && value
+                  ? attr.replace(
+                      /(\.civet)(['"]?)$/,
+                      (_, extension, endQuote) =>
+                        `${extension}${outExt}?transform${endQuote}`
+                    )
+                  : attr
             )
           )
-        )
+        );
       },
     },
   };
