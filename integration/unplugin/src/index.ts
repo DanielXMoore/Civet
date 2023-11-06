@@ -83,10 +83,9 @@ function tryFsResolve(file: string): string | undefined {
 }
 
 function resolveAbsolutePath(rootDir: string, id: string) {
-  const file = cleanCivetId(id);
-  const resolved = tryFsResolve(path.join(rootDir, file));
+  const resolved = tryFsResolve(path.join(rootDir, id));
 
-  if (!resolved) return tryFsResolve(file);
+  if (!resolved) return tryFsResolve(id);
 
   return resolved;
 }
