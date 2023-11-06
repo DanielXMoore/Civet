@@ -16,6 +16,7 @@ import path from 'path';
 import ts from 'typescript';
 import * as tsvfs from '@typescript/vfs';
 import type { UserConfig } from 'vite';
+import os from 'os';
 
 const formatHost: ts.FormatDiagnosticsHost = {
   getCurrentDirectory: () => ts.sys.getCurrentDirectory(),
@@ -46,8 +47,49 @@ export type PluginOptions = {
 
 const isCivet = (id: string) => /\.civet$/.test(id);
 const isCivetTranspiled = (id: string) =>
-  /\.civet\.(m?)(j|t)s(x?)(\?transform)?$/.test(id);
-const isCivetTranspiledTS = (id: string) => /\.civet\.(m?)ts(x?)$/.test(id);
+  /\.civet\.[jt]sx(\?transform)?$/.test(id);
+const isCivetTranspiledTS = (id: string) => /\.civet\.tsx$/.test(id);
+const postfixRE = /(\.[jt]sx)?[?#].*$/s;
+const isWindows = os.platform() === 'win32';
+const windowsSlashRE = /\\/g;
+
+// removes query string, hash and tsx/jsx extension
+function cleanCivetId(id: string): string {
+  return id.replace(postfixRE, '');
+}
+
+function tryStatSync(file: string): fs.Stats | undefined {
+  try {
+    // The "throwIfNoEntry" is a performance optimization for cases where the file does not exist
+    return fs.statSync(file, { throwIfNoEntry: false });
+  } catch {
+    return undefined;
+  }
+}
+
+export function slash(p: string): string {
+  return p.replace(windowsSlashRE, '/');
+}
+
+function normalizePath(id: string): string {
+  return path.posix.normalize(isWindows ? slash(id) : id);
+}
+
+function tryFsResolve(file: string): string | undefined {
+  const fileStat = tryStatSync(file);
+  if (fileStat?.isFile()) return normalizePath(file);
+
+  return undefined;
+}
+
+function resolveAbsolutePath(rootDir: string, id: string) {
+  const file = cleanCivetId(id);
+  const resolved = tryFsResolve(path.join(rootDir, file));
+
+  if (!resolved) return tryFsResolve(file);
+
+  return resolved;
+}
 
 const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
   if (options.dts && options.js) {
@@ -66,7 +108,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
   let fsMap: Map<string, string> = new Map();
   const sourceMaps = new Map<string, SourceMap>();
   let compilerOptions: any;
-  let rootDir: string | undefined;
+  let rootDir = process.cwd();
 
   return {
     name: 'unplugin-civet',
@@ -179,16 +221,15 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       if (/\0/.test(id)) return null;
       if (!isCivet(id) && !isCivetTranspiled(id)) return null;
 
-      const absolutePath = rootDir != null && path.isAbsolute(id)
-        ? path.join(rootDir, id)
+      id = cleanCivetId(id);
+      const absolutePath = path.isAbsolute(id)
+        ? resolveAbsolutePath(rootDir, id)
         : path.resolve(path.dirname(importer ?? ''), id);
+      if (!absolutePath) return null;
 
       const relativeId = path.relative(process.cwd(), absolutePath);
 
-      if (isCivetTranspiled(id)) return relativeId.replace(/\?transform$/, '');
-
       const relativePath = relativeId + outExt;
-
       return relativePath;
     },
     loadInclude(id) {
@@ -240,8 +281,8 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         fsMap.set(resolved, code);
         // Vite and Rollup normalize filenames to use `/` instead of `\`.
         // We give the TypeScript VFS both versions just in case.
-        const slash = resolved.replace(/\\/g, '/');
-        if (resolved !== slash) fsMap.set(slash, code);
+        const slashed = slash(resolved);
+        if (resolved !== slashed) fsMap.set(slashed, code);
       }
 
       return null;
@@ -265,15 +306,19 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         return html.replace(/<!--[^]*?-->|<[^<>]*>/g, tag =>
           tag.replace(/<\s*script\b[^<>]*>/gi, script =>
             // https://html.spec.whatwg.org/multipage/syntax.html#attributes-2
-            script.replace(/([:_\p{ID_Start}][:\p{ID_Continue}]*)(\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]*))?/gu, (attr, name, value) =>
-              name.toLowerCase() === 'src' && value
-              ? attr.replace(/(\.civet)(['"]?)$/, (_, extension, endQuote) =>
-                `${extension}${outExt}?transform${endQuote}`
-              )
-              : attr
+            script.replace(
+              /([:_\p{ID_Start}][:\p{ID_Continue}]*)(\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]*))?/gu,
+              (attr, name, value) =>
+                name.toLowerCase() === 'src' && value
+                  ? attr.replace(
+                      /(\.civet)(['"]?)$/,
+                      (_, extension, endQuote) =>
+                        `${extension}${outExt}?transform${endQuote}`
+                    )
+                  : attr
             )
           )
-        )
+        );
       },
     },
   };
