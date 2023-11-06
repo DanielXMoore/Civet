@@ -27,6 +27,7 @@ const {
   lastAccessInCallExpression,
   literalValue,
   makeEmptyBlock,
+  makeExpressionStatement,
   makeGetterMethod,
   makeLeftHandSideExpression,
   makeRef,
@@ -103,6 +104,11 @@ TopLevelStatement
     }
     return [statement, delimiter]
 
+# Expressions with comma operator, or expressions with If and Switch
+ExtendedCommaExpression
+  NonAssignmentExtendedExpression
+  CommaExpression
+
 # Expressions with If and Switch, but no comma operator
 ExtendedExpression
   NonAssignmentExtendedExpression
@@ -163,7 +169,7 @@ _ExpressionizedStatement
   TryExpression
 
 # https://262.ecma-international.org/#prod-Expression
-Expression
+CommaExpression
   # CommaOperator
   # https://262.ecma-international.org/#sec-comma-operator
   # NOTE: Eliminated left recursion
@@ -514,7 +520,7 @@ FatArrowBody
   # If same-line single expression, avoid wrapping in braces
   !EOS NonPipelinePostfixedExpression:exp !TrailingDeclaration !SemicolonDelimiter -> exp
   # Otherwise, wrap block body in braces and insert returns
-  BracedOrEmptyBlock
+  NoCommaBracedOrEmptyBlock
 
 # https://262.ecma-international.org/#prod-ConditionalExpression
 ConditionalExpression
@@ -621,7 +627,7 @@ PrimaryExpression
 # https://262.ecma-international.org/#prod-ParenthesizedExpression
 ParenthesizedExpression
   # NOTE: Currently ignoring early error checking in https://262.ecma-international.org/#prod-CoverParenthesizedExpressionAndArrowParameterList
-  OpenParen:open AllowAll ( PostfixedExpression __ CloseParen )? RestoreAll ->
+  OpenParen:open AllowAll ( PostfixedCommaExpression __ CloseParen )? RestoreAll ->
     if (!$3) return $skip
     const [exp, ws, close] = $3
     switch (exp.type) {
@@ -1812,7 +1818,7 @@ AmpersandUnaryPrefix
   [!~+-]+
 
 ThinArrowFunction
-  ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:suffix _? Arrow:arrow BracedOrEmptyBlock:block ->
+  ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:suffix _? Arrow:arrow NoCommaBracedOrEmptyBlock:block ->
     if (hasAwait(block) && !async) {
       async = "async "
     }
@@ -1935,6 +1941,10 @@ BracedOrEmptyBlock
   BracedBlock
   EmptyBlock
 
+NoCommaBracedOrEmptyBlock
+  NoCommaBracedBlock
+  EmptyBlock
+
 NoPostfixBracedOrEmptyBlock
   NoPostfixBracedBlock
   EmptyBlock
@@ -1989,6 +1999,19 @@ NoPostfixBracedBlock
       children: [o, s.children, ws, c],
     }
 
+# This version forbids top-level , operator in one-liners
+NoCommaBracedBlock
+  NonSingleBracedBlock
+  # Nonempty one liner
+  InsertOpenBrace:o !EOS PostfixedSingleLineNoCommaStatements:s InsertSpace:ws InsertCloseBrace:c ->
+    if (!s.children.length) return $skip
+    return {
+      type: "BlockStatement",
+      expressions: s.expressions,
+      // Remove !EOS assertion
+      children: [o, s.children, ws, c],
+    }
+
 NonSingleBracedBlock
   _?:ws1 OpenBrace:open AllowAll ( BracedContent __ CloseBrace )? RestoreAll ->
     if (!$4) return $skip
@@ -2034,6 +2057,18 @@ SingleLineStatements
 
 PostfixedSingleLineStatements
   ( ( _? !EOS ) StatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) StatementListItem SemicolonDelimiter? )?:last ->
+    const children = [...stmts]
+    if (last) children.push(last)
+
+    return {
+      type: "BlockStatement",
+      expressions: children,
+      children,
+      bare: true,
+    }
+
+PostfixedSingleLineNoCommaStatements
+  ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter? )?:last ->
     const children = [...stmts]
     if (last) children.push(last)
 
@@ -3267,10 +3302,29 @@ PostfixedStatement
     if (post) return addPostfixStatement(statement, ...post)
     return statement
 
+NoCommaStatementListItem
+  Declaration
+  # NOTE: Added postfix conditionals/loops
+  PostfixedNoCommaStatement
+
+PostfixedNoCommaStatement
+  NoCommaStatement:statement ( _? PostfixStatement )?:post ->
+    if (post) return addPostfixStatement(statement, ...post)
+    return statement
+
 PostfixedExpression
   ExtendedExpression:expression ( _? PostfixStatement )?:post ->
     if (post) return attachPostfixStatementAsExpression(expression, post)
     return expression
+
+# Expression with postfixes *or* comma operators (mixing seems ambiguous)
+PostfixedCommaExpression
+  PostfixedExpression:expression ( ( _? PostfixStatement ) / ( CommaDelimiter AssignmentExpression )* ):post ->
+    if (!post.length) return $1
+    if (post.length === 2 && !Array.isArray(post[1])) {
+      return attachPostfixStatementAsExpression(expression, post)
+    }
+    return $0
 
 NonPipelinePostfixedExpression
   NonPipelineExtendedExpression:expression ( _? PostfixStatement )?:post ->
@@ -3302,20 +3356,25 @@ Statement
   # treated as a label, not an implicit object literal, for Svelte compatibility
   LabelledStatement
 
-  # Wrap object literal with parens to disambiguate from block statements.
-  # Also wrap nameless functions from `->` expressions with parens
-  # as needed in JS.
-  ExpressionStatement ->
-    if ($1.type === "ObjectExpression" ||
-        ($1.type === "FunctionExpression" && !$1.id)) {
-      return makeLeftHandSideExpression($1)
-    }
-    return $1
+  CommaExpressionStatement
 
   # NOTE: Block statement is after expression statement because valid ObjectLiterals should take priority over blocks
   BlockStatement
 
   # NOTE: no WithStatement
+
+# Variant of Statement to forbid , operator (CommaExpression)
+NoCommaStatement
+  KeywordStatement
+  VariableStatement
+  IfStatement
+  IterationStatement
+  SwitchStatement
+  TryStatement
+  EmptyStatement
+  LabelledStatement
+  ExpressionStatement
+  BlockStatement
 
 # NOTE: EmptyStatement handled differently than spec, consuming inline whitespace and comments then asserting following semi-colon
 EmptyStatement
@@ -3744,13 +3803,13 @@ CoffeeForDeclaration
 
 ForStatementParameters
   # https://262.ecma-international.org/#prod-ForStatement
-  OpenParen __ ( LexicalDeclaration / VariableStatement / Expression? ):declaration __ Semicolon Expression? Semicolon Expression? __ CloseParen ->
+  OpenParen __ ( LexicalDeclaration / VariableStatement / CommaExpression? ):declaration __ Semicolon CommaExpression? Semicolon CommaExpression? __ CloseParen ->
     return {
       declaration,
       children: $0,
     }
   # NOTE: Added optional parens
-  InsertOpenParen __ ( LexicalDeclaration / VariableStatement / Expression? ):declaration __ Semicolon Expression? Semicolon (!EOS ExpressionWithIndentedApplicationForbidden)? InsertCloseParen ->
+  InsertOpenParen __ ( LexicalDeclaration / VariableStatement / CommaExpression? ):declaration __ Semicolon CommaExpression? Semicolon (!EOS ExpressionWithIndentedApplicationForbidden)? InsertCloseParen ->
     return {
       declaration,
       children: $0,
@@ -4189,15 +4248,26 @@ RestoreAll
   RestoreTrailingMemberProperty RestoreBracedApplication RestoreIndentedApplication RestoreClassImplicitCall RestoreNewlineBinaryOp
 
 # https://262.ecma-international.org/#prod-ExpressionStatement
-ExpressionStatement
+CommaExpressionStatement
   # NOTE: semi-colons are being handled elsewhere
   # NOTE: Shouldn't need negative lookahead if shadowed in the proper order
   # NOTE: Allow for e.g. await forms of IterationExpression that weren't
-  # already parsed as IterationStatement. Must be before Expression to avoid
-  # treated `async do ...` like a function call `async(do ...)`.
+  # already parsed as IterationStatement. Must be before AssignmentExpression
+  # to avoid treated `async do ...` like a function call `async(do ...)`.
   IterationExpression
-  # NOTE: Expression enables , operator
-  Expression
+  # NOTE: CommaExpression allows , operator
+  CommaExpression ->
+    // Wrap object literal with parens to disambiguate from block statements.
+    // Also wrap nameless functions from `->` expressions with parens
+    // as needed in JS.
+    return makeExpressionStatement($1)
+
+# CommaExpressionStatement, but forbidding comma operator
+ExpressionStatement
+  IterationExpression
+  # NOTE: AssignmentExpression forbids , operator
+  AssignmentExpression ->
+    return makeExpressionStatement($1)
 
 KeywordStatement
   # https://262.ecma-international.org/#prod-BreakStatement
