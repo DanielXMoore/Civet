@@ -7,9 +7,9 @@ Features
 
 - [x] Syntax Highlighting
 - [x] Go to definition
-- [ ] Find all references
+- [x] Find all references
 - [x] Completions
-- [ ] Comment/Uncomment
+- [x] Comment/Uncomment
 - [x] Symbols outline
 - [x] Diagnostics
 - [x] Custom Transpiler Plugins
