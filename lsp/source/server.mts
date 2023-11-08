@@ -268,7 +268,7 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
 // TODO
 connection.onCompletionResolve((item) => {
   return item;
-})
+});
 
 connection.onDefinition(async ({ textDocument, position }) => {
   const sourcePath = documentToSourcePath(textDocument)
@@ -339,6 +339,74 @@ connection.onDefinition(async ({ textDocument, position }) => {
   }).filter((d) => !!d) as Location[]
 
 })
+
+connection.onReferences(async ({ textDocument, position }) => {
+  const sourcePath = documentToSourcePath(textDocument)
+  assert(sourcePath)
+  const service = await ensureServiceForSourcePath(sourcePath)
+  // TODO: same source mapping as onDefinition I think...
+  if (!service) return
+
+  let references
+
+  if (sourcePath.match(tsSuffix)) { // non-transpiled
+    const document = documents.get(textDocument.uri)
+    assert(document)
+    const p = document.offsetAt(position)
+    references = service.getReferencesAtPosition(sourcePath, p)
+  } else {
+    // need to sourcemap the line/columns
+    const meta = service.host.getMeta(sourcePath)
+    if (!meta) return
+    const { sourcemapLines, transpiledDoc } = meta
+    if (!transpiledDoc) return
+
+    // Map input hover position into output TS position
+    // Don't map for files that don't have a sourcemap (plain .ts for example)
+    if (sourcemapLines) {
+      position = forwardMap(sourcemapLines, position)
+    }
+
+    const p = transpiledDoc.offsetAt(position)
+    const transpiledPath = documentToSourcePath(transpiledDoc)
+    references = service.getReferencesAtPosition(transpiledPath, p)
+  }
+
+  if (!references) return
+
+  const program = service.getProgram()
+  assert(program)
+
+  return references.map<Location | undefined>((reference) => {
+    let { fileName, textSpan } = reference
+    // source file as it is known to TSServer
+    const sourceFile = program.getSourceFile(fileName)
+    if (!sourceFile) return
+
+    let start = sourceFile.getLineAndCharacterOfPosition(textSpan.start)
+    let end = sourceFile.getLineAndCharacterOfPosition(textSpan.start + textSpan.length)
+    const rawSourceName = service.getSourceFileName(fileName)
+
+    // Reverse map back to .civet source space if this definition is in a transpiled file
+    const meta = service.host.getMeta(rawSourceName)
+    if (meta) {
+      const { sourcemapLines } = meta
+
+      if (sourcemapLines) {
+        start = remapPosition(start, sourcemapLines)
+        end = remapPosition(end, sourcemapLines)
+      }
+    }
+
+    return {
+      uri: pathToFileURL(rawSourceName).toString(),
+      range: {
+        start,
+        end,
+      }
+    }
+  }).filter((d) => !!d) as Location[]
+});
 
 connection.onDocumentSymbol(async ({ textDocument }) => {
   const sourcePath = documentToSourcePath(textDocument)
