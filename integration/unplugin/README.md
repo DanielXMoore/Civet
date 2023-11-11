@@ -56,7 +56,7 @@ esbuild
 ### Webpack
 
 ```js
-const civetWebpackPlugin = require('@danielx/civet/webpack');
+const civetWebpackPlugin = require('@danielx/civet/webpack').default;
 
 module.exports = {
   // ...
