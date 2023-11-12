@@ -424,14 +424,14 @@ a not instanceof "number"
 
 ### Logical XOR Operator
 
-<Playground>
+<Playground raw>
 a ^^ b
 a xor b
 a ^^= b
 a xor= b
 </Playground>
 
-<Playground>
+<Playground raw>
 a !^ b
 a xnor b
 a !^= b
