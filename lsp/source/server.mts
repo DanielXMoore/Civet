@@ -55,16 +55,21 @@ const projectPathToServiceMap = new Map<string, ReturnType<typeof TSService>>()
 
 let rootDir: string;
 
-const ensureServiceForSourcePath = async (sourcePath: string) => {
+const getProjectPathFromSourcePath = (sourcePath: string) => {
   let projPath = sourcePathToProjectPathMap.get(sourcePath)
-  if (!projPath) {
-    const tsConfigPath = findConfigFile(sourcePath, tsSys.fileExists, 'tsconfig.json')
-    if (tsConfigPath) {
-      projPath = pathToFileURL(path.dirname(tsConfigPath) + "/").toString()
-    }
-    if (!projPath) projPath = rootDir // Fallback
-    sourcePathToProjectPathMap.set(sourcePath, projPath)
+  if (projPath) return projPath
+
+  const tsConfigPath = findConfigFile(sourcePath, tsSys.fileExists, 'tsconfig.json')
+  if (tsConfigPath) {
+    projPath = pathToFileURL(path.dirname(tsConfigPath) + "/").toString()
   }
+  if (!projPath) projPath = rootDir // Fallback
+  sourcePathToProjectPathMap.set(sourcePath, projPath)
+  return projPath
+}
+
+const ensureServiceForSourcePath = async (sourcePath: string) => {
+  const projPath = getProjectPathFromSourcePath(sourcePath)
   await projectPathToPendingPromiseMap.get(projPath)
   let service = projectPathToServiceMap.get(projPath)
   if (service) return service
