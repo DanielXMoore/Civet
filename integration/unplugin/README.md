@@ -48,6 +48,7 @@ import civetEsbuildPlugin from '@danielx/civet/esbuild';
 esbuild
   .build({
     // ...
+    // sourcemap: true, // build and link sourcemap files
     plugins: [civetEsbuildPlugin()],
   })
   .catch(() => process.exit(1));

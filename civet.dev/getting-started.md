@@ -154,6 +154,7 @@ import civetPlugin from '@danielx/civet/esbuild'
 
 esbuild.build({
   // ...
+  // sourcemap: true, // build and link sourcemap files
   plugins: [
     civetPlugin({
       // Options and their defaults:
