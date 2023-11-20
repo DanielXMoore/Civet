@@ -8,7 +8,7 @@ export default {
   },
   plugins: [
     civetRollupPlugin({
-      dts: true,
+      emitDeclaration: true,
     }),
   ],
 };

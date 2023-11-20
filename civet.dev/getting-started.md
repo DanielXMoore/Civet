@@ -158,9 +158,9 @@ esbuild.build({
   plugins: [
     civetPlugin({
       // Options and their defaults:
-      // dts: false,                     // generate .d.ts files?
+      // emitDeclaration: false,         // generate .d.ts files?
       // outputExtension: '.civet.tsx',  // replaces .civet in output
-      // js: false,                      // use Civet's TS -> JS transpiler?
+      // ts: 'civet',                    // use Civet's TS -> JS transpiler?
     })
   ]
 }).catch(() => process.exit(1))
@@ -186,9 +186,11 @@ import civetPlugin from '@danielx/civet/esbuild';
 
 export default defineConfig({
   entryPoints: ['main.civet'],
-  esbuildPlugins: [civetPlugin({
-    // options
-  })],
+  esbuildPlugins: [
+    civetPlugin({
+      // options
+    }),
+  ],
 });
 ```
 

@@ -73,9 +73,9 @@ module.exports = {
 
 ```ts
 interface PluginOptions {
-  dts?: boolean;
+  emitDeclaration?: boolean;
   outputExtension?: string;
-  js?: boolean;
+  ts?: 'civet' | 'esbuild' | 'tsc' | 'preserve';
   typecheck?: boolean;
   transformOutput?: (
     code: string,
@@ -84,8 +84,12 @@ interface PluginOptions {
 }
 ```
 
-- `dts`: Whether to generate `.d.ts` type definition files from the Civet source, which is useful for building libraries. Default: `false`
+- `emitDeclaration`: Whether to generate `.d.ts` type definition files from the Civet source, which is useful for building libraries. Default: `false`
 - `typecheck`: Whether to run type checking on the generated code. Default: `false`.
 - `outputExtension`: Output filename extension to use. Default: `.civet.tsx`, or uses `.civet.jsx` if `js` is `true`.
-- `js`: Whether to transpile to JS or TS. Default: `false`.
+- `ts`: Mode of transpilation of TS->JS source code. Default: `civet`. Options:
+  - `civet`: Use Civet's JS mode.
+  - `esbuild`: Use esbuild's transpiler. (Requires installing `esbuild`)
+  - `tsc`: Use the typescript compiler. (Requires installing `typescript`)
+  - `preserve`: Don't transpile TS code.
 - `transformOutput(code, id)`: Adds a custom transformer over jsx/tsx code produced by `civet.compile`. It gets passed the jsx/tsx source (`code`) and filename (`id`), and should return valid jsx/tsx code.
