@@ -301,6 +301,11 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
               js: true,
               sourceMap: true,
             });
+          }
+          case undefined: {
+            console.log(
+              'WARNING: You are using the default mode for `options.ts` which is `civet`. This mode does not support all TS features. If this is intentional, you should explicitly set `options.ts` to `civet`, or choose a different mode.'
+            );
             break;
           }
         }
