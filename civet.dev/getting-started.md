@@ -160,7 +160,7 @@ esbuild.build({
       // Options and their defaults:
       // emitDeclaration: false,         // generate .d.ts files?
       // outputExtension: '.civet.tsx',  // replaces .civet in output
-      // ts: 'civet',                    // use Civet's TS -> JS transpiler?
+      // ts: 'civet',                    // TS -> JS transpilation mode
     })
   ]
 }).catch(() => process.exit(1))
