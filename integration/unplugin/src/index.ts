@@ -27,6 +27,10 @@ export type PluginOptions = {
   emitDeclaration?: boolean;
   typecheck?: boolean;
   ts?: 'civet' | 'esbuild' | 'tsc' | 'preserve';
+  // @deprecated
+  js?: boolean;
+  // @deprecated
+  dts?: boolean;
 };
 
 const isCivet = (id: string) => /\.civet([?#].*)?$/.test(id);
@@ -73,6 +77,9 @@ function resolveAbsolutePath(rootDir: string, id: string) {
 }
 
 const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
+  if (options.dts) options.emitDeclaration = options.dts;
+  if (options.js) options.ts = 'civet';
+
   const transformTS = options.emitDeclaration || options.typecheck;
   const outExt =
     options.outputExtension ?? (options.ts === 'preserve' ? '.tsx' : '.jsx');
@@ -86,7 +93,6 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     transformTS || options.ts === 'tsc'
       ? import('typescript').then(m => m.default)
       : null;
-  const getTS = () => tsPromise!;
   const getFormatHost = (sys: System): FormatDiagnosticsHost => {
     return {
       getCurrentDirectory: () => sys.getCurrentDirectory(),
@@ -102,7 +108,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     enforce: 'pre',
     async buildStart() {
       if (transformTS || options.ts === 'tsc') {
-        const ts = await getTS();
+        const ts = await tsPromise!;
 
         const configPath = ts.findConfigFile(process.cwd(), ts.sys.fileExists);
 
@@ -281,7 +287,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
             break;
           }
           case 'tsc': {
-            const tsTranspile = (await getTS()).transpileModule;
+            const tsTranspile = (await tsPromise!).transpileModule;
             const result = tsTranspile(compiledTS.code, { compilerOptions });
 
             compiled = {
