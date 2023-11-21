@@ -302,7 +302,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
           }
           case 'civet':
           default: {
-            compiled = civet.compile(compiledTS.code, {
+            compiled = civet.compile(rawCivetSource, {
               filename: id,
               js: true,
               sourceMap: true,
