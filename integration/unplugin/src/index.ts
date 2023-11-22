@@ -278,6 +278,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
           case 'esbuild': {
             const esbuildTransform = (await import('esbuild')).transform;
             const result = await esbuildTransform(compiledTS.code, {
+              jsx: 'preserve',
               loader: 'tsx',
               sourcefile: id,
               sourcemap: 'external',
