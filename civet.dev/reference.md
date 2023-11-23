@@ -524,6 +524,12 @@ url |> fetch |> await
 |> callback
 </Playground>
 
+<Playground>
+document.createElement('div')
+||> .className = 'civet'
+||> .appendChild document.createTextNode 'Civet'
+</Playground>
+
 Unicode forms:
 
 <Playground>
@@ -724,6 +730,12 @@ You can also omit `&` when starting with a `.` or `?.` property access:
 <Playground>
 x.map .name
 x.map ?.profile?.name[0...3]
+</Playground>
+
+You can also assign properties:
+
+<Playground>
+x.map .name = "Civet" + i++
 </Playground>
 
 ### Functions as Infix Operators
