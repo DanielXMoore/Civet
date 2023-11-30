@@ -956,6 +956,22 @@ switch x
     type
 </Playground>
 
+Use `^x` to refer to variable `x` in the parent scope,
+as opposed to a generic name that gets destructured.
+(This is called "pinning" in
+[Elixir](https://hexdocs.pm/elixir/1.16/pattern-matching.html#the-pin-operator)
+and [Erlang](https://www.erlang.org/eeps/eep-0055).)
+
+<Playground>
+switch x
+  ^y
+    console.log "y"
+  [^y]
+    console.log "array with y"
+  [y]
+    console.log "array with", y
+</Playground>
+
 ## Loops
 
 All JavaScript loops are available,
