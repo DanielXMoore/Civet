@@ -102,8 +102,7 @@ symbol operators (`+`, `-`, etc.) need to be spaced consistently:
   (`+`, `-`, `*`, `**`, `/`, `%`, `%%`, `==`, `===`, `<`, `>`, `<=`, `>=`,
   `<<`, `>>`, `>>>`, `&`, `&&`, `|`, `||`, `??`)
   should either have spaces on both sides, or no space on either side.
-  Currently we also allow space after but not before the operator,
-  which is common e.g. with the `,` operator.
+  (Currently we also allow space after but not before the operator.)
 * Regular expression literals cannot start with a space.
   (Use `\ ` or `[ ]`.)
 
@@ -111,12 +110,14 @@ symbol operators (`+`, `-`, etc.) need to be spaced consistently:
 x+y    // addition
 x + y  // addition
 x +y   // unary
+//invalid: + y
 </Playground>
 
 <Playground>
 x/y/z      // division
 x / y / z  // division
 x /y/ z    // regular expression
+//invalid: x /y
 </Playground>
 
 <!--x<y>z      // comparison-->
@@ -124,6 +125,7 @@ x /y/ z    // regular expression
 <Playground>
 x < y > z  // comparison
 x <y> z    // JSX
+//invalid: x <y
 </Playground>
 
 ## Indentation
