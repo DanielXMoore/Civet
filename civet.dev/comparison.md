@@ -107,16 +107,24 @@ symbol operators (`+`, `-`, etc.) need to be spaced consistently:
 * Regular expression literals cannot start with a space.
   (Use `\ ` or `[ ]`.)
 
-Examples:
+<Playground>
+x+y    // addition
+x + y  // addition
+x +y   // unary
+</Playground>
 
-* `x+y` and `x + y` are treated as binary addition, while
-  `x +y` is treated as a function call with unary operator: `x(+y)`.
-* `x/y/z` and `x / y / z` are treated as two divisions,
-  while `x /y/ z` is treated as two function calls with a regular expression:
-  `x(/y/(z))`.
-* `x<y>z` and `x < y > z` are treated as two comparisions,
-  while `x <y> z` is treated as a function call with a JSX tag:
-  `x(<y> z</y>)`.
+<Playground>
+x/y/z      // division
+x / y / z  // division
+x /y/ z    // regular expression
+</Playground>
+
+<!--x<y>z      // comparison-->
+
+<Playground>
+x < y > z  // comparison
+x <y> z    // JSX
+</Playground>
 
 ## Indentation
 
