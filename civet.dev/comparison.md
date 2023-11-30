@@ -92,6 +92,32 @@ function hello() {
 (x) => x + 1
 </Playground>
 
+## Operator Spacing
+
+Because Civet allows for implicit function calls without parentheses,
+symbol operators (`+`, `-`, etc.) need to be spaced consistently:
+
+* Unary operators (`+`, `-`, `~`, `!`) cannot have spaces after them.
+* Binary operators
+  (`+`, `-`, `*`, `**`, `/`, `%`, `%%`, `==`, `===`, `<`, `>`, `<=`, `>=`,
+  `<<`, `>>`, `>>>`, `&`, `&&`, `|`, `||`, `??`)
+  should either have spaces on both sides, or no space on either side.
+  Currently we also allow space after but not before the operator,
+  which is common e.g. with the `,` operator.
+* Regular expression literals cannot start with a space.
+  (Use `\ ` or `[ ]`.)
+
+Examples:
+
+* `x+y` and `x + y` are treated as binary addition, while
+  `x +y` is treated as a function call with unary operator: `x(+y)`.
+* `x/y/z` and `x / y / z` are treated as two divisions,
+  while `x /y/ z` is treated as two function calls with a regular expression:
+  `x(/y/(z))`.
+* `x<y>z` and `x < y > z` are treated as two comparisions,
+  while `x <y> z` is treated as a function call with a JSX tag:
+  `x(<y> z</y>)`.
+
 ## Indentation
 
 Because Civet allows for indented blocks as shorthand for braced blocks,
