@@ -303,9 +303,13 @@ console.log ```
 
 ## Regular Expressions
 
-In addition to the usual JavaScript syntax `/.../`, you can use `///...///`
-to write multi-line regular expressions that ignore top-level whitespace and
-single-line comments:
+Civet supports JavaScript regular expression literals `/.../`, provided the
+first slash is not immediately followed by a space.  Instead of `/ x /`
+(which can be interpreted as division in some contexts),
+write `/\ x /` or `/[ ]x /` (or more escaped forms like `/[ ]x[ ]/`).
+
+In addition, you can use `///...///` to write multi-line regular expressions
+that ignore top-level whitespace and single-line comments:
 
 <Playground>
 phoneNumber := ///
@@ -333,6 +337,14 @@ name := user?.name ?? defaultName
 typeof x === "string" && x += "!"
 result! as string | number
 </Playground>
+
+:::info
+Civet is a bit sensitive when it comes to
+[spacing around operators](comparison#operator-spacing).
+Unary symbol operators (`+`, `-`, `~`, `!`) must not have spaces after them.
+Binary symbol operators should either have spaces on both sides,
+or no space on either side.
+:::
 
 ### Late Assignment
 
