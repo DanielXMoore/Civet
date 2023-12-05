@@ -574,6 +574,23 @@ await.all
 You can also define your own infix operators;
 see [Functions as Infix Operators](#functions-as-infix-operators) below.
 
+### Unicode Operators
+
+Many operators have Unicode equivalents.
+Here is a table of all currently supported:
+
+<div class="unicode-table">
+
+| Unicode | ASCII | Unicode | ASCII | Unicode | ASCII | Unicode | ASCII |
+|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| `≤` | `<=` | `≥` | `>=` | `≠` | `!=` | `≡` | `==` |
+| `≣` | `===` | `≢` | `!==` | `≔` | `:=` | `⁇` | `?=` |
+| `‖` | `\|\|` | `≪` | `<<` | `≫` | `>>` | `⋙` | `>>>` |
+| `…` | `...` | `‥` | `..` | `∈` | `is in` | `∉` | `is not in` |
+| `▷` | `\|>` | `→` | `->` | `⇒` | `=>` | `’s` | `'s` |
+
+</div>
+
 ## Functions
 
 ### Function Calls
