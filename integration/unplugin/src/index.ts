@@ -13,18 +13,10 @@ import {
 } from '@danielx/civet/ts-diagnostic';
 import * as fs from 'fs';
 import path from 'path';
-import ts from 'typescript';
+import type { FormatDiagnosticsHost, Diagnostic, System } from 'typescript';
 import * as tsvfs from '@typescript/vfs';
 import type { UserConfig } from 'vite';
 import os from 'os';
-
-const formatHost: ts.FormatDiagnosticsHost = {
-  getCurrentDirectory: () => ts.sys.getCurrentDirectory(),
-  getNewLine: () => ts.sys.newLine,
-  getCanonicalFileName: ts.sys.useCaseSensitiveFileNames
-    ? f => f
-    : f => f.toLowerCase(),
-};
 
 export type PluginOptions = {
   outputExtension?: string;
@@ -32,30 +24,24 @@ export type PluginOptions = {
     code: string,
     id: string
   ) => TransformResult | Promise<TransformResult>;
-} & ( // Eliminates the possibility of having both `dts` and `js` set to `true`
-  | {
-      dts?: false;
-      typecheck?: false;
-      js?: false | true;
-    }
-  | {
-      dts?: true;
-      typecheck?: true;
-      js?: false;
-    }
-);
+  emitDeclaration?: boolean;
+  typecheck?: boolean;
+  ts?: 'civet' | 'esbuild' | 'tsc' | 'preserve';
+  /** @deprecated Use "ts" option instead */
+  js?: boolean;
+  /** @deprecated Use "emitDeclaration" instead */
+  dts?: boolean;
+};
 
-const isCivet = (id: string) => /\.civet$/.test(id);
-const isCivetTranspiled = (id: string) =>
-  /\.civet\.[jt]sx(\?transform)?$/.test(id);
-const isCivetTranspiledTS = (id: string) => /\.civet\.tsx$/.test(id);
-const postfixRE = /(\.[jt]sx)?[?#].*$/s;
+const isCivet = (id: string) => /\.civet([?#].*)?$/.test(id);
+const isCivetTranspiled = (id: string) => /\.civet\.[jt]sx([?#].*)?$/.test(id);
+const postfixRE = /[?#].*$/s;
 const isWindows = os.platform() === 'win32';
 const windowsSlashRE = /\\/g;
 
 // removes query string, hash and tsx/jsx extension
 function cleanCivetId(id: string): string {
-  return id.replace(postfixRE, '');
+  return id.replace(postfixRE, '').replace(/\.[jt]sx$/, '');
 }
 
 function tryStatSync(file: string): fs.Stats | undefined {
@@ -91,29 +77,39 @@ function resolveAbsolutePath(rootDir: string, id: string) {
 }
 
 const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
-  if (options.dts && options.js) {
-    throw new Error("Can't have both `dts` and `js` be set to `true`.");
-  }
+  if (options.dts) options.emitDeclaration = options.dts;
+  if (options.js) options.ts = 'civet';
 
-  if (options.typecheck && options.js) {
-    throw new Error("Can't have both `typecheck` and `js` be set to `true`.");
-  }
-
-  const transpileToJS = options.js ?? false;
-  // When Civet's js option is better, we could consider a different default:
-  //const transpileToJS = options.js ?? !(options.dts || options.typecheck);
-  const outExt = options.outputExtension ?? (transpileToJS ? '.jsx' : '.tsx');
+  const transformTS = options.emitDeclaration || options.typecheck;
+  const outExt =
+    options.outputExtension ?? (options.ts === 'preserve' ? '.tsx' : '.jsx');
 
   let fsMap: Map<string, string> = new Map();
   const sourceMaps = new Map<string, SourceMap>();
   let compilerOptions: any;
   let rootDir = process.cwd();
 
+  const tsPromise =
+    transformTS || options.ts === 'tsc'
+      ? import('typescript').then(m => m.default)
+      : null;
+  const getFormatHost = (sys: System): FormatDiagnosticsHost => {
+    return {
+      getCurrentDirectory: () => sys.getCurrentDirectory(),
+      getNewLine: () => sys.newLine,
+      getCanonicalFileName: sys.useCaseSensitiveFileNames
+        ? f => f
+        : f => f.toLowerCase(),
+    };
+  };
+
   return {
     name: 'unplugin-civet',
     enforce: 'pre',
     async buildStart() {
-      if (options.dts || options.typecheck) {
+      if (transformTS || options.ts === 'tsc') {
+        const ts = await tsPromise!;
+
         const configPath = ts.findConfigFile(process.cwd(), ts.sys.fileExists);
 
         if (!configPath) {
@@ -126,7 +122,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         );
 
         if (error) {
-          console.error(ts.formatDiagnostic(error, formatHost));
+          console.error(ts.formatDiagnostic(error, getFormatHost(ts.sys)));
           throw error;
         }
 
@@ -143,8 +139,10 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         fsMap = new Map();
       }
     },
-    buildEnd() {
-      if (options.dts || options.typecheck) {
+    async buildEnd() {
+      if (transformTS) {
+        const ts = await tsPromise!;
+
         const system = tsvfs.createFSBackedSystem(fsMap, process.cwd(), ts);
         const host = tsvfs.createVirtualCompilerHost(
           system,
@@ -157,7 +155,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
           host: host.compilerHost,
         });
 
-        const diagnostics: ts.Diagnostic[] = ts
+        const diagnostics: Diagnostic[] = ts
           .getPreEmitDiagnostics(program)
           .map(diagnostic => {
             const file = diagnostic.file;
@@ -185,11 +183,14 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
         if (diagnostics.length > 0) {
           console.error(
-            ts.formatDiagnosticsWithColorAndContext(diagnostics, formatHost)
+            ts.formatDiagnosticsWithColorAndContext(
+              diagnostics,
+              getFormatHost(ts.sys)
+            )
           );
         }
 
-        if (options.dts) {
+        if (options.emitDeclaration) {
           for (const file of fsMap.keys()) {
             const sourceFile = program.getSourceFile(file)!;
             program.emit(
@@ -238,26 +239,94 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
       if (!isCivetTranspiled(id)) return null;
 
       const filename = path.resolve(process.cwd(), id.slice(0, -outExt.length));
-      const code = await fs.promises.readFile(filename, 'utf-8');
+      const rawCivetSource = await fs.promises.readFile(filename, 'utf-8');
       this.addWatchFile(filename);
 
-      // Ideally this should have been done in a `transform` step
-      // but for some reason, webpack seems to be running them in the order
-      // of `resolveId` -> `loadInclude` -> `transform` -> `load`
-      // so we have to do transformation here instead
-      const compiled = civet.compile(code, {
-        // inlineMap: true,
-        filename: id,
-        js: transpileToJS,
-        sourceMap: true,
-      });
+      let compiled: {
+        code: string;
+        sourceMap: SourceMap | string;
+      } = undefined!;
 
-      sourceMaps.set(path.resolve(process.cwd(), id), compiled.sourceMap);
+      if (options.ts === 'civet' && !transformTS) {
+        compiled = civet.compile(rawCivetSource, {
+          filename: id,
+          js: true,
+          sourceMap: true,
+        });
+      } else {
+        const compiledTS = civet.compile(rawCivetSource, {
+          filename: id,
+          js: false,
+          sourceMap: true,
+        });
 
-      const jsonSourceMap = compiled.sourceMap.json(
-        path.basename(id.replace(/\.[jt]sx$/, '')),
-        path.basename(id)
-      );
+        sourceMaps.set(
+          path.resolve(process.cwd(), id),
+          compiledTS.sourceMap as SourceMap
+        );
+
+        if (transformTS) {
+          const resolved = path.resolve(process.cwd(), id);
+          fsMap.set(resolved, compiledTS.code);
+          // Vite and Rollup normalize filenames to use `/` instead of `\`.
+          // We give the TypeScript VFS both versions just in case.
+          const slashed = slash(resolved);
+          if (resolved !== slashed) fsMap.set(slashed, rawCivetSource);
+        }
+
+        switch (options.ts) {
+          case 'esbuild': {
+            const esbuildTransform = (await import('esbuild')).transform;
+            const result = await esbuildTransform(compiledTS.code, {
+              jsx: 'preserve',
+              loader: 'tsx',
+              sourcefile: id,
+              sourcemap: 'external',
+            });
+
+            compiled = { code: result.code, sourceMap: result.map };
+            break;
+          }
+          case 'tsc': {
+            const tsTranspile = (await tsPromise!).transpileModule;
+            const result = tsTranspile(compiledTS.code, { compilerOptions });
+
+            compiled = {
+              code: result.outputText,
+              sourceMap: result.sourceMapText ?? '',
+            };
+            break;
+          }
+          case 'preserve': {
+            compiled = compiledTS;
+            break;
+          }
+          case 'civet':
+          default: {
+            compiled = civet.compile(rawCivetSource, {
+              filename: id,
+              js: true,
+              sourceMap: true,
+            });
+
+            if (options.ts == undefined) {
+              console.log(
+                'WARNING: You are using the default mode for `options.ts` which is `"civet"`. This mode does not support all TS features. If this is intentional, you should explicitly set `options.ts` to `"civet"`, or choose a different mode.'
+              );
+            }
+
+            break;
+          }
+        }
+      }
+
+      const jsonSourceMap =
+        typeof compiled.sourceMap == 'string'
+          ? compiled.sourceMap
+          : compiled.sourceMap.json(
+              path.basename(id.replace(/\.[jt]sx$/, '')),
+              path.basename(id)
+            );
 
       let transformed: TransformResult = {
         code: compiled.code,
@@ -269,37 +338,9 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
       return transformed;
     },
-    transformInclude(id) {
-      return isCivetTranspiledTS(id);
-    },
-    transform(code, id) {
-      if (!isCivetTranspiledTS(id)) return null;
-
-      if (options.dts || options.typecheck) {
-        const resolved = path.resolve(process.cwd(), id);
-        fsMap.set(resolved, code);
-        // Vite and Rollup normalize filenames to use `/` instead of `\`.
-        // We give the TypeScript VFS both versions just in case.
-        const slashed = slash(resolved);
-        if (resolved !== slashed) fsMap.set(slashed, code);
-      }
-
-      return null;
-    },
     vite: {
-      config(config: UserConfig, { command }: { command: string }) {
+      config(config: UserConfig) {
         rootDir = path.resolve(process.cwd(), config.root ?? '');
-        // Ensure esbuild runs on .civet files
-        if (command === 'build') {
-          return {
-            esbuild: {
-              include: [/\.civet$/],
-              loader: 'tsx',
-            },
-          };
-        }
-
-        return null;
       },
       async transformIndexHtml(html) {
         return html.replace(/<!--[^]*?-->|<[^<>]*>/g, tag =>

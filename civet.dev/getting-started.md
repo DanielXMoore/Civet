@@ -51,6 +51,7 @@ To use TypeScript for type checking, create a `tsconfig.json` file. For example:
     "strict": true,
     "jsx": "preserve",
     "lib": ["es2021"],
+    "moduleResolution": "nodenext",
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "esModuleInterop": true
@@ -138,7 +139,7 @@ To transpile within a CommonJS NodeJS app
 To transpile in the browser, you can load the browser build `dist/browser.js`
 via a `<script>` tag, and access the global variable `Civet`, as in
 `Civet.compile`.
-Alternatively, if you're using a build system, you can import `"danielx/civet"`
+Alternatively, if you're using a build system, you can import `"@danielx/civet"`
 normally, but you'll need to mark `"fs"` as an external dependency
 (see e.g. [esbuild instructions](https://esbuild.github.io/api/#external>)
 and [Vite instructions](https://vitejs.dev/guide/build#library-mode)).
@@ -158,9 +159,9 @@ esbuild.build({
   plugins: [
     civetPlugin({
       // Options and their defaults:
-      // dts: false,                     // generate .d.ts files?
+      // emitDeclaration: false,         // generate .d.ts files?
       // outputExtension: '.civet.tsx',  // replaces .civet in output
-      // js: false,                      // use Civet's TS -> JS transpiler?
+      // ts: 'civet',                    // TS -> JS transpilation mode
     })
   ]
 }).catch(() => process.exit(1))
@@ -186,9 +187,11 @@ import civetPlugin from '@danielx/civet/esbuild';
 
 export default defineConfig({
   entryPoints: ['main.civet'],
-  esbuildPlugins: [civetPlugin({
-    // options
-  })],
+  esbuildPlugins: [
+    civetPlugin({
+      // options
+    }),
+  ],
 });
 ```
 

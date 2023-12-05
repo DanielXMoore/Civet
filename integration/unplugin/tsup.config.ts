@@ -21,5 +21,6 @@ export default defineConfig({
     'typescript',
     '@typescript/vfs',
     'unplugin',
+    'esbuild',
   ],
 });
