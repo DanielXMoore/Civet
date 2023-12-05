@@ -27,9 +27,9 @@ export type PluginOptions = {
   emitDeclaration?: boolean;
   typecheck?: boolean;
   ts?: 'civet' | 'esbuild' | 'tsc' | 'preserve';
-  // @deprecated
+  /** @deprecated Use "ts" option instead */
   js?: boolean;
-  // @deprecated
+  /** @deprecated Use "emitDeclaration" instead */
   dts?: boolean;
 };
 
