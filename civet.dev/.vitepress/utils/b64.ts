@@ -1,14 +1,14 @@
 export const b64 = {
   encode(str: string) {
-    if (typeof window === 'undefined') {
-      return Buffer.from(str).toString('base64');
-    }
-    return window.btoa(str);
+    const bytes = new TextEncoder().encode(str);
+    str = String.fromCodePoint(...bytes);
+    str = btoa(str);
+    return str;
   },
   decode(str: string) {
-    if (typeof window === 'undefined') {
-      return Buffer.from(str, 'base64').toString();
-    }
-    return window.atob(str);
+    str = atob(str);
+    const bytes = Uint8Array.from(str, (c) => c.codePointAt(0)!);
+    str = new TextDecoder().decode(bytes);
+    return str;
   },
 };
