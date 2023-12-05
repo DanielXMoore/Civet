@@ -120,9 +120,8 @@ x /y/ z    // regular expression
 //invalid: x /y
 </Playground>
 
-<!--x<y>z      // comparison-->
-
 <Playground>
+x<y>z      // comparison
 x < y > z  // comparison
 x <y> z    // JSX
 //invalid: x <y
