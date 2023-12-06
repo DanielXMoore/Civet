@@ -999,6 +999,24 @@ switch x
     console.log "array with y"
   [y]
     console.log "array with", y
+  ^getSpecial()
+    console.log "special"
+</Playground>
+
+You can also write general expressions after `^`.
+Member expressions like `enum` values do not need `^`:
+
+<Playground>
+function directionVector(dir: Direction)
+  switch dir
+    Direction.Left
+      [-1, 0]
+    Direction.Right
+      [+1, 0]
+    Direction.Down
+      [0, -1]
+    ^Direction.Up
+      [0, +1]
 </Playground>
 
 ## Loops
