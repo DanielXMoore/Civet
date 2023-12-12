@@ -1498,7 +1498,7 @@ You can also omit quotes around most filenames.
 <Playground>
 fs from fs
 {basename, dirname} from path
-metadata from ./package.json assert type: 'json'
+metadata from ./package.json with type: 'json'
 </Playground>
 
 ### Import Like Object Destructuring
