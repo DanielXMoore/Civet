@@ -123,7 +123,8 @@ x /y/ z    // regular expression
 <Playground>
 x<y>z      // comparison
 x < y > z  // comparison
-x <y> z    // JSX
+// JSX:
+x <y> z
 //invalid: x <y
 </Playground>
 
