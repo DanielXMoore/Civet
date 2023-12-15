@@ -5,7 +5,9 @@ const options = {
   entryPoints: ['src/main.civet'],
   bundle: true,
   outfile: 'dist/main.js',
-  plugins: [civetEsbuildPlugin()],
+  plugins: [civetEsbuildPlugin({
+    ts: 'esbuild',
+  })],
 }
 
 if (process.argv.includes('--watch')) {
