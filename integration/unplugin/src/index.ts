@@ -318,7 +318,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
       const jsonSourceMap =
         typeof compiled.sourceMap == 'string'
-          ? compiled.sourceMap
+          ? JSON.parse(compiled.sourceMap)
           : compiled.sourceMap.json(
               path.basename(id.replace(/\.[jt]sx$/, '')),
               path.basename(id)
@@ -326,7 +326,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
       let transformed: TransformResult = {
         code: compiled.code,
-        map: JSON.parse(jsonSourceMap as any),
+        map: jsonSourceMap,
       };
 
       if (options.transformOutput)
