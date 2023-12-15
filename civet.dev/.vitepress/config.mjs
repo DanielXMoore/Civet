@@ -5,7 +5,7 @@ import { defineConfig } from 'vitepress';
 import { compileCivet } from './utils/compileCivet';
 import { getHighlighter } from './utils/getHighlighter';
 import civet from '../../dist/main.mjs';
-import prettier from 'prettier';
+import prettier from '@prettier/sync';
 import { getOpenCollectiveInfo } from './utils/getOpenCollectiveInfo';
 import { b64 } from './utils/b64';
 
