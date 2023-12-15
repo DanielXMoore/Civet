@@ -1,8 +1,4 @@
-import {
-  TransformResult,
-  createUnplugin,
-  SourceMapCompact as UnpluginSourceMap,
-} from 'unplugin';
+import { TransformResult, createUnplugin } from 'unplugin';
 import civet, { SourceMap } from '@danielx/civet';
 import {
   remapRange,
@@ -322,7 +318,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
       const jsonSourceMap =
         typeof compiled.sourceMap == 'string'
-          ? compiled.sourceMap
+          ? JSON.parse(compiled.sourceMap)
           : compiled.sourceMap.json(
               path.basename(id.replace(/\.[jt]sx$/, '')),
               path.basename(id)
@@ -330,7 +326,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
       let transformed: TransformResult = {
         code: compiled.code,
-        map: jsonSourceMap as UnpluginSourceMap,
+        map: jsonSourceMap,
       };
 
       if (options.transformOutput)
