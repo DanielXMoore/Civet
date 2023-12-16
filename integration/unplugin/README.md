@@ -74,6 +74,7 @@ module.exports = {
 ```ts
 interface PluginOptions {
   emitDeclaration?: boolean;
+  implicitExtension?: boolean;
   outputExtension?: string;
   ts?: 'civet' | 'esbuild' | 'tsc' | 'preserve';
   typecheck?: boolean;
@@ -86,7 +87,8 @@ interface PluginOptions {
 
 - `emitDeclaration`: Whether to generate `.d.ts` type definition files from the Civet source, which is useful for building libraries. Default: `false`. (Requires installing `typescript`.)
 - `typecheck`: Whether to run type checking on the generated code. Default: `false`.
-- `outputExtension`: Output filename extension to use. Default: `".civet.tsx"`, or uses `".civet.jsx"` if `ts` is `"preserve"`.
+- `implicitExtension`: Whether to allow importing `filename.civet` via `import "filename"`. Default: `true`.
+- `outputExtension`: Output filename extension to append to `.civet`. Default: `".jsx"`, or `".tsx"` if `ts` is `"preserve"`.
 - `ts`: Mode for transpiling TypeScript features into JavaScript. Default: `"civet"`. Options:
   - `"civet"`: Use Civet's JS mode. (Not all TS features supported.)
   - `"esbuild"`: Use esbuild's transpiler. (Fast and more complete. Requires installing `esbuild`.)
