@@ -64,12 +64,14 @@ function tryFsResolve(file: string): string | undefined {
   return undefined;
 }
 
-function resolveAbsolutePath(rootDir: string, id: string) {
-  const resolved = tryFsResolve(path.join(rootDir, id));
-
-  if (!resolved) return tryFsResolve(id);
-
-  return resolved;
+function resolveAbsolutePath(rootDir: string, id: string, implicitExtension: boolean) {
+  const file = path.join(rootDir, id);
+  // Check for existence of resolved file and unsolved id,
+  // without and with implicit .civet extension, and return first existing
+  return tryFsResolve(file) ||
+    (implicitExtension && implicitCivet(file)) ||
+    tryFsResolve(id) ||
+    (implicitExtension && implicitCivet(id));
 }
 
 function implicitCivet(file: string): string | undefined {
@@ -226,7 +228,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
 
       id = cleanCivetId(id);
       const absolutePath = path.isAbsolute(id)
-        ? resolveAbsolutePath(rootDir, id)
+        ? resolveAbsolutePath(rootDir, id, implicitExtension)
         : path.resolve(path.dirname(importer ?? ''), id);
       if (!absolutePath) return null;
 
