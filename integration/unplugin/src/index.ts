@@ -356,6 +356,22 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
           )
         );
       },
+      handleHotUpdate({ file, server, modules }) {
+        // `file` is an absolute path to the changed file on disk,
+        // so for our case it should end with .civet extension
+        if (!file.endsWith('.civet')) return;
+        // Convert into relative path as would be output by `resolveId`
+        const relativeId = slash(path.relative(process.cwd(), file) + outExt);
+        // Check for module with this name
+        const module = server.moduleGraph.getModuleById(relativeId);
+        if (module) {
+          // Invalidate modules depending on this one
+          server.moduleGraph.onFileChange(relativeId);
+          // Hot reload this module
+          return [ ...modules, module ]
+        }
+        return modules;
+      },
     },
   };
 });
