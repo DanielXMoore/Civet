@@ -160,8 +160,10 @@ esbuild.build({
     civetPlugin({
       // Options and their defaults:
       // emitDeclaration: false,         // generate .d.ts files?
-      // outputExtension: '.civet.tsx',  // replaces .civet in output
+      // implicitExtension: true,        // import "./x" checks for x.civet
+      // outputExtension: '.tsx',        // appended to .civet in output
       // ts: 'civet',                    // TS -> JS transpilation mode
+      // typecheck: false,               // check types via tsc
     })
   ]
 }).catch(() => process.exit(1))

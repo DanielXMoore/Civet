@@ -15,6 +15,7 @@ import type { UserConfig } from 'vite';
 import os from 'os';
 
 export type PluginOptions = {
+  implicitExtension?: boolean;
   outputExtension?: string;
   transformOutput?: (
     code: string,
@@ -29,7 +30,6 @@ export type PluginOptions = {
   dts?: boolean;
 };
 
-const isCivet = (id: string) => /\.civet([?#].*)?$/.test(id);
 const isCivetTranspiled = (id: string) => /\.civet\.[jt]sx([?#].*)?$/.test(id);
 const postfixRE = /[?#].*$/s;
 const isWindows = os.platform() === 'win32';
@@ -64,12 +64,21 @@ function tryFsResolve(file: string): string | undefined {
   return undefined;
 }
 
-function resolveAbsolutePath(rootDir: string, id: string) {
-  const resolved = tryFsResolve(path.join(rootDir, id));
+function resolveAbsolutePath(rootDir: string, id: string, implicitExtension: boolean) {
+  const file = path.join(rootDir, id);
+  // Check for existence of resolved file and unsolved id,
+  // without and with implicit .civet extension, and return first existing
+  return tryFsResolve(file) ||
+    (implicitExtension && implicitCivet(file)) ||
+    tryFsResolve(id) ||
+    (implicitExtension && implicitCivet(id));
+}
 
-  if (!resolved) return tryFsResolve(id);
-
-  return resolved;
+function implicitCivet(file: string): string | undefined {
+  if (tryFsResolve(file)) return
+  const civet = file + '.civet'
+  if (tryFsResolve(civet)) return civet
+  return
 }
 
 const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
@@ -79,6 +88,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
   const transformTS = options.emitDeclaration || options.typecheck;
   const outExt =
     options.outputExtension ?? (options.ts === 'preserve' ? '.tsx' : '.jsx');
+  const implicitExtension = options.implicitExtension ?? true;
 
   let fsMap: Map<string, string> = new Map();
   const sourceMaps = new Map<string, SourceMap>();
@@ -215,15 +225,22 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     },
     resolveId(id, importer) {
       if (/\0/.test(id)) return null;
-      if (!isCivet(id) && !isCivetTranspiled(id)) return null;
 
       id = cleanCivetId(id);
       const absolutePath = path.isAbsolute(id)
-        ? resolveAbsolutePath(rootDir, id)
+        ? resolveAbsolutePath(rootDir, id, implicitExtension)
         : path.resolve(path.dirname(importer ?? ''), id);
       if (!absolutePath) return null;
 
-      const relativeId = path.relative(process.cwd(), absolutePath);
+      let relativeId = path.relative(process.cwd(), absolutePath);
+
+      // Implicit .civet extension
+      if (!relativeId.endsWith('.civet')) {
+        if (!implicitExtension) return null;
+        const implicitId = implicitCivet(relativeId)
+        if (!implicitId) return null;
+        relativeId = implicitId
+      }
 
       const relativePath = relativeId + outExt;
       return relativePath;
@@ -337,6 +354,12 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
     vite: {
       config(config: UserConfig) {
         rootDir = path.resolve(process.cwd(), config.root ?? '');
+
+        if (implicitExtension) {
+          config.resolve ??= {};
+          config.resolve.extensions ??= [];
+          config.resolve.extensions.push('.civet');
+        }
       },
       async transformIndexHtml(html) {
         return html.replace(/<!--[^]*?-->|<[^<>]*>/g, tag =>
