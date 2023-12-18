@@ -24,8 +24,8 @@ const actions = [
   <VPHero
     class="hero"
     name="Civet"
-    text="The Modern Way to Write TypeScript"
-    tagline="Expressive Syntax and Faster Coding with Civet"
+    text="A Programming Language for the New Millenium"
+    tagline="Code More with Less in this Expressive TypeScript Superset"
     :image="{
       src: 'https://user-images.githubusercontent.com/13007891/210392977-03a3b140-ec63-4ce9-b6e3-0a0f7cac6cbe.png',
       alt: 'Civet logo',
