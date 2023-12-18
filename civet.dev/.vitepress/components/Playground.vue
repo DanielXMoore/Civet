@@ -134,7 +134,7 @@ const playgroundUrl = computed(() => {
   margin: 8px 0;
   position: relative;
   background: var(--vp-code-block-bg);
-  border-radius: 5px;
+  border-radius: var(--border-radius);
   border: 1px solid transparent;
   transition: border-color 0.15s;
   width: calc(50% - 10px);
@@ -223,7 +223,7 @@ const playgroundUrl = computed(() => {
   background: transparent;
   overflow-x: auto;
   background-color: transparent !important;
-  border-radius: 5px;
+  border-radius: var(--border-radius);
 
   position: relative;
   z-index: 1;
