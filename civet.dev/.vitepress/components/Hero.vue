@@ -25,7 +25,7 @@ const actions = [
     class="hero"
     name="Civet"
     text="A Programming Language for the New Millenium"
-    tagline="This Expressive Superset of TypeScript Helps You Code More With Less"
+    tagline="Code More with Less in this Expressive TypeScript Superset"
     :image="{
       src: 'https://user-images.githubusercontent.com/13007891/210392977-03a3b140-ec63-4ce9-b6e3-0a0f7cac6cbe.png',
       alt: 'Civet logo',
