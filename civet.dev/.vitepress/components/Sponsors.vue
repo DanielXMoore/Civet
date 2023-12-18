@@ -62,13 +62,14 @@ const { sponsors, backers } = useData().theme.value
   text-align: center;
 
   background: var(--vp-c-bg-mute);
-  border-radius: 5px;
+  border-radius: var(--border-radius);
   padding: 10px;
 }
 
 .img {
   max-width: 120px;
   max-height: 120px;
-  border-radius: 5px;
+  border-radius: var(--border-radius);
+  filter: drop-shadow(var(--shadow-heavy));
 }
 </style>
