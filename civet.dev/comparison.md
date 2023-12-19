@@ -253,6 +253,17 @@ at the same indentation level into a JSX fragment.
 <p>Text</p>
 </Playground>
 
+## Sloppy Mode Features
+
+Civet generally assumes (but does not enforce)
+that you are following JavaScript's
+[strict mode](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Strict_mode),
+so it does not support:
+
+* [with](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/with)
+  (consider [using](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-2.html#using-declarations-and-explicit-resource-management))
+* octal values of the form `0644` (use `0o644` instead)
+
 ## Anything Else
 
 If some existing JS/TS code does not parse in Civet and it does not fall into
