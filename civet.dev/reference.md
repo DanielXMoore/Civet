@@ -748,7 +748,8 @@ x.map &.name
 x.map &.profile?.name[0...3]
 x.map &.callback a, b
 x.map +&
-x.map await &.json()
+x.map typeof &
+await.allSettled x.map await &.json()
 x.forEach delete &.old
 x.filter (&)
 </Playground>
