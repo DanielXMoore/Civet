@@ -740,11 +740,16 @@ function search<T>(list: T[]): T | undefined
 
 ### Single-Argument Function Shorthand
 
+`&` (optionally preceding by unary operators) marks the beginning of a
+single-argument function whose argument gets immediately used:
+
 <Playground>
 x.map &.name
 x.map &.profile?.name[0...3]
 x.map &.callback a, b
 x.map +&
+x.map await &.json()
+x.forEach delete &.old
 x.filter (&)
 </Playground>
 
