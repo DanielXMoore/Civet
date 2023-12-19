@@ -9,6 +9,8 @@ Things Kept from CoffeeScript
 - `is` → `===`
 - `or`,  `or=`  → `||`, `||=`
 - `and`, `and=` → `&&`, `&&=`
+- `not` → `!`
+- `a not instanceof b` → `!(a instanceof b)`
 - `a %% b` → `(a % b + b) % b`
 - `loop` → `while(true)`
 - `unless exp` → `if(!exp)`
@@ -61,10 +63,6 @@ Civet.
 
 - Implicit `var` declarations (use `"civet coffeeCompat"` or `"civet autoVar"`)
 - `on/yes/off/no` (use `true/false`, `"civet coffeeCompat"`, or `"civet coffeeBooleans"` to add them back)
-- `not` (use `!`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
-  - `not instanceof` (use `!(a instanceof b)`, `"civet coffeeCompat"`, or `"civet coffeeNot"`)
-  - `not of` use (`"civet coffeeCompat"`, or `"civet coffeeNot"`)
-  - NOTE: CoffeeScript `not` precedence is dubious. `not a < b` should be equivalent to `!(a < b)` but it is in fact `!a < b`
 - `do` keyword (replaced with JS `do...while` blocks and new `do` blocks; replace with `((x) -> ...)(x)` syntax or use `"civet coffeeCompat"`, or `"civet coffeeDo"`)
 - `for from` (use JS `for of`, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for in` (use `for each of`, or `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
@@ -72,6 +70,7 @@ Civet.
 - `for ... when <condition>` (use `continue if exp` inside loop, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables; `"civet coffeeCompat"`, or `"civet coffeeBinaryExistential"` enables `a ? b` at the cost of losing JS ternary operator)
 - `a of b` (use `a in b` as in JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
+- `a not of b` (use `a not in b`, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
 - Prototype shorthand: `X::` → `X.prototype`, `X::a` → `X.prototype.a` (use `"civet coffeeCompat"`, or `civet "coffeePrototype"`). Note that Civet doesn't allow space
 between the identifier and the `::`.
 - Backtick embedded JS (replaced by template literals)
