@@ -15,9 +15,12 @@ aside: false
 [TypeScript](https://www.typescriptlang.org/) or
 [JavaScript](https://developer.mozilla.org/en-US/docs/Web/JavaScript),
 so you can [use existing tooling](/integrations)
-but enable concise and powerful syntax.
-In addition to 99% JS/TS [compatibility](/comparison), there are many
-features, with some highlights below and more comprehensive examples
+(including VSCode type checking, hints, completion, etc.)
+while enabling concise and powerful syntax.
+It starts with [99% JS/TS compatibility](/comparison),
+making it easy to transition existing code bases.
+Then it adds many features and syntactic sugar,
+with some highlights below and more comprehensive examples
 in the [reference](/reference).
 See also Civet's [design philosophy](/philosophy).
 
