@@ -197,14 +197,18 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         }
 
         if (options.emitDeclaration) {
+          // Removed duplicate slashed (`\`) versions of the same file for emit
+          for (const file of fsMap.keys()) {
+            const slashed = slash(file);
+            if (file !== slashed) {
+              fsMap.delete(slashed);
+            }
+          }
           for (const file of fsMap.keys()) {
             const sourceFile = program.getSourceFile(file)!;
             program.emit(
               sourceFile,
-              async (filePath, content) => {
-                const dir = path.dirname(filePath);
-                await fs.promises.mkdir(dir, { recursive: true });
-
+              (filePath, content) => {
                 const pathFromDistDir = path.relative(
                   compilerOptions.outDir ?? process.cwd(),
                   filePath
@@ -273,18 +277,18 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
           sourceMap: true,
         });
 
+        const resolved = path.resolve(process.cwd(), id);
         sourceMaps.set(
-          path.resolve(process.cwd(), id),
+          resolved,
           compiledTS.sourceMap as SourceMap
         );
 
         if (transformTS) {
-          const resolved = path.resolve(process.cwd(), id);
           fsMap.set(resolved, compiledTS.code);
           // Vite and Rollup normalize filenames to use `/` instead of `\`.
           // We give the TypeScript VFS both versions just in case.
           const slashed = slash(resolved);
-          if (resolved !== slashed) fsMap.set(slashed, rawCivetSource);
+          if (resolved !== slashed) fsMap.set(slashed, compiledTS.code);
         }
 
         switch (options.ts) {
