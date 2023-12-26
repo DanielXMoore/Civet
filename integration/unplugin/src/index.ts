@@ -12,6 +12,7 @@ import path from 'path';
 import type { FormatDiagnosticsHost, Diagnostic, System } from 'typescript';
 import * as tsvfs from '@typescript/vfs';
 import type { UserConfig } from 'vite';
+import type { BuildOptions } from 'esbuild';
 import os from 'os';
 
 export type PluginOptions = {
@@ -81,7 +82,7 @@ function implicitCivet(file: string): string | undefined {
   return
 }
 
-const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
+const civetUnplugin = createUnplugin((options: PluginOptions = {}, meta) => {
   if (options.dts) options.emitDeclaration = options.dts;
   if (options.js) options.ts = 'civet';
 
@@ -94,6 +95,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
   const sourceMaps = new Map<string, SourceMap>();
   let compilerOptions: any;
   let rootDir = process.cwd();
+  let esbuildOptions: BuildOptions;
 
   const tsPromise =
     transformTS || options.ts === 'tsc'
@@ -197,14 +199,22 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         }
 
         if (options.emitDeclaration) {
+          if (meta.framework === 'esbuild' && !esbuildOptions.outdir) {
+            console.log("WARNING: Civet unplugin's `emitDeclaration` requires esbuild's `outdir` option to be set;");
+          }
+
+          // Removed duplicate slashed (`\`) versions of the same file for emit
+          for (const file of fsMap.keys()) {
+            const slashed = slash(file);
+            if (file !== slashed) {
+              fsMap.delete(slashed);
+            }
+          }
           for (const file of fsMap.keys()) {
             const sourceFile = program.getSourceFile(file)!;
             program.emit(
               sourceFile,
-              async (filePath, content) => {
-                const dir = path.dirname(filePath);
-                await fs.promises.mkdir(dir, { recursive: true });
-
+              (filePath, content) => {
                 const pathFromDistDir = path.relative(
                   compilerOptions.outDir ?? process.cwd(),
                   filePath
@@ -273,18 +283,18 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
           sourceMap: true,
         });
 
+        const resolved = path.resolve(process.cwd(), id);
         sourceMaps.set(
-          path.resolve(process.cwd(), id),
+          resolved,
           compiledTS.sourceMap as SourceMap
         );
 
         if (transformTS) {
-          const resolved = path.resolve(process.cwd(), id);
           fsMap.set(resolved, compiledTS.code);
           // Vite and Rollup normalize filenames to use `/` instead of `\`.
           // We give the TypeScript VFS both versions just in case.
           const slashed = slash(resolved);
-          if (resolved !== slashed) fsMap.set(slashed, rawCivetSource);
+          if (resolved !== slashed) fsMap.set(slashed, compiledTS.code);
         }
 
         switch (options.ts) {
@@ -350,6 +360,11 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         transformed = await options.transformOutput(transformed.code, id);
 
       return transformed;
+    },
+    esbuild: {
+      config(options: BuildOptions) {
+        esbuildOptions = options;
+      },
     },
     vite: {
       config(config: UserConfig) {
