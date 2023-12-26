@@ -4,9 +4,10 @@ import civetEsbuildPlugin from '@danielx/civet/esbuild'
 const options = {
   entryPoints: ['src/main.civet'],
   bundle: true,
-  outfile: 'dist/main.js',
+  outdir: 'dist',
   plugins: [civetEsbuildPlugin({
     ts: 'esbuild',
+    emitDeclaration: true,
   })],
 }
 

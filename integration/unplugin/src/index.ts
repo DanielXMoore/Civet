@@ -12,6 +12,7 @@ import path from 'path';
 import type { FormatDiagnosticsHost, Diagnostic, System } from 'typescript';
 import * as tsvfs from '@typescript/vfs';
 import type { UserConfig } from 'vite';
+import type { BuildOptions } from 'esbuild';
 import os from 'os';
 
 export type PluginOptions = {
@@ -81,7 +82,7 @@ function implicitCivet(file: string): string | undefined {
   return
 }
 
-const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
+const civetUnplugin = createUnplugin((options: PluginOptions = {}, meta) => {
   if (options.dts) options.emitDeclaration = options.dts;
   if (options.js) options.ts = 'civet';
 
@@ -94,6 +95,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
   const sourceMaps = new Map<string, SourceMap>();
   let compilerOptions: any;
   let rootDir = process.cwd();
+  let esbuildOptions: BuildOptions;
 
   const tsPromise =
     transformTS || options.ts === 'tsc'
@@ -197,6 +199,10 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         }
 
         if (options.emitDeclaration) {
+          if (meta.framework === 'esbuild' && !esbuildOptions.outdir) {
+            console.log("WARNING: Civet unplugin's `emitDeclaration` requires esbuild's `outdir` option to be set;");
+          }
+
           // Removed duplicate slashed (`\`) versions of the same file for emit
           for (const file of fsMap.keys()) {
             const slashed = slash(file);
@@ -354,6 +360,11 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}) => {
         transformed = await options.transformOutput(transformed.code, id);
 
       return transformed;
+    },
+    esbuild: {
+      config(options: BuildOptions) {
+        esbuildOptions = options;
+      },
     },
     vite: {
       config(config: UserConfig) {
