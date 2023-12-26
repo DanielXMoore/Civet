@@ -11,6 +11,7 @@ const options = {
 }
 
 if (process.argv.includes('--watch')) {
+  console.log('watching for changes...')
   const ctx = await esbuild.context(options)
   await ctx.watch()
 } else {
