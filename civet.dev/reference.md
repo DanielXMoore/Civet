@@ -1492,6 +1492,7 @@ enum Direction
 
 <Playground>
 elt as HTMLInputElement
+elt as! HTMLInputElement
 </Playground>
 
 ## Modules
