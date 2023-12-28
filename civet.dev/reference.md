@@ -381,6 +381,13 @@ substring is in string
 item1 ∈ container ∌ item2  // Unicode
 </Playground>
 
+### Concat Operator
+
+<Playground>
+a ++ b ++ c
+[1,2,3] ⧺ rest
+</Playground>
+
 ### Assignment Operators
 
 <Playground>
@@ -588,6 +595,7 @@ Here is a table of all currently supported:
 | `‖` | `\|\|` | `≪` | `<<` | `≫` | `>>` | `⋙` | `>>>` |
 | `…` | `...` | `‥` | `..` | `∈` | `is in` | `∉` | `is not in` |
 | `▷` | `\|>` | `→` | `->` | `⇒` | `=>` | `’s` | `'s` |
+| `⧺` | `++` |
 
 </div>
 
