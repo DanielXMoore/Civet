@@ -388,6 +388,19 @@ a ++ b ++ c
 [1,2,3] ⧺ rest
 </Playground>
 
+You can use `++` to concatenate arrays or strings,
+or your own types by providing a `concat` method.
+Remember that
+[`Array.prototype.concat`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/concat)
+appends a single item unless it is an array
+(or has the [`Symbol.isConcatSpreadable` property](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/isConcatSpreadable)),
+in which case it flattens it into the target array.
+Civet's assignment operator behaves the same:
+
+<Playground>
+a ++= b
+</Playground>
+
 ### Assignment Operators
 
 <Playground>
