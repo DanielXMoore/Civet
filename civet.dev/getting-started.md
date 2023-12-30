@@ -65,6 +65,12 @@ To use TypeScript for type checking, create a `tsconfig.json` file. For example:
 }
 ```
 
+If you do not set
+[`strict: true`](https://www.typescriptlang.org/tsconfig#strict), we recommend
+at least setting
+[`noImplicitAny: true`](https://www.typescriptlang.org/tsconfig#noImplicitAny);
+otherwise, Civet's generated code sometimes introduces unexpected `any` types.
+
 ## Executing code
 
 Simple execution of a .civet source file (CommonJS or ESM):
