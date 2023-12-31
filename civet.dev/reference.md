@@ -1444,6 +1444,16 @@ class Civet
 declare function jsonParse(json: string): ???
 </Playground>
 
+### Optional Types
+
+Similar to function parameters and object properties,
+`let` declarations can be declared optional to allow `undefined`:
+
+<Playground>
+let i?: number
+i?: number .= undefined
+</Playground>
+
 ### Import
 
 <Playground>
