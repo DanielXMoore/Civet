@@ -123,7 +123,7 @@ type FunctionSignature =
   parameters: ParametersNode
   parent: ASTNodeBase | undefined
 
-type TypeSuffix
+type TypeSuffix =
   type: "TypeSuffix"
   ts: true
   optional?: ASTNode
@@ -131,10 +131,13 @@ type TypeSuffix
   children: Children
 
 type ReturnTypeAnnotation =
-  t:
+  type: "ReturnTypeAnnotation"
+  ts: true
+  optional?: ASTNode
+  t: ASTNodeBase &
     type: string
-    t:
-      type: string
+    t: ASTNodeBase
+  children: Children
 
 type MethodModifier =
   get?: boolean
@@ -1660,7 +1663,7 @@ function insertTrimmingSpace(target: ASTNode, c: string): ASTNode
   return target
 
 // Returns leading space as a string, or undefined if none
-function getTrimmingSpace(target: ASTNodeBase) {
+function getTrimmingSpace(target: ASTNode) {
   if (!target) return
   if (Array.isArray(target)) return getTrimmingSpace(target[0])
   if (target.children) return getTrimmingSpace(target.children[0])
@@ -2154,6 +2157,28 @@ function convertMethodToFunction(method) {
   }
 }
 
+/**
+ * Convert type suffix of `?: T` to `: undefined | T`
+ */
+function convertOptionalType(suffix: TypeSuffix | ReturnTypeAnnotation): void
+  if (suffix.t as ASTNodeBase).type is "AssertsType"
+    spliceChild suffix, suffix.optional, 1, suffix.optional =
+      type: "Error"
+      message: "Can't use optional ?: syntax with asserts type"
+    return
+  spliceChild suffix, suffix.optional, 1, suffix.optional = undefined
+  // Return types with | need to be wrapped in parentheses
+  wrap := suffix.type is "ReturnTypeAnnotation"
+  spliceChild suffix, suffix.t, 1, suffix.t = [
+    getTrimmingSpace suffix.t
+    wrap and "("
+    // TODO: avoid parens if unnecessary
+    "undefined | ("
+    insertTrimmingSpace suffix.t, ""
+    ")"
+    wrap and ")"
+  ]
+
 // Convert an ObjectExpression (with `properties`)
 // into a set of JSX attributes.
 // {foo} is equivalent to foo={foo}, and
@@ -2488,18 +2513,10 @@ function processDeclarations(statements: StatementTuple[]): void
   // @ts-ignore
   .forEach ({ bindings }: DeclarationStatement) =>
     bindings?.forEach (binding) =>
-      suffix := binding.suffix as TypeSuffix
+      suffix := binding.suffix as TypeSuffix | undefined
       if suffix and suffix.optional and suffix.t
         // Convert `let x?: T` to `let x: undefined | T`
-        spliceChild suffix, suffix.optional, 1, suffix.optional = undefined
-        ws := getTrimmingSpace suffix.t
-        spliceChild suffix, suffix.t, 1, suffix.t = [
-          ws
-          // TODO: avoid parens if unnecessary
-          "undefined | ("
-          insertTrimmingSpace suffix.t, ""
-          ")"
-        ]
+        convertOptionalType suffix
 
       { initializer } := binding
       if initializer
@@ -2536,6 +2553,10 @@ function implicitFunctionBlock(f): void {
 }
 
 function processReturn(f: FunctionNode, implicitReturns: boolean): void
+  { returnType } .= f.signature
+  if returnType and returnType.optional
+    convertOptionalType returnType
+
   if (!processReturnValue(f) and implicitReturns)
     { signature, block } := f
     { modifier, name, returnType } := signature

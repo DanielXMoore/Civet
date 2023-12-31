@@ -1447,11 +1447,15 @@ declare function jsonParse(json: string): ???
 ### Optional Types
 
 Similar to function parameters and object properties,
-`let` declarations can be declared optional to allow `undefined`:
+`let` declarations and function return values
+can be declared optional to allow `undefined`:
 
 <Playground>
 let i?: number
 i?: number .= undefined
+(x?: string)?: string => x
+function f(x?: string)?: string
+  x
 </Playground>
 
 ### Import
