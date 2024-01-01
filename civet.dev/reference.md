@@ -1469,6 +1469,8 @@ let verb:
     if Civet extends Cat then "meow"
   else
     string
+let breed: unless Civet extends Animal
+  then undefined else string
 </Playground>
 
 ### Import
