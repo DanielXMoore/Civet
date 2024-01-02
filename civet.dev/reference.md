@@ -1458,6 +1458,21 @@ function f(x?: string)?: string
   x
 </Playground>
 
+### Conditional Types
+
+TypeScript's ternary types can be written using `if`/`unless` expressions,
+with optional `else` blocks:
+
+<Playground>
+let verb:
+  if Civet extends Animal
+    if Civet extends Cat then "meow"
+  else
+    string
+let breed: unless Civet extends Animal
+  then undefined else string
+</Playground>
+
 ### Import
 
 <Playground>
