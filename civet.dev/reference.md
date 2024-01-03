@@ -1481,6 +1481,14 @@ let breed: unless Civet extends Animal
   then undefined else string
 </Playground>
 
+You can also use [`<` as shorthand for `extends`](#extends),
+and the negated forms `not extends` and `!<`:
+
+<Playground>
+let verb: Civet < Cat ? "meow" : string
+let breed: Civet !< Animal ? undefined : string
+</Playground>
+
 ### Import
 
 <Playground>
