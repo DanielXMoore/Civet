@@ -1458,6 +1458,14 @@ function f(x?: string)?: string
   x
 </Playground>
 
+More generally, `T?` allows for `undefined` and
+`T??` additionally allows for `null`:
+
+<Playground>
+let i: number?
+let x: string??
+</Playground>
+
 ### Conditional Types
 
 TypeScript's ternary types can be written using `if`/`unless` expressions,

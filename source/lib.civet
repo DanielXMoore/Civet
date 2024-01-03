@@ -14,7 +14,7 @@ type ASTNodeBase =
   names?: string[]
   parent?: ASTNodeBase | undefined
 
-type ASTError =
+type ASTError = ASTNodeBase &
   type: "Error"
   message: string
 
@@ -22,7 +22,7 @@ type Loc =
   pos: number
   length: number
 
-type ASTLeaf =
+type ASTLeaf = ASTNodeBase &
   $loc: Loc
   token: string
 
@@ -70,7 +70,7 @@ type LabeledStatement
 
 type ElseToken = { $loc: Loc, token: "else" }
 
-type ASTRef =
+type ASTRef = ASTNodeBase &
   type: "Ref"
   base: string
   id: string
@@ -1282,7 +1282,7 @@ function findChildIndex(parent, child)
 /**
  * Replace this node with another, by modifying its parent's children.
  */
-function replaceNode(node: ASTNodeBase, newNode: ASTNodeBase): void
+function replaceNode(node: ASTNodeBase, newNode: ASTNode): void
   unless node.parent?
     throw new Error "replaceNode failed: node has no parent"
   function recurse(children: ASTNode[]): boolean
@@ -1295,7 +1295,8 @@ function replaceNode(node: ASTNodeBase, newNode: ASTNodeBase): void
     return false
   unless recurse node.parent.children
     throw new Error "replaceNode failed: didn't find child node in parent"
-  newNode.parent = node.parent
+  if newNode <? "object" and not Array.isArray newNode
+    newNode.parent = node.parent
 
 /**
  * Find nearest strict `ancestor` that satisfies predicate,
@@ -2111,11 +2112,20 @@ function makeExpressionStatement(expression: ASTNode): ASTNode
   else
     expression
 
+const typeNeedsNoParens = new Set [
+  "IdentifierType"
+  "ImportType"
+  "LiteralType"
+  "TupleType"
+  "ParenthesizedType"
+  "UnaryType"
+]
+
 /**
  * Parenthesize type if it might need it in some contexts.
  */
-function parenthesizeType(type)
-  // TODO: avoid parens in some cases
+function parenthesizeType(type: ASTNodeBase)
+  return type if typeNeedsNoParens.has type.type
   ["(", type, ")"]
 
 // Adjust a parsed string by escaping newlines
@@ -3407,6 +3417,38 @@ function processPipelineExpressions(statements): void {
     })
 }
 
+function processTypes(node: ASTNode)
+  // T? -> T | undefined; T?? -> T | undefined | null
+  gatherRecursiveAll node, (n) => n.type is "UnaryType"
+  // @ts-ignore
+  .forEach (unary: ASTNodeBase): void =>
+    let last: ASTNode
+    count .= 0
+    while unary.suffix.length and unary.suffix.-1?.token is "?"
+      last = unary.suffix.pop()
+      count++
+    return unless count
+    if unary.parent?.type is "TypeTuple"
+      // Leave one ? inside a type tuple
+      if count is 1
+        unary.suffix.push last
+        return
+      replaceNode unary, [
+        getTrimmingSpace unary
+        "("
+        parenthesizeType insertTrimmingSpace unary, ""
+        " | null)"
+        last
+      ]
+    else
+      replaceNode unary, [
+        getTrimmingSpace unary
+        "("
+        parenthesizeType insertTrimmingSpace unary, ""
+        count is 1 ? " | undefined" : " | undefined | null"
+        ")"
+      ]
+
 function processProgram(root: BlockStatement, config, m, ReservedWord): void {
   // invariants
   assert.equal(m.forbidBracedApplication.length, 1, "forbidBracedApplication")
@@ -3420,6 +3462,7 @@ function processProgram(root: BlockStatement, config, m, ReservedWord): void {
 
   const { expressions: statements } = root
 
+  processTypes(statements)
   processDeclarationConditions(statements)
   processPipelineExpressions(statements)
   processDeclarations(statements)
