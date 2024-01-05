@@ -794,6 +794,20 @@ You can also assign properties:
 x.map .name = "Civet" + i++
 </Playground>
 
+### Binary Operators as Functions
+
+Wrapping a binary operator in parentheses turns it into a two-argument function:
+
+<Playground>
+numbers.reduce (+)
+booleans.reduce (||), false
+</Playground>
+
+::: info
+One exception: `(&)` is currently the single-argument identity function,
+not two-argument bitwise and.
+:::
+
 ### Functions as Infix Operators
 
 You can "bless" an existing function to behave as an infix operator
