@@ -8,7 +8,7 @@ import type {
 import BundledCivetModule from "@danielx/civet"
 import BundledCivetConfigModule from "@danielx/civet/config"
 
-import ts, { JsxEmit } from "typescript"
+import ts, { JsxEmit, isExternalModuleNameRelative } from "typescript"
 const { version: typescriptVersion } = ts
 import type {
   CompilerHost,
@@ -118,30 +118,75 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
      */
     resolveModuleNames(moduleNames: string[], containingFile: string, _reusedNames: string[] | undefined, _redirectedReference: ts.ResolvedProjectReference | undefined, compilerOptions: CompilerOptions, _containingSourceFile?: ts.SourceFile) {
       return moduleNames.map(name => {
-        let resolution
         // Try to resolve the module using the standard TypeScript logic
-        resolution = ts.resolveModuleName(name, containingFile, compilerOptions, self, resolutionCache) as ResolvedModuleWithFailedLookupLocations
-
-        let { resolvedModule } = resolution
-        if (resolvedModule) {
-          return resolvedModule
-        }
+        const { resolvedModule } = ts.resolveModuleName(name, containingFile, compilerOptions, self, resolutionCache) as ResolvedModuleWithFailedLookupLocations
+        if (resolvedModule) return resolvedModule
 
         // get the transpiler for the extension
         const extension = getExtensionFromPath(name)
         const transpiler = transpilers.get(extension)
         if (transpiler) {
           const { target } = transpiler
-          const resolved = path.resolve(path.dirname(containingFile), name)
-          if (sys.fileExists(resolved)) {
-            // TODO: add to resolution cache?
-            resolvedModule = {
-              resolvedFileName: resolved + target,
-              extension: target,
-              isExternalLibraryImport: false,
+          const resolvedModule = (resolved: string) => ({
+            resolvedFileName: resolved + target,
+            extension: target,
+            isExternalLibraryImport: false,
+          })
+
+          // Mimic tryLoadModuleUsingOptionalResolutionSettings from
+          // https://github.com/microsoft/TypeScript/blob/cf33fd0cde22905effce371bb02484a9f2009023/src/compiler/moduleNameResolver.ts
+          let { baseUrl, paths, pathsBasePath } = compilationSettings
+          if (!isExternalModuleNameRelative(name)) { // absolute
+            // tryLoadModuleUsingPathsIfEligible
+            if (paths) {
+              // tryLoadModuleUsingPaths
+              // getPathsBasePath from
+              // https://github.com/microsoft/TypeScript/blob/bbef6a7a31cff1d0d9f94b082996334baca74caa/src/compiler/utilities.ts#L6317-L6320
+              const pathsBase = baseUrl ?? (pathsBasePath as string ||
+                (baseHost.getCurrentDirectory?.() ?? '.'))
+              // TODO: more closely follow tryParsePatterns from
+              // https://github.com/microsoft/TypeScript/blob/bbef6a7a31cff1d0d9f94b082996334baca74caa/src/compiler/utilities.ts#L9743-L9745
+              let best = '', bestPrefix = ''
+              for (const [pattern, replacements] of Object.entries(paths)) {
+                if (pattern.endsWith("*")) {
+                  const prefix = pattern.slice(0, -1)
+                  if (name.startsWith(prefix)) {
+                    for (const replacement of replacements) {
+                      const resolved = path.resolve(pathsBase,
+                        replacement.replace('*', name.slice(prefix.length)))
+                      if (sys.fileExists(resolved) && prefix.length > bestPrefix.length) {
+                        best = resolved
+                        bestPrefix = prefix
+                      }
+                    }
+                  }
+                } else if (name === pattern) {
+                  for (const replacement of replacements) {
+                    const resolved = path.resolve(pathsBase, replacement)
+                    if (sys.fileExists(resolved) && pattern.length > bestPrefix.length) {
+                      best = resolved
+                      bestPrefix = pattern
+                    }
+                  }
+                }
+              }
+              if (best) return resolvedModule(best)
             }
-            return resolvedModule
+            // tryLoadModuleUsingBaseUrl
+            if (baseUrl) {
+              const resolved = path.resolve(baseUrl, name)
+              if (sys.fileExists(resolved)) return resolvedModule(resolved)
+            }
+          } else { // relative
+            // TODO: tryLoadModuleUsingRootDirs
           }
+
+          // This backup resolver is really just for relative paths.
+          // TODO: Implement absolute case from tryResolve
+          // https://github.com/microsoft/TypeScript/blob/cf33fd0cde22905effce371bb02484a9f2009023/src/compiler/moduleNameResolver.ts#L3221
+          const resolved = path.resolve(path.dirname(containingFile), name)
+          if (sys.fileExists(resolved)) return resolvedModule(resolved)
+          // TODO: add to resolution cache?
         }
 
         return undefined
