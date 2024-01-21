@@ -197,7 +197,7 @@ function shouldIncludeEntry(item: NavigationTree | NavigationBarItem): boolean {
   return !!(item.text && item.text !== '<function>' && item.text !== '<class>');
 }
 
-function parseKindModifier(kindModifiers: string): Set<string> {
+export function parseKindModifier(kindModifiers: string): Set<string> {
   return new Set(kindModifiers.split(/,|\s+/g));
 }
 

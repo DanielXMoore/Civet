@@ -11,6 +11,7 @@ import {
   TextDocumentIdentifier,
   DocumentSymbol,
   CompletionItem,
+  CompletionItemTag,
   Location,
   DiagnosticSeverity,
 } from 'vscode-languageserver/node';
@@ -20,14 +21,15 @@ import {
 } from 'vscode-languageserver-textdocument';
 import TSService, { FileMeta } from './lib/typescript-service.mjs';
 import * as Previewer from "./lib/previewer.mjs";
-import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition } from './lib/util.mjs';
+import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier } from './lib/util.mjs';
 import assert from "assert"
 import path from "node:path"
 import ts, {
   sys as tsSys,
   displayPartsToString,
   GetCompletionsAtPositionOptions,
-  findConfigFile
+  findConfigFile,
+  ScriptElementKindModifier
 } from 'typescript';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { setTimeout } from 'timers/promises';
@@ -53,7 +55,7 @@ const projectPathToPendingPromiseMap = new Map<string, Promise<void>>()
 // Mapping from project path -> TSService instance operating on that base directory
 const projectPathToServiceMap = new Map<string, ReturnType<typeof TSService>>()
 
-let rootDir: string;
+let rootUri: string, rootDir: string;
 
 const getProjectPathFromSourcePath = (sourcePath: string) => {
   let projPath = sourcePathToProjectPathMap.get(sourcePath)
@@ -63,7 +65,7 @@ const getProjectPathFromSourcePath = (sourcePath: string) => {
   if (tsConfigPath) {
     projPath = pathToFileURL(path.dirname(tsConfigPath) + "/").toString()
   }
-  if (!projPath) projPath = rootDir // Fallback
+  if (!projPath) projPath = rootUri // Fallback
   sourcePathToProjectPathMap.set(sourcePath, projPath)
   return projPath
 }
@@ -135,7 +137,8 @@ connection.onInitialize(async (params: InitializeParams) => {
   if (!baseDir)
     throw new Error("Could not initialize without workspace folders")
 
-  rootDir = baseDir + "/"
+  rootUri = baseDir + "/"
+  rootDir = fileURLToPath(rootUri)
 
   console.log("Init", rootDir)
   return result;
@@ -245,7 +248,7 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
     const p = document.offsetAt(position)
     const completions = service.getCompletionsAtPosition(sourcePath, p, completionOptions)
     if (!completions) return
-    return convertCompletions(completions)
+    return convertCompletions(completions, document)
   }
 
   // need to sourcemap the line/columns
@@ -267,7 +270,7 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
   const completions = service.getCompletionsAtPosition(transpiledPath, p, completionOptions)
   if (!completions) return;
 
-  return convertCompletions(completions)
+  return convertCompletions(completions, transpiledDoc, sourcemapLines)
 });
 
 // TODO
@@ -648,19 +651,60 @@ function documentToSourcePath(textDocument: TextDocumentIdentifier) {
   return fileURLToPath(textDocument.uri);
 }
 
-function convertCompletions(completions: ts.CompletionInfo): CompletionItem[] {
-  // TODO: TS is doing a lot more here and some of it might be useful
+function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcemapLines?: any): CompletionItem[] {
+  // Partial simulation of MyCompletionItem in
+  // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
   const { entries } = completions;
 
   const items: CompletionItem[] = [];
   for (const entry of entries) {
     const item: CompletionItem = {
-      label: entry.name,
-      kind: getCompletionItemKind(entry.kind)
-    };
+      label: entry.name || (entry.insertText ?? ''),
+      kind: getCompletionItemKind(entry.kind),
+    }
 
+    if (entry.sourceDisplay) {
+      item.labelDetails = { description: Previewer.plain(entry.sourceDisplay) }
+    } else if (entry.source && entry.hasAction) {
+      item.labelDetails = { description: path.relative(rootDir, entry.source) }
+    }
+    if (entry.labelDetails) {
+      item.labelDetails = { ...item.labelDetails, ...entry.labelDetails }
+    }
+
+    if (entry.isRecommended) {
+      item.preselect = entry.isRecommended
+    }
     if (entry.insertText) {
       item.insertText = entry.insertText
+    }
+    if (entry.filterText) {
+      item.filterText = entry.filterText
+    }
+    if (entry.sortText) {
+      item.sortText = entry.sortText
+    }
+    if (entry.replacementSpan) {
+      const { start, length } = entry.replacementSpan
+      let begin = document.positionAt(start)
+      let end = document.positionAt(start + length)
+      if (sourcemapLines) {
+        begin = remapPosition(begin, sourcemapLines)
+        end = remapPosition(end, sourcemapLines)
+      }
+      item.textEdit = {
+        range: { start: begin, end },
+        newText: entry.insertText!,
+      }
+    }
+    if (entry.kindModifiers) {
+      const kindModifiers = parseKindModifier(entry.kindModifiers)
+      if (kindModifiers.has(ScriptElementKindModifier.optionalModifier)) {
+        item.label += '?'
+      }
+      if (kindModifiers.has(ScriptElementKindModifier.deprecatedModifier)) {
+        item.tags = [CompletionItemTag.Deprecated]
+      }
     }
 
     items.push(item);
