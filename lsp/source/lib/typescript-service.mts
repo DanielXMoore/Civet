@@ -124,17 +124,38 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
 
         // get the transpiler for the extension
         const extension = getExtensionFromPath(name)
-        const transpiler = transpilers.get(extension)
-        if (transpiler) {
-          const { target } = transpiler
-          const resolvedModule = (resolved: string) => ({
-            resolvedFileName: resolved + target,
-            extension: target,
-            isExternalLibraryImport: false,
-          })
+        let transpiler = transpilers.get(extension)
+        if (transpiler || !extension) {
+          const exists = (transpiler ? sys.fileExists : sys.directoryExists).bind(sys)
+          const resolvedModule = (resolved: string) => {
+            // Assumes exists(resolved) is true
+            // Directories don't yet have a transpiler chosen; try to find one
+            // via implicit index file.
+            // TODO: Only when state.features & NodeResolutionFeatures.EsmMode
+            // TODO: Read package.json as in loadNodeModuleFromDirectoryWorker
+            if (!transpiler) {
+              for (const [_, t] of transpilers) {
+                const index = path.join(resolved, "index" + t.extension)
+                if (sys.fileExists(index)) {
+                  transpiler = t
+                  resolved = index
+                  break
+                }
+              }
+              if (!transpiler) return
+            }
+            // Now sys.fileExists(resolved) should be true
+            const { target } = transpiler
+            return {
+              resolvedFileName: resolved + target,
+              extension: target,
+              isExternalLibraryImport: false,
+            }
+          }
 
-          // Mimic tryLoadModuleUsingOptionalResolutionSettings from
+          // Mimic tryResolve from
           // https://github.com/microsoft/TypeScript/blob/cf33fd0cde22905effce371bb02484a9f2009023/src/compiler/moduleNameResolver.ts
+          // tryLoadModuleUsingOptionalResolutionSettings
           let { baseUrl, paths, pathsBasePath } = compilationSettings
           if (!isExternalModuleNameRelative(name)) { // absolute
             // tryLoadModuleUsingPathsIfEligible
@@ -154,7 +175,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
                     for (const replacement of replacements) {
                       const resolved = path.resolve(pathsBase,
                         replacement.replace('*', name.slice(prefix.length)))
-                      if (sys.fileExists(resolved) && prefix.length > bestPrefix.length) {
+                      if (exists(resolved) && prefix.length > bestPrefix.length) {
                         best = resolved
                         bestPrefix = prefix
                       }
@@ -163,7 +184,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
                 } else if (name === pattern) {
                   for (const replacement of replacements) {
                     const resolved = path.resolve(pathsBase, replacement)
-                    if (sys.fileExists(resolved) && pattern.length > bestPrefix.length) {
+                    if (exists(resolved) && pattern.length > bestPrefix.length) {
                       best = resolved
                       bestPrefix = pattern
                     }
@@ -175,7 +196,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
             // tryLoadModuleUsingBaseUrl
             if (baseUrl) {
               const resolved = path.resolve(baseUrl, name)
-              if (sys.fileExists(resolved)) return resolvedModule(resolved)
+              if (exists(resolved)) return resolvedModule(resolved)
             }
           } else { // relative
             // TODO: tryLoadModuleUsingRootDirs
@@ -185,7 +206,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
           // TODO: Implement absolute case from tryResolve
           // https://github.com/microsoft/TypeScript/blob/cf33fd0cde22905effce371bb02484a9f2009023/src/compiler/moduleNameResolver.ts#L3221
           const resolved = path.resolve(path.dirname(containingFile), name)
-          if (sys.fileExists(resolved)) return resolvedModule(resolved)
+          if (exists(resolved)) return resolvedModule(resolved)
           // TODO: add to resolution cache?
         }
 
@@ -545,8 +566,8 @@ function getExtensionFromPath(path: string): string {
 }
 
 // Regex to match last extension including dot
-const lastExtension = /(?:\.(?:[^.]+))?$/
-const lastTwoExtensions = /(\.[^.\/]*)(\.[^./]*)$/
+const lastExtension = /(?:\.(?:[^./]+))?$/
+const lastTwoExtensions = /(\.[^./]*)(\.[^./]*)$/
 
 /**
  * Returns the last two extensions of a path.
