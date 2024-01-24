@@ -287,18 +287,21 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}, meta) => {
           sourceMap: true,
         });
 
-        const resolved = path.resolve(process.cwd(), id);
+        const resolved = filename + outExt;
         sourceMaps.set(
           resolved,
           compiledTS.sourceMap as SourceMap
         );
 
         if (transformTS) {
-          fsMap.set(resolved, compiledTS.code);
+          // Force .tsx extension for type checking purposes.
+          // Otherwise, TypeScript complains about types in .jsx files.
+          const tsx = filename + '.tsx';
+          fsMap.set(tsx, compiledTS.code);
           // Vite and Rollup normalize filenames to use `/` instead of `\`.
           // We give the TypeScript VFS both versions just in case.
-          const slashed = slash(resolved);
-          if (resolved !== slashed) fsMap.set(slashed, compiledTS.code);
+          const slashed = slash(tsx);
+          if (tsx !== slashed) fsMap.set(slashed, compiledTS.code);
         }
 
         switch (options.ts) {
