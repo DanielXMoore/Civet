@@ -77,7 +77,7 @@ interface PluginOptions {
   implicitExtension?: boolean;
   outputExtension?: string;
   ts?: 'civet' | 'esbuild' | 'tsc' | 'preserve';
-  typecheck?: boolean;
+  typecheck?: boolean | string;
   transformOutput?: (
     code: string,
     id: string
@@ -86,7 +86,9 @@ interface PluginOptions {
 ```
 
 - `emitDeclaration`: Whether to generate `.d.ts` type definition files from the Civet source, which is useful for building libraries. Default: `false`. (Requires installing `typescript`.)
-- `typecheck`: Whether to run type checking on the generated code. Default: `false`.
+- `typecheck`: Whether to run type checking on the generated code. (Requires installing `typescript`.) Default: `false`.
+  - Specifying `true` aborts the build (with an error code) on TypeScript errors.
+  - Alternatively, you can specify a string with any combination of `error`, `warning`, `suggestion`, or `message` for what diagnostics abort the build. For example, `"none"` ignores all diagnostics, `"error+warning"` aborts on errors and warnings, and `"all"` aborts on all diagnostics.
 - `implicitExtension`: Whether to allow importing `filename.civet` via `import "filename"`. Default: `true`.
 - `outputExtension`: Output filename extension to append to `.civet`. Default: `".jsx"`, or `".tsx"` if `ts` is `"preserve"`.
 - `ts`: Mode for transpiling TypeScript features into JavaScript. Default: `"civet"`. Options:

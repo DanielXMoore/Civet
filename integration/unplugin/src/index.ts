@@ -15,6 +15,14 @@ import type { UserConfig } from 'vite';
 import type { BuildOptions } from 'esbuild';
 import os from 'os';
 
+// Copied from typescript to avoid importing the whole package
+enum DiagnosticCategory {
+  Warning = 0,
+  Error = 1,
+  Suggestion = 2,
+  Message = 3
+}
+
 export type PluginOptions = {
   implicitExtension?: boolean;
   outputExtension?: string;
@@ -23,7 +31,7 @@ export type PluginOptions = {
     id: string
   ) => TransformResult | Promise<TransformResult>;
   emitDeclaration?: boolean;
-  typecheck?: boolean;
+  typecheck?: boolean | string;
   ts?: 'civet' | 'esbuild' | 'tsc' | 'preserve';
   /** @deprecated Use "ts" option instead */
   js?: boolean;
@@ -200,6 +208,27 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}, meta) => {
               getFormatHost(ts.sys)
             )
           );
+          if (options.typecheck) {
+            let failures: DiagnosticCategory[] = [];
+            if (typeof options.typecheck === 'string') {
+              if (options.typecheck.includes('error')) failures.push(DiagnosticCategory.Error)
+              if (options.typecheck.includes('warning')) failures.push(DiagnosticCategory.Warning)
+              if (options.typecheck.includes('suggestion')) failures.push(DiagnosticCategory.Suggestion)
+              if (options.typecheck.includes('message')) failures.push(DiagnosticCategory.Message)
+              if (options.typecheck.includes('all')) {
+                failures = { includes: () => true } as any as DiagnosticCategory[]
+              }
+            } else {
+              // Default behavior: fail on errors
+              failures.push(DiagnosticCategory.Error)
+            }
+            const count = diagnostics.filter(d => failures.includes(d.category)).length
+            if (count) {
+              const reason =
+                (count === diagnostics.length ? count : `${count} out of ${diagnostics.length}`)
+              throw new Error(`Aborting build because of ${reason} TypeScript diagnostic${diagnostics.length > 1 ? 's' : ''} above`)
+            }
+          }
         }
 
         if (options.emitDeclaration) {
