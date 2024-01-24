@@ -93,7 +93,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}, meta) => {
 
   let fsMap: Map<string, string> = new Map();
   const sourceMaps = new Map<string, SourceMap>();
-  let compilerOptions: any;
+  let compilerOptions: any, compilerOptionsWithSourceMap: any;
   let rootDir = process.cwd();
   let esbuildOptions: BuildOptions;
 
@@ -143,6 +143,10 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}, meta) => {
         compilerOptions = {
           ...configContents.options,
           target: ts.ScriptTarget.ESNext,
+        };
+        compilerOptionsWithSourceMap = {
+          ...compilerOptions,
+          sourceMap: true,
         };
         fsMap = new Map();
       }
@@ -267,8 +271,8 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}, meta) => {
 
       let compiled: {
         code: string;
-        sourceMap: SourceMap | string;
-      } = undefined!;
+        sourceMap: SourceMap | string | undefined;
+      };
 
       if (options.ts === 'civet' && !transformTS) {
         compiled = civet.compile(rawCivetSource, {
@@ -312,11 +316,12 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}, meta) => {
           }
           case 'tsc': {
             const tsTranspile = (await tsPromise!).transpileModule;
-            const result = tsTranspile(compiledTS.code, { compilerOptions });
+            const result = tsTranspile(compiledTS.code,
+              { compilerOptions: compilerOptionsWithSourceMap });
 
             compiled = {
               code: result.outputText,
-              sourceMap: result.sourceMapText ?? '',
+              sourceMap: result.sourceMapText,
             };
             break;
           }
@@ -343,13 +348,14 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}, meta) => {
         }
       }
 
-      const jsonSourceMap =
-        typeof compiled.sourceMap == 'string'
+      const jsonSourceMap = compiled.sourceMap && (
+        typeof compiled.sourceMap === 'string'
           ? JSON.parse(compiled.sourceMap)
           : compiled.sourceMap.json(
               path.basename(id.replace(/\.[jt]sx$/, '')),
               path.basename(id)
-            );
+            )
+      );
 
       let transformed: TransformResult = {
         code: compiled.code,
