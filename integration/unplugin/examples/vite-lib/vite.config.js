@@ -9,5 +9,11 @@ export default defineConfig({
       formats: ['cjs', 'es'],
     },
   },
-  plugins: [civetVitePlugin({ emitDeclaration: true })],
+  plugins: [
+    civetVitePlugin({
+      ts: 'tsc',
+      emitDeclaration: true,
+      typecheck: true,
+    })
+  ],
 });
