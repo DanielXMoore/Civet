@@ -1,5 +1,3 @@
-import axios from 'axios';
-
 export type OpenCollectiveInfo = Awaited<
   ReturnType<typeof getOpenCollectiveInfo>
 >;
@@ -28,10 +26,12 @@ export async function getOpenCollectiveInfo() {
   return { sponsors, backers };
 }
 
-function getTier(tierSlug: TierSlug): Promise<Sponsor[]> {
-  return axios
-    .get(`https://opencollective.com/civet/tiers/${tierSlug}/all.json`)
-    .then((res) => res.data.map(parseSponsor));
+async function getTier(tierSlug: TierSlug): Promise<Sponsor[]> {
+  const result = await fetch(
+    `https://opencollective.com/civet/tiers/${tierSlug}/all.json`
+  )
+  const json = await result.json()
+  return json.map(parseSponsor);
 }
 
 function parseSponsor(sponsor: any): Sponsor {
