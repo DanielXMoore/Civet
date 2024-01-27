@@ -1,6 +1,6 @@
 importScripts('https://cdn.jsdelivr.net/npm/prettier@2.8.1/standalone.js');
 importScripts('https://cdn.jsdelivr.net/npm/prettier@2.8.1/parser-typescript.js');
-importScripts('https://cdn.jsdelivr.net/npm/shiki');
+importScripts('https://cdn.jsdelivr.net/npm/shiki@0.14.7');
 importScripts('/__civet.js');
 
 onmessage = async (e) => {
