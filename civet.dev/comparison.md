@@ -128,6 +128,21 @@ x <y> z
 //invalid: x <y
 </Playground>
 
+## Comments
+
+Civet supports
+[`///...///` regular expression blocks](https://civet.dev/reference#regular-expressions).
+Thus, you should avoid comments that start with a triple slash —
+unless they are at the start of the file, as in
+[TypeScript triple-slash directives](https://www.typescriptlang.org/docs/handbook/triple-slash-directives.html).
+
+<Playground>
+/// A comment because at the top of file
+if s
+  /// not a comment
+  ///.exec s
+</Playground>
+
 ## Indentation
 
 Because Civet allows for indented blocks as shorthand for braced blocks,
@@ -246,7 +261,7 @@ still inside div
 
 Another discrepancy is that Civet automatically combines consecutive JSX tags
 at the same indentation level into a JSX fragment.
-(Otherwise, only the last tag would serve a function.)
+(Otherwise, only the last tag would serve a purpose.)
 
 <Playground>
 <h1>Hello</h1>
