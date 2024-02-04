@@ -4,24 +4,38 @@ importScripts('https://cdn.jsdelivr.net/npm/shiki@0.14.7');
 importScripts('/__civet.js');
 
 onmessage = async (e) => {
-  const { uid, code, prettierOutput, jsOutput } = e.data;
+  let { uid, code, prettierOutput, jsOutput } = e.data;
   const highlighter = await getHighlighter();
   const inputHtml = highlighter.codeToHtml(code, { lang: 'coffee' });
 
   try {
-    const ast = Civet.compile(code, { ast: true });
+    let ast = Civet.compile(code, { ast: true });
     let tsCode = Civet.generate(ast, {});
     let jsCode = '';
 
     if (jsOutput) {
+      // Wrap in IIFE if there's a top-level await
+      const topLevelAwait = Civet.lib.gatherRecursive(ast,
+        (n) => n.type === 'Await',
+        Civet.lib.isFunction
+      ).length > 0
+      if (topLevelAwait) {
+        code = 'async do\n' + code.replace(/^/gm, ' ')
+        ast = Civet.compile(code, { ast: true });
+      }
+
       // Convert console to civetconsole for Playground execution
-      Civet.lib.gatherRecursiveAll(ast,
+      Civet.lib.gatherRecursive(ast,
         (n) => n.type === 'Identifier' && n.children?.token === "console"
       ).forEach((node) => {
         node.children.token = "civetconsole"
       })
 
       jsCode = Civet.generate(ast, { js: true });
+
+      if (topLevelAwait) {
+        jsCode += `.then((x)=>x!==undefined&&civetconsole.log("[EVAL] "+x))`
+      }
     }
 
     if (prettierOutput) {

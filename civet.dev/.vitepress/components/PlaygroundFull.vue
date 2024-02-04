@@ -51,7 +51,7 @@ Object.keys(console).forEach((key) => {
       (key === 'log' ? '' : `[${key.toUpperCase()}] `) +
       args
         .map((arg) =>
-          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : arg
+          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : arg.toString()
         )
         .join(' ') +
       '\n';
@@ -59,14 +59,18 @@ Object.keys(console).forEach((key) => {
 });
 
 function runInBrowser() {
+  const code = jsCode.value
   evalOutput.value = ''
   evalComplete.value = false
   try {
     // Indirect eval call (via ?.) causes evaluation in global scope,
     // instead of the scope of this function.
     // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/eval#direct_and_indirect_eval
-    const returned = eval?.(jsCode.value);
-    if (returned !== undefined) evalOutput.value += `${returned}\n`
+    const returned = eval?.(code);
+    if (returned !== undefined &&
+        !code.endsWith('civetconsole.log("[EVAL] "+x))')) {
+      evalOutput.value += `[EVAL] ${returned}\n`
+    }
   } catch (err) {
     console.error(err);
     evalOutput.value += `[THROWN] ${err.toString()}\n`
