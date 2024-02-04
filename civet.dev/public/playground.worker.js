@@ -4,7 +4,7 @@ importScripts('https://cdn.jsdelivr.net/npm/shiki@0.14.7');
 importScripts('/__civet.js');
 
 onmessage = async (e) => {
-  let { uid, code, prettierOutput, jsOutput } = e.data;
+  const { uid, code, prettierOutput, jsOutput } = e.data;
   const highlighter = await getHighlighter();
   const inputHtml = highlighter.codeToHtml(code, { lang: 'coffee' });
 
@@ -20,8 +20,16 @@ onmessage = async (e) => {
         Civet.lib.isFunction
       ).length > 0
       if (topLevelAwait) {
-        code = 'async do\n' + code.replace(/^/gm, ' ')
-        ast = Civet.compile(code, { ast: true });
+        const prefix = /^(\s*|;|\'([^'\\]|\\.)*\'|\"([^"\\]|\\.)*\"|\/\/.*|\/\*[^]*?\*\/)*/.exec(code)[0]
+        const rest = code.slice(prefix.length)
+        .replace(/\/\/.*|\/\*[^]*?\*\//g, '')
+        const coffee = /['"]civet[^'"]*coffee(Compat|-compat|Do|-do)/.test(prefix)
+        ast = Civet.compile(
+          prefix +
+          (coffee ? 'do ->\n' : 'async do\n') +
+          rest.replace(/^/gm, ' '),
+          { ast: true }
+        );
       }
 
       // Convert console to civetconsole for Playground execution
@@ -31,7 +39,7 @@ onmessage = async (e) => {
         node.children.token = "civetconsole"
       })
 
-      jsCode = Civet.generate(ast, { js: true });
+      jsCode = Civet.generate(ast, { js: true })
 
       if (topLevelAwait) {
         jsCode += `.then((x)=>x!==undefined&&civetconsole.log("[EVAL] "+x))`
