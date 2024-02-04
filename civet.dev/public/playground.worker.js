@@ -9,11 +9,19 @@ onmessage = async (e) => {
   const inputHtml = highlighter.codeToHtml(code, { lang: 'coffee' });
 
   try {
-    let tsCode = Civet.compile(code);
+    const ast = Civet.compile(code, { ast: true });
+    let tsCode = Civet.generate(ast, {});
     let jsCode = '';
 
     if (jsOutput) {
-      jsCode = Civet.compile(code, { js: true });
+      // Convert console to civetconsole for Playground execution
+      Civet.lib.gatherRecursiveAll(ast,
+        (n) => n.type === 'Identifier' && n.children?.token === "console"
+      ).forEach((node) => {
+        node.children.token = "civetconsole"
+      })
+
+      jsCode = Civet.generate(ast, { js: true });
     }
 
     if (prettierOutput) {
