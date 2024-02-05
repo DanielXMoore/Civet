@@ -40,30 +40,42 @@ function onInput(civet: string, js: string) {
   updateUrl();
 }
 
-const defaultConsoleLog = console.log;
 const evalOutput = ref<null | string>(null);
-function runInBrowser() {
-  const output: string[] = [];
-  console.log = (...args) => {
-    defaultConsoleLog(...args);
-    output.push(
+const evalComplete = ref<boolean>(true);
+
+window.civetconsole = {};
+Object.keys(console).forEach((key) => {
+  window.civetconsole[key] = (...args) => {
+    console[key](...args);
+    evalOutput.value +=
+      (key === 'log' ? '' : `[${key.toUpperCase()}] `) +
       args
         .map((arg) =>
-          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : arg
+          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : arg.toString()
         )
-        .join(' ')
-    );
+        .join(' ') +
+      '\n';
   };
+});
 
+function runInBrowser() {
+  const code = jsCode.value
+  evalOutput.value = ''
+  evalComplete.value = false
   try {
-    eval(jsCode.value);
+    // Indirect eval call (via ?.) causes evaluation in global scope,
+    // instead of the scope of this function.
+    // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/eval#direct_and_indirect_eval
+    const returned = eval?.(code);
+    if (returned !== undefined &&
+        !code.endsWith('civetconsole.log("[EVAL] "+x))')) {
+      evalOutput.value += `[EVAL] ${returned}\n`
+    }
   } catch (err) {
-    output.push(err.toString());
     console.error(err);
+    evalOutput.value += `[THROWN] ${err.toString()}\n`
   }
-
-  evalOutput.value = output.join('\n');
-  console.log = defaultConsoleLog;
+  evalComplete.value = true
 }
 
 const clearTrigger = ref(false);
@@ -91,7 +103,7 @@ function clear() {
   <div v-if="evalOutput !== null">
     <h2>Console output</h2>
     <pre
-      class="eval-output shiki one-dark-pro">{{ evalOutput }}<span v-if="!evalOutput">
+      class="eval-output shiki one-dark-pro">{{ evalOutput }}<span v-if="!evalOutput && evalComplete">
     _._     _,-'""`-._        Nothing to show...  
    (,-.`._,'(       |\`-/|  /
        `-.-' \ )-`( , o o)
