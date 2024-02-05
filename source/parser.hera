@@ -5,7 +5,7 @@
 # https://262.ecma-international.org/13.0/
 
 ```
-const {
+import {
   addPostfixStatement,
   adjustBindingElements,
   attachPostfixStatementAsExpression,
@@ -48,7 +48,14 @@ const {
   replaceNodes,
   typeOfJSX,
   wrapIIFE,
-} = require("./lib.civet")
+} from "./lib.civet"
+
+/**
+ * A global object to hold methods used in rule handlers
+ * We can probably transition away from this now that Hera
+ * supports importing from other files as well as inline JS.
+ */
+const module = {};
 ```
 
 Program
@@ -193,17 +200,17 @@ Arguments
     return $skip
 
 ImplicitArguments
-  ( TypeArguments !ImplementsToken )?:ta ApplicationStart InsertOpenParen:open _?:ws NonPipelineArgumentList:args InsertCloseParen:close ->
+  ApplicationStart InsertOpenParen:open _?:ws NonPipelineArgumentList:args InsertCloseParen:close ->
     // Don't treat as call if this is a postfix for/while/until/if/unless
     if (args.length === 1 && args[0].type === "IterationExpression" &&
         args[0].subtype !== "DoStatement" && !args[0].async &&
         isEmptyBareBlock(args[0].block)) {
       return $skip
     }
-    return [ta?.[0], open, insertTrimmingSpace(ws, ""), args, close]
+    return [open, insertTrimmingSpace(ws, ""), args, close]
 
 ExplicitArguments
-  TypeArguments? OpenParen ArgumentList? ( __ Comma )? __ CloseParen
+  OpenParen ArgumentList? ( __ Comma )? __ CloseParen
 
 # Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
 ApplicationStart
@@ -735,10 +742,8 @@ OmittedNegation
   Not " "? _? -> $3
 
 ExtendsTarget
-  LeftHandSideExpressionWithObjectApplicationForbidden:exp TypeArguments?:ta ->
-    exp = makeLeftHandSideExpression(exp)
-    if (ta) return [exp, ta]
-    return exp
+  LeftHandSideExpressionWithObjectApplicationForbidden:exp ->
+    return makeLeftHandSideExpression(exp)
 
 ImplementsClause
   ImplementsToken ImplementsTarget ( Comma ImplementsTarget )* ->
@@ -950,7 +955,7 @@ LeftHandSideExpression
   # NOTE: Merged in NewExpression
   # NOTE: Changed to CallExpression to handle arguments
   # NOTE: Eliminated left recursion
-  ( New !( "." / ":" ) __ )+ CallExpression TypeArguments?
+  ( New !( "." / ":" ) __ )+ CallExpression
   CallExpression
   # NOTE: OptionalExpression is merged into CallExpression
 
@@ -984,13 +989,16 @@ CallExpression
 
 CallExpressionRest
   MemberExpressionRest
+  # NOTE: TypeScript instantiation expressions
+  # https://devblogs.microsoft.com/typescript/announcing-typescript-4-7/#instantiation-expressions
+  # But x<y>z and x<y>0 is a comparison chain.
+  TypeArguments !( IdentifierName / NumericLiteral ) -> $1
   # perf: assertion to exit early
-  /(?=['"`<])/ TypeArguments?:args ( TemplateLiteral / StringLiteral ):literal ->
+  /(?=['"`])/ ( TemplateLiteral / StringLiteral ):literal ->
     if (literal.type === "StringLiteral") {
       literal = "`" + literal.token.slice(1, -1).replace(/(`|\$\{)/g, "\\$1") + "`"
     }
-    if (!args) return literal
-    return [args, literal]
+    return literal
   # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
   OptionalShorthand? ArgumentsWithTrailingMemberExpressions ->
     if (!$1) return $2
@@ -6612,7 +6620,8 @@ TypeSuffix
 
 MaybeIndentedType
   # NOTE: Let InterfaceBlock take first crack at an indented block
-  InterfaceBlock
+  # But don't prevent parsing a braced type with unary suffix like {}[]
+  !(__ OpenBrace) InterfaceBlock -> $2
   PushIndent ( Nested Type )? PopIndent ->
     if (!$2) return $skip
     return $2
@@ -6682,7 +6691,6 @@ TypeUnarySuffix
 
 TypeUnaryOp
   "keyof" NonIdContinue
-  "typeof" NonIdContinue
   "infer" NonIdContinue
   "readonly" NonIdContinue
 
@@ -6694,6 +6702,12 @@ UnknownAlias
     return { $loc, token: "unknown" }
 
 TypePrimary
+  # NOTE: typeof also parses as an identifier, so check for it early
+  _? Typeof _? ConditionalExpression ->
+    return {
+      type: "TypeofType",
+      children: $0,
+    }
   _? TypeTuple ->
     return { ...$2, children: [ $1, ...$2.children ] }
   InterfaceBlock
@@ -7418,8 +7432,13 @@ Reset
     })
 
     // Hack to pass in parser config from main
-    Object.assign(module.config, exports.parse.config)
-    exports.parse.config = module.config
+    if (typeof parse !== "undefined") {
+      Object.assign(module.config, parse.config)
+      parse.config = module.config
+    } else {
+      Object.assign(module.config, exports.parse.config)
+      exports.parse.config = module.config
+    }
 
     // Hack to pass parser state to cache key
     return {

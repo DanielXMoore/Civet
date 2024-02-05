@@ -9,11 +9,41 @@ onmessage = async (e) => {
   const inputHtml = highlighter.codeToHtml(code, { lang: 'coffee' });
 
   try {
-    let tsCode = Civet.compile(code);
+    let ast = Civet.compile(code, { ast: true });
+    let tsCode = Civet.generate(ast, {});
     let jsCode = '';
 
     if (jsOutput) {
-      jsCode = Civet.compile(code, { js: true });
+      // Wrap in IIFE if there's a top-level await
+      const topLevelAwait = Civet.lib.gatherRecursive(ast,
+        (n) => n.type === 'Await',
+        Civet.lib.isFunction
+      ).length > 0
+      if (topLevelAwait) {
+        const prefix = /^(\s*|;|\'([^'\\]|\\.)*\'|\"([^"\\]|\\.)*\"|\/\/.*|\/\*[^]*?\*\/)*/.exec(code)[0]
+        const rest = code.slice(prefix.length)
+        .replace(/\/\/.*|\/\*[^]*?\*\//g, '')
+        const coffee = /['"]civet[^'"]*coffee(Compat|-compat|Do|-do)/.test(prefix)
+        ast = Civet.compile(
+          prefix +
+          (coffee ? 'do ->\n' : 'async do\n') +
+          rest.replace(/^/gm, ' '),
+          { ast: true }
+        );
+      }
+
+      // Convert console to civetconsole for Playground execution
+      Civet.lib.gatherRecursive(ast,
+        (n) => n.type === 'Identifier' && n.children?.token === "console"
+      ).forEach((node) => {
+        node.children.token = "civetconsole"
+      })
+
+      jsCode = Civet.generate(ast, { js: true })
+
+      if (topLevelAwait) {
+        jsCode += `.then((x)=>x!==undefined&&civetconsole.log("[EVAL] "+x))`
+      }
     }
 
     if (prettierOutput) {

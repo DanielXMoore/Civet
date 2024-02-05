@@ -1874,3 +1874,21 @@ you can enable `#` for single-line comments:
 </Playground>
 
 [`###...###` block comments](#block-comments) are always available.
+
+### CoffeeScript Line Continuations
+
+<Playground>
+"civet coffeeLineContinuation"
+loop
+  x += \
+'hello'
+</Playground>
+
+### CoffeeScript Classes
+
+<Playground>
+"civet coffeeClasses"
+class X
+  constructor: (@x) ->
+  get: -> @x
+</Playground>
