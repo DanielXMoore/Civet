@@ -1568,6 +1568,29 @@ enum Direction
   Right = 2 * Left
 </Playground>
 
+### Indexing Types
+
+[Indexed access types](https://www.typescriptlang.org/docs/handbook/2/indexed-access-types.html)
+can be written with a `.` when accessing a string, template, or number:
+
+<Playground>
+type Age = Person."age"
+type First = TupleType.0
+type Data = T.`data-${keyof Person}`
+</Playground>
+
+Note that `T.x` is reserved for
+[TypeScript namespaces](https://www.typescriptlang.org/docs/handbook/namespaces.html),
+so you need to add quotes around `x` for indexed access.
+
+You can also enable [CoffeeScript prototype style](#coffeescript-operators)
+indexed access:
+
+<Playground>
+"civet coffeePrototype"
+type Age = Person::age
+</Playground>
+
 ### Assertions
 
 <Playground>
