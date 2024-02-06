@@ -369,6 +369,8 @@ a and b
 a or b
 a not in b
 a not instanceof b
+a !in b
+a !instanceof b
 a?
 </Playground>
 
@@ -452,6 +454,7 @@ a <? "string"
 a !<? "string"
 a instanceof "number"
 a not instanceof "number"
+a !instanceof "number"
 </Playground>
 
 ### Logical XOR Operator
@@ -817,6 +820,7 @@ You can "bless" an existing function to behave as an infix operator
 operator contains
 x contains y
 x not contains y
+x !contains y
 </Playground>
 
 You can combine this with a [variable declaration](#variable-declaration):
