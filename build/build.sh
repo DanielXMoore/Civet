@@ -5,7 +5,7 @@ set -euo pipefail
 rm -rf dist
 
 # normal files
-civet --no-config build/esbuild.civet
+civet --no-config build/esbuild.civet "$@"
 
 # cli
 BIN="dist/civet"

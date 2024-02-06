@@ -1,8 +1,13 @@
 { compile, type CompilerOptions } from ../source/main.civet
-
+{ before, after } from mocha
+esbuild from esbuild
 assert from assert
 
-compare := (src: string, result: string, compilerOpts: CompilerOptions) ->
+let wrappers: string[] = []
+
+type CompilerOptionsWithWrapper = CompilerOptions & {wrapper?: string}
+
+compare := (src: string, result: string, compilerOpts: CompilerOptionsWithWrapper) ->
   { filename } := compilerOpts
   compileResult := compile(src, {
     ...compilerOpts
@@ -21,6 +26,29 @@ compare := (src: string, result: string, compilerOpts: CompilerOptions) ->
 
   """
 
+  jsCode .= compileResult
+  wrapper := compilerOpts.wrapper ?? wrappers.-1
+  if wrapper?
+    // Empty string means "don't check with esbuild"
+    return unless wrapper
+    jsCode = wrapper.replace /([ \t]*)CODE/g, (_, indent) =>
+      jsCode.replace /^/gm, indent
+
+  try
+    esbuild.transformSync jsCode,
+      loader: if compilerOpts.js then 'jsx' else 'tsx'
+      jsx: 'preserve'
+  catch e
+    assert.fail """
+      Failed to parse #{if compilerOpts.js then 'JavaScript' else 'TypeScript'}
+
+      --- Code ---
+      #{jsCode}
+
+      --- Error    ---
+      #{e}
+    """
+
 /**
  * Pass a string with the following format:
  * ```
@@ -34,7 +62,7 @@ compare := (src: string, result: string, compilerOpts: CompilerOptions) ->
  * The description will be used as the test description.
  * You can also do testCase.only and testCase.skip to only run or skip this test.
  */
-testCase := (text: string, opt?: "only" | "skip", compilerOpts: CompilerOptions={}) ->
+testCase := (text: string, compilerOpts: CompilerOptionsWithWrapper = {}, opt?: "only" | "skip") ->
   [desc, src, result] := text.split("\n---\n")
 
   fn := opt ? it[opt] : it
@@ -45,15 +73,13 @@ testCase := (text: string, opt?: "only" | "skip", compilerOpts: CompilerOptions=
       ...compilerOpts
     }
 
-testCase.only = (text: string, compilerOpts?: CompilerOptions) -> testCase text, "only", compilerOpts
-testCase.skip = (text: string, compilerOpts?: CompilerOptions) -> testCase text, "skip", compilerOpts
+testCase.only = (text: string, compilerOpts?: CompilerOptionsWithWrapper) -> testCase text, compilerOpts, "only"
+testCase.skip = (text: string, compilerOpts?: CompilerOptionsWithWrapper) -> testCase text, compilerOpts, "skip"
 
 testCase.js = (text: string) ->
-  testCase(text, undefined, {
-    js: true
-  })
+  testCase text, js: true
 
-throws := (text: string, opt?: "only" | "skip", compilerOpts?: CompilerOptions) ->
+throws := (text: string, compilerOpts?: CompilerOptions, opt?: "only" | "skip") ->
   let [desc, src] = text.split("\n---\n")
   throw new Error "Missing code block" unless src
 
@@ -75,8 +101,8 @@ throws := (text: string, opt?: "only" | "skip", compilerOpts?: CompilerOptions) 
 
     """
 
-throws.only = (text: string, compilerOpts?: CompilerOptions) -> throws text, "only", compilerOpts
-throws.skip = (text: string, compilerOpts?: CompilerOptions) -> throws text, "skip", compilerOpts
+throws.only = (text: string, compilerOpts?: CompilerOptions) -> throws text, compilerOpts, "only"
+throws.skip = (text: string, compilerOpts?: CompilerOptions) -> throws text, compilerOpts, "skip"
 
 evalsTo := (src: string, value: any) ->
   result := eval compile src, {
@@ -95,9 +121,14 @@ evalsTo := (src: string, value: any) ->
 
   """
 
+wrapper := (wrap: string) ->
+  before => wrappers.push wrap
+  after => wrappers.pop()
+
 export {
   compare
   evalsTo
   testCase
   throws
+  wrapper
 }
