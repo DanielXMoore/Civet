@@ -839,12 +839,22 @@ not two-argument bitwise and.
 ### Binary Operator Sections
 
 Like [Haskell](https://wiki.haskell.org/Section_of_an_infix_operator),
-you can specify one of the arguments in a parenthesized binary operator
+you can specify one of the arguments in a
+[parenthesized binary operator](#binary-operators-as-functions)
 to make a one-argument function instead:
 
 <Playground>
 counts.map (1+)
 .map (2*)
+.map (**2)
+</Playground>
+
+Note that `+` and `-` get treated as unary operators first.
+Add a space after them to make them binary operator sections.
+
+<Playground>
+(+x)
+(+ x)
 </Playground>
 
 ### Functions as Infix Operators
