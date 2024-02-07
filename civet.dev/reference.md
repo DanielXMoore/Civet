@@ -836,6 +836,17 @@ One exception: `(&)` is currently the single-argument identity function,
 not two-argument bitwise and.
 :::
 
+### Binary Operator Sections
+
+Like [Haskell](https://wiki.haskell.org/Section_of_an_infix_operator),
+you can specify one of the arguments in a parenthesized binary operator
+to make a one-argument function instead:
+
+<Playground>
+counts.map (1+)
+.map (2*)
+</Playground>
+
 ### Functions as Infix Operators
 
 You can "bless" an existing function to behave as an infix operator
