@@ -439,6 +439,31 @@ a instanceof b not instanceof c
 x? instanceof Function
 </Playground>
 
+### Prefix Operators
+
+Complex nested conditions can be written prefix-style by wrapping the
+binary operators in parentheses:
+
+<Playground>
+function haveAccess(doc, user)
+  (and)
+    user?
+    (or)
+      user.super, doc.worldReadable
+      user.name is doc.owner
+      (and)
+        doc.groupReadable
+        user.group is doc.group
+</Playground>
+
+This is a special case of
+[binary operators as functions](#binary-operators-as-functions)
+followed by immediate [function calls](#function-calls).
+In this special case, the operator can be given multiple arguments,
+and the operators
+[short circuit](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Expressions_and_operators#short-circuit_evaluation)
+as usual.
+
 ### `instanceof` shorthand
 
 <Playground>
