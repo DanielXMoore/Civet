@@ -1,9 +1,9 @@
-"civet coffeeCompat"
-
 { compile } from ./main.civet
 { findConfig, loadConfig } from ./config.civet
 
-version = -> require("../package.json").version
+function version: string
+  require("../package.json").version
+
 if process.argv.includes "--version"
   console.log version()
   process.exit(0)
@@ -51,16 +51,35 @@ if process.argv.includes "--help"
 encoding .= "utf8" as BufferEncoding
 
 fs from "fs/promises"
+type { Stats } from fs
 path from "path"
 
-parseArgs = (args) ->
-  options = {}
+interface Options
+  run?: boolean
+  compile?: boolean
+  output?: string
+  config?: string | boolean | ???
+  ast?: boolean
+  noCache?: boolean
+  inlineMap?: boolean
+  js?: boolean
+  hits?: string
+  trace?: string
+  repl?: boolean
+
+interface ParsedArgs
+  filenames: string[]
+  scriptArgs: string[]
+  options: Options
+
+function parseArgs(args: string[]): ParsedArgs
+  options: Options := {}
   Object.defineProperty options, 'run',
-    get: -> not (@ast or @compile)
-  filenames = []
-  scriptArgs = null
-  i = 0
-  endOfArgs = (j) ->
+    get: (this: Options) -> not (@ast or @compile)
+  filenames: string[] := []
+  scriptArgs: string[] .= []
+  i .= 0
+  function endOfArgs(j: number): void
     i = args.length  // trigger end of loop
     return if j >= args.length  // no more args
     if options.run
@@ -69,12 +88,12 @@ parseArgs = (args) ->
     else
       filenames.push ...args[j..]
   while i < args.length
-    arg = args[i]
+    arg := args[i]
     // Split -ab into -a -b
     if /^-\w{2,}$/.test arg
       args[i..i] =
-        for char in arg[1..]
-          "-#{char}"
+        for each char of arg[1..]
+          `-${char}`
       continue
     // Main argument handling
     switch arg
@@ -101,8 +120,8 @@ parseArgs = (args) ->
       when '--'
         endOfArgs ++i  // remaining arguments are filename and/or arguments
       else
-        if arg.startsWith('-') and arg != '-'
-          throw new Error "Invalid command-line argument #{arg}"
+        if arg.startsWith('-') and arg is not '-'
+          throw new Error `Invalid command-line argument ${arg}`
         if options.run
           endOfArgs i  // remaining arguments are arguments to the script
         else
@@ -111,10 +130,18 @@ parseArgs = (args) ->
 
   {filenames, scriptArgs, options}
 
-readFiles = (filenames, options) ->
-  for filename in filenames
-    stdin = filename == '-'
+type ReadFile = (
+  filename: string
+  stdin: boolean
+  content?: string
+  error?: unknown
+) & ((content: string) | (error: unknown))
+
+function readFiles(filenames: string[]): AsyncGenerator<ReadFile>
+  for each let filename of filenames
+    stdin := filename is '-'
     try
+      let content: string
       if stdin
         process.stdin.setEncoding encoding
 
@@ -125,34 +152,38 @@ readFiles = (filenames, options) ->
 
         if process.stdin.isTTY
           // In interactive stdin, `readline` lets user end the file via ^D.
-          lines = []
-          rl = require('readline').createInterface process.stdin, process.stdout
-          rl.on 'line', (buffer) -> lines.push buffer + '\n'
-          content = await new Promise (resolve, reject) ->
-            rl.on 'SIGINT', ->
+          lines: string[] := []
+          rl := import('readline') |> await |> .createInterface process.stdin, process.stdout
+          rl.on 'line', (buffer: string) => lines.push buffer + '\n'
+          content = await new Promise (resolve, reject) =>
+            rl.on 'SIGINT', =>
               reject '^C'
-            rl.on 'close', ->
+            rl.on 'close', =>
               resolve lines.join ''
         else
           // For piped stdin, read stdin directly to avoid potential echo.
-          content = (chunk for await chunk from process.stdin).join ''
+          content = (chunk for await chunk of process.stdin).join ''
       else
         content = await fs.readFile filename, {encoding}
       yield {filename, content, stdin}
     catch error
       yield {filename, error, stdin}
 
-repl = (options) ->
-  console.log "Civet #{version()} REPL.  Enter a blank line to #{
+declare global
+  var quit: () => void, exit: () => void
+  var v8debug: unknown
+
+function repl(options: Options)
+  console.log `Civet ${version()} REPL.  Enter a blank line to ${
     switch
       when options.ast then 'parse'
       when options.compile then 'transpile'
       else 'execute'
-  } code."
-  global.quit = global.exit = -> process.exit 0
-  nodeRepl = require 'repl'
-  vm = require 'vm'
-  r = nodeRepl.start
+  } code.`
+  global.quit = global.exit = => process.exit 0
+  nodeRepl := await import 'repl'
+  vm := await import 'vm'
+  r := nodeRepl.start
     prompt:
       switch
         when options.ast then '🌲> '
@@ -160,51 +191,53 @@ repl = (options) ->
         else '🐱> '
     writer:
       if options.ast
-        (obj) ->
+        (obj: unknown) =>
           try
             JSON.stringify obj, null, 2
           catch e
-            console.log "Failed to stringify: #{e}"
-            obj
+            console.log `Failed to stringify: ${e}`
+            ''
       else if options.compile
-        (obj) ->
-          if typeof obj == 'string'
+        (obj: unknown) =>
+          if obj <? 'string'
             obj?.replace /\n*$/, ''
           else
-            obj
-    eval: (input, context, filename, callback) ->
-      if input == '\n'  // blank input
-        callback null
+            ''
+    eval: (input: string, context, filename: string, callback) ->
+      if input is '\n'  // blank input
+        callback null, undefined
       else if input in ['quit\n', 'exit\n', 'quit()\n', 'exit()\n']
         process.exit 0
       else if input.endsWith '\n\n'  // finished input with blank line
+        let output: string
         try
           output = compile input, {...options, filename}
         catch error
           //console.error "Failed to transpile Civet:"
           console.error error
-          return callback ''
+          return callback null, undefined
         if options.compile or options.ast
           callback null, output
         else
+          let result: string
           try
             result = vm.runInContext output, context, {filename}
           catch error
-            return callback error
+            return callback error as Error, undefined
           callback null, result
       else  // still reading
-        callback new nodeRepl.Recoverable "Enter a blank line to execute code."
+        callback (new nodeRepl.Recoverable new Error "Enter a blank line to execute code."), null
 
-cli = ->
-  argv = process.argv  // process.argv gets overridden when running scripts
-  {filenames, scriptArgs, options} = parseArgs argv[2..]
+function cli
+  argv := process.argv  // process.argv gets overridden when running scripts
+  {filenames, scriptArgs, options} .= parseArgs argv[2..]
 
-  if options.config isnt false // --no-config
-    options.config ?= await findConfig(process.cwd())
+  if options.config is not false // --no-config
+    options.config ?= await findConfig(process.cwd()) as Options
 
   if options.config
     options = {
-      ...(await loadConfig options.config),
+      ...(await loadConfig options.config as string) as Options,
       ...options
     }
 
@@ -223,34 +256,36 @@ cli = ->
 
   return repl options if options.repl
 
-  for await {filename, error, content, stdin} from readFiles filenames, options
+  for await {filename, error, content, stdin} of readFiles filenames
     if error
-      console.error "#{filename} failed to load:"
+      console.error `${filename} failed to load:`
       console.error error
       continue
 
     // Transpile
+    let output: string
     try
-      output = compile content, {...options, filename}
+      output = compile content!, {...options, filename}
     catch error
-      //console.error "#{filename} failed to transpile:"
+      //console.error `${filename} failed to transpile:`
       console.error error
       continue
 
     if options.ast
       process.stdout.write JSON.stringify(output, null, 2)
     else if options.compile
-      if (stdin and not options.output) or options.output == '-'
+      if (stdin and not options.output) or options.output is '-'
         process.stdout.write output
       else
-        outputPath = path.parse filename
+        outputPath: path.FormatInputPathObject .= path.parse filename
         delete outputPath.base  // use name and ext
         if options.js
           outputPath.ext += ".jsx"
         else
           outputPath.ext += ".tsx"
         if options.output
-          optionsPath = path.parse options.output
+          optionsPath := path.parse options.output
+          let stat: Stats | null
           try
             stat = await fs.stat options.output
           catch
@@ -270,41 +305,41 @@ cli = ->
             outputPath = optionsPath
         // Make output directory in case it doesn't already exist
         fs.mkdir outputPath.dir, recursive: true if outputPath.dir
-        outputFilename = path.format outputPath
+        outputFilename := path.format outputPath
         try
           await fs.writeFile outputFilename, output
         catch error
-          console.error "#{outputFilename} failed to write:"
+          console.error `${outputFilename} failed to write:`
           console.error error
     else // run
-      esm = /^\s*(import|export)\b/m.test output
+      esm := /^\s*(import|export)\b/m.test output
       if esm
         // Run ESM code via `node --loader @danielx/civet/esm` subprocess
         if stdin
           // If code was read on stdin via command-line argument "-", try to
           // save it in a temporary file in same directory so paths are correct.
-          filename = ".stdin-#{process.pid}.civet"
+          filename := `.stdin-${process.pid}.civet`
           try
-            await fs.writeFile filename, content, {encoding}
+            await fs.writeFile filename, content!, {encoding}
           catch e
-            console.error "Could not write #{filename} for Civet ESM mode:"
+            console.error `Could not write ${filename} for Civet ESM mode:`
             console.error e
             process.exit 1
         { fork } := await import 'child_process'
-        execArgv = [ '--loader', '@danielx/civet/esm' ]
-        debugRe = /--debug|--inspect/
-        isDebug = typeof v8debug is "object" or debugRe.test(process.execArgv.join(' ')) or debugRe.test(process.env.NODE_OPTIONS)
+        execArgv := [ '--loader', '@danielx/civet/esm' ]
+        debugRe := /--debug|--inspect/
+        isDebug := v8debug <? "object" or debugRe.test(process.execArgv.join(' ')) or debugRe.test(process.env.NODE_OPTIONS ?? '')
         if process.env.NODE_OPTIONS
           execArgv.push process.env.NODE_OPTIONS
         if isDebug
           execArgv.push "--inspect=" + (process.debugPort + 1)
-        child = fork filename, [
+        child := fork filename, [
           ...scriptArgs
         ], {
           execArgv,
           stdio: 'inherit'
         }
-        child.on 'exit', (code) ->
+        child.on 'exit', (code) =>
           if stdin
             // Delete temporary file
             await fs.unlink filename
@@ -323,8 +358,8 @@ cli = ->
         try
           module._compile output, module.filename
         catch error
-          console.error "#{filename} crashed while running in CJS mode:"
+          console.error `${filename} crashed while running in CJS mode:`
           console.error error
           process.exit 1
 
-cli() if require.main == module
+cli() if require.main is module
