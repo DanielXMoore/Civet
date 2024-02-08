@@ -439,6 +439,31 @@ a instanceof b not instanceof c
 x? instanceof Function
 </Playground>
 
+### Prefix Operators
+
+Complex nested conditions can be written prefix-style by wrapping the
+binary operators in parentheses:
+
+<Playground>
+function haveAccess(doc, user)
+  (and)
+    user?
+    (or)
+      user.super, doc.worldReadable
+      user.name is doc.owner
+      (and)
+        doc.groupReadable
+        user.group is doc.group
+</Playground>
+
+This is a special case of
+[binary operators as functions](#binary-operators-as-functions)
+followed by immediate [function calls](#function-calls).
+In this special case, the operator can be given multiple arguments,
+and the operators
+[short circuit](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Expressions_and_operators#short-circuit_evaluation)
+as usual.
+
 ### `instanceof` shorthand
 
 <Playground>
@@ -810,6 +835,27 @@ booleans.reduce (||), false
 One exception: `(&)` is currently the single-argument identity function,
 not two-argument bitwise and.
 :::
+
+### Binary Operator Sections
+
+Like [Haskell](https://wiki.haskell.org/Section_of_an_infix_operator),
+you can specify one of the arguments in a
+[parenthesized binary operator](#binary-operators-as-functions)
+to make a one-argument function instead:
+
+<Playground>
+counts.map (1+)
+.map (2*)
+.map (**2)
+</Playground>
+
+Note that `+` and `-` get treated as unary operators first.
+Add a space after them to make them binary operator sections.
+
+<Playground>
+(+x)
+(+ x)
+</Playground>
 
 ### Functions as Infix Operators
 
