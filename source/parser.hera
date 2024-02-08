@@ -202,15 +202,37 @@ Arguments
 ImplicitArguments
   ApplicationStart InsertOpenParen:open _?:ws NonPipelineArgumentList:args InsertCloseParen:close ->
     // Don't treat as call if this is a postfix for/while/until/if/unless
-    if (args.length === 1 && args[0].type === "IterationExpression" &&
-        args[0].subtype !== "DoStatement" && !args[0].async &&
-        isEmptyBareBlock(args[0].block)) {
-      return $skip
+    if (args.length === 1) {
+      let arg0 = args[0]
+      if (Array.isArray(arg0)) arg0 = arg0[1] // skip whitespace
+      if (arg0.type === "IterationExpression" &&
+          arg0.subtype !== "DoStatement" && !arg0.async &&
+          isEmptyBareBlock(arg0.block)) {
+        return $skip
+      }
     }
-    return [open, insertTrimmingSpace(ws, ""), args, close]
+    return {
+      type: "Call",
+      args,
+      children: [open, insertTrimmingSpace(ws, ""), args, close]
+    }
 
 ExplicitArguments
-  OpenParen ArgumentList? ( __ Comma )? __ CloseParen
+  OpenParen:open ( ArgumentList ( __ Comma )? )?:args __:ws CloseParen:close ->
+    if (args) {
+      if (args[1]) { // trailing comma
+        args = [ ...args[0], args[1] ]
+      } else { // no trailing comma
+        args = args[0]
+      }
+    } else { // no arguments
+      args = []
+    }
+    return {
+      type: "Call",
+      args,
+      children: [open, args, ws, close],
+    }
 
 # Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
 ApplicationStart
@@ -238,11 +260,7 @@ ForbiddenImplicitCalls
 
 ArgumentsWithTrailingMemberExpressions
   Arguments:args AllowedTrailingMemberExpressions:trailing ->
-    const call = {
-      type: "Call",
-      children: args,
-    }
-    return [ call, ...trailing ]
+    return [ args, ...trailing ]
 
 TrailingMemberExpressions
   # NOTE: Assert "." to not match "?" or "!" as a member expression on the following line
@@ -265,39 +283,62 @@ CommaDelimiter
   NotDedented Comma
 
 # https://262.ecma-international.org/#prod-ArgumentList
+# NOTE: Return value should always be an array alternating
+#   argument, comma, argument, comma, ..., argument, [comma],
+# where each comma is a Comma token or an array [whitespace, commaToken]
+# (like CommaDelimiter)
 ArgumentList
   # Check for same line arguments then nested arguments
-  ArgumentPart ( CommaDelimiter !EOS ArgumentPart )* ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+
+  ArgumentPart ( CommaDelimiter !EOS ArgumentPart )* ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+ ->
+    return [
+      $1,
+      ...$2.flatMap(([comma, eos, arg]) => [comma, arg]),
+      ...$3.flatMap(([comma, args]) =>
+        Array.isArray(args) ? [comma, ...args] : [comma, args]
+      )
+    ]
   # NOTE: Added nested arguments on separate new lines
   NestedImplicitObjectLiteral ->
-    return insertTrimmingSpace($1, '')
+    return [ insertTrimmingSpace($1, '') ]
   NestedArgumentList
   # NOTE: Eliminated left recursion
-  _? ArgumentPart ( CommaDelimiter _? ArgumentPart )* ->
-    return [...($1 || []), $2, ...$3]
+  ( _? ArgumentPart ) ( CommaDelimiter ( _? ArgumentPart ) )* ->
+    return [ $1, ...$2.flat() ]
 
 # NOTE: ArgumentList variant that forbids top-level pipeline operators
 NonPipelineArgumentList
   # Check for same line arguments then nested arguments
-  NonPipelineArgumentPart ( CommaDelimiter !EOS NonPipelineArgumentPart )* ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+
+  NonPipelineArgumentPart ( CommaDelimiter !EOS NonPipelineArgumentPart )* ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+ ->
+    return [
+      $1,
+      ...$2.flatMap(([comma, eos, arg]) => [comma, arg]),
+      ...$3.flatMap(([comma, args]) =>
+        Array.isArray(args) ? [comma, ...args] : [comma, args]
+      )
+    ]
   # NOTE: Added nested arguments on separate new lines
   NestedImplicitObjectLiteral ->
-    return insertTrimmingSpace($1, '')
+    return [ insertTrimmingSpace($1, '') ]
   NestedArgumentList
   # NOTE: Eliminated left recursion
-  _? NonPipelineArgumentPart ( CommaDelimiter _? NonPipelineArgumentPart )* ->
-    return [...($1 || []), $2, ...$3]
+  ( _? NonPipelineArgumentPart ) ( CommaDelimiter ( _? NonPipelineArgumentPart ) )* ->
+    return [ $1, ...$2.flat() ]
 
 NestedArgumentList
   PushIndent NestedArgument*:args PopIndent ->
-    if (args.length) return args
-    return $skip
+    if (!args.length) return $skip
+    return args.flat()
 
 NestedArgument
-  Nested SingleLineArgumentExpressions ParameterElementDelimiter
+  Nested:indent SingleLineArgumentExpressions:args ParameterElementDelimiter:comma ->
+    // Attach indentation to first argument in SingleLineArgumentExpressions
+    let [ arg0, ...rest ] = args
+    arg0 = [ indent, ...arg0 ]
+    return [ arg0, ...rest, comma ]
 
 SingleLineArgumentExpressions
-  _? ArgumentPart ( _? Comma _? ArgumentPart )*
+  ( _? ArgumentPart ) ( ( _? Comma ) ( _? ArgumentPart ) )* ->
+    return [ $1, ...$2.flat() ]
 
 ArgumentPart
   # NOTE: Using ExtendedExpression to allow for If/Switch expressions
@@ -6224,7 +6265,7 @@ InlineJSXCallExpression
       type: "CallExpression",
       children: [
         $1,
-        { type: "Call", children: args },
+        args,
         ...rest.flat()
       ],
     })
@@ -6233,7 +6274,7 @@ InlineJSXCallExpression
       type: "CallExpression",
       children: [
         $1,
-        { type: "Call", children: args },
+        args,
         ...rest.flat()
       ],
     })
@@ -6256,7 +6297,6 @@ InlineJSXCallExpressionRest
     }
     return $1
   OptionalShorthand? ExplicitArguments:args ->
-    args = { type: "Call", children: args }
     if (!$1) return args
     return [ $1, args ]
 
