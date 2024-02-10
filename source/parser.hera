@@ -660,7 +660,7 @@ PipelineHeadItem
 PipelineTailItem
   Await
   Yield
-  Return
+  Return !AccessStart -> $1
   NWTypePostfix TypePostfix* ->
     return makeAmpersandFunction([" ", $1, ...$2])
   AmpersandFunctionExpression
@@ -843,7 +843,7 @@ NestedClassElement
 ClassElement
   # NOTE: Combined optional static and Method/Field definition
   Decorators?:decorators AccessModifier? ( Static _? )? ClassElementDefinition:definition ->
-    if (definition.type === "ShorthandMethodDefinition") {
+    if (definition.type === "MultiMethodDefinition") {
       // If shorthand method definition has multiple expansions each one should get the decorators
       return {
         ...definition,
@@ -2866,9 +2866,15 @@ PropertyDefinition
       names: id.names,
       value,
     }
-  # NOTE: Forbidding EmptyBlock in MethodDefinition to allow `foo()` shorthand
-  # for `foo: foo()`
   _?:ws MethodDefinition:def ->
+    // Add commas between multiple method definitions (from globs)
+    if (def.type === "MultiMethodDefinition") {
+      return {
+        children: def.children.flatMap((c, i) => i ? [",", c] : [c])
+      }
+    }
+    // NOTE: Forbidding EmptyBlock in MethodDefinition to allow `foo()`
+    // shorthand for `foo: foo()`
     if (!def.block || def.block.empty) return $skip
     return {
       ...def,
@@ -3102,12 +3108,12 @@ MethodDefinition
     }
 
   # shorthand get method definition
-  GetOrSet:kind _?:ws ForbidIndentedApplication ( MemberBase CallExpressionRest* )?:value RestoreIndentedApplication BracedBlock?:block ->
-    if (!value) return $skip
-    const rest = value[1]
+  GetOrSet:kind _?:ws ForbidIndentedApplication ( MemberBase CallExpressionRest* ReturnTypeSuffix? )?:content RestoreIndentedApplication BracedBlock?:block ->
+    if (!content) return $skip
+    const [ base, rest, returnType ] = content
+    const value = [ base, rest ]
 
     if (!rest.length) {
-      const base = value[0]
       let name
       if (base.type === "MemberExpression") {
         const lastAccess = lastAccessInCallExpression(base)
@@ -3125,7 +3131,7 @@ MethodDefinition
 
       // Skip autoReturn for identifiers with an explicit block like `get foo { true }`
       const autoReturn = !block || base.type !== "Identifier"
-      return makeGetterMethod(name, ws, base, block, kind, autoReturn)
+      return makeGetterMethod(name, ws, base, returnType, block, kind, autoReturn)
     }
 
     let last = rest[rest.length-1]
@@ -3138,10 +3144,10 @@ MethodDefinition
         return $skip
       case "PropertyAccess":
         const { name } = last
-        return makeGetterMethod(name, ws, value, block, kind)
+        return makeGetterMethod(name, ws, value, returnType, block, kind)
       case "PropertyGlob":
         return {
-          type: "ShorthandMethodDefinition",
+          type: "MultiMethodDefinition",
           children: last.object.properties.map((p) => {
             const { name, type } = p
             let v
@@ -3155,7 +3161,7 @@ MethodDefinition
             }
             const exp = processCallMemberExpression({
               type: "CallExpression",
-              children: [value[0], ...value[1].slice(0, -1), {
+              children: [base, ...rest.slice(0, -1), {
                 type: "PropertyAccess",
                 children: [last.dot, {
                   ...v,
@@ -3164,7 +3170,7 @@ MethodDefinition
               }],
             })
 
-            return makeGetterMethod(name, ws, exp, block, kind)
+            return makeGetterMethod(name, ws, exp, returnType, block, kind)
           })
         }
     }
@@ -3172,7 +3178,7 @@ MethodDefinition
     const lastAccess = lastAccessInCallExpression({children: rest})
     const { name } = lastAccess
 
-    return makeGetterMethod(name, ws, value, block, kind)
+    return makeGetterMethod(name, ws, value, returnType, block, kind)
 
 MethodModifier
   # NOTE: Merged get/set definitions
