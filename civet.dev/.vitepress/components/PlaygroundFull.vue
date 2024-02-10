@@ -51,7 +51,8 @@ Object.keys(console).forEach((key) => {
       (key === 'log' ? '' : `[${key.toUpperCase()}] `) +
       args
         .map((arg) =>
-          typeof arg === 'object' ? JSON.stringify(arg, null, 2) : arg.toString()
+          typeof arg === 'object' ? JSON.stringify(arg, null, 2) :
+          arg === undefined ? 'undefined' : arg.toString()
         )
         .join(' ') +
       '\n';
