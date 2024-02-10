@@ -1563,6 +1563,13 @@ type { Civet, Cat } from animals
 { type Civet, meow } from animals
 </Playground>
 
+### CommonJS Import/Export
+
+<Playground>
+import fs = require 'fs'
+export = fs.readFileSync 'example'
+</Playground>
+
 ### Aliases
 
 <Playground>
