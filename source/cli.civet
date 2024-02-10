@@ -56,13 +56,13 @@ path from "path"
 
 // TODO: Once the types are exported within the Civet source code,
 // we should import them directly here, instead of looking at an old release.
-type { ParseOptions } from "@danielx/civet"
+type { CompileOptions } from "@danielx/civet"
 
-interface Options
+interface Options extends CompileOptions
   run?: boolean
   compile?: boolean
   output?: string
-  config?: string | boolean | undefined | ParseOptions
+  config?: string | boolean | undefined
   ast?: boolean
   noCache?: boolean
   inlineMap?: boolean
@@ -260,6 +260,32 @@ function cli
 
   return repl options if options.repl
 
+  // Parse `output` option into forced directory, extension, and/or full path
+  let outputDir?: string, outputExt?: string, outputPath?: path.ParsedPath
+  if options.output
+    optionsPath := path.parse options.output
+    let stat: Stats | null
+    try
+      stat = await fs.stat options.output
+    catch
+      stat = null
+    if stat?.isDirectory() or options.output.endsWith(path.sep) or
+                              options.output.endsWith('/')
+      // -o dir writes outputs into that directory with default name
+      outputDir = options.output
+    else if /^(\.[^.]+)+$/.test optionsPath.base
+      // -o .js or .ts or .civet.js or .civet.ts etc. to control extension
+      outputExt = optionsPath.base
+      // Can also be prefixed by a directory name
+      outputDir = optionsPath.dir if optionsPath.dir
+    else
+      // -o filename fully specifies the output filename
+      // (don't use this with multiple input files)
+      outputPath = optionsPath
+    // For CLI compilations, default to rewriting imports to output extension
+    (options.parseOptions ??= {}).rewriteCivetImports ??=
+      outputExt ?? '.civet' + if options.js then ".jsx" else ".tsx"
+
   for await {filename, error, content, stdin} of readFiles filenames
     if error
       console.error `${filename} failed to load:`
@@ -281,39 +307,24 @@ function cli
       if (stdin and not options.output) or options.output is '-'
         process.stdout.write output
       else
-        outputPath: path.FormatInputPathObject .= path.parse filename
-        delete outputPath.base  // use name and ext
+        targetPath: path.FormatInputPathObject .= path.parse filename
+        delete targetPath.base  // use name and ext
+        // Default extension
         if options.js
-          outputPath.ext += ".jsx"
+          targetPath.ext += ".jsx"
         else
-          outputPath.ext += ".tsx"
-        if options.output
-          optionsPath := path.parse options.output
-          let stat: Stats | null
-          try
-            stat = await fs.stat options.output
-          catch
-            stat = null
-          if stat?.isDirectory() or options.output.endsWith(path.sep) or
-                                    options.output.endsWith('/')
-            // -o dir writes outputs into that directory with default name
-            outputPath.dir = options.output
-          else if /^(\.[^.]+)+$/.test optionsPath.base
-            // -o .js or .ts or .civet.js or .civet.ts etc. to control extension
-            outputPath.ext = optionsPath.base
-            // Can also be prefixed by a directory name
-            outputPath.dir = optionsPath.dir if optionsPath.dir
-          else
-            // -o filename fully specifies the output filename
-            // (don't use this with multiple input files)
-            outputPath = optionsPath
+          targetPath.ext += ".tsx"
+        // `output` option overrides
+        targetPath.dir = outputDir if outputDir?
+        targetPath.ext = outputExt if outputExt?
+        targetPath = outputPath if outputPath?
         // Make output directory in case it doesn't already exist
-        fs.mkdir outputPath.dir, recursive: true if outputPath.dir
-        outputFilename := path.format outputPath
+        fs.mkdir targetPath.dir, recursive: true if targetPath.dir
+        targetFilename := path.format targetPath
         try
-          await fs.writeFile outputFilename, output
+          await fs.writeFile targetFilename, output
         catch error
-          console.error `${outputFilename} failed to write:`
+          console.error `${targetFilename} failed to write:`
           console.error error
     else // run
       esm := /^\s*(import|export)\b/m.test output
