@@ -23,6 +23,7 @@ declare module "@danielx/civet" {
     react: boolean
     solid: boolean
     client: boolean
+    rewriteCivetImports: string
     rewriteTsImports: boolean
     server: boolean
     tab: number
