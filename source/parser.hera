@@ -31,6 +31,7 @@ import {
   makeEmptyBlock,
   makeExpressionStatement,
   makeGetterMethod,
+  makeAmpersandFunction,
   makeLeftHandSideExpression,
   makeRef,
   maybeRef,
@@ -439,12 +440,16 @@ UnaryPostfix
   TypePostfix+ -> { ts: true, children: $0 }
 
 TypePostfix
-  _:ws As:as ExclamationPoint?:ex Type:type ->
+  _:ws NWTypePostfix:postfix ->
+    return [ws, ...postfix]
+
+NWTypePostfix
+  As:as ExclamationPoint?:ex Type:type ->
     if (ex) {
-      return [{ $loc: ex.$loc, token: " as unknown" }, ws, as, type]
+      return [{ $loc: ex.$loc, token: "as unknown " }, as, type]
     }
-    return [ws, as, type]
-  _ Satisfies Type
+    return [as, type]
+  Satisfies Type
 
 # https://262.ecma-international.org/#prod-UpdateExpression
 UpdateExpression
@@ -623,40 +628,20 @@ ShortCircuitExpression
 PipelineExpression
   _?:ws PipelineHeadItem:head ( NotDedented Pipe __ PipelineTailItem )+:body ->
     if (head.token === "&") {
-      const ref = makeRef("$")
+      head = makeAmpersandFunction()
+    }
 
-      const arrowBody = {
+    if (head.type === "ArrowFunction" && head.ampersandBlock) {
+      const expressions = [ {
         type: "PipelineExpression",
-        children: [ws, ref, body]
-      }
-
-      const parameters = {
-        type: "Parameters",
-        children: [ref],
-        names: [],
-      }
-      const expressions = [arrowBody]
-      const block = {
-        bare: true,
-        expressions,
-        children: [expressions],
-      }
-
-      const children = [ parameters, " => ", block ]
-
+        children: [ ws, head.block.expressions[0], body ],
+      } ]
+      const block = { ...head.block, expressions, children: [expressions] }
       return {
-        type: "ArrowFunction",
-        signature: {
-          modifier: {
-            children: []
-          }
-        },
-        children,
-        ref,
-        body: [arrowBody],
-        ampersandBlock: true,
-        parameters,
+        ...head,
         block,
+        body: expressions,
+        children: [ ...head.children.slice(0, -1), block ],
       }
     }
 
@@ -676,6 +661,8 @@ PipelineTailItem
   Await
   Yield
   Return !AccessStart -> $1
+  NWTypePostfix TypePostfix* ->
+    return makeAmpersandFunction([" ", $1, ...$2])
   AmpersandFunctionExpression
   !Ampersand PipelineHeadItem -> $2
 
@@ -1850,29 +1837,7 @@ FunctionExpression
   # Identity function shorthand
   # NOTE: Currently shadows (&) binary & operator, we might want to revisit
   "(&)" ->
-    const ref = makeRef("$"), body = [ref]
-
-    const parameters = {
-      type: "Parameters",
-      children: [ref],
-      names: [],
-    }
-    const block = {
-      expressions: [ref],
-    }
-
-    return {
-      type: "ArrowFunction",
-      signature: {
-        modifier: {},
-      },
-      children: [parameters, " => ", body],
-      ref,
-      body,
-      ampersandBlock: true,
-      block,
-      parameters,
-    }
+    return makeAmpersandFunction()
 
   # BinaryOp function shorthand
   OpenParen:open BinaryOp:op CloseParen:close ->
@@ -1986,19 +1951,13 @@ AmpersandFunctionExpression
   UnaryOp*:prefix ( Ampersand / ( !NumericLiteral &( QuestionMark? Dot !Dot ) ) ) AmpersandBlockRHS?:rhs ->
     if (!prefix.length && !rhs) return $skip
 
-    let body, ref
+    let body, ref, typeSuffix
 
     // Only unary ops
     if (!rhs) {
       body = ref = makeRef("$")
     } else {
-      // &? gets wrapped in UnaryExpression and ParenthesizedExpression;
-      // descend into `expression` property until `ref` is defined
-      let exp = rhs
-      while (!exp.ref && exp.expression) {
-        exp = exp.expression
-      }
-      ({ref} = exp)
+      ({ref, typeSuffix} = rhs)
       if (!ref) {
         throw new Error("Could not find ref in ampersand shorthand block")
       }
@@ -2013,7 +1972,7 @@ AmpersandFunctionExpression
 
     const parameters = {
       type: "Parameters",
-      children: [ref],
+      children: typeSuffix ? ["(", ref, typeSuffix, ")"] : [ref],
       names: [],
     }
     const expressions = [body]
@@ -2093,9 +2052,12 @@ AmpersandBlockRHS
     if (!$2) return $skip
     return $2
 
+AmpersandTypeSuffix
+  &( _? QuestionMark? _? Colon ) TypeSuffix -> $2
+
 AmpersandBlockRHSBody
-  (!_ CallExpressionRest+ )?:callExpRest QuestionMark?:unaryPostfix ( WAssignmentOp ( NotDedented UpdateExpression WAssignmentOp )* NonPipelineExtendedExpression )?:assign ( ![&] BinaryOpRHS+ )?:binopRHS ->
-    if (!callExpRest && !binopRHS && !unaryPostfix) return $skip
+  AmpersandTypeSuffix?:typeSuffix (!_ CallExpressionRest+ )?:callExpRest UnaryPostfix?:unaryPostfix ( WAssignmentOp ( NotDedented UpdateExpression WAssignmentOp )* NonPipelineExtendedExpression )?:assign ( ![&] BinaryOpRHS+ )?:binopRHS ->
+    if (!typeSuffix && !callExpRest && !binopRHS && !unaryPostfix) return $skip
     const ref = makeRef("$")
 
     let exp = {
@@ -2127,16 +2089,18 @@ AmpersandBlockRHSBody
         lhs,
         assigned: exp,
         exp: rhs,
-        ref,
       }
     }
 
     if (binopRHS) {
       exp = {
         children: processBinaryOpExpression([exp, binopRHS[1]]),
-        ref,
       }
     }
+
+    // Put at top level for AmpersandFunctionExpression to process
+    exp.ref = ref
+    exp.typeSuffix = typeSuffix
 
     return exp
 
