@@ -7,18 +7,23 @@ testFile=source/lib.civet
 
 function get_times {
   cmd=$1
-  file=$2
   echo "Running $cmd on $testFile $count times"
-  true > "$file"
+
+  times=()
   for ((i = 1; i <= count; i++)) {
-    (time $cmd < $testFile > /dev/null) 2>&1 | awk '/real/ {print $2}' | awk -Fm '{print $1*60+$2}' | tee -a "$file"
+    time=$( (time $cmd < $testFile > /dev/null) 2>&1 | awk '/real/ {print $2}' | awk -Fm '{print $1*60+$2}' )
+    echo $time
+    times+=($time)
   }
+
+  average=$(echo ${times[@]} | awk -f build/avg.awk)
 }
 
 get_times ./dist/civet new.out
+new_avg=$average
 get_times ./node_modules/.bin/civet old.out
+old_avg=$average
 
-echo "New"
-awk --file=build/avg.awk new.out
-echo "Old"
-awk --file=build/avg.awk old.out
+echo New: $new_avg
+echo Old: $old_avg
+echo Ratio: $(awk "BEGIN { print $new_avg / $old_avg }")
