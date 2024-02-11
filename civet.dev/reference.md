@@ -538,10 +538,31 @@ data
 </Playground>
 
 Pairs particularly well with
-[single-argument function shorthand](#single-argument-function-shorthand):
+[single-argument function shorthand](#single-argument-function-shorthand)
+and [binary operator sections](#binary-operator-sections):
 
 <Playground>
 x.length |> & + 1 |> .toString()
+</Playground>
+
+<Playground>
+x.length |> (+ 1) |> .toString()
+</Playground>
+
+Build functions by starting with `&`:
+
+<Playground>
+& |> .toString |> console.log
+</Playground>
+
+<Playground>
+&: number |> (+ 1) |> (* 2) |> Math.round
+</Playground>
+
+Use `as T` to cast types in your pipeline:
+
+<Playground>
+data |> JSON.parse |> as MyRecord |> addRecord
 </Playground>
 
 Use `await`, `yield`, or `return` in your pipeline:
@@ -820,6 +841,12 @@ You can also assign properties:
 
 <Playground>
 x.map .name = "Civet" + i++
+</Playground>
+
+You can also type the argument:
+
+<Playground>
+increment := &: number + 1
 </Playground>
 
 ### Binary Operators as Functions
