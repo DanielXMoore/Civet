@@ -716,7 +716,7 @@ ClassDeclaration
   # NOTE: skipping syntax directed operation for now
   # Wrap nameless function declarations with parens, as needed in JS.
   ClassExpression ->
-    if ($1.binding) return $1
+    if ($1.id) return $1
     return makeLeftHandSideExpression($1)
 
 # https://262.ecma-international.org/#prod-ClassExpression
@@ -726,6 +726,7 @@ ClassExpression
       decorators,
       abstract,
       binding,
+      id: binding?.[0],
       heritage,
       body,
       children: $0,
@@ -2009,7 +2010,10 @@ OperatorDeclaration
   # `operator {x, y} := ...` declaration while blessing
   Operator:op _:w LexicalDeclaration:decl ->
     decl.names.forEach((name) => module.operators.add(name))
-    return [insertTrimmingSpace(w, ""), decl]
+    return {
+      ...decl,
+      children: [ insertTrimmingSpace(w, ""), ...decl.children ]
+    }
   # `operator id(a, b) {...}` defines a function
   OperatorSignature:signature BracedBlock:block ->
     module.operators.add(signature.id.name)
@@ -2025,7 +2029,10 @@ OperatorDeclaration
   Operator:op _:w1 Identifier:id ( CommaDelimiter _? Identifier )*:ids ->
     module.operators.add(id.name)
     ids.forEach(([, , id2]) => module.operators.add(id2.name))
-    return []
+    return {
+      id,
+      children: [],
+    }
 
 # NOTE: Like FunctionSignature, but no async or star or @,
 # and parameters are required (to be useful).
@@ -4918,9 +4925,34 @@ ExportDeclaration
       type: "ExportDeclaration",
       children: [exp, $0.slice(1)],
     }
-  # NOTE: Using ExtendedExportDeclaration to allow If/Switch expressions
-  Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / ExtendedExpression ):declaration ->
-    return { type: "ExportDeclaration", declaration, children: $0 }
+  # NOTE: export default for all Declarations not supported by TS export default
+  # NOTE: Avoid matching `f := ->`, leaving that for the next rule.
+  Decorators? Export __ Default __ !FunctionDeclaration ( LexicalDeclaration / VariableStatement / TypeAliasDeclaration / NamespaceDeclaration / EnumDeclaration / OperatorDeclaration ):declaration ->
+    let id, error
+    if (declaration.id) {
+      id = declaration.id
+    } else if (declaration.names) {
+      if (declaration.names.length !== 1) {
+        error = {
+          type: "Error",
+          message: `export default with ${declaration.names.length} variable declaration (should be 1)`
+        }
+      }
+      id = declaration.names[0]
+    } else {
+      throw new Error("Could not find name of declaration in export default")
+    }
+    return [
+      declaration,
+      { children: [";"], ts: declaration.ts },
+      error ??
+      { type: "ExportDeclaration", declaration: id, ts: declaration.ts,
+        children: [ ...$0.slice(0, -2), id ] }
+    ]
+  # NOTE: This covers all forms that can be directly export defaulted in TS.
+  # NOTE: Using ExtendedExpression to allow If/Switch expressions
+  Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / ExtendedExpression ):declaration ->
+    return { type: "ExportDeclaration", declaration, ts: declaration.ts, children: $0 }
   Export __ ExportFromClause __ FromClause ->
     return { type: "ExportDeclaration", ts: $3.ts, children: $0 }
   # NOTE: Declaration and VariableStatement should come before NamedExports
@@ -5060,6 +5092,7 @@ VariableStatement
   Var __ VariableDeclarationList ->
     return {
       ...$3,
+      names: $3.names,
       children: [$1, ...$2, ...$3.children],
     }
 
@@ -6522,15 +6555,49 @@ UsingJSModeError
 TypeDeclaration
   # NOTE: First check for forms with a `declare` keyword present
   ( Export _? )? ( Declare _? )  TypeLexicalDeclaration -> { ts: true, children: $0 }
-  ( Export _? )? ( Declare _? )? TypeDeclarationRest    -> { ts: true, children: $0 }
+  ( Export _? )?:export_ ( Declare _? )?:declare TypeDeclarationRest:t ->
+    return {
+      ...t,
+      ts: true,
+      export: export_,
+      declare,
+      children: [ export_, declare, ...t.children ]
+    }
 
 # NOTE: These are declarations even without a `declare` prefix
 TypeDeclarationRest
-  # TODO: ( __ Type ) can be refined further to check for consistently nested binary ops, etc.
-  TypeKeyword _? IdentifierName TypeParameters? OptionalEquals ( ( _? Type ) / ( __ Type ) )
-  Interface   _? IdentifierName TypeParameters? InterfaceExtendsClause? InterfaceBlock
-  Namespace   _? IdentifierName ModuleBlock
+  TypeAliasDeclaration
+  InterfaceDeclaration
+  NamespaceDeclaration
   FunctionSignature
+
+TypeAliasDeclaration
+  # TODO: ( __ Type ) can be refined further to check for consistently nested binary ops, etc.
+  TypeKeyword _? IdentifierName:id TypeParameters? OptionalEquals ( ( _? Type ) / ( __ Type ) ) ->
+    return {
+      type: "TypeDeclaration",
+      id,
+      children: $0,
+      ts: true,
+    }
+
+InterfaceDeclaration
+  Interface _? IdentifierName:id TypeParameters? InterfaceExtendsClause? InterfaceBlock ->
+    return {
+      type: "InterfaceDeclaration",
+      id,
+      children: $0,
+      ts: true,
+    }
+
+NamespaceDeclaration
+  Namespace _? IdentifierName:id ModuleBlock ->
+    return {
+      type: "NamespaceDeclaration",
+      id,
+      children: $0,
+      ts: true,
+    }
 
 OptionalEquals
   __ Equals
@@ -6654,8 +6721,10 @@ EnumDeclaration
     // if (isConst) return ts
     // Generate JS output for enum similar to how TypeScript does
     const names = new Set(block.properties.map(p => p.name.name))
-    return [ts,
-      {
+    return {
+      type: "EnumDeclaration",
+      id,
+      children: [ts, {
         js: true,
         children: [
           ["let ", id, " = {};\n"],
@@ -6691,8 +6760,8 @@ EnumDeclaration
             }
           }),
         ],
-      }
-    ]
+      }]
+    }
 
 EnumBlock
   __ OpenBrace NestedEnumProperties:props __ CloseBrace ->

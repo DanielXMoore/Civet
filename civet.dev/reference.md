@@ -1718,6 +1718,14 @@ export a, b, c from "./cool.js"
 export x = 3
 </Playground>
 
+### Export Default Shorthand
+
+Most declarations can also be `export default`:
+
+<Playground>
+export default x := 5
+</Playground>
+
 ## Comments
 
 ### JavaScript Comments
