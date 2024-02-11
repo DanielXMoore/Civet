@@ -266,6 +266,7 @@ The `"civet"` prologue directive can also specify the following options:
 
 | Configuration       | What it enables |
 |---------------------|---------------------------------------|
+| rewrite-civet-imports=.ext | Rewrite `import "file.civet"` to `import "file.ext"` |
 | tab=NNN             | treat tab like NNN spaces (default=1) |
 
 For example, `"civet tab=2"` or `"civet tab=4"` lets you mix tabs and spaces
