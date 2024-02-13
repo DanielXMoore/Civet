@@ -10,7 +10,12 @@ onmessage = async (e) => {
 
   try {
     let ast = Civet.compile(code, { ast: true });
-    let tsCode = Civet.generate(ast, {});
+    const errors = [];
+    let tsCode = Civet.generate(ast, { errors });
+    if (errors.length) {
+      // TODO: Better error display; copied from main.civet
+      throw new Error(`Parse errors: ${errors.map($ => $.message).join("\n")}`)
+    }
     let jsCode = '';
 
     if (jsOutput) {
@@ -39,10 +44,16 @@ onmessage = async (e) => {
         node.children.token = "civetconsole"
       })
 
-      jsCode = Civet.generate(ast, { js: true })
+      jsCode = Civet.generate(ast, { js: true, errors })
 
       if (topLevelAwait) {
         jsCode += `.then((x)=>x!==undefined&&civetconsole.log("[EVAL] "+x))`
+      }
+
+      // Parse errors specific to JS generation
+      if (errors.length) {
+        jsCode = `civetconsole.error("Civet failed to generate JavaScript code:\\n${errors.map($ => $.message.replace(/[\\"]/g, '\\$&')).join("\\n")}")`
+        console.log(jsCode)
       }
     }
 
