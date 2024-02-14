@@ -1012,7 +1012,7 @@ getX := (civet: Civet, dir: Dir) =>
 switch s
   ""
     console.log "nothing"
-  /\s+/
+  /^\s+$/
     console.log "whitespace"
   "hi"
     console.log "greeting"
