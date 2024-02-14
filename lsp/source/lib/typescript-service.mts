@@ -77,6 +77,7 @@ interface Transpiler {
   compile(path: string, source: string): {
     code: string,
     sourceMap?: SourceMap
+    errors?: Error[]
   } | undefined
 }
 
@@ -407,8 +408,8 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
     }
 
     if (result) {
-      const { code: transpiledCode, sourceMap } = result
-      createOrUpdateMeta(sourcePath, transpiledDoc, sourceMap?.data.lines)
+      const { code: transpiledCode, sourceMap, errors } = result
+      createOrUpdateMeta(sourcePath, transpiledDoc, sourceMap?.data.lines, errors)
       TextDocument.update(transpiledDoc, [{ text: transpiledCode }], version)
 
       return transpiledCode
@@ -495,7 +496,7 @@ function TSService(projectURL = "./") {
   }
 
   let civetConfig: CompileOptions = {}
-  CivetConfig.findConfig(projectPath).then(async configPath => {
+  CivetConfig.findConfig(projectPath).then(async (configPath: unknown) => {
     if (configPath) {
       console.info("Loading Civet config @", configPath)
       const config = await CivetConfig.loadConfig(configPath)
@@ -542,11 +543,15 @@ function TSService(projectURL = "./") {
   }
 
   function transpileCivet(path: string, source: string) {
-    return Civet.compile(source, {
-      ...civetConfig,
-      filename: path,
-      sourceMap: true,
-    })
+    const errors: Error[] = [],
+      result = Civet.compile(source, {
+        ...civetConfig,
+        filename: path,
+        sourceMap: true,
+        errors,
+      })
+
+    return Object.assign(result, { errors })
   }
 }
 
