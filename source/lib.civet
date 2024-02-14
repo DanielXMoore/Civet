@@ -14,7 +14,7 @@ type ASTNodeBase =
   names?: string[]
   parent?: ASTNodeBase | undefined
 
-type ASTError = ASTNodeBase &
+type ASTError =
   type: "Error"
   message: string
 
@@ -60,7 +60,18 @@ type SwitchStatement
   children: Children
   parent: ASTNodeBase | undefined
   condition: Condition
-  caseBlock: unknown
+  caseBlock: CaseBlock
+
+type CaseBlock
+  type: "CaseBlock"
+  clauses: CaseClause[]
+  children: Children
+
+type CaseClause
+  type: unknown
+  children: Children
+  break?: ASTNode
+  block: BlockStatement
 
 type LabeledStatement
   type: "LabeledStatement"
@@ -158,6 +169,8 @@ type FunctionNode = FunctionExpression | ArrowFunction | MethodDefinition
 type Predicate = (node: Exclude<ASTNode, undefined>) => boolean
 
 type TabConfig = number | undefined
+
+type ParseRule = (context: {fail: () => void}, state: {pos: number, input: string}) => ???
 
 /**
  * Adds parent pointers to all nodes in the AST. Elements within
@@ -3101,80 +3114,69 @@ function nonMatcherBindings(pattern) {
   }
 }
 
-function aggregateDuplicateBindings(bindings, ReservedWord) {
-  const props = gatherRecursiveAll(bindings, (n) => n.type === "BindingProperty")
-  const arrayBindings = gatherRecursiveAll(bindings, (n) => n.type === "ArrayBindingPattern")
+function aggregateDuplicateBindings(bindings, ReservedWord: ParseRule) {
+  props := gatherRecursiveAll bindings, .type is "BindingProperty"
+  arrayBindings := gatherRecursiveAll bindings, .type is "ArrayBindingPattern"
 
-  arrayBindings.forEach((a) => {
-    const { elements } = a
-    elements.forEach((element) => {
-      if (Array.isArray(element)) {
-        const [, e] = element
-        if (e.type === "Identifier") {
-          props.push(e)
-        } else if (e.type === "BindingRestElement") {
-          props.push(e)
-        }
-      }
-    })
-  })
+  arrayBindings.forEach (a) =>
+    { elements } := a
+    elements.forEach (element) =>
+      if Array.isArray element
+        [, e] := element
+        if e.type is "Identifier"
+          props.push e
+        else if e.type is "BindingRestElement"
+          props.push e
 
-  const declarations = []
+  declarations: ASTNode[][] := []
 
-  const propsGroupedByName = new Map
+  propsGroupedByName := new Map
 
-  for (const p of props) {
-    const { name, value } = p
+  for p of props
+    { name, value } := p
 
     // This is to handle aliased props, non-aliased props, and binding identifiers in arrays
-    const key = value?.name || name?.name || name
-    if (propsGroupedByName.has(key)) {
+    const key = value?.name or name?.name or name
+    if propsGroupedByName.has key
       propsGroupedByName.get(key).push(p)
-    } else {
-      propsGroupedByName.set(key, [p])
-    }
-  }
+    else
+      propsGroupedByName.set key, [p]
 
-  propsGroupedByName.forEach((shared, key) => {
-    if (!key) return
+  propsGroupedByName.forEach (shared, key) =>
+    return unless key
     // NOTE: Allows pattern matching reserved word keys by binding to inaccessible refs
     // HACK: using the parser's ReservedWord rule here
-    if (ReservedWord({ fail() { } }, {
+    if ReservedWord({ fail() { } }, {
       pos: 0,
       input: key,
-    })) {
-      shared.forEach((p) => {
-        aliasBinding(p, makeRef(`_${key}`, key))
-      });
+    })
+      shared.forEach (p) =>
+        aliasBinding p, makeRef(`_${key}`, key)
       // Don't push declarations for reserved words
       return
-    }
 
-    if (shared.length === 1) return
+    return if shared.length is 1
 
     // Create a ref alias for each duplicate binding
-    const refs = shared.map((p) => {
-      const ref = makeRef(key)
-
+    refs := shared.map (p) =>
+      ref := makeRef(key)
       aliasBinding(p, ref)
 
       return ref
-    })
 
     // Gather duplicates in an array
     declarations.push(["const ", key, " = [", ...refs.map((r, i) => {
       return i === 0 ? r : [", ", r]
     }), "]"])
-  })
 
   return declarations
 }
 
-function processPatternMatching(statements, ReservedWord): void {
-  gatherRecursiveAll(statements, (n) => n.type === "SwitchStatement")
+function processPatternMatching(statements: ASTNode, ReservedWord: ParseRule): void {
+  gatherRecursiveAll(statements, .type is "SwitchStatement")
     .forEach((s: SwitchStatement) => {
-      const { caseBlock } = s
-      const { clauses } = caseBlock
+      { caseBlock } := s
+      { clauses } := caseBlock
 
       // Remove inserted `break;` in `when` clauses that don't need them
       for c of clauses
@@ -3185,29 +3187,24 @@ function processPatternMatching(statements, ReservedWord): void {
             c.children.splice c.children.indexOf(c.break), 1
             c.break = undefined
 
-      let errors = false
-      let isPattern = false
-      if (clauses.some((c) => c.type === "PatternClause")) {
+      errors .= false
+      isPattern .= false
+      if clauses.some .type is "PatternClause"
         isPattern = true
-        clauses.forEach((c) => {
+        clauses.forEach (c) =>
           // else/default clause is ok
-          if (!(c.type === "PatternClause" || c.type === "DefaultClause")) {
+          unless c.type is "PatternClause" or c.type is "DefaultClause"
             errors = true
-            c.children.push({
+            c.children.push
               type: "Error",
               message: "Can't mix pattern matching and non-pattern matching clauses",
-            })
-          }
-        })
-      }
 
-      if (errors || !isPattern) return
+      return if errors or !isPattern
 
-      let { condition } = s
-      if (condition.type === "ParenthesizedExpression") {
+      { condition } .= s
+      if condition.type is "ParenthesizedExpression"
         // Unwrap parenthesized expression
-        condition = condition.expression
-      }
+        condition = condition.expression as ParenthesizedExpression
 
       let hoistDec, refAssignment = [], ref = maybeRef(condition, "m");
       if (ref !== condition) {
@@ -3224,7 +3221,7 @@ function processPatternMatching(statements, ReservedWord): void {
       let prev = [],
         root = prev
 
-      const l = clauses.length
+      l := clauses.length
       clauses.forEach((c, i) => {
         if (c.type === "DefaultClause") {
           prev.push(c.block)
@@ -3515,7 +3512,7 @@ function processTypes(node: ASTNode)
         ")"
       ]
 
-function processProgram(root: BlockStatement, config, m, ReservedWord): void {
+function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule): void {
   // invariants
   assert.equal(m.forbidBracedApplication.length, 1, "forbidBracedApplication")
   assert.equal(m.forbidClassImplicitCall.length, 1, "forbidClassImplicitCall")
