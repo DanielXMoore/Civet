@@ -19,7 +19,7 @@ import {
 import {
   TextDocument
 } from 'vscode-languageserver-textdocument';
-import TSService, { FileMeta } from './lib/typescript-service.mjs';
+import TSService from './lib/typescript-service.mjs';
 import * as Previewer from "./lib/previewer.mjs";
 import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier } from './lib/util.mjs';
 import assert from "assert"
