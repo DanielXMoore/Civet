@@ -108,13 +108,25 @@ $: document.title = title
 ### Braced Literals
 
 With braces, the `{x}` shorthand generalizes to any
-sequence of member accesses and/or calls:
+sequence of member accesses and/or calls and/or unary operators:
 
 <Playground>
 another := {person.name, obj?.c?.x}
 computed := {foo(), bar()}
 named := {lookup[x+y]}
-templated := {`${prefix}${suffix}`: result}
+cast := {value as T}
+bool := {!!available}
+</Playground>
+
+### Property Names
+
+Both braced and unbraced literals support shorthand for
+computed property names:
+
+<Playground>
+negate := {-1: +1, +1: -1}
+templated :=
+  `${prefix}${suffix}`: result
 </Playground>
 
 ### Object Globs
