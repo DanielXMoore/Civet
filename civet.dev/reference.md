@@ -124,8 +124,9 @@ Both braced and unbraced literals support shorthand for
 computed property names:
 
 <Playground>
-negate := {-1: 1, 1: -1}
-templated := {`${prefix}${suffix}`: result}
+negate := {-1: +1, +1: -1}
+templated :=
+  `${prefix}${suffix}`: result
 </Playground>
 
 ### Object Globs
