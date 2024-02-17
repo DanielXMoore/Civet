@@ -150,6 +150,35 @@ normally, but you'll need to mark `"fs"` as an external dependency
 (see e.g. [esbuild instructions](https://esbuild.github.io/api/#external>)
 and [Vite instructions](https://vitejs.dev/guide/build#library-mode)).
 
+## Typechecking
+
+You can ask Civet to run TypeScript to check for type errors in your Civet code
+(the analog of `tsc`):
+
+```sh
+civet --typecheck src/**/*.civet
+```
+
+Be sure to specify all the files you want to check.
+This command returns an error code if there are any type errors,
+so you can use it in an NPM script and in CI.
+
+You can typecheck and generate JavaScript/TypeScript files at the same time.
+This could be a good NPM `build` script, for example.
+Note that JavaScript/TypeScript files will be generated
+even if there are type errors.
+
+```sh
+civet -c --typecheck src/**/*.civet
+```
+
+You can also use TypeScript to generate `.d.ts` declaration files
+(if there are no type errors):
+
+```sh
+civet --emit-declaration src/**/*.civet
+```
+
 ## Building a project
 
 Use Civet's built-in [unplugin](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin) to integrate with many
