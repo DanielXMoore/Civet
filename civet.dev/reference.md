@@ -1611,15 +1611,17 @@ export = fs.readFileSync 'example'
 
 ### Aliases
 
-<Playground>
-type ID = number | string
-</Playground>
+`::=` is shorthand for type aliases:
 
 <Playground>
+ID ::= number | string
+Point ::= x: number, y: number
+type ID = number | string
 type Point = x: number, y: number
 </Playground>
 
-The `=` is optional if the content is indented:
+Alternatively, you can use `type` without an `=`,
+if the right-hand side is indented (similar to an `interface`):
 
 <Playground>
 type ID
