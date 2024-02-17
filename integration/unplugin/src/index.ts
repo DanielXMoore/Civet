@@ -90,7 +90,8 @@ function implicitCivet(file: string): string | undefined {
   return
 }
 
-const civetUnplugin = createUnplugin((options: PluginOptions = {}, meta) => {
+export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
+(options: PluginOptions = {}, meta) => {
   if (options.dts) options.emitDeclaration = options.dts;
   if (options.js) options.ts = 'civet';
 
@@ -202,6 +203,7 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}, meta) => {
           });
 
         if (diagnostics.length > 0) {
+          // TODO: Map diagnostics to original file via sourcemap
           console.error(
             ts.formatDiagnosticsWithColorAndContext(
               diagnostics,
@@ -450,6 +452,6 @@ const civetUnplugin = createUnplugin((options: PluginOptions = {}, meta) => {
       },
     },
   };
-});
+};
 
-export default civetUnplugin;
+export default createUnplugin(rawPlugin)

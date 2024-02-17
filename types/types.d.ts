@@ -7,6 +7,7 @@ declare module "@danielx/civet" {
     coffeeBooleans: boolean
     coffeeClasses: boolean
     coffeeComment: boolean
+    coffeeCompat: boolean
     coffeeDo: boolean
     coffeeEq: boolean
     coffeeForLoops: boolean
