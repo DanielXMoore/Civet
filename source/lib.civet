@@ -26,6 +26,10 @@ type ASTLeaf = ASTNodeBase &
   $loc: Loc
   token: string
 
+type CommentNode = ASTLeaf & type: "Comment"
+
+type WSNode = "" | (ASTLeaf | CommentNode)[]
+
 type Children = ASTNode[]
 
 type StatementDelimiter = ASTNode
@@ -109,11 +113,42 @@ type Binding =
   type: "Binding"
   children: Children
   names: string[]
-  pattern: unknown
-  suffix: unknown
+  pattern: BindingIdentifier | BindingPattern
+  suffix: TypeSuffix | undefined
   initializer: [unknown, unknown, ASTNodeBase] | undefined
   splices: unknown[]
   thisAssignments: unknown[]
+
+type Identifier =
+  type: "Identifier"
+  name: string
+  names: string[]
+  children: [ ASTLeaf ]
+  parent: ASTNodeBase | undefined
+
+type ReturnValue =
+  type: "ReturnValue"
+  children: Children
+
+type BindingIdentifier = AtBinding | Identifier | ReturnValue
+
+type BindingPattern = ObjectBindingPattern | ArrayBindingPattern | PinPattern | Literal | RegularExpressionLiteral
+
+type RegularExpressionLiteral = ASTLeaf & type: "RegularExpressionLiteral"
+
+type ArrayBindingPattern = ASTNodeBase
+
+type PinPattern = ASTNodeBase
+
+type NonNewlineWhitespace = (ASTLeaf | " ")[]
+
+type BindingPatternContent = unknown[]
+
+type ObjectBindingPattern =
+  type: "ObjectBindingPattern",
+  children: [NonNewlineWhitespace, ASTLeaf, BindingPatternContent, WSNode, ASTLeaf],
+  names: string[],
+  properties: BindingPatternContent,
 
 type MethodDefinition =
   type: "MethodDefinition"
@@ -166,7 +201,7 @@ type TypeParameters = unknown
 
 type FunctionNode = FunctionExpression | ArrowFunction | MethodDefinition
 
-type LiteralNode =
+type Literal =
   type: "Literal",
   subtype: LiteralContentNode["type"],
   children: [ LiteralContentNode ],
@@ -246,7 +281,7 @@ function updateParentPointers(node: ASTNode, parent?: ASTNodeBase, depth = 1): v
     for child of node.children
       updateParentPointers(child, node, depth-1)
 
-function makeNode(node: ASTNode): ASTNode
+function makeNode<T extends ASTNodeBase>(node: T): T
   updateParentPointers node
   node
 
@@ -2105,7 +2140,7 @@ function dotNumericLiteral(literal: ASTNode)
   literal
 
 // Convert (non-Template) Literal to actual JavaScript value
-function literalValue(literal: LiteralNode) {
+function literalValue(literal: Literal) {
   let { raw } = literal
   switch (raw) {
     case "null": return null
@@ -2509,37 +2544,36 @@ function processCoffeeInterpolation(s, parts, e, $loc) {
   }
 }
 
-function processAssignmentDeclaration(decl, id, suffix, ws, assign, e)
+function processAssignmentDeclaration(decl: ASTLeaf, pattern: Binding["pattern"], suffix: TypeSuffix, ws: WSNode, assign: ASTLeaf, e: ASTNode)
   // Adjust position to space before assignment to make TypeScript remapping happier
   decl = {
     ...decl,
-    $loc: {
-      pos: assign.$loc.pos - 1,
-      length: assign.$loc.length + 1,
-    }
+    $loc:
+      pos: assign.$loc.pos - 1
+      length: assign.$loc.length + 1
   }
 
-  [splices, thisAssignments] .= gatherBindingCode(id)
+  [splices, assignments] .= gatherBindingCode pattern
 
-  splices = splices.map((s) => [", ", s])
-  thisAssignments = thisAssignments.map((a) => ["", a, ";"])
+  splices = splices.map (s) => [", ", s]
+  thisAssignments := assignments.map (a) => ["", a, ";"] as const
 
-  const initializer = [ws, assign, e]
-  const binding = makeNode {
+  initializer := [ws, assign, e]
+  binding := makeNode {
     type: "Binding",
-    pattern: id,
+    pattern,
     initializer,
     splices,
     suffix,
     thisAssignments,
-    children: [id, suffix, initializer]
+    children: [pattern, suffix, initializer]
   }
 
-  const children = [decl, binding]
+  children := [decl, binding]
 
   makeNode {
     type: "Declaration",
-    names: id.names,
+    names: pattern.names,
     decl,
     bindings: [binding],
     splices,
@@ -2657,13 +2691,12 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
       s.parent = block
 
 function processDeclarations(statements: StatementTuple[]): void
-  gatherRecursiveAll statements, (n) =>
-    // @ts-ignore
-    n.type is "Declaration"
+  // @ts-ignore
+  gatherRecursiveAll statements, .type is "Declaration"
   // @ts-ignore
   .forEach ({ bindings }: DeclarationStatement) =>
     bindings?.forEach (binding) =>
-      suffix := binding.suffix as TypeSuffix | undefined
+      suffix := binding.suffix
       if suffix and suffix.optional and suffix.t
         // Convert `let x?: T` to `let x: undefined | T`
         convertOptionalType suffix
