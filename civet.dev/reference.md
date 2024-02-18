@@ -942,6 +942,14 @@ export operator has(x, y)
   y contains x
 </Playground>
 
+Custom infix operators currently have a precedence between relational and
+arithmetic operators, and are left-associative.
+
+<Playground>
+operator foo
+a < b + c foo d * e
+</Playground>
+
 ### Operator Assignment
 
 Even without blessing a function as an `operator`, you can use it in
