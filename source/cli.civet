@@ -1,6 +1,13 @@
 { compile, parse } from ./main.civet
 { findConfig, loadConfig } from ./config.civet
 
+// unplugin ends up getting installed in the same dist directory
+{rawPlugin} from ./unplugin
+let unplugin:
+  buildStart: () => void
+  buildEnd: (this: {emitFile: (data: {source: string, fileName: string, type: string}) => void}) => void
+  load: (this: {addWatchFile: (filename: string) => void}, filename: string) => Promise<{code: string, map: unknown}>
+
 function version: string
   require("../package.json").version
 
@@ -42,6 +49,8 @@ if process.argv.includes "--help"
       --ast            Print the AST instead of the compiled code
       --inline-map     Generate a sourcemap
       --no-cache       Disable compiler caching (slow, for debugging)
+      --typecheck      Run TypeScript and output diagnostics
+      --emit-declaration  Run TypeScript and emit .d.ts files (if no errors)
 
     You can use - to read from stdin or (prefixed by -o) write to stdout.
 
@@ -70,10 +79,11 @@ interface Options extends CompileOptions
   ast?: boolean
   noCache?: boolean
   inlineMap?: boolean
-  js?: boolean
   hits?: string
   trace?: string
   repl?: boolean
+  typecheck?: boolean
+  emitDeclaration?: boolean
 
 interface ParsedArgs
   filenames: string[]
@@ -83,7 +93,7 @@ interface ParsedArgs
 function parseArgs(args: string[]): ParsedArgs
   options: Options := {}
   Object.defineProperty options, 'run',
-    get: (this: Options) -> not (@ast or @compile)
+    get: (this: Options) -> not (@ast or @compile or @typecheck or @emitDeclaration)
   filenames: string[] := []
   scriptArgs: string[] .= []
   i .= 0
@@ -130,6 +140,10 @@ function parseArgs(args: string[]): ParsedArgs
         options.hits = args[++i]
       when '--trace'
         options.trace = args[++i]
+      when '--typecheck'
+        options.typecheck = true
+      when '--emit-declaration', '--emitDeclaration'
+        options.emitDeclaration = true
       when '--'
         endOfArgs ++i  // remaining arguments are filename and/or arguments
       else
@@ -262,6 +276,14 @@ function cli
       options.compile = true
       filenames = ['-']
 
+  if options.typecheck or options.emitDeclaration
+    unplugin = rawPlugin {
+      ...options
+      ts: if options.js then 'civet' else 'preserve'
+      outputExtension: '.tsx'
+    }, framework: 'civet-cli'
+    unplugin.buildStart()
+
   // In run mode, compile to JS with source maps
   if options.run
     options.js = true
@@ -296,19 +318,29 @@ function cli
       (options.parseOptions ??= {}).rewriteCivetImports ??=
         outputExt ?? '.civet' + if options.js then ".jsx" else ".tsx"
 
+  errors .= 0
   for await {filename, error, content, stdin} of readFiles filenames
     if error
       console.error `${filename} failed to load:`
       console.error error
+      errors++
       continue
 
     // Transpile
     let output: string
     try
-      output = compile content!, {...options, filename}
+      if unplugin?
+        output = unplugin.load.call {
+          addWatchFile();
+        }, `${filename}.tsx`
+        |> await
+        |> .code
+      else
+        output = compile content!, {...options, filename}
     catch error
       //console.error `${filename} failed to transpile:`
       console.error error
+      errors++
       continue
 
     if options.ast
@@ -336,7 +368,8 @@ function cli
         catch error
           console.error `${targetFilename} failed to write:`
           console.error error
-    else // run
+          errors++
+    else if options.run
       esm := /^\s*(import|export)\b/m.test output
       if esm
         // Run ESM code via `node --loader @danielx/civet/esm` subprocess
@@ -386,5 +419,19 @@ function cli
           console.error `${filename} crashed while running in CJS mode:`
           console.error error
           process.exit 1
+
+  process.exitCode = Math.min 255, errors
+  if unplugin?
+    try
+      await unplugin.buildEnd.call {
+        emitFile({source, fileName})
+          fs.writeFile fileName, source
+      }
+    catch error
+      if match := (error as Error).message.match /Aborting build because of (\d+) TypeScript diagnostic/
+        process.exitCode = Math.min 255, errors + +match[1]
+      else
+        process.exitCode = 1
+        throw error
 
 cli() if require.main is module
