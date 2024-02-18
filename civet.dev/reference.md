@@ -947,7 +947,7 @@ arithmetic operators, and are left-associative.
 
 <Playground>
 operator foo
-a < b + c foo d * e
+a < b + c foo d * e foo f
 </Playground>
 
 ### Operator Assignment
