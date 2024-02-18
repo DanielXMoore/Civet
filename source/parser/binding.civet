@@ -1,0 +1,148 @@
+import {
+  ASTNode,
+  AtBinding,
+  ThisAssignments
+} from ./types.civet
+
+import {
+  gatherRecursiveAll
+} from ./traversal.civet
+
+import { insertTrimmingSpace } from ./util.civet
+
+/**
+ * Adjusts `@binding` inside object properties that need to be aliased
+ * see test/function.civet binding pattern
+ */
+function adjustAtBindings(statements: ASTNode, asThis = false): void
+  gatherRecursiveAll(statements, (n) => n.type is "AtBindingProperty")
+    .forEach((binding) => {
+      const { ref } = binding
+
+      if (asThis) {
+        // Convert from @x to x: this.x keeping any whitespace or initializer to the right
+        const atBinding = binding.binding
+        atBinding.children.pop()
+        atBinding.type = undefined
+
+        binding.children.unshift(ref.id, ": this.", ref.base)
+        binding.type = "Property"
+        binding.ref = undefined
+        return
+      }
+
+      if (ref.names[0] !== ref.base) {
+        binding.children.unshift(ref.base, ": ")
+      }
+    })
+
+function adjustBindingElements(elements: ASTNodeBase[])
+  const names = elements.flatMap((p) => p.names or []),
+    { length } = elements
+
+  let blockPrefix,
+    restIndex = -1,
+    restCount = 0
+
+  elements.forEach(({ type }, i) => {
+    if (type is "BindingRestElement") {
+      if (restIndex < 0) restIndex = i
+      restCount++
+    }
+  })
+
+  if (restCount is 0) {
+    return {
+      children: elements,
+      names,
+      blockPrefix,
+      length,
+    }
+  } else if (restCount is 1) {
+    const rest = elements[restIndex]
+    const after = elements.slice(restIndex + 1)
+
+    const restIdentifier = rest.binding.ref or rest.binding
+    names.push(...rest.names or [])
+
+    let l = after.length
+
+    if (l) {
+      // increment l if trailing comma
+      if (arrayElementHasTrailingComma(after[l - 1])) l++
+
+      blockPrefix = {
+        type: "PostRestBindingElements",
+        children: ["[", insertTrimmingSpace(after, ""), "] = ", restIdentifier, ".splice(-", l.toString(), ")"],
+        names: after.flatMap((p) => p.names),
+      }
+    }
+
+    return {
+      names,
+      children: [...elements.slice(0, restIndex), {
+        ...rest,
+        children: rest.children.slice(0, -1) // remove trailing comma
+      }],
+      blockPrefix,
+      length,
+    }
+  }
+
+  const err = {
+    type: "Error",
+    children: ["Multiple rest elements in array pattern"],
+  }
+
+  return {
+    names,
+    children: [...elements, err],
+    blockPrefix,
+    length,
+  }
+
+function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: boolean })
+  thisAssignments: ThisAssignments := []
+  splices: unknown[] := []
+
+  function insertRestSplices(s, p: unknown[], thisAssignments: ThisAssignments): void
+    gatherRecursiveAll(s, (n) => n.blockPrefix or (opts?.injectParamProps and n.accessModifier) or n.type is "AtBinding")
+      .forEach((n) => {
+        // Insert `this` assignments
+        if n.type is "AtBinding"
+          { ref } := n as! AtBinding
+          { id } := ref
+          thisAssignments.push([`this.${id} = `, ref])
+          return
+
+        if (opts?.injectParamProps and n.type is "Parameter" and n.accessModifier)
+          n.names.forEach((id) => {
+            thisAssignments.push({
+              type: "AssignmentExpression",
+              children: [`this.${id} = `, id],
+              js: true
+            })
+          })
+          return
+
+        { blockPrefix } := n
+        p.push(blockPrefix)
+
+        // Search for any further nested splices, and at bindings
+        insertRestSplices(blockPrefix, p, thisAssignments)
+      })
+
+  insertRestSplices(statements, splices, thisAssignments)
+
+  return [splices, thisAssignments] as const
+
+function arrayElementHasTrailingComma(elementNode)
+  const lastChild = elementNode.children.-1
+  return lastChild and lastChild[lastChild.length - 1]?.token is ","
+
+
+export {
+  adjustAtBindings
+  adjustBindingElements
+  gatherBindingCode
+}

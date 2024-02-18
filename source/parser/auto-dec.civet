@@ -1,0 +1,208 @@
+import {
+  gatherNodes
+  gatherRecursive
+} from ./traversal.civet
+
+import {
+  isFunction
+} from ./util.civet
+
+import {
+  getIndent
+} from ./block.civet
+
+function findDecs(statements)
+  const declarationNames = gatherNodes(statements, ({ type }) => type is "Declaration")
+    .flatMap((d) => d.names)
+
+  return new Set(declarationNames)
+
+function createConstLetDecs(statements, scopes, letOrConst: "let" | "const"): void {
+  function findVarDecs(statements, decs) {
+    const declarationNames = gatherRecursive statements, (node) =>
+        node.type is "Declaration" &&
+        node.children &&
+        node.children.length > 0 &&
+        node.children[0].token &&
+        node.children[0].token.startsWith('var') ||
+        node.type is "FunctionExpression"
+      .filter((node) => node.type is "Declaration")
+      .flatMap((node) => node.names)
+
+    return new Set(declarationNames)
+  }
+
+  let declaredIdentifiers = findVarDecs(statements)
+
+  function hasDec(name) {
+    return declaredIdentifiers.has(name) or scopes.some((s) => s.has(name))
+  }
+
+  function gatherBlockOrOther(statement) {
+    return gatherNodes(statement, (s) => s.type is "BlockStatement" or s.type is "AssignmentExpression" or s.type is "Declaration").flatMap((node) => {
+      if (node.type == "BlockStatement")
+        // bare blocks is not a safe position to insert let declaration
+        return node.bare ? gatherBlockOrOther(node.expressions) : node
+      else if (node.children and node.children.length)
+        return [...gatherBlockOrOther(node.children), node]
+      else
+        return []
+    })
+  }
+
+  let currentScope = new Set()
+  scopes.push(currentScope)
+
+  const fnNodes = gatherNodes(statements, isFunction)
+  const forNodes = gatherNodes(statements, (s) => s.type is "ForStatement")
+
+  let targetStatements: StatementTuple[] = []
+  for (const statement of statements) {
+    const nodes = gatherBlockOrOther(statement)
+    let undeclaredIdentifiers = []
+    for (const node of nodes) {
+      if (node.type == "BlockStatement") {
+        let block = node
+        let fnNode = fnNodes.find((fnNode) => fnNode.block is block)
+        let forNode = forNodes.find((forNode) => forNode.block is block)
+        if (fnNode != null) {
+          scopes.push(new Set(fnNode.parameters.names))
+          createConstLetDecs(block.expressions, scopes, letOrConst)
+          scopes.pop()
+        }
+        else if (forNode != null) {
+          scopes.push(new Set(forNode.declaration.names))
+          createConstLetDecs(block.expressions, scopes, letOrConst)
+          scopes.pop()
+        }
+        else
+          createConstLetDecs(block.expressions, scopes, letOrConst)
+        continue
+      }
+      // Assignment and Declaration all use 'names'.
+      if (node.names == null) continue
+      let names = node.names.filter((name) => !hasDec(name))
+      if (node.type == "AssignmentExpression")
+        undeclaredIdentifiers.push(...names)
+      names.forEach((name) => currentScope.add(name))
+    }
+
+    if (undeclaredIdentifiers.length > 0) {
+      let indent = statement[0]
+      // Is this statement a simple assingment like 'a = 1'?
+      let firstIdentifier = gatherNodes(statement[1], (node) => node.type == "Identifier")[0]
+      if (undeclaredIdentifiers.length == 1
+        and statement[1].type == 'AssignmentExpression'
+        and statement[1].names.length == 1
+        and statement[1].names[0] == undeclaredIdentifiers[0]
+        and firstIdentifier and firstIdentifier.names == undeclaredIdentifiers[0]
+        and gatherNodes(statement[1], (node) => node.type is "ObjectBindingPattern").length == 0)
+        statement[1].children.unshift([`${letOrConst} `])
+      else {
+        let tail = "\n"
+        // Does this statement start with a newline?
+        if (gatherNodes(indent, (node) => node.token and node.token.endsWith("\n")).length > 0)
+          tail = undefined
+        // Have to use 'let' instead of 'const' if the assignment is inside an expression
+        targetStatements.push [indent, {
+          type: "Declaration",
+          children: ["let ", ...undeclaredIdentifiers.join(", ")],
+          names: undeclaredIdentifiers,
+        }, tail]
+      }
+    }
+    targetStatements.push(statement)
+  }
+
+  scopes.pop()
+  statements.splice(0, statements.length, ...targetStatements)
+}
+
+// CoffeeScript compatible automatic var insertion
+function createVarDecs(statements, scopes, pushVar?) {
+  // NOTE: var and let/const have different scoping rules
+  // need to keep var scopes when entering functions and within a var scope keep
+  // track of lexical scopes within blocks
+  function hasDec(name) {
+    return scopes.some((s) => s.has(name))
+  }
+
+  function findAssignments(statements, decs) {
+    let assignmentStatements = gatherNodes(statements, (node) => {
+      return node.type is "AssignmentExpression"
+    })
+
+    if (assignmentStatements.length) {
+      // Get nested assignments that could be in expressions
+      assignmentStatements = assignmentStatements
+        .concat(findAssignments(assignmentStatements.map((s) => s.children), decs))
+    }
+
+    return assignmentStatements
+  }
+
+  // Let descendent blocks add the var at the outer enclosing function scope
+  if (!pushVar) {
+    pushVar = function (name) {
+      varIds.push(name)
+      decs.add(name)
+    }
+  }
+
+  decs := findDecs statements
+  scopes.push decs
+  varIds := []
+  assignmentStatements := findAssignments statements, scopes
+  undeclaredIdentifiers := assignmentStatements.flatMap ?.names or []
+
+  // Unique, undeclared identifiers in this scope
+  undeclaredIdentifiers.filter((x, i, a) => {
+    if (!hasDec(x)) return a.indexOf(x) is i
+  }).forEach(pushVar)
+
+  const fnNodes = gatherNodes(statements, isFunction)
+  const forNodes = gatherNodes(statements, (s) => s.type is "ForStatement")
+
+  const blockNodes = new Set(gatherNodes(statements, (s) => s.type is "BlockStatement"))
+  // Remove function blocks and for statements, they get handled separately because they have additional parameter scopes and lexical scopes to add
+  fnNodes.forEach(({ block }) => blockNodes.delete(block))
+  forNodes.forEach(({ block }) => blockNodes.delete(block))
+
+  // recurse into nested blocks
+  blockNodes.forEach (block) =>
+    createVarDecs(block.expressions, scopes, pushVar)
+
+  // recurse into for loops
+  forNodes.forEach ({ block, declaration }) =>
+    scopes.push(new Set(declaration.names))
+    createVarDecs(block.expressions, scopes, pushVar)
+    scopes.pop()
+
+  // recurse into nested functions
+  fnNodes.forEach ({ block, parameters }) =>
+    scopes.push(new Set(parameters.names))
+    createVarDecs(block.expressions, scopes)
+    scopes.pop()
+
+  if (varIds.length) {
+    // get indent from first statement
+    const indent = getIndent(statements[0])
+    let delimiter = ";"
+    if (statements[0][1]?.parent?.root) {
+      delimiter = ";\n"
+    }
+    // TODO: Declaration ast node
+    statements.unshift([indent, {
+      type: "Declaration"
+      children: ["var ", varIds.join(", ")]
+    }, delimiter])
+  }
+
+  scopes.pop()
+}
+
+
+export {
+  createConstLetDecs
+  createVarDecs
+}

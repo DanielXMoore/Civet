@@ -1,0 +1,516 @@
+import type {
+  ASTRef
+  ASTLeaf
+  ASTNode
+  ASTNodeBase
+  TypeSuffix
+  ReturnTypeAnnotation
+} from ./types.civet
+
+import {
+  gatherRecursiveWithinFunction
+} from ./traversal.civet
+
+/**
+ * Adds parent pointers to all nodes in the AST. Elements within
+ * arrays of nodes receive the closest non-array object parent.
+ */
+function addParentPointers(node: ASTNode, parent?: ASTNodeBase): void
+  if (not node?) return
+  if (typeof node !== "object") return
+
+  // NOTE: Arrays are transparent and skipped when traversing via parent
+  if Array.isArray(node)
+    for child of node
+      addParentPointers(child, parent)
+    return
+
+  node = node as ASTNodeBase
+  node.parent = parent
+  if node.children
+    for child of node.children
+      addParentPointers(child, node)
+
+/**
+ * Clone an AST node including children (removing parent pointes)
+ * This gives refs new identities which may not be what we want.
+ *
+ * TODO: preserve ref identities
+ */
+function clone(node: ASTNode) {
+  removeParentPointers(node)
+  return deepCopy(node)
+}
+
+function closest(node: ASTNodeBase, types: string[])
+  do
+    if (types.includes(node.type)) {
+      return node
+    }
+  while (node = node.parent!)
+  return
+
+function removeParentPointers(node): void {
+  if (node == null) return
+  if (typeof node !== "object") return
+
+  // NOTE: Arrays are transparent and skipped when traversing via parent
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      removeParentPointers(child)
+    }
+    return
+  }
+
+  node.parent = null
+  if (node.children) {
+    for (const child of node.children) {
+      removeParentPointers(child)
+    }
+  }
+}
+
+function isEmptyBareBlock(node: ASTNode): boolean {
+  if (node?.type !== "BlockStatement") return false
+  const { bare, expressions } = node
+  return bare &&
+    (expressions.length is 0 ||
+      (expressions.length is 1 &&
+        expressions[0][1]?.type is "EmptyStatement"))
+}
+
+function isFunction(node: ASTNode): boolean {
+  const { type } = node
+  return type is "FunctionExpression" or type is "ArrowFunction" ||
+    type is "MethodDefinition" or node.async
+  // do blocks can be marked async to prevent automatic await
+}
+
+/**
+ * Returns true if the StringLiteral node is a template literal.
+ */
+function isTemplateLiteral(node: ASTNode): boolean {
+  let s = node
+  while (s and s[0] and !s.token) s = s[0]
+  return s.token?.startsWith?.('`')
+}
+
+function isWhitespaceOrEmpty(node): boolean {
+  if (!node) return true
+  if (node.type is "Ref") return false
+  if (node.token) return node.token.match(/^\s*$/)
+  if (node.children) node = node.children
+  if (!node.length) return true
+  if (typeof node is "string") return node.match(/^\s*$/)
+  if (Array.isArray(node)) return node.every(isWhitespaceOrEmpty)
+}
+
+/**
+ * Does this statement force exit from normal flow, implying that the
+ * line after this one can never execute?
+ */
+function isExit(node: ASTNode): boolean
+  node?.type is in [
+    "ReturnStatement",
+    "ThrowStatement",
+    "BreakStatement",
+    "ContinueStatement"
+  ]
+
+/**
+ * Detects Comma, CommaDelimiter, and ParameterElementDelimiter
+ * with an explicit comma, as should be at the top level of
+ * a "Call" node's `args` array.
+ * Returns the node whose `token` is ",", or else undefined.
+ */
+function isComma(node: ASTNode): (ASTLeaf & { token: "," }) | undefined
+  if node?.token is ","
+    node
+  else if Array.isArray(node) and node.-1?.token is ","
+    node.-1
+
+/**
+ * Trims the first single space from the spacing array or node's children if present
+ * Inserts string `c` in the first position.
+ * maintains $loc for source maps
+ */
+function insertTrimmingSpace(target: ASTNode, c: string): ASTNode
+  return target unless target
+
+  if Array.isArray target
+    return c if target.length is 0
+
+    return target.map (e, i) =>
+      return insertTrimmingSpace(e, c) if i is 0
+      return e
+
+  if target.children
+    return {
+      ...target
+      children: insertTrimmingSpace(target.children, c)
+    }
+
+  if target.token
+    return {
+      ...target
+      token: target.token.replace(/^ ?/, c)
+    }
+
+  return target
+
+// Returns leading space as a string, or undefined if none
+function getTrimmingSpace(target: ASTNode) {
+  if (!target) return
+  if (Array.isArray(target)) return getTrimmingSpace(target[0])
+  if (target.children) return getTrimmingSpace(target.children[0])
+  if (target.token) return target.token.match(/^ ?/)[0]
+}
+
+// Convert (non-Template) Literal to actual JavaScript value
+function literalValue(literal: Literal)
+  let { raw } = literal
+  switch (raw) {
+    case "null": return null
+    case "true": return true
+    case "false": return false
+  }
+  if (
+    (raw.startsWith('"') and raw.endsWith('"')) ||
+    (raw.startsWith("'") and raw.endsWith("'"))
+  ) {
+    return raw.slice(1, -1)
+  }
+  const numeric = literal.children.find(
+    (child) => child.type is "NumericLiteral"
+  )
+  if (numeric) {
+    raw = raw.replace(/_/g, "")
+    const { token } = numeric
+    if (token.endsWith("n")) {
+      return BigInt(raw.slice(0, -1))
+    } else if (token.match(/[\.eE]/)) {
+      return parseFloat(raw)
+    } else if (token.startsWith("0")) {
+      switch (token.charAt(1).toLowerCase()) {
+        case "x": return parseInt(raw.replace(/0[xX]/, ""), 16)
+        case "b": return parseInt(raw.replace(/0[bB]/, ""), 2)
+        case "o": return parseInt(raw.replace(/0[oO]/, ""), 8)
+      }
+    }
+    return parseInt(raw, 10)
+  }
+  throw new Error("Unrecognized literal " + JSON.stringify(literal))
+
+function startsWith(target: ASTNodeBase, value: RegExp)
+  if (!target) return
+  if Array.isArray target
+    let i = 0
+    let l = target.length
+    while i < l
+      const t = target[i]
+      break if t and (t.length or t.token or t.children)
+      i++
+    if i < l
+      return startsWith target[i], value
+  if (target.children) return startsWith target.children, value
+  if (target.token) return value.test target.token
+  if (typeof target is "string") return value.test target
+
+/**
+ * Does this expression have an `await` in it and thus needs to be `async`?
+ */
+function hasAwait(exp)
+  gatherRecursiveWithinFunction(exp, ({ type }) => type is "Await").length > 0
+
+function hasYield(exp)
+  gatherRecursiveWithinFunction(exp, ({ type }) => type is "Yield").length > 0
+
+function deepCopy(node: ASTNode): ASTNode {
+  if (node == null) return node
+  if (typeof node !== "object") return node
+
+  if (Array.isArray(node)) {
+    return node.map(deepCopy)
+  }
+
+  // Use from entries to clone objects
+  // map the values to clone the children
+  return Object.fromEntries(
+    Object.entries(node).map(([key, value]) => {
+      return [key, deepCopy(value)]
+    })
+  ) as any
+}
+
+function makeAmpersandFunction(bodyAfterRef = []): ASTNode
+  ref := makeRef("$")
+  body := [ref, ...bodyAfterRef]
+  parameters :=
+    type: "Parameters"
+    children: [ref]
+    names: []
+  block :=
+    expressions: body
+
+  return {
+    type: "ArrowFunction"
+    signature:
+      modifier: {}
+    children: [parameters, " => ", body]
+    ref
+    body
+    ampersandBlock: true
+    block
+    parameters
+  }
+
+/**
+ * Convert general ExtendedExpression into LeftHandSideExpression.
+ * More generally wrap in parentheses if necessary.
+ * (Consider renaming and making parentheses depend on context.)
+ */
+function makeLeftHandSideExpression(expression)
+  return expression if expression.parenthesized
+  switch (expression.type)
+    case "Ref":
+    case "AmpersandRef":
+    case "Identifier":
+    case "Literal":
+    case "IterationExpression": // already a CallExpression
+    case "CallExpression":
+    case "MemberExpression":
+    case "NewExpression":
+    case "ParenthesizedExpression":
+    case "IfExpression": // already wrapped in parens
+    case "DebuggerExpression": // wrapIIFE
+    case "SwitchExpression": // wrapIIFE
+    case "ThrowExpression": // wrapIIFE
+    case "TryExpression": // wrapIIFE
+      return expression
+
+  makeNode {
+    type: "ParenthesizedExpression"
+    children: ["(", expression, ")"]
+    expression
+    implicit: true
+  }
+
+/**
+ * Just update parent pointers for the children of a node,
+ * recursing into arrays but not objects.  More efficient version of
+ * `addParentPointers` when just injecting one new node.
+ */
+function updateParentPointers(node: ASTNode, parent?: ASTNodeBase, depth = 1): void
+  if (not node?) return
+  if (typeof node !== "object") return
+
+  // NOTE: Arrays are transparent and skipped when traversing via parent
+  if Array.isArray(node)
+    for child of node
+      updateParentPointers(child, parent, depth)
+    return
+
+  node = node as ASTNodeBase
+  if (parent?) node.parent = parent
+  if depth and node.children
+    for child of node.children
+      updateParentPointers(child, node, depth-1)
+
+function makeNode<T extends ASTNodeBase>(node: T): T
+  updateParentPointers node
+  node
+
+function makeRef(base = "ref", id = base): ASTRef
+  return {
+    type: "Ref",
+    base,
+    id,
+  }
+
+/**
+ * Returns a new ref if the expression needs a ref (not a simple value).
+ * Otherwise returns undefined.
+ */
+function needsRef(expression, base = "ref")
+  switch (expression.type) {
+    case "Ref":
+    case "Identifier":
+    case "Literal":
+      return
+  }
+  return makeRef(base)
+
+// Transform into a ref if needed
+function maybeRef(exp: ASTNode, base: string = "ref"): ASTNode
+  if (!needsRef(exp)) return exp
+  return makeRef(base)
+
+// Return an array of Rule names that correspond to the current call stack
+function parsePosition()
+  let s = Error().stack.split(/\n    at /)
+  s.shift()
+  s = s.filter((e) => !e.match(/^eval/)).map((e) => e.split(' ')[0])
+  s = s.slice(1, s.indexOf('Program') + 1)
+
+  return s
+
+/**
+ * Used to ignore the result of __ if it is only whitespace
+ * Useful to preserve spacing around comments
+ */
+function skipIfOnlyWS(target)
+  if (!target) return target
+  if (Array.isArray(target)) {
+    if (target.length is 1) {
+      return skipIfOnlyWS(target[0])
+    } else if (target.every((e) => (skipIfOnlyWS(e) is undefined))) {
+      return undefined
+    }
+    return target
+  }
+  if (target.token != null and target.token.trim() is '') {
+    return undefined
+  }
+  return target
+
+/**
+ * Splice child from children/array, similar to Array.prototype.splice,
+ * but specifying a child instead of an index.  Throw if child not found.
+ */
+function spliceChild(node: ASTNode, child: ASTNode, del, ...replacements)
+  children := node?.children ?? node
+  unless Array.isArray children
+    throw new Error "spliceChild: non-array node has no children field"
+  index := children.indexOf child
+  if index < 0
+    throw new Error "spliceChild: child not found"
+  children.splice index, del, ...replacements
+
+/**
+ * Convert type suffix of `?: T` to `: undefined | T`
+ */
+function convertOptionalType(suffix: TypeSuffix | ReturnTypeAnnotation): void
+  if (suffix.t as ASTNodeBase).type is "AssertsType"
+    spliceChild suffix, suffix.optional, 1, suffix.optional =
+      type: "Error"
+      message: "Can't use optional ?: syntax with asserts type"
+    return
+  spliceChild suffix, suffix.optional, 1, suffix.optional = undefined
+  // Return types with | need to be wrapped in parentheses
+  wrap := suffix.type is "ReturnTypeAnnotation"
+  spliceChild suffix, suffix.t, 1, suffix.t = [
+    getTrimmingSpace suffix.t
+    wrap and "("
+    // TODO: avoid parens if unnecessary
+    "undefined | "
+    parenthesizeType insertTrimmingSpace suffix.t, ""
+    wrap and ")"
+  ]
+
+const typeNeedsNoParens = new Set [
+  "IdentifierType"
+  "ImportType"
+  "LiteralType"
+  "TupleType"
+  "ParenthesizedType"
+  "UnaryType"
+]
+/**
+ * Parenthesize type if it might need it in some contexts.
+ */
+function parenthesizeType(type: ASTNodeBase)
+  return type if typeNeedsNoParens.has type.type
+  ["(", type, ")"]
+
+/**
+ * Wrap an expression in an IIFE, adding async/await if expression
+ * uses await, or just adding async if specified.
+ * Returns an Array suitable for `children`.
+ */
+function wrapIIFE(expressions: StatementTuple[], async): ASTNode[]
+  let prefix
+
+  if async
+    async = "async "
+  else if hasAwait expressions
+    async = "async "
+    prefix =
+      type: "Await"
+      children: ["await "]
+
+  block := makeNode {
+    type: "BlockStatement",
+    expressions,
+    children: ["{", expressions, "}"],
+    bare: false,
+  }
+
+  parameters :=
+    type: "Parameters"
+    children: ["()"]
+    names: []
+
+  signature :=
+    modifier:
+      async: !!async
+    returnType: undefined
+
+  fn := makeNode {
+    type: "ArrowFunction",
+    signature
+    parameters
+    returnType: undefined
+    ts: false
+    async
+    block
+    children: [async, parameters, "=>", block]
+  }
+
+  exp := makeNode
+    type: "CallExpression"
+    children: [ makeLeftHandSideExpression(fn), "()" ]
+
+  if prefix
+    return [ makeLeftHandSideExpression [prefix, exp] ]
+
+  return [ exp ]
+
+function wrapWithReturn(expression?: ASTNode): ASTNode
+  const children = expression ? ["return ", expression] : ["return"]
+
+  return makeNode {
+    type: "ReturnStatement",
+    children,
+  }
+
+export {
+  addParentPointers
+  clone
+  closest
+  convertOptionalType
+  deepCopy
+  getTrimmingSpace
+  hasAwait
+  hasYield
+  insertTrimmingSpace
+  isComma
+  isEmptyBareBlock
+  isExit
+  isFunction
+  isTemplateLiteral
+  isWhitespaceOrEmpty
+  literalValue
+  makeAmpersandFunction
+  makeLeftHandSideExpression
+  makeNode
+  makeRef
+  maybeRef
+  needsRef
+  parenthesizeType
+  parsePosition
+  skipIfOnlyWS
+  startsWith
+  updateParentPointers
+  wrapIIFE
+  wrapWithReturn
+}
