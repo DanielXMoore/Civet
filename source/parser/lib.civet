@@ -19,7 +19,6 @@ import type {
   ParseRule
   ReturnTypeAnnotation
   StatementTuple
-  TabConfig
   TypeSuffix
   WSNode
 } from types.civet
@@ -48,20 +47,24 @@ import {
   isVoidType
   isWhitespaceOrEmpty
   literalValue
+  makeAmpersandFunction
   makeLeftHandSideExpression
   makeNode
   makeRef
   maybeRef
-  startsWith
   updateParentPointers
+  wrapIIFE
+  wrapWithReturn
 } from util.civet
 
 import {
   blockWithPrefix
   braceBlock
+  duplicateBlock
   getIndent
   hoistRefDecs
   makeEmptyBlock
+  processBlocks
 } from block.civet
 
 import { processPipelineExpressions } from pipe.civet
@@ -73,29 +76,17 @@ import {
   gatherBindingCode
 } from binding.civet
 import { processBinaryOpExpression } from op.civet
+import { processUnaryExpression } from unary.civet
 import { createConstLetDecs, createVarDecs } from auto-dec.civet
 
-function makeAmpersandFunction(bodyAfterRef = []): ASTNode
-  ref := makeRef("$")
-  body := [ref, ...bodyAfterRef]
-  parameters :=
-    type: "Parameters"
-    children: [ref]
-    names: []
-  block :=
-    expressions: body
-
-  return {
-    type: "ArrowFunction"
-    signature:
-      modifier: {}
-    children: [parameters, " => ", body]
-    ref
-    body
-    ampersandBlock: true
-    block
-    parameters
-  }
+import {
+  dedentBlockString
+  dedentBlockSubstitutions
+  getIndentLevel
+  modifyString
+  processCoffeeInterpolation
+  quoteString
+} from string.civet
 
 function addPostfixStatement(statement: StatementTuple, ws: ASTNode, post)
   expressions := [
@@ -124,104 +115,6 @@ assert := {
     /* c8 ignore next */
     throw new Error(`Assertion failed [${msg}]: ${a} !== ${b}`) if a !== b
 }
-
-// Given a string of spaces and tabs, and the current tab size
-// (where `undefined` means "tabs are the same width as 1 space"),
-// compute the indentation level counted as spaces.
-// NOTE: Currently, tabs are treated as the specified number of spaces,
-// no matter their location (no round-to-next-multiple behavior).
-function getIndentLevel(str: string, tab: TabConfig)
-  if tab? and tab != 1
-    tabs := str.match /\t/g
-    numTabs := tabs ? tabs.length : 0
-    numTabs * tab + /*spaces*/ (str.length - numTabs)
-  else
-    str.length
-
-// Given an indentation string (spaces and tabs), reduces the leading
-// indentation by the specified amount of spaces. If removing a tab reduced
-// the indentation too much, replaces it with the appropriate number of spaces.
-function reduceIndentLevel(str: string, dedent: number, tab: TabConfig)
-  if tab? and tab != 1
-    for each char, i of str
-      unless dedent  // finished removing indentation
-        return str[i..]
-      if char == '\t'
-        dedent -= tab  // one tab removed
-        if dedent < 0  // removed too much; add some spaces back
-          return ''.padStart(-dedent, ' ') + str[i+1..]
-      else
-        dedent--  // one space removed
-    ''  // removed all indentation (and maybe wanted to remove more)
-  else
-    str[dedent..]
-
-indentRe := ///
-  \n        // indent starts after newline (possibly preceded by \r)
-  ([ \t]*)  // capture indentation as $1
-  (?! [ \t] | \r?\n | $ )  // ignore blank lines
-///g
-
-// Gets the indentation level (number of spaces) shared by all indentations
-// after the first newline.
-function getIndentOfBlockString(str: string, tab: TabConfig)
-  minLevel .= Infinity
-  while match := indentRe.exec str
-    level := getIndentLevel match[1], tab
-    minLevel = level if level < minLevel
-  minLevel = 0 if minLevel == Infinity
-  minLevel
-
-function dedentBlockString({ $loc, token: str }: ASTLeaf, tab: TabConfig, dedent: number | undefined, trimStart = true, trimEnd = true)
-  // If string begins with a newline then indentation assume that it should be removed for all lines
-  if not dedent? and /^[ \t]*\r?\n/.test str
-    // Remove remaining shared indentation
-    dedent = getIndentOfBlockString str, tab
-  if dedent
-    str = str.replace /(\n)([ \t]*)/g, (_, newline, indent) =>
-      newline + reduceIndentLevel indent, dedent as number, tab
-
-  // Remove leading newline
-  str = str.replace /^[ \t]*\r?\n/, "" if trimStart
-  // Remove trailing newline
-  str = str.replace /(\r?\n|\n)[ \t]*$/, "" if trimEnd
-
-  // escape unescaped backticks and `${`
-  str = str.replace /(\\.|`|\$\{)/g, (s) =>
-    if s[0] is "\\"
-      s
-    else
-      `\\${s}`
-
-  { $loc, token: str }
-
-function dedentBlockSubstitutions($0: [ASTLeaf, (ASTLeaf | (ASTNode[] & {token: never}))[], ASTLeaf], tab: TabConfig)
-  [s, strWithSubstitutions, e] := $0
-
-  return $0 unless strWithSubstitutions.length
-
-  // Compute shared indentation of all string parts, concatenated
-  stringPart :=
-    for each part of strWithSubstitutions
-      part.token ?? "s"  // put "s" in place of substitutions
-  .join ''
-  dedent :=
-    if /^[ \t]*\r?\n/.test stringPart
-      getIndentOfBlockString stringPart, tab
-    else
-      false
-
-  // Dedent the string parts
-  results: ASTNode[] .= [s]
-  for each let part, i of strWithSubstitutions
-    if part.token?
-      part = dedentBlockString part as ASTLeaf, tab, dedent,
-        i is 0, i is strWithSubstitutions.length - 1
-    results.push part
-  results.push e
-
-  type: "TemplateLiteral"
-  children: results
 
 // Negate expression inside condition
 function negateCondition(condition)
@@ -599,14 +492,6 @@ function insertPush(node, ref): void {
   node.push(")")
 }
 
-function wrapWithReturn(expression?: ASTNode): ASTNode
-  const children = expression ? ["return ", expression] : ["return"]
-
-  return makeNode {
-    type: "ReturnStatement",
-    children,
-  }
-
 function processParams(f): void {
   const { type, parameters, block } = f
   const isConstructor = f.name is 'constructor'
@@ -886,24 +771,6 @@ function parenthesizeType(type: ASTNodeBase)
   return type if typeNeedsNoParens.has type.type
   ["(", type, ")"]
 
-// Adjust a parsed string by escaping newlines
-function modifyString(str) {
-  // Replace non-escaped newlines with escaped newlines
-  // taking into account the possibility of a preceding escaped backslash
-  return str.replace(/(^.?|[^\\]{2})(\\\\)*\n/g, '$1$2\\n')
-}
-
-// Add quotes around a string to make it a valid JavaScript string,
-// escaping any \s
-function quoteString(str) {
-  str = str.replace(/\\/g, '\\\\')
-  if (str.includes('"') and !str.includes("'")) {
-    return "'" + str.replace(/'/g, "\\'") + "'"
-  } else {
-    return '"' + str.replace(/"/g, '\\"') + '"'
-  }
-}
-
 // Look for last property access like `.foo` or `[computed]` or root Identifier,
 // before any calls like `(args)`, non-null assertions `!`, and optionals `?`.
 // The return value should have a `name` property (for "Identifier" and
@@ -1021,16 +888,6 @@ function convertObjectToJSXAttributes(obj) {
   return parts
 }
 
-function duplicateBlock(block: BlockStatement): BlockStatement
-  expressions := [...block.expressions]
-  children := [...block.children]
-  children.splice(children.indexOf(block.expressions), 1, expressions)
-  return {
-    ...block,
-    expressions,
-    children,
-  }
-
 /**
  * Returns a new MethodDefinition node.
  */
@@ -1089,35 +946,6 @@ function makeGetterMethod(name, ws, value, returnType, block?: BlockStatement, k
     block,
     parameters,
   }
-
-function processCoffeeInterpolation(s, parts, e, $loc) {
-  // Check for no interpolations
-  if (parts.length is 0 or (parts.length is 1 and parts[0].token != null)) {
-    return {
-      type: "StringLiteral",
-      token: parts.length ? `"${modifyString(parts[0].token)}"` : '""',
-      $loc,
-    }
-  }
-
-  parts.forEach((part) => {
-    // Is a string
-    if (part.token) {
-      // Escape '${' and '`'
-      const str = part.token.replace(/(`|\$\{)/g, "\\$1")
-      // Escape non-continuation newlines
-      part.token = modifyString(str)
-    }
-  })
-
-  // Convert to backtick enclosed string
-  s.token = e.token = "`"
-
-  return {
-    type: "TemplateLiteral",
-    children: [s, parts, e],
-  }
-}
 
 function processAssignmentDeclaration(decl: ASTLeaf, pattern: Binding["pattern"], suffix: TypeSuffix, ws: WSNode, assign: ASTLeaf, e: ASTNode)
   // Adjust position to space before assignment to make TypeScript remapping happier
@@ -1388,62 +1216,6 @@ function processAssignments(statements): void {
     })
 }
 
-function processBlocks(statements): void
-  insertSemicolon(statements)
-  gatherRecursive statements, .type is "BlockStatement"
-  .forEach ({ expressions }) ->
-    processBlocks expressions
-
-/**
-* Avoid automatic continuation onto lines that start with
-* certain characters by adding an explicit semicolon. See
-* https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Lexical_grammar#automatic_semicolon_insertion
-*/
-function insertSemicolon(statements: StatementTuple[]): void
-  l := statements.length
-  for each s, i of statements
-    if i < l - 1
-      if needsPrecedingSemicolon(statements[i + 1])
-        delim := s[2]
-        if !delim
-          s[2] = ";"
-        // If delim is an object assume it already has a semicolon
-        // TODO: trailing comments might violate this assumption
-        else if typeof delim is "string" and !delim.match(/;/)
-          s[2] = `;${delim}`
-
-function needsPrecedingSemicolon(exp)
-  let following: ASTNode
-  if Array.isArray exp
-    [,following] = exp
-  else
-    // Ideally this would be a StatementTuple but js only public/protected param items don't quite fit into that yet
-    // since the js: true is on the AST node the semicolon delimiters will stack up with empty nodes in between
-    following = exp
-
-  return false unless following
-
-  if Array.isArray following // for chained conditionals
-    return needsPrecedingSemicolon following[0]
-
-  switch following.type
-    when "ParenthesizedExpression", "ArrayExpression", "ArrowFunction", "TemplateLiteral", "RegularExpressionLiteral", "RangeExpression"
-      true
-    when "AssignmentExpression"
-      startsWith(following, /^(\[|\()/)
-    when "Literal"
-      following.raw?.startsWith('-') or following.raw?.startsWith('+')
-    when "PipelineExpression", "UnwrappedExpression"
-      // skip first child which is whitespace
-      needsPrecedingSemicolon following.children[1]
-    else
-      // descend into first child for things like:
-      // IterationExpression
-      //   CallExpression
-      //     ParenthesizedExpression
-      if following.children
-        return needsPrecedingSemicolon following.children[0]
-
 function attachPostfixStatementAsExpression(exp, post): void {
   switch (post[1].type) {
     case "ForStatement":
@@ -1643,77 +1415,6 @@ function processReturnValue(func: FunctionNode)
 
   return true
 
-function processUnaryExpression(pre, exp, post) {
-  if (!(pre.length or post)) return exp
-  // Handle "?" postfix
-  if (post?.token is "?") {
-    post = {
-      $loc: post.$loc,
-      token: " != null",
-    }
-
-    if (pre.length) {
-      const lastPre = pre[pre.length - 1]
-      // Check for `!a?`
-      if (lastPre.token is "!") {
-        post.token = " == null"
-        pre = pre.slice(0, -1)
-      // Chec for `not a?`
-      } else if (lastPre.length is 2 and lastPre[0].token is "!") {
-        post.token = " == null"
-        pre = pre.slice(0, -1)
-      }
-    }
-    const existence = {
-      type: "Existence",
-      expression: exp,
-      children: [exp, post],
-    }
-    exp = makeLeftHandSideExpression(existence)
-    if (pre.length) {
-      return {
-        type: "UnaryExpression",
-        children: [...pre, exp],
-      }
-    }
-    return exp
-  }
-
-  // Combine unary -/+ to become numeric literals
-  if exp.type is "Literal"
-    if pre.length is 1
-      {token} := pre[0]
-      if token is "-" or token is "+"
-        children := [pre[0], ...exp.children]
-        if (post) exp.children.push(post)
-
-        return {
-          type: "Literal",
-          children,
-          raw: `${token}${exp.raw}`
-        }
-
-  // Await ops
-  const l = pre.length
-  if (l) {
-    const last = pre[l - 1]
-    if (last.type is "Await" and last.op) {
-      if (exp.type !== "ParenthesizedExpression") {
-        exp = ["(", exp, ")"]
-      }
-      exp = {
-        type: "CallExpression",
-        children: [" Promise", last.op, exp]
-      }
-    }
-  }
-
-  return {
-    type: "UnaryExpression",
-    children: [...pre, exp, post]
-  }
-}
-
 function prune(node: ASTNode): ASTNode {
   if (node is null or node is undefined) return
   if (node.length is 0) return
@@ -1903,60 +1604,6 @@ function typeOfJSXFragment(node, config, getRef) {
       return ["[", type, "]"]
     }
   }
-}
-
-/**
- * Wrap an expression in an IIFE, adding async/await if expression
- * uses await, or just adding async if specified.
- * Returns an Array suitable for `children`.
- */
-function wrapIIFE(expressions: StatementTuple[], async): ASTNode[] {
-  let prefix
-
-  if async
-    async = "async "
-  else if hasAwait expressions
-    async = "async "
-    prefix =
-      type: "Await"
-      children: ["await "]
-
-  block := makeNode {
-    type: "BlockStatement",
-    expressions,
-    children: ["{", expressions, "}"],
-    bare: false,
-  }
-
-  parameters :=
-    type: "Parameters"
-    children: ["()"]
-    names: []
-
-  signature :=
-    modifier:
-      async: !!async
-    returnType: undefined
-
-  fn := makeNode {
-    type: "ArrowFunction",
-    signature
-    parameters
-    returnType: undefined
-    ts: false
-    async
-    block
-    children: [async, parameters, "=>", block]
-  }
-
-  exp := makeNode
-    type: "CallExpression"
-    children: [ makeLeftHandSideExpression(fn), "()" ]
-
-  if prefix
-    return [ makeLeftHandSideExpression [prefix, exp] ]
-
-  return [ exp ]
 }
 
 export {

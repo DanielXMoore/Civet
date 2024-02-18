@@ -1,17 +1,19 @@
 import {
-  ASTNodeBase,
-  BlockStatement,
-  StatementTuple,
+  ASTNodeBase
+  BlockStatement
+  StatementTuple
 } from types.civet
 
 import {
-  addParentPointers,
-  updateParentPointers,
+  addParentPointers
+  updateParentPointers
+  startsWith
 } from util.civet
 
 import {
   findAncestor
   gatherRecursiveAll
+  gatherRecursive
 } from traversal.civet
 
 /**
@@ -54,6 +56,16 @@ function braceBlock(block: BlockStatement)
     block.children.unshift(" {")
     block.children.push("}")
     block.bare = false
+
+function duplicateBlock(block: BlockStatement): BlockStatement
+  expressions := [...block.expressions]
+  children := [...block.children]
+  children.splice(children.indexOf(block.expressions), 1, expressions)
+  return {
+    ...block,
+    expressions,
+    children,
+  }
 
 function makeEmptyBlock(): BlockStatement
   const expressions = []
@@ -138,11 +150,69 @@ function insertHoistDec(block: BlockStatement, node: ASTNode | StatementTuple, d
   // hoistDec wasn't previously a child, so now needs parent pointers
   addParentPointers dec, block
 
+function processBlocks(statements): void
+  insertSemicolon(statements)
+  gatherRecursive statements, .type is "BlockStatement"
+  .forEach ({ expressions }) ->
+    processBlocks expressions
+
+/**
+* Avoid automatic continuation onto lines that start with
+* certain characters by adding an explicit semicolon. See
+* https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Lexical_grammar#automatic_semicolon_insertion
+*/
+function insertSemicolon(statements: StatementTuple[]): void
+  l := statements.length
+  for each s, i of statements
+    if i < l - 1
+      if needsPrecedingSemicolon(statements[i + 1])
+        delim := s[2]
+        if !delim
+          s[2] = ";"
+        // If delim is an object assume it already has a semicolon
+        // TODO: trailing comments might violate this assumption
+        else if typeof delim is "string" and !delim.match(/;/)
+          s[2] = `;${delim}`
+
+function needsPrecedingSemicolon(exp)
+  let following: ASTNode
+  if Array.isArray exp
+    [,following] = exp
+  else
+    // Ideally this would be a StatementTuple but js only public/protected param items don't quite fit into that yet
+    // since the js: true is on the AST node the semicolon delimiters will stack up with empty nodes in between
+    following = exp
+
+  return false unless following
+
+  if Array.isArray following // for chained conditionals
+    return needsPrecedingSemicolon following[0]
+
+  switch following.type
+    when "ParenthesizedExpression", "ArrayExpression", "ArrowFunction", "TemplateLiteral", "RegularExpressionLiteral", "RangeExpression"
+      true
+    when "AssignmentExpression"
+      startsWith(following, /^(\[|\()/)
+    when "Literal"
+      following.raw?.startsWith('-') or following.raw?.startsWith('+')
+    when "PipelineExpression", "UnwrappedExpression"
+      // skip first child which is whitespace
+      needsPrecedingSemicolon following.children[1]
+    else
+      // descend into first child for things like:
+      // IterationExpression
+      //   CallExpression
+      //     ParenthesizedExpression
+      if following.children
+        return needsPrecedingSemicolon following.children[0]
+
 export {
   blockWithPrefix
   braceBlock
+  duplicateBlock
   getIndent
   hoistRefDecs
   makeEmptyBlock
+  processBlocks
   replaceBlockExpression
 }

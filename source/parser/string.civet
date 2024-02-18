@@ -1,0 +1,165 @@
+import type {
+  ASTLeaf
+  ASTNode
+  TabConfig
+} from types.civet
+
+/**
+Given a string of spaces and tabs, and the current tab size
+(where `undefined` means "tabs are the same width as 1 space"),
+compute the indentation level counted as spaces.
+NOTE: Currently, tabs are treated as the specified number of spaces,
+no matter their location (no round-to-next-multiple behavior).
+*/
+function getIndentLevel(str: string, tab: TabConfig)
+  if tab? and tab != 1
+    tabs := str.match /\t/g
+    numTabs := tabs ? tabs.length : 0
+    numTabs * tab + /*spaces*/ (str.length - numTabs)
+  else
+    str.length
+
+/**
+Given an indentation string (spaces and tabs), reduces the leading
+indentation by the specified amount of spaces. If removing a tab reduced
+the indentation too much, replaces it with the appropriate number of spaces.
+*/
+function reduceIndentLevel(str: string, dedent: number, tab: TabConfig)
+  if tab? and tab != 1
+    for each char, i of str
+      unless dedent  // finished removing indentation
+        return str[i..]
+      if char == '\t'
+        dedent -= tab  // one tab removed
+        if dedent < 0  // removed too much; add some spaces back
+          return ''.padStart(-dedent, ' ') + str[i+1..]
+      else
+        dedent--  // one space removed
+    ''  // removed all indentation (and maybe wanted to remove more)
+  else
+    str[dedent..]
+
+indentRe := ///
+  \n        // indent starts after newline (possibly preceded by \r)
+  ([ \t]*)  // capture indentation as $1
+  (?! [ \t] | \r?\n | $ )  // ignore blank lines
+///g
+
+/**
+Gets the indentation level (number of spaces) shared by all indentations
+after the first newline.
+*/
+function getIndentOfBlockString(str: string, tab: TabConfig)
+  minLevel .= Infinity
+  while match := indentRe.exec str
+    level := getIndentLevel match[1], tab
+    minLevel = level if level < minLevel
+  minLevel = 0 if minLevel == Infinity
+  minLevel
+
+function dedentBlockString({ $loc, token: str }: ASTLeaf, tab: TabConfig, dedent: number | undefined, trimStart = true, trimEnd = true)
+  // If string begins with a newline then indentation assume that it should be removed for all lines
+  if not dedent? and /^[ \t]*\r?\n/.test str
+    // Remove remaining shared indentation
+    dedent = getIndentOfBlockString str, tab
+  if dedent
+    str = str.replace /(\n)([ \t]*)/g, (_, newline, indent) =>
+      newline + reduceIndentLevel indent, dedent as number, tab
+
+  // Remove leading newline
+  str = str.replace /^[ \t]*\r?\n/, "" if trimStart
+  // Remove trailing newline
+  str = str.replace /(\r?\n|\n)[ \t]*$/, "" if trimEnd
+
+  // escape unescaped backticks and `${`
+  str = str.replace /(\\.|`|\$\{)/g, (s) =>
+    if s[0] is "\\"
+      s
+    else
+      `\\${s}`
+
+  { $loc, token: str }
+
+function dedentBlockSubstitutions($0: [ASTLeaf, (ASTLeaf | (ASTNode[] & {token: never}))[], ASTLeaf], tab: TabConfig)
+  [s, strWithSubstitutions, e] := $0
+
+  return $0 unless strWithSubstitutions.length
+
+  // Compute shared indentation of all string parts, concatenated
+  stringPart :=
+    for each part of strWithSubstitutions
+      part.token ?? "s"  // put "s" in place of substitutions
+  .join ''
+  dedent :=
+    if /^[ \t]*\r?\n/.test stringPart
+      getIndentOfBlockString stringPart, tab
+    else
+      false
+
+  // Dedent the string parts
+  results: ASTNode[] .= [s]
+  for each let part, i of strWithSubstitutions
+    if part.token?
+      part = dedentBlockString part as ASTLeaf, tab, dedent,
+        i is 0, i is strWithSubstitutions.length - 1
+    results.push part
+  results.push e
+
+  type: "TemplateLiteral"
+  children: results
+
+function processCoffeeInterpolation(s, parts, e, $loc)
+  // Check for no interpolations
+  if (parts.length is 0 or (parts.length is 1 and parts[0].token != null)) {
+    return {
+      type: "StringLiteral",
+      token: parts.length ? `"${modifyString(parts[0].token)}"` : '""',
+      $loc,
+    }
+  }
+
+  parts.forEach((part) => {
+    // Is a string
+    if (part.token) {
+      // Escape '${' and '`'
+      const str = part.token.replace(/(`|\$\{)/g, "\\$1")
+      // Escape non-continuation newlines
+      part.token = modifyString(str)
+    }
+  })
+
+  // Convert to backtick enclosed string
+  s.token = e.token = "`"
+
+  return {
+    type: "TemplateLiteral",
+    children: [s, parts, e],
+  }
+
+/**
+Adjust a parsed string by escaping newlines
+*/
+function modifyString(str: string)
+  // Replace non-escaped newlines with escaped newlines
+  // taking into account the possibility of a preceding escaped backslash
+  return str.replace(/(^.?|[^\\]{2})(\\\\)*\n/g, '$1$2\\n')
+
+/**
+Add quotes around a string to make it a valid JavaScript string,
+escaping any \s
+*/
+function quoteString(str: string)
+  str = str.replace(/\\/g, '\\\\')
+  if str.includes('"') and !str.includes("'")
+    "'" + str.replace(/'/g, "\\'") + "'"
+  else
+    '"' + str.replace(/"/g, '\\"') + '"'
+
+export {
+  dedentBlockString
+  dedentBlockSubstitutions
+  getIndentLevel
+  modifyString
+  processCoffeeInterpolation
+  quoteString
+}
