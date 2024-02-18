@@ -3,9 +3,8 @@ import type {
   ASTLeaf
   ASTNode
   ASTNodeBase
-  BlockStatement
-  TypeIdentifierNode
-  TypeNode
+  TypeSuffix
+  ReturnTypeAnnotation
 } from ./types.civet
 
 import {
@@ -95,23 +94,6 @@ function isTemplateLiteral(node: ASTNode): boolean {
   while (s and s[0] and !s.token) s = s[0]
   return s.token?.startsWith?.('`')
 }
-
-function isVoidType(t?: TypeNode): boolean
-  return t?.type is "LiteralType" and t.t.type is "VoidType"
-
-function isPromiseVoidType(t?: TypeIdentifierNode): boolean
-  return t?.type is "IdentifierType" and t.raw is "Promise" &&
-    t.args?.types?.length is 1 and isVoidType(t.args.types[0])
-
-function isGeneratorVoidType(t?: TypeIdentifierNode): boolean
-  return t?.type is "IdentifierType" and
-    (t.raw is "Iterator" or t.raw is "Generator") and
-    t.args?.types?.length >= 2 and isVoidType(t.args.types[1])
-
-function isAsyncGeneratorVoidType(t?: TypeIdentifierNode): boolean
-  return t?.type is "IdentifierType" and
-    (t.raw is "AsyncIterator" or t.raw is "AsyncGenerator") and
-    t.args?.types?.length >= 2 and isVoidType(t.args.types[1])
 
 function isWhitespaceOrEmpty(node): boolean {
   if (!node) return true
@@ -391,6 +373,54 @@ function skipIfOnlyWS(target)
   }
   return target
 
+/**
+ * Splice child from children/array, similar to Array.prototype.splice,
+ * but specifying a child instead of an index.  Throw if child not found.
+ */
+function spliceChild(node: ASTNode, child: ASTNode, del, ...replacements)
+  children := node?.children ?? node
+  unless Array.isArray children
+    throw new Error "spliceChild: non-array node has no children field"
+  index := children.indexOf child
+  if index < 0
+    throw new Error "spliceChild: child not found"
+  children.splice index, del, ...replacements
+
+/**
+ * Convert type suffix of `?: T` to `: undefined | T`
+ */
+function convertOptionalType(suffix: TypeSuffix | ReturnTypeAnnotation): void
+  if (suffix.t as ASTNodeBase).type is "AssertsType"
+    spliceChild suffix, suffix.optional, 1, suffix.optional =
+      type: "Error"
+      message: "Can't use optional ?: syntax with asserts type"
+    return
+  spliceChild suffix, suffix.optional, 1, suffix.optional = undefined
+  // Return types with | need to be wrapped in parentheses
+  wrap := suffix.type is "ReturnTypeAnnotation"
+  spliceChild suffix, suffix.t, 1, suffix.t = [
+    getTrimmingSpace suffix.t
+    wrap and "("
+    // TODO: avoid parens if unnecessary
+    "undefined | "
+    parenthesizeType insertTrimmingSpace suffix.t, ""
+    wrap and ")"
+  ]
+
+const typeNeedsNoParens = new Set [
+  "IdentifierType"
+  "ImportType"
+  "LiteralType"
+  "TupleType"
+  "ParenthesizedType"
+  "UnaryType"
+]
+/**
+ * Parenthesize type if it might need it in some contexts.
+ */
+function parenthesizeType(type: ASTNodeBase)
+  return type if typeNeedsNoParens.has type.type
+  ["(", type, ")"]
 
 /**
  * Wrap an expression in an IIFE, adding async/await if expression
@@ -457,20 +487,17 @@ export {
   addParentPointers
   clone
   closest
+  convertOptionalType
   deepCopy
   getTrimmingSpace
   hasAwait
   hasYield
   insertTrimmingSpace
-  isAsyncGeneratorVoidType
   isComma
   isEmptyBareBlock
   isExit
   isFunction
-  isGeneratorVoidType
-  isPromiseVoidType
   isTemplateLiteral
-  isVoidType
   isWhitespaceOrEmpty
   literalValue
   makeAmpersandFunction
@@ -479,6 +506,7 @@ export {
   makeRef
   maybeRef
   needsRef
+  parenthesizeType
   parsePosition
   skipIfOnlyWS
   startsWith

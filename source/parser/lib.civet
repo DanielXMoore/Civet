@@ -13,38 +13,28 @@ import type {
   Binding
   BlockStatement
   DeclarationStatement
-  FunctionNode
-  LabeledStatement
   MethodDefinition
   ParseRule
-  ReturnTypeAnnotation
   StatementTuple
   TypeSuffix
   WSNode
 } from types.civet
 
 import {
-  gatherRecursiveWithinFunction
-  findAncestor
-  gatherNodes
   gatherRecursive
   gatherRecursiveAll
 } from traversal.civet
 
 import {
   addParentPointers
+  convertOptionalType
   deepCopy
   getTrimmingSpace
   hasAwait
   hasYield
   insertTrimmingSpace
-  isAsyncGeneratorVoidType
   isComma
   isEmptyBareBlock
-  isFunction
-  isGeneratorVoidType
-  isPromiseVoidType
-  isVoidType
   isWhitespaceOrEmpty
   literalValue
   makeAmpersandFunction
@@ -52,16 +42,14 @@ import {
   makeNode
   makeRef
   maybeRef
-  updateParentPointers
+  parenthesizeType
   wrapIIFE
   wrapWithReturn
 } from util.civet
 
 import {
   blockWithPrefix
-  braceBlock
   duplicateBlock
-  getIndent
   hoistRefDecs
   makeEmptyBlock
   processBlocks
@@ -69,6 +57,7 @@ import {
 
 import { processPipelineExpressions } from pipe.civet
 import { forRange, processForInOf } from for.civet
+import { processFunctions, expressionizeIteration } from function.civet
 import { processDeclarationConditions, processPatternMatching } from pattern-matching.civet
 import {
   adjustAtBindings
@@ -173,36 +162,6 @@ function expressionizeTypeIf([ws, ifOp, condition, t, e])
     children.push t
   children.push ")"
   children
-
-function expressionizeIteration(exp): void
-  const { async, subtype, block, children, statement } = exp
-  const i = children.indexOf(statement)
-  if i < 0
-    throw new Error("Could not find iteration statement in iteration expression")
-
-  if subtype is "DoStatement"
-    // Just wrap with IIFE
-    insertReturn(block)
-    children.splice(i, 1, ...wrapIIFE(["", statement, undefined], async))
-    updateParentPointers exp
-    return
-
-  const resultsRef = makeRef("results")
-
-  // insert `results.push` to gather results array
-  insertPush(block, resultsRef)
-  braceBlock(block)
-
-  // Wrap with IIFE
-  children.splice(i,
-    1,
-    ...wrapIIFE([
-      ["", ["const ", resultsRef, "=[]"], ";"],
-      ...children.map((c) => ["", c, undefined]),
-      ["", wrapWithReturn(resultsRef)],
-    ], async)
-  )
-  updateParentPointers exp
 
 /**
  * This adjusts #x.y().z and @x.y().z when used inside Object glob expressions
@@ -371,208 +330,6 @@ function processCallMemberExpression(node)
   }
   return node
 
-function wrapIterationReturningResults(statement, outer, outerRef?): void {
-  if (statement.type is "DoStatement") {
-    if (outerRef) {
-      insertPush(statement.block, outerRef)
-    } else {
-      insertReturn(statement.block, outer)
-    }
-    return
-  }
-
-  const resultsRef = makeRef("results")
-
-  const declaration = {
-    type: "Declaration",
-    children: ["const ", resultsRef, "=[];"],
-  }
-
-  insertPush(statement.block, resultsRef)
-
-  outer.children.unshift(declaration)
-  if (outerRef) {
-    statement.children.push(";", outerRef, ".push(", resultsRef, ");")
-  } else {
-    statement.children.push(";return ", resultsRef, ";")
-  }
-}
-
-// NOTE: this is almost the same as insertReturn but doesn't remove `breaks` in `when` and
-// does construct an else clause pushing undefined in if statements that lack them
-// and adds to the beginning and the end of the expression's children.
-// Maybe these insertion modifications can be refactored to be more DRY eventually.
-function insertPush(node, ref): void {
-  if (!node) return
-  // TODO: unify this with the `exp` switch
-  switch (node.type) {
-    case "BlockStatement":
-      if (node.expressions.length) {
-        const last = node.expressions[node.expressions.length - 1]
-        insertPush(last, ref)
-      } else {
-        node.expressions.push([ref, ".push(void 0);"])
-      }
-      return
-    case "CaseBlock":
-      node.clauses.forEach((clause) => {
-        insertPush(clause, ref)
-      })
-      return
-    // NOTE: "CaseClause"s don't push
-    case "WhenClause":
-      insertPush(node.block, ref)
-      return
-    case "DefaultClause":
-      insertPush(node.block, ref)
-      return
-  }
-  if (!Array.isArray(node)) return
-
-  [, exp] .= node
-  return unless exp
-  indent := getIndent(node)
-
-  outer := exp
-  {type} .= exp
-  if type is "LabelledStatement"
-    exp = (exp as LabeledStatement).statement
-    {type} = exp
-
-  switch (exp.type) {
-    case "BreakStatement":
-    case "ContinueStatement":
-    case "DebuggerStatement":
-    case "EmptyStatement":
-    case "ReturnStatement":
-    case "ThrowStatement":
-      return
-    case "Declaration":
-      exp.children.push(["", [";", ref, ".push(",
-        patternAsValue(exp.bindings.-1.pattern), ")"]])
-      return
-    case "ForStatement":
-    case "IterationStatement":
-    case "DoStatement":
-      wrapIterationReturningResults(exp, outer, ref)
-      return
-    case "BlockStatement":
-      insertPush(exp.expressions[exp.expressions.length - 1], ref)
-      return
-    case "IfStatement":
-      // if block
-      insertPush(exp.then, ref)
-      if (exp.then.bare)
-        exp.then.children.push(";")
-      // else block
-      if (exp.else) insertPush(exp.else[2], ref)
-      // Add else block pushing undefined if no else block
-      else exp.children.push([" else {\n", indent, ref, ".push(undefined)\n", indent, "}"])
-      return
-    case "PatternMatchingStatement":
-      insertPush(exp.children[0][0], ref)
-      return
-    case "SwitchStatement":
-      // insert a results.push in each case block
-      insertPush(exp.children[2], ref)
-      return
-    case "TryStatement":
-      // NOTE: CoffeeScript doesn't add a push to an empty catch block but does add if there is any statement in the catch block
-      // we always add a push to the catch block
-      // NOTE: does not insert a push in the finally block
-      exp.blocks.forEach((block) => insertPush(block, ref))
-      return
-  }
-
-  // Don't push if there's a trailing semicolon
-  if (node[node.length - 1]?.type is "SemicolonDelimiter") return
-
-  // Insert push wrapping expression
-  node.splice(1, 0, ref, ".push(")
-  node.push(")")
-}
-
-function processParams(f): void {
-  const { type, parameters, block } = f
-  const isConstructor = f.name is 'constructor'
-
-  // Check for singleton TypeParameters <Foo> before arrow function,
-  // which TypeScript (in tsx mode) treats like JSX; replace with <Foo,>
-  if (type is "ArrowFunction" and parameters and parameters.tp and parameters.tp.parameters.length is 1) {
-    parameters.tp.parameters.push(",")
-  }
-
-  if (!block) return
-  const { expressions } = block
-  if (!expressions) return
-  const { blockPrefix } = parameters
-
-  let indent: string
-  if (!expressions.length) {
-    indent = ""
-  } else {
-    indent = expressions[0][0]
-  }
-
-  const [splices, thisAssignments] = gatherBindingCode(parameters, {
-    injectParamProps: isConstructor
-  })
-
-  const delimiter = {
-    type: "SemicolonDelimiter",
-    children: [";"],
-  }
-
-  const prefix = splices
-    .map (s) => ["let ", s]
-    .concat(thisAssignments)
-    .map((s) => s.type
-      ? {
-        // TODO: figure out how to get JS only statement tuples
-        ...s,
-        children: [indent, ...s.children, delimiter]
-      }
-      : [indent, s, delimiter]
-    )
-
-  if (!prefix.length) return
-  // In constructor definition, insert prefix after first super() call
-  if (isConstructor) {
-    const superCalls = gatherNodes expressions, (exp) =>
-      exp.type is "CallExpression" and exp.children[0]?.token is "super"
-    if (superCalls.length) {
-      const {child} = findAncestor(superCalls[0],
-        (ancestor) => ancestor is block)
-      const index = findChildIndex(expressions, child)
-      if (index < 0) {
-        throw new Error("Could not find super call within top-level expressions")
-      }
-      expressions.splice(index + 1, 0, ...prefix)
-      return
-    }
-  }
-  expressions.unshift(...prefix)
-}
-
-/**
- * If `child.parent is parent`, then this should find the index `i` such that
- * `parent.children[i]` contains `child`.  This requires looking in
- * `parent.children` while descending into any arrays.
- * Also works if you pass an array (such as `parent.children`) as the `parent`,
- * which is useful for working with e.g. the `expressions` property.
- * Returns -1 if `child` cannot be found.
- */
-function findChildIndex(parent, child)
-  children := Array.isArray(parent) ? parent : parent.children
-  for each c, i of children
-    if c is child or (Array.isArray(c) and arrayRecurse(c))
-      return i
-  function arrayRecurse(array)
-    for each c, i of array
-      if c is child or (Array.isArray(c) and arrayRecurse(c))
-        return true
-  return -1
-
 /**
  * Replace this node with another, by modifying its parent's children.
  */
@@ -592,152 +349,6 @@ function replaceNode(node: ASTNodeBase, newNode: ASTNode): void
   if newNode <? "object" and not Array.isArray newNode
     newNode.parent = node.parent
 
-function patternAsValue(pattern) {
-  switch (pattern.type) {
-    case "ArrayBindingPattern": {
-      const children = [...pattern.children]
-      const index = children.indexOf(pattern.elements)
-      if (index < 0) throw new Error("failed to find elements in ArrayBindingPattern")
-      children[index] = pattern.elements.map((el) => {
-        const [ws, e, delim] = el.children
-        return { ...el, children: [ws, patternAsValue(e), delim] }
-      })
-      return { ...pattern, children }
-    }
-    case "ObjectBindingPattern": {
-      const children = [...pattern.children]
-      const index = children.indexOf(pattern.properties)
-      if (index < 0) throw new Error("failed to find properties in ArrayBindingPattern")
-      children[index] = pattern.properties.map(patternAsValue)
-      return { ...pattern, children }
-    }
-    case "Identifier":
-    case "BindingProperty": {
-      const children = [pattern.name, pattern.delim]
-      // Check for leading whitespace
-      if (isWhitespaceOrEmpty(pattern.children[0])) {
-        children.unshift(pattern.children[0])
-      }
-      return { ...pattern, children }
-    }
-    default:
-      return pattern
-  }
-}
-
-// [indent, statement, semicolon]
-function insertReturn(node: ASTNode, outerNode: ASTNode = node): void
-  if (!node) return
-  // TODO: unify this with the `exp` switch
-  switch node.type
-    case "BlockStatement":
-      if node.expressions.length
-        const last = node.expressions[node.expressions.length - 1]
-        insertReturn(last)
-      else
-        // NOTE: Kind of hacky but I'm too much of a coward to make `->` add an implicit return
-        if node.parent.type is "CatchClause"
-          node.expressions.push(["return"])
-      return
-    // NOTE: "CaseClause"s don't get a return statements inserted
-    case "WhenClause":
-      // Remove inserted `break;` if it hasn't already been removed
-      node.children.splice node.children.indexOf(node.break), 1 if node.break
-      if node.block.expressions.length
-        insertReturn(node.block)
-      else
-        node.block.expressions.push(wrapWithReturn())
-      return
-    case "DefaultClause":
-      insertReturn(node.block)
-      return
-  if (!Array.isArray(node)) return
-
-  [, exp, semi] .= node
-  return if semi?.type is "SemicolonDelimiter"
-  return unless exp
-
-  outer := exp
-  {type} .= exp
-  if type is "LabelledStatement"
-    exp = (exp as LabeledStatement).statement
-    {type} = exp
-
-  switch type
-    case "BreakStatement":
-    case "ContinueStatement":
-    case "DebuggerStatement":
-    case "EmptyStatement":
-    case "ReturnStatement":
-    case "ThrowStatement":
-      return
-    case "Declaration":
-      exp.children.push ["", {
-        type: "ReturnStatement",
-        children: [";return ", patternAsValue(exp.bindings.-1.pattern)],
-        parent: exp
-      }]
-      return
-    case "FunctionExpression":
-      // Add return after function declaration if it has an id to not interfere with hoisting
-      if (exp.id)
-        exp.children.push ["",
-          type: "ReturnStatement"
-          children: [";return ", exp.id]
-          parent: exp
-        ]
-        return
-      /* c8 ignore next 3 */
-      // This is currently never hit because anonymous FunctionExpressions are already wrapped in parens by this point
-      // Add return in normal way for functions without ids
-      break
-    case "ForStatement":
-    case "IterationStatement":
-    case "DoStatement":
-      wrapIterationReturningResults(exp, outer)
-      return
-    case "BlockStatement":
-      insertReturn(exp.expressions[exp.expressions.length - 1])
-      return
-    case "IfStatement":
-      // if block
-      insertReturn(exp.then)
-      // else block
-      if (exp.else) insertReturn(exp.else[2])
-      // Add explicit return after if block if no else block
-      else exp.children.push ["", {
-        type: "ReturnStatement"
-        // NOTE: add a prefixed semi-colon because the if block may not be braced
-        children: [";return"]
-        parent: exp
-      }]
-      return
-    case "PatternMatchingStatement":
-      insertReturn(exp.children[0][0])
-      return
-    case "SwitchStatement":
-      insertSwitchReturns(exp)
-      return
-    case "TryStatement":
-      exp.blocks.forEach((block) => insertReturn(block))
-      // NOTE: do not insert a return in the finally block
-      return
-
-  // Don't add return if there's a trailing semicolon
-  if (node[node.length - 1]?.type is "SemicolonDelimiter") return
-
-  // Insert return after indentation and before expression
-  const returnStatement = wrapWithReturn(node[1])
-  node.splice(1, 1, returnStatement)
-
-// insert a return in each when/else/default block
-// case blocks don't get implicit returns
-// maybe default blocks shouldn't either?
-function insertSwitchReturns(exp): void
-  exp.caseBlock.clauses.forEach (clause) =>
-    insertReturn clause
-
-
 // Wrap expression in parentheses to make into a statement when:
 // * object literal expression
 // * anonymous function expression
@@ -754,22 +365,6 @@ function makeExpressionStatement(expression: ASTNode): ASTNode
     makeLeftHandSideExpression expression
   else
     expression
-
-const typeNeedsNoParens = new Set [
-  "IdentifierType"
-  "ImportType"
-  "LiteralType"
-  "TupleType"
-  "ParenthesizedType"
-  "UnaryType"
-]
-
-/**
- * Parenthesize type if it might need it in some contexts.
- */
-function parenthesizeType(type: ASTNodeBase)
-  return type if typeNeedsNoParens.has type.type
-  ["(", type, ")"]
 
 // Look for last property access like `.foo` or `[computed]` or root Identifier,
 // before any calls like `(args)`, non-null assertions `!`, and optionals `?`.
@@ -822,27 +417,6 @@ function convertMethodToFunction(method) {
     block,
   }
 }
-
-/**
- * Convert type suffix of `?: T` to `: undefined | T`
- */
-function convertOptionalType(suffix: TypeSuffix | ReturnTypeAnnotation): void
-  if (suffix.t as ASTNodeBase).type is "AssertsType"
-    spliceChild suffix, suffix.optional, 1, suffix.optional =
-      type: "Error"
-      message: "Can't use optional ?: syntax with asserts type"
-    return
-  spliceChild suffix, suffix.optional, 1, suffix.optional = undefined
-  // Return types with | need to be wrapped in parentheses
-  wrap := suffix.type is "ReturnTypeAnnotation"
-  spliceChild suffix, suffix.t, 1, suffix.t = [
-    getTrimmingSpace suffix.t
-    wrap and "("
-    // TODO: avoid parens if unnecessary
-    "undefined | "
-    parenthesizeType insertTrimmingSpace suffix.t, ""
-    wrap and ")"
-  ]
 
 // Convert an ObjectExpression (with `properties`)
 // into a set of JSX attributes.
@@ -998,74 +572,6 @@ function processDeclarations(statements: StatementTuple[]): void
       { initializer } := binding
       if initializer
         exp := initializer[2]
-
-// Add implicit block unless followed by a method/function of the same name,
-// or block is within an ExportDeclaration.
-function implicitFunctionBlock(f): void {
-  if (f.abstract or f.block or f.signature?.optional) return
-
-  const { name, parent } = f
-  if (parent?.type is "ExportDeclaration") return
-  const expressions = parent?.expressions ?? parent?.elements
-  const currentIndex = expressions?.findIndex(([, def]) => def is f)
-  const following = currentIndex >= 0 and expressions[currentIndex + 1]?.[1]
-
-  if (f.type is following?.type and name and name is following.name) {
-    f.ts = true
-  } else {
-    const block = makeEmptyBlock()
-    block.parent = f
-    f.block = block
-    f.children.push(block)
-    f.ts = false
-  }
-}
-
-function processReturn(f: FunctionNode, implicitReturns: boolean): void
-  { returnType } .= f.signature
-  if returnType and returnType.optional
-    convertOptionalType returnType
-
-  if (!processReturnValue(f) and implicitReturns)
-    { signature, block } := f
-    { modifier, name, returnType } := signature
-    { async, generator, set } := modifier
-    isMethod := f.type is "MethodDefinition"
-    isConstructor := isMethod and name is "constructor"
-    isVoid := (or)
-      isVoidType(returnType?.t)
-      (and)
-        async
-        (or)
-          isPromiseVoidType(returnType?.t)
-          generator and isAsyncGeneratorVoidType(returnType?.t)
-      (and)
-        not async
-        generator
-        isGeneratorVoidType(returnType?.t)
-
-    if block?.type is "BlockStatement"
-      if isVoid or set or isConstructor
-        if block.bare and block.implicitlyReturned
-          block.children = [ " {", ...block.children, " }" ]
-          block.bare = block.implicitlyReturned = false
-      else
-        unless block.implicitlyReturned
-          insertReturn(block)
-
-function processFunctions(statements, config): void
-  gatherRecursiveAll(statements, ({ type }) => type is "FunctionExpression" or type is "ArrowFunction")
-  .forEach (f) =>
-    if (f.type is "FunctionExpression") implicitFunctionBlock(f)
-    processParams(f)
-    processReturn(f, config.implicitReturns)
-
-  gatherRecursiveAll(statements, ({ type }) => type is "MethodDefinition")
-  .forEach (f) =>
-    implicitFunctionBlock(f)
-    processParams(f)
-    processReturn(f, config.implicitReturns)
-
 
 function processBindingPatternLHS(lhs, tail): void {
   // Expand AtBindings first before gathering splices
@@ -1348,73 +854,6 @@ function populateRefs(statements: ASTNode): void {
   }
 }
 
-/**
- * Support for `return.value` and `return =`
- * for changing automatic return value of function.
- * Returns whether any present (so shouldn't do implicit return).
- */
-function processReturnValue(func: FunctionNode)
-  { block } := func
-  values: ASTNodeBase[] := (gatherRecursiveWithinFunction block,
-    ({ type }) => type is "ReturnValue") as ASTNodeBase[]
-  return false unless values.length
-
-  ref := makeRef "ret"
-
-  let declaration
-  values.forEach (value) =>
-    value.children = [ref]
-
-    // Check whether return.value already declared within this function
-    { ancestor, child } := findAncestor(value,
-      ({ type }) => type is "Declaration",
-      isFunction)
-    declaration ??= child if ancestor  // remember binding
-
-  // Compute default return type
-  returnType .= func.returnType ?? func.signature?.returnType
-  if returnType
-    { t } := returnType
-    switch t.type
-      "TypePredicate"
-        returnType = ": boolean"
-      "AssertsType"
-        returnType = undefined
-
-  // Modify existing declaration, or add declaration of return.value after {
-  if declaration
-    unless declaration.suffix?
-      declaration.children[1] = declaration.suffix = returnType
-  else
-    block.expressions.unshift [
-      getIndent block.expressions[0]
-    ,
-      type: "Declaration"
-      children: ["let ", ref, returnType]
-      names: []
-    ,
-      ";"
-    ]
-
-  // Transform existing `return` -> `return ret`
-  gatherRecursiveWithinFunction block,
-    (r) => r.type is "ReturnStatement" and not r.expression
-  .forEach (r) =>
-    r.expression = ref
-    r.children.splice -1, 1, " ", ref
-
-  // Implicit return before }
-  unless block.children.-2?.type is "ReturnStatement"
-    block.expressions.push [
-      [getIndent(block.expressions.-1)]
-    ,
-      type: "ReturnStatement",
-      expression: ref,
-      children: ["return ", ref]
-    ]
-
-  return true
-
 function prune(node: ASTNode): ASTNode {
   if (node is null or node is undefined) return
   if (node.length is 0) return
@@ -1521,19 +960,6 @@ function replaceNodes(root, predicate, replacer)
     else
       replaceNodes node, predicate, replacer
   return root
-
-/**
- * Splice child from children/array, similar to Array.prototype.splice,
- * but specifying a child instead of an index.  Throw if child not found.
- */
-function spliceChild(node: ASTNode, child: ASTNode, del, ...replacements)
-  children := node?.children ?? node
-  unless Array.isArray children
-    throw new Error "spliceChild: non-array node has no children field"
-  index := children.indexOf child
-  if index < 0
-    throw new Error "spliceChild: child not found"
-  children.splice index, del, ...replacements
 
 function typeOfJSX(node, config, getRef) {
   switch (node.type) {
