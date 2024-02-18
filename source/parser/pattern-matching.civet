@@ -1,0 +1,570 @@
+import type {
+  ASTNode
+  ASTRef
+  BlockStatement
+  IfStatement
+  IterationStatement
+  ParenthesizedExpression
+  ParseRule
+  SwitchStatement
+} from ./types.civet
+
+import {
+  gatherRecursiveAll
+} from ./traversal.civet
+
+import {
+  addParentPointers
+  isExit
+  makeRef
+  maybeRef
+  updateParentPointers
+} from ./util.civet
+
+import {
+  blockWithPrefix
+  braceBlock
+  makeEmptyBlock
+  replaceBlockExpression
+} from ./block.civet
+
+import {
+  gatherBindingCode
+} from ./binding.civet
+
+import {
+  processBinaryOpExpression
+} from ./op.civet
+
+function processPatternMatching(statements: ASTNode, ReservedWord: ParseRule): void {
+  gatherRecursiveAll(statements, .type is "SwitchStatement")
+    .forEach((s: SwitchStatement) => {
+      { caseBlock } := s
+      { clauses } := caseBlock
+
+      // Remove inserted `break;` in `when` clauses that don't need them
+      for c of clauses
+        if c.type is "WhenClause" and c.break
+          last := c.block?.expressions?.-1?[1]
+          // [1] extracts statement from [indent, statement, delim]
+          if isExit last
+            c.children.splice c.children.indexOf(c.break), 1
+            c.break = undefined
+
+      errors .= false
+      isPattern .= false
+      if clauses.some .type is "PatternClause"
+        isPattern = true
+        clauses.forEach (c) =>
+          // else/default clause is ok
+          unless c.type is "PatternClause" or c.type is "DefaultClause"
+            errors = true
+            c.children.push
+              type: "Error",
+              message: "Can't mix pattern matching and non-pattern matching clauses",
+
+      return if errors or !isPattern
+
+      { condition } .= s
+      if condition.type is "ParenthesizedExpression"
+        // Unwrap parenthesized expression
+        condition = condition.expression as ParenthesizedExpression
+
+      let hoistDec, refAssignment = [], ref = maybeRef(condition, "m");
+      if (ref !== condition) {
+        hoistDec = {
+          type: "Declaration",
+          children: ["let ", ref],
+          names: [],
+        }
+        refAssignment = [{
+          type: "AssignmentExpression",
+          children: [ref, " = ", condition],
+        }, ","]
+      }
+      let prev = [],
+        root = prev
+
+      l := clauses.length
+      clauses.forEach((c, i) => {
+        if (c.type is "DefaultClause") {
+          prev.push(c.block)
+          return
+        }
+
+        let { patterns, block } = c
+        let pattern = patterns[0]
+
+        const indent = block.expressions?.[0]?.[0] or ""
+
+        // TODO: multiple binding patterns
+
+        const alternativeConditions = patterns.map((pattern, i) => {
+          const conditions = []
+          getPatternConditions(pattern, ref, conditions)
+          return conditions
+        })
+
+        const conditionExpression = alternativeConditions.map((conditions, i) => {
+          const conditionArray = conditions.map((c, i) => {
+            if (i is 0) return c
+            return [" && ", ...c]
+          })
+
+          if (i is 0) return conditionArray
+          return [" || ", ...conditionArray]
+        })
+
+        const condition = {
+          type: "ParenthesizedExpression",
+          children: ["(", ...refAssignment, conditionExpression, ")"],
+          expression: conditionExpression,
+        }
+
+        const prefix = []
+
+        switch (pattern.type) {
+          case "ArrayBindingPattern":
+            if (pattern.length is 0) break
+          case "ObjectBindingPattern": {
+            // NOTE: Array matching pattern falls through so we use the null check
+            if (pattern.properties?.length is 0) break
+
+            // Gather bindings
+            let [splices, thisAssignments] = gatherBindingCode(pattern)
+            const patternBindings = nonMatcherBindings(pattern)
+
+            splices = splices.map((s) => [", ", nonMatcherBindings(s)])
+            thisAssignments = thisAssignments.map((a) => [indent, a, ";"])
+
+            const duplicateDeclarations = aggregateDuplicateBindings([patternBindings, splices], ReservedWord)
+
+            prefix.push([indent, "const ", patternBindings, " = ", ref, splices, ";"])
+            prefix.push(...thisAssignments)
+            prefix.push(...duplicateDeclarations.map((d) => [indent, d, ";"]))
+
+            break
+          }
+        }
+
+        block.expressions.unshift(...prefix)
+
+        const next = []
+
+        // Add braces if necessary
+        braceBlock(block)
+
+        // Insert else if there are more branches
+        if (i < l - 1) next.push("\n", "else ")
+
+        prev.push(["", {
+          type: "IfStatement",
+          children: ["if", condition, block, next],
+          then: block,
+          else: next,
+          hoistDec,
+        }])
+        hoistDec = undefined
+        refAssignment = []
+        prev = next
+      })
+
+      s.type = "PatternMatchingStatement"
+      s.children = [root]
+      // Update parent pointers
+      addParentPointers(s, s.parent)
+    })
+}
+
+function getPatternConditions(pattern, ref, conditions): void {
+  if (pattern.rest) return // No conditions for rest elements
+
+  switch (pattern.type) {
+    case "ArrayBindingPattern": {
+      const { elements, length } = pattern,
+        hasRest = elements.some((e) => e.rest),
+        comparator = hasRest ? " >= " : " === ",
+        l = [comparator, (length - hasRest).toString()]
+
+      conditions.push(
+        ["Array.isArray(", ref, ")"],
+        [ref, ".length", l],
+      )
+
+      // recursively collect nested conditions
+      elements.forEach(({ children: [, e] }, i) => {
+        const subRef = [ref, "[", i.toString(), "]"]
+        getPatternConditions(e, subRef, conditions)
+      })
+
+      // collect post rest conditions
+      const { blockPrefix } = pattern
+      if (blockPrefix) {
+        const postElements = blockPrefix.children[1],
+          { length: postLength } = postElements
+
+        postElements.forEach(({ children: [, e] }, i) => {
+          const subRef = [ref, "[", ref, ".length - ", (postLength + i).toString(), "]"]
+          getPatternConditions(e, subRef, conditions)
+        })
+      }
+
+      break
+    }
+    case "ObjectBindingPattern": {
+      conditions.push(
+        ["typeof ", ref, " === 'object'"],
+        [ref, " != null"],
+      )
+
+      pattern.properties.forEach((p) => {
+        switch (p.type) {
+          case "PinProperty":
+          case "BindingProperty": {
+            const { name, value } = p
+            let subRef
+            switch (name.type) {
+              case "ComputedPropertyName":
+                conditions.push([name.expression, " in ", ref])
+                subRef = [ref, name]
+                break
+              case "Literal":
+              case "StringLiteral":
+              case "NumericLiteral":
+                conditions.push([name, " in ", ref])
+                subRef = [ref, "[", name, "]"]
+                break
+              default:
+                conditions.push(["'", name, "' in ", ref])
+                subRef = [ref, ".", name]
+            }
+
+            if (value) {
+              getPatternConditions(value, subRef, conditions)
+            }
+
+            break
+          }
+        }
+      })
+
+      break
+    }
+    case "ConditionFragment": {
+      let { children } = pattern
+      // Add leading space to first binary operation
+      if (children.length) {
+        let [ first, ...rest ] = children
+        let [ ws, ...op ] = first
+        ws = [" "].concat(ws)
+        first = [ ws, ...op ]
+        children = [ first, ...rest ]
+      }
+      conditions.push(
+        processBinaryOpExpression([ref, children])
+      )
+      break
+    }
+    case "RegularExpressionLiteral": {
+      conditions.push(
+        ["typeof ", ref, " === 'string'"],
+        [pattern, ".test(", ref, ")"],
+      )
+
+      break
+    }
+    case "PinPattern":
+      conditions.push([
+        ref,
+        " === ",
+        pattern.expression,
+      ])
+      break
+    case "Literal":
+      conditions.push([
+        ref,
+        " === ",
+        pattern,
+      ])
+      break
+    default:
+      break
+  }
+}
+
+function elideMatchersFromArrayBindings(elements) {
+  return elements.map((el) => {
+    // TODO: this isn't unified with the element [ws, e, sep] tuple yet
+    if (el.type is "BindingRestElement") {
+      return ["", el, undefined]
+    }
+    const { children: [ws, e, delim] } = el
+    switch (e.type) {
+      case "Literal":
+      case "RegularExpressionLiteral":
+      case "StringLiteral":
+      case "PinPattern":
+        return delim
+      default:
+        return [ws, nonMatcherBindings(e), delim]
+    }
+  })
+}
+
+function elideMatchersFromPropertyBindings(properties) {
+  return properties.map((p) => {
+    switch (p.type) {
+      case "BindingProperty": {
+        const { children, name, value } = p
+        const [ws] = children
+
+        switch (value and value.type) {
+          case "ArrayBindingPattern":
+          case "ObjectBindingPattern":
+            return {
+              ...p,
+              children: [ws, name, ": ", nonMatcherBindings(value), p.delim],
+            }
+          case "Identifier":
+            return p
+          case "Literal":
+          case "RegularExpressionLiteral":
+          case "StringLiteral":
+          default:
+            return {
+              ...p,
+              children: [ws, name, p.delim],
+            }
+        }
+      }
+      case "PinProperty":
+      case "BindingRestProperty":
+      default:
+        return p
+    }
+  })
+}
+
+function nonMatcherBindings(pattern) {
+  switch (pattern.type) {
+    case "ArrayBindingPattern": {
+      const elements = elideMatchersFromArrayBindings(pattern.elements)
+      const children = ["[", elements, "]"]
+      return {
+        ...pattern,
+        children,
+        elements,
+      }
+    }
+    case "PostRestBindingElements": {
+      const els = elideMatchersFromArrayBindings(pattern.children[1])
+
+      return {
+        ...pattern,
+        children: [
+          pattern.children[0],
+          els,
+          ...pattern.children.slice(2),
+        ],
+      }
+    }
+    case "ObjectBindingPattern":
+      return ["{", elideMatchersFromPropertyBindings(pattern.properties), "}"]
+
+    default:
+      return pattern
+  }
+}
+
+function aggregateDuplicateBindings(bindings, ReservedWord: ParseRule) {
+  props := gatherRecursiveAll bindings, .type is "BindingProperty"
+  arrayBindings := gatherRecursiveAll bindings, .type is "ArrayBindingPattern"
+
+  arrayBindings.forEach (a) =>
+    { elements } := a
+    elements.forEach (element) =>
+      if Array.isArray element
+        [, e] := element
+        if e.type is "Identifier"
+          props.push e
+        else if e.type is "BindingRestElement"
+          props.push e
+
+  declarations: ASTNode[][] := []
+
+  propsGroupedByName := new Map
+
+  for p of props
+    { name, value } := p
+
+    // This is to handle aliased props, non-aliased props, and binding identifiers in arrays
+    const key = value?.name or name?.name or name
+    if propsGroupedByName.has key
+      propsGroupedByName.get(key).push(p)
+    else
+      propsGroupedByName.set key, [p]
+
+  propsGroupedByName.forEach (shared, key) =>
+    return unless key
+    // NOTE: Allows pattern matching reserved word keys by binding to inaccessible refs
+    // HACK: using the parser's ReservedWord rule here
+    if ReservedWord({ fail() { } }, {
+      pos: 0,
+      input: key,
+    })
+      shared.forEach (p) =>
+        aliasBinding p, makeRef(`_${key}`, key)
+      // Don't push declarations for reserved words
+      return
+
+    return if shared.length is 1
+
+    // Create a ref alias for each duplicate binding
+    refs := shared.map (p) =>
+      ref := makeRef(key)
+      aliasBinding(p, ref)
+
+      return ref
+
+    // Gather duplicates in an array
+    declarations.push(["const ", key, " = [", ...refs.map((r, i) => {
+      return i is 0 ? r : [", ", r]
+    }), "]"])
+
+  return declarations
+}
+
+function processDeclarationCondition(condition, rootCondition, parent): void
+  return unless condition.type is "DeclarationCondition"
+  ref := makeRef()
+
+  { decl, bindings } := condition.declaration
+  // TODO: Add support for `let` and `const` declarations with multiple bindings in conditions
+  binding := bindings[0]
+  { pattern, suffix, initializer, splices, thisAssignments } := binding
+
+  Object.assign condition,
+    type: "AssignmentExpression"
+    children: [ref, initializer]
+    hoistDec:
+      type: "Declaration"
+      children: ["let ", ref, suffix]
+      names: []
+    pattern: pattern
+    ref: ref
+  // condition wasn't previously a child, so now needs parent pointers
+  addParentPointers condition, parent
+
+  Object.assign rootCondition,
+    blockPrefix: [
+      ["", [ decl, pattern, suffix, " = ", ref, ...splices ], ";"],
+      ...thisAssignments
+    ]
+
+function processDeclarationConditions(node: ASTNode): void
+  gatherRecursiveAll node, (n) =>
+    n.type is "IfStatement" or n.type is "IterationStatement" or n.type is "SwitchStatement"
+  .forEach processDeclarationConditionStatement
+
+/**
+ * Processes adding additional conditions when declarations are used as a condition in IfStatements, WhileStatements, and SwitchStatements.
+ * Also does additional processing for IfStatements that used to be in the parser (inserting semi-colon on bare-block consequent with else).
+ */
+function processDeclarationConditionStatement(s: IfStatement | IterationStatement | SwitchStatement): void
+  { condition } := s
+  return unless condition?.expression
+  { expression } .= condition
+  // Support for negated conditions built by unless/until
+  switch expression
+    {type: 'UnaryExpression', children: ['!', {type: 'ParenthesizedExpression', expression: expression2}]}
+      expression = expression2
+  processDeclarationCondition expression, condition.expression, s
+
+  { ref, pattern } := expression
+
+  if pattern
+    conditions .= []
+    getPatternConditions(pattern, ref, conditions)
+
+    conditions = conditions.filter (c) =>
+      !(c.length is 3 and c[0] is "typeof " and c[1] is ref and c[2] is " === 'object'") and
+      !(c.length is 2 and c[0] is ref and c[1] is " != null")
+
+    if conditions.length
+      condition.children.unshift "("
+      conditions.forEach (c) ->
+        condition.children.push " && ", c
+      condition.children.push ")"
+
+  switch s.type
+    when "IfStatement"
+      { else: e} := s
+      block := blockWithPrefix(condition.expression.blockPrefix, s.then)
+      s.then = block
+
+      toAdd := [block]
+
+      if block.bare and e
+        toAdd.push ";"
+
+      s.children.splice(2, 1, ...toAdd)
+
+      // Update parent pointers since declaration conditions have expanded
+      updateParentPointers(block, s)
+
+    when "IterationStatement"
+      { children, block } := s
+      newBlock := blockWithPrefix(condition.expression.blockPrefix, block)
+      s.children = children.map (c) => c?.type is "BlockStatement" ? newBlock : c
+
+      // Update parent pointers since declaration conditions have expanded
+      updateParentPointers(newBlock, s)
+
+    when "SwitchStatement"
+      { blockPrefix, ref } := condition.expression
+      return unless blockPrefix
+
+      s.condition =
+        type: "ParenthesizedExpression"
+        children: ["(", ref, ")"]
+        expression: ref
+        parent: s
+      s.children[1] = s.condition
+      updateParentPointers s
+
+      // wraps the entire switch statement
+      block := blockWithPrefix [["", [{
+        type: "Declaration",
+        children: ["let ", ...condition.expression.children],
+      }], ";"], ...blockPrefix], makeEmptyBlock()
+      updateParentPointers block, s.parent
+
+      replaceBlockExpression(s.parent as BlockStatement, s, block)
+      block.expressions.push ["", s]
+      s.parent = block
+
+/**
+ * Adjust the alias of a binding property, adding an alias if one doesn't exist or
+ * replacing an existing alias. This mutates the property in place.
+ */
+function aliasBinding(p, ref: ASTRef): void
+  if p.type is "Identifier"
+    // Array element binding
+    // TODO: This ignores `name` and `names` properties of Identifier and
+    // hackily converts it to a container for a Ref.
+    p.children[0] = ref
+  else if p.type is "BindingRestElement"
+    aliasBinding p.binding, ref
+  else if p.value?.type is "Identifier"
+    // aliased property binding
+    aliasBinding p.value, ref
+  else
+    // non-aliased property binding
+    p.value = ref
+    index := p.children.indexOf p.name
+    p.children.splice index + 1, 0, ": ", ref
+
+export {
+  processDeclarationConditions
+  processPatternMatching
+}

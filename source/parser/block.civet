@@ -1,0 +1,218 @@
+import {
+  ASTNodeBase
+  BlockStatement
+  StatementTuple
+} from ./types.civet
+
+import {
+  addParentPointers
+  updateParentPointers
+  startsWith
+} from ./util.civet
+
+import {
+  findAncestor
+  gatherRecursiveAll
+  gatherRecursive
+} from ./traversal.civet
+
+/**
+ * Duplicate a block and attach statements prefixing the block.
+ * Adds braces if the block is bare.
+ *
+ * @returns the duplicated block with prefix statements attached or the unchanged block.
+ */
+function blockWithPrefix(prefixStatements: StatementTuple[] | undefined, block: BlockStatement)
+  if prefixStatements and prefixStatements.length
+    const indent = getIndent(block.expressions[0])
+    // Match prefix statements to block indent level
+    if indent
+      //@ts-ignore
+      prefixStatements = prefixStatements.map (statement) =>
+        [indent, ...statement.slice(1)]
+
+    const expressions = [...prefixStatements, ...block.expressions]
+    // blockPrefix wasn't previously a child, so now needs parent pointers
+    addParentPointers prefixStatements, block
+
+    block = {
+      ...block,
+      expressions,
+      children: block.children is block.expressions ? expressions :
+        block.children.map((c) => c is block.expressions ? expressions : c),
+    }
+    // Add braces if block lacked them
+    if block.bare
+      // Now copied, so mutation is OK
+      block.children = [[" {"], ...block.children, "}"]
+      block.bare = false
+
+    updateParentPointers block
+
+  return block
+
+function braceBlock(block: BlockStatement)
+  if block.bare
+    block.children.unshift(" {")
+    block.children.push("}")
+    block.bare = false
+
+function duplicateBlock(block: BlockStatement): BlockStatement
+  expressions := [...block.expressions]
+  children := [...block.children]
+  children.splice(children.indexOf(block.expressions), 1, expressions)
+  return {
+    ...block,
+    expressions,
+    children,
+  }
+
+function makeEmptyBlock(): BlockStatement
+  const expressions = []
+  return {
+    type: "BlockStatement",
+    expressions,
+    children: ["{", expressions, "}"],
+    bare: false,
+    empty: true,
+  }
+
+/**
+ * Replace `child` with `replacement` inside the `block`.
+ * Assumes a `StatementTuple[]` for `block.expressions`
+ */
+function replaceBlockExpression(node: BlockStatement, child: ASTNodeBase, replacement: ASTNodeBase): void
+  found .= false
+
+  { expressions } := node
+
+  for (let i = 0, l = expressions.length; i < l; i++)
+    statement := expressions[i]
+    [, s,] := statement
+
+    if s is child
+      statement[1] = replacement
+      replacement.parent = node
+      found = true
+      break
+
+  throw new Error("Could not find child to replace") unless found
+
+/**
+ * Gets the indentation node from a statement. Includes newline,
+ * excludes comments, strips location info.
+ */
+function getIndent(statement: StatementTuple) {
+  let indent = statement?.[0]
+  if (Array.isArray(indent)) {
+    indent = indent.flat(Infinity)
+
+    return indent.filter((n) => n and !(n.type is "Comment")).map((n) => {
+      if (typeof n is "string") return n
+      if (n.token != null) return n.token
+      return ""
+    })
+  }
+  return indent
+}
+
+function hoistRefDecs(statements: StatementTuple[]): void
+  gatherRecursiveAll(statements, (s) => s.hoistDec)
+    .forEach((node) => {
+      let { hoistDec } = node
+      node.hoistDec = null
+
+      const { ancestor, child } = findAncestor node, (ancestor) =>
+        ancestor.type is "BlockStatement" and (!ancestor.bare or ancestor.root)
+
+      if (ancestor) {
+        insertHoistDec(ancestor, child, hoistDec)
+      } else {
+        throw new Error("Couldn't find block to hoist declaration into.")
+      }
+
+      return
+    })
+
+function insertHoistDec(block: BlockStatement, node: ASTNode | StatementTuple, dec: ASTNode): void
+  // NOTE: This is more accurately 'statements'
+  { expressions } := block
+  index := expressions.findIndex (exp) =>
+    exp is node or (Array.isArray(exp) and exp[1] is node)
+
+  if index < 0
+    throw new Error("Couldn't find expression in block for hoistable declaration.")
+
+  statement := [ expressions[index][0], dec, ";" ] as StatementTuple
+  expressions[index][0] = ""
+  expressions.splice index, 0, statement
+
+  // hoistDec wasn't previously a child, so now needs parent pointers
+  addParentPointers dec, block
+
+function processBlocks(statements): void
+  insertSemicolon(statements)
+  gatherRecursive statements, .type is "BlockStatement"
+  .forEach ({ expressions }) ->
+    processBlocks expressions
+
+/**
+* Avoid automatic continuation onto lines that start with
+* certain characters by adding an explicit semicolon. See
+* https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Lexical_grammar#automatic_semicolon_insertion
+*/
+function insertSemicolon(statements: StatementTuple[]): void
+  l := statements.length
+  for each s, i of statements
+    if i < l - 1
+      if needsPrecedingSemicolon(statements[i + 1])
+        delim := s[2]
+        if !delim
+          s[2] = ";"
+        // If delim is an object assume it already has a semicolon
+        // TODO: trailing comments might violate this assumption
+        else if typeof delim is "string" and !delim.match(/;/)
+          s[2] = `;${delim}`
+
+function needsPrecedingSemicolon(exp)
+  let following: ASTNode
+  if Array.isArray exp
+    [,following] = exp
+  else
+    // Ideally this would be a StatementTuple but js only public/protected param items don't quite fit into that yet
+    // since the js: true is on the AST node the semicolon delimiters will stack up with empty nodes in between
+    following = exp
+
+  return false unless following
+
+  if Array.isArray following // for chained conditionals
+    return needsPrecedingSemicolon following[0]
+
+  switch following.type
+    when "ParenthesizedExpression", "ArrayExpression", "ArrowFunction", "TemplateLiteral", "RegularExpressionLiteral", "RangeExpression"
+      true
+    when "AssignmentExpression"
+      startsWith(following, /^(\[|\()/)
+    when "Literal"
+      following.raw?.startsWith('-') or following.raw?.startsWith('+')
+    when "PipelineExpression", "UnwrappedExpression"
+      // skip first child which is whitespace
+      needsPrecedingSemicolon following.children[1]
+    else
+      // descend into first child for things like:
+      // IterationExpression
+      //   CallExpression
+      //     ParenthesizedExpression
+      if following.children
+        return needsPrecedingSemicolon following.children[0]
+
+export {
+  blockWithPrefix
+  braceBlock
+  duplicateBlock
+  getIndent
+  hoistRefDecs
+  makeEmptyBlock
+  processBlocks
+  replaceBlockExpression
+}

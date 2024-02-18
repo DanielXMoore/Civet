@@ -1,0 +1,113 @@
+import type { ASTNode, ASTNodeBase, Predicate } from ./types.civet
+import { isFunction } from ./util.civet
+
+function gatherRecursiveWithinFunction(node: ASTNode, predicate: Predicate)
+  gatherRecursive(node, predicate, isFunction)
+
+/**
+ * If `child.parent is parent`, then this should find the index `i` such that
+ * `parent.children[i]` contains `child`.  This requires looking in
+ * `parent.children` while descending into any arrays.
+ * Also works if you pass an array (such as `parent.children`) as the `parent`,
+ * which is useful for working with e.g. the `expressions` property.
+ * Returns -1 if `child` cannot be found.
+ */
+function findChildIndex(parent, child)
+  children := Array.isArray(parent) ? parent : parent.children
+  for each c, i of children
+    if c is child or (Array.isArray(c) and arrayRecurse(c))
+      return i
+  function arrayRecurse(array)
+    for each c, i of array
+      if c is child or (Array.isArray(c) and arrayRecurse(c))
+        return true
+  return -1
+
+/**
+ * Find nearest strict `ancestor` that satisfies predicate,
+ * aborting (and returning `ancestor: undefined`) if stopPredicate returns true.
+ * Also returns the `child` that we came from (possibly `node`), in an
+ * `{ancestor, child}` object.  If none are found, `ancestor` will be null.
+ */
+function findAncestor(
+  node: ASTNodeBase,
+  predicate: (parent: ASTNode, child: ASTNode) => boolean,
+  stopPredicate?: (parent: ASTNode, child: ASTNode) => boolean
+): { ancestor: ASTNodeBase | undefined, child: ASTNodeBase }
+  let { parent } = node
+  while (parent and !stopPredicate?.(parent, node)) {
+    if (predicate(parent, node)) {
+      return { ancestor: parent, child: node }
+    }
+    node = parent
+    parent = node.parent
+  }
+  return { ancestor: undefined, child: node }
+
+// Gather child nodes that match a predicate
+// while recursing into nested expressions
+// without recursing into nested blocks/for loops
+function gatherNodes(node: ASTNode, predicate: Predicate): ASTNode[]
+  if (node == null) return []
+
+  if (Array.isArray(node)) {
+    return node.flatMap((n) => gatherNodes(n, predicate))
+  }
+
+  if (predicate(node)) {
+    return [node]
+  }
+
+  switch (node.type) {
+    case "BlockStatement":
+      return []
+    case "ForStatement":
+      // Descend into expressions but not into declarations or the body of the for loop
+      const isDec = node.declaration?.type is "Declaration"
+      return node.children.flatMap((n) => {
+        if (isDec and n is node.declaration) return []
+        return gatherNodes(n, predicate)
+      })
+    default:
+      return gatherNodes(node.children, predicate)
+  }
+
+// Gather nodes that match a predicate recursing into all unmatched children
+// i.e. if the predicate matches a node it is not recursed into further
+function gatherRecursive(node: ASTNode, predicate: Predicate, skipPredicate?: Predicate): ASTNode[]
+  if (node == null) return []
+
+  if (Array.isArray(node)) {
+    return node.flatMap((n) => gatherRecursive(n, predicate, skipPredicate))
+  }
+
+  if (skipPredicate?.(node)) return []
+
+  if (predicate(node)) {
+    return [node]
+  }
+
+  return gatherRecursive(node.children, predicate, skipPredicate)
+
+function gatherRecursiveAll(node: ASTNode, predicate: Predicate): Exclude<ASTNode, undefined | ASTNode[]>[]
+  if (node == null) return []
+
+  if (Array.isArray(node)) {
+    return node.flatMap((n) => gatherRecursiveAll(n, predicate))
+  }
+
+  const nodes = gatherRecursiveAll(node.children, predicate)
+  if (predicate(node)) {
+    nodes.push(node)
+  }
+
+  return nodes
+
+export {
+  findAncestor
+  findChildIndex
+  gatherNodes
+  gatherRecursive
+  gatherRecursiveAll
+  gatherRecursiveWithinFunction
+}
