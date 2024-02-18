@@ -793,93 +793,91 @@ function expressionizeIteration(exp): void
   updateParentPointers exp
 
 function processBinaryOpExpression($0)
-  expandedOps := expandChainedComparisons($0)
+  return recurse expandChainedComparisons($0)
 
   // Expanded ops is [a, __, op1, __, b, __, op2, __, c, __, op3, __, d], etc.
   // NOTE: all operators of higher precedence than relational have been merged into the operand expressions
-  let i = 2
-  while i < expandedOps.length
-    let op = expandedOps[i]
-    // a not instanceof b -> !(a instanceof b)
-    // Above is high precedence; below are relational so low precedence.
-    // a in b -> indexOf.call(b, a) >= 0
-    // a is in b -> b.includes(a)
-    // a not in b -> indexOf.call(b, a) < 0
-    // a is not in b -> !b.includes(a)
-    if op.special
-      let start = i - 2, end = i + 2
-      if op.lowPrec // xor/xnor
-        while start >= 4
-          start -= 4
-        while end + 4 < expandedOps.length and !expandedOps[end + 2].lowPrec
-          end += 4
-      else if isRelationalOp op
-        while start >= 4 and !isLowerThanRelationalOp(expandedOps[start - 2])
-          start -= 4
-        while end + 4 < expandedOps.length and !isLowerThanRelationalOp(expandedOps[end + 2])
-          end += 4
+  function recurse(expandedOps)
+    let i = 2
+    while i < expandedOps.length
+      let op = expandedOps[i]
+      // a not instanceof b -> !(a instanceof b)
+      // Above is high precedence; below are relational so low precedence.
+      // a in b -> indexOf.call(b, a) >= 0
+      // a is in b -> b.includes(a)
+      // a not in b -> indexOf.call(b, a) < 0
+      // a is not in b -> !b.includes(a)
+      if op.special
+        let start = i - 2, end = i + 2
+        if op.lowPrec // xor/xnor
+          while start >= 4
+            start -= 4
+          while end + 4 < expandedOps.length and !expandedOps[end + 2].lowPrec
+            end += 4
+        else if isRelationalOp op
+          while start >= 4 and !isLowerThanRelationalOp(expandedOps[start - 2])
+            start -= 4
+          while end + 4 < expandedOps.length and !isLowerThanRelationalOp(expandedOps[end + 2])
+            end += 4
 
-      let a = start === i - 2
-        ? expandedOps[start]
-        : expandedOps.slice(start, i - 1)
-      let wsOp = expandedOps[i - 1]
-      //let op = expandedOps[i]
-      let wsB = expandedOps[i + 1]
-      let b = end === i + 2
-        ? expandedOps[i + 2]
-        : expandedOps.slice(i + 2, end + 1)
+        let a = start === i - 2
+          ? expandedOps[start]
+          : expandedOps.slice(start, i - 1)
+        let wsOp = expandedOps[i - 1]
+        //let op = expandedOps[i]
+        let wsB = expandedOps[i + 1]
+        let b = end === i + 2
+          ? expandedOps[i + 2]
+          : recurse expandedOps.slice(i + 2, end + 1)
 
-      // typeof shorthand: x instanceof "String" -> typeof x === "string"
-      if (op.token === "instanceof" && b.type === "Literal" &&
-        b.children?.[0]?.type === "StringLiteral") {
-        a = ["typeof ", makeLeftHandSideExpression(a)]
-        if (op.negated) {
-          op = { ...op, token: "!==", negated: false }
-        } else {
-          op = { ...op, token: "===" }
-        }
-      }
+        // typeof shorthand: x instanceof "String" -> typeof x === "string"
+        if op.token === "instanceof" and b.type === "Literal" and
+           b.children?.[0]?.type === "StringLiteral"
+          a = ["typeof ", makeLeftHandSideExpression(a)]
+          if op.negated
+            op = { ...op, token: "!==", negated: false }
+          else
+            op = { ...op, token: "===" }
 
-      if op.asConst
-        a = makeAsConst a
-        b = makeAsConst b
+        if op.asConst
+          a = makeAsConst a
+          b = makeAsConst b
 
-      let children
-      if op.call
-        wsOp = insertTrimmingSpace(wsOp, "")
+        let children
+        if op.call
+          wsOp = insertTrimmingSpace(wsOp, "")
 
-        if op.reversed
+          if op.reversed
+            wsB = insertTrimmingSpace(wsB, "")
+            children = [wsOp, op.call, "(", wsB, b, ", ", a, ")", op.suffix]
+          else
+            children = [wsOp, op.call, "(", a, ",", wsB, b, ")", op.suffix]
+        else if op.method
+          wsOp = insertTrimmingSpace(wsOp, "")
           wsB = insertTrimmingSpace(wsB, "")
-          children = [wsOp, op.call, "(", wsB, b, ", ", a, ")", op.suffix]
+          if op.reversed
+            if (end !== i + 2) b = makeLeftHandSideExpression b
+            b = dotNumericLiteral b
+            children = [wsB, b, wsOp, ".", op.method, "(", a, ")"]
+          else
+            if start !== i - 2 or a.type === "NumericLiteral"
+              a = makeLeftHandSideExpression a
+            a = dotNumericLiteral a
+            children = [a, wsOp, ".", op.method, "(", wsB, b, ")"]
+        else if op.token
+          children = [a, wsOp, op, wsB, b]
+          if (op.negated) children = ["(", ...children, ")"]
         else
-          children = [wsOp, op.call, "(", a, ",", wsB, b, ")", op.suffix]
-      else if op.method
-        wsOp = insertTrimmingSpace(wsOp, "")
-        wsB = insertTrimmingSpace(wsB, "")
-        if op.reversed
-          if (end !== i + 2) b = makeLeftHandSideExpression b
-          b = dotNumericLiteral b
-          children = [wsB, b, wsOp, ".", op.method, "(", a, ")"]
-        else
-          if start !== i - 2 or a.type === "NumericLiteral"
-            a = makeLeftHandSideExpression a
-          a = dotNumericLiteral a
-          children = [a, wsOp, ".", op.method, "(", wsB, b, ")"]
-      else if op.token
-        children = [a, wsOp, op, wsB, b]
-        if (op.negated) children = ["(", ...children, ")"]
+          throw new Error("Unknown operator: " + JSON.stringify(op))
+        if (op.negated) children.unshift("!")
+
+        expandedOps.splice(start, end - start + 1, {
+          children
+        })
+        i = start + 2
       else
-        throw new Error("Unknown operator: " + JSON.stringify(op))
-      if (op.negated) children.unshift("!")
-
-      expandedOps.splice(start, end - start + 1, {
-        children
-      })
-      i = start + 2
-    else
-      i += 4
-
-  return expandedOps
+        i += 4
+    expandedOps
 
 /**
  * This adjusts #x.y().z and @x.y().z when used inside Object glob expressions
@@ -1198,7 +1196,11 @@ lowerThanRelationalOps := ["&", "^", "|", "&&", "||", "??"]
 
 function isLowerThanRelationalOp(op)
   // "&&" without wrapper is generated by expandChainedComparisons
-  op === "&&" or lowerThanRelationalOps.includes(op.token) or isRelationalOp(op)
+  (or)
+    op === "&&"
+    lowerThanRelationalOps.includes op.token
+    op.lowPrec
+    isRelationalOp op
 
 /**
 * binops is an array of [__, op, __, exp] tuples
