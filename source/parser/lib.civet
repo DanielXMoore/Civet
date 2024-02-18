@@ -7,71 +7,44 @@
  */
 
 import type {
-  ASTError,
-  ASTLeaf,
-  ASTNode,
-  ASTNodeBase,
-  ASTRef,
-  ASTString,
-  ArrayBindingPattern,
-  AtBinding,
-  Binding,
-  BindingIdentifier,
-  BindingPattern,
-  BindingPatternContent,
-  BlockStatement,
-  CaseBlock,
-  CaseClause,
-  Children,
-  CommentNode,
-  Condition,
-  DeclarationStatement,
-  ElseToken,
-  FunctionNode,
-  FunctionSignature,
-  Identifier,
-  IfStatement,
-  IndentNode,
-  IterationStatement,
-  LabeledStatement,
-  Literal,
-  LiteralContentNode,
-  LiteralTypeNode,
-  MethodDefinition,
-  MethodModifier,
-  NonNewlineWhitespace,
-  ObjectBindingPattern,
-  ParametersNode,
-  ParenthesizedExpression,
-  ParseRule,
-  PinPattern,
-  RegularExpressionLiteral,
-  ReturnTypeAnnotation,
-  ReturnValue,
-  StatementDelimiter,
-  StatementTuple,
-  SwitchStatement,
-  TabConfig,
-  ThisAssignments,
-  TypeArgumentsNode,
-  TypeIdentifierNode,
-  TypeLiteralNode,
-  TypeNode,
-  TypeParameters,
-  TypeSuffix,
-  VoidType,
-  WSNode,
+  ASTError
+  ASTLeaf
+  ASTNode
+  ASTNodeBase
+  ASTRef
+  AtBinding
+  Binding
+  BlockStatement
+  DeclarationStatement
+  FunctionNode
+  IfStatement
+  IterationStatement
+  LabeledStatement
+  Literal
+  MethodDefinition
+  ParenthesizedExpression
+  ParseRule
+  ReturnTypeAnnotation
+  StatementTuple
+  SwitchStatement
+  TabConfig
+  ThisAssignments
+  TypeSuffix
+  WSNode
 } from ./types.civet
 
 import {
-  gatherRecursiveWithinFunction,
-  findAncestor,
-  gatherNodes,
-  gatherRecursive,
-  gatherRecursiveAll,
+  gatherRecursiveWithinFunction
+  findAncestor
+  gatherNodes
+  gatherRecursive
+  gatherRecursiveAll
 } from ./traversal.civet
 
 import {
+  addParentPointers
+  clone
+  deepCopy
   getTrimmingSpace
   hasAwait
   hasYield
@@ -83,56 +56,17 @@ import {
   isFunction
   isGeneratorVoidType
   isPromiseVoidType
-  isTemplateLiteral
   isVoidType
   isWhitespaceOrEmpty
+  makeLeftHandSideExpression
+  makeNode
+  makeRef
+  maybeRef
   startsWith
+  updateParentPointers
 } from ./util.civet
 
-/**
- * Adds parent pointers to all nodes in the AST. Elements within
- * arrays of nodes receive the closest non-array object parent.
- */
-function addParentPointers(node: ASTNode, parent?: ASTNodeBase): void
-  if (not node?) return
-  if (typeof node !== "object") return
-
-  // NOTE: Arrays are transparent and skipped when traversing via parent
-  if Array.isArray(node)
-    for child of node
-      addParentPointers(child, parent)
-    return
-
-  node = node as ASTNodeBase
-  node.parent = parent
-  if node.children
-    for child of node.children
-      addParentPointers(child, node)
-
-/**
- * Just update parent pointers for the children of a node,
- * recursing into arrays but not objects.  More efficient version of
- * `addParentPointers` when just injecting one new node.
- */
-function updateParentPointers(node: ASTNode, parent?: ASTNodeBase, depth = 1): void
-  if (not node?) return
-  if (typeof node !== "object") return
-
-  // NOTE: Arrays are transparent and skipped when traversing via parent
-  if Array.isArray(node)
-    for child of node
-      updateParentPointers(child, parent, depth)
-    return
-
-  node = node as ASTNodeBase
-  if (parent?) node.parent = parent
-  if depth and node.children
-    for child of node.children
-      updateParentPointers(child, node, depth-1)
-
-function makeNode<T extends ASTNodeBase>(node: T): T
-  updateParentPointers node
-  node
+import {processPipelineExpressions} from ./pipe.civet
 
 function makeAmpersandFunction(bodyAfterRef = []): ASTNode
   ref := makeRef("$")
@@ -338,106 +272,6 @@ function blockWithPrefix(prefixStatements: StatementTuple[] | undefined, block: 
 
   return block
 
-function closest(node: ASTNodeBase, types: string[]) {
-  do {
-    if (types.includes(node.type)) {
-      return node
-    }
-  } while (node = node.parent!)
-  return
-}
-
-/**
- * Clone an AST node including children (removing parent pointes)
- * This gives refs new identities which may not be what we want.
- *
- * TODO: preserve ref identities
- */
-function clone(node: ASTNode) {
-  removeParentPointers(node)
-  return deepCopy(node)
-}
-
-function constructInvocation(fn, arg) {
-  const fnArr = [fn.leadingComment, fn.expr, fn.trailingComment]
-
-  // Unwrap ampersand blocks
-  let expr = fn.expr
-  while (expr.type is "ParenthesizedExpression") {
-    expr = expr.expression
-  }
-  if (expr.ampersandBlock) {
-    const { ref, body } = expr
-
-    ref.type = "PipedExpression"
-    ref.children = [makeLeftHandSideExpression(arg)]
-    updateParentPointers ref
-
-    return makeNode {
-      type: "UnwrappedExpression",
-      children: [skipIfOnlyWS(fn.leadingComment), body, skipIfOnlyWS(fn.trailingComment)],
-    }
-  }
-
-  expr = fn.expr
-  const lhs = makeLeftHandSideExpression(expr)
-
-  // Attach comments
-  let comment = skipIfOnlyWS(fn.trailingComment)
-  if (comment) lhs.children.splice(2, 0, comment)
-  comment = skipIfOnlyWS(fn.leadingComment)
-  if (comment) lhs.children.splice(1, 0, comment)
-
-  switch (arg.type) {
-    case "CommaExpression":
-      arg = makeLeftHandSideExpression(arg)
-      break
-  }
-
-  return {
-    type: "CallExpression",
-    children: [lhs, "(", arg, ")"],
-  }
-}
-
-function constructPipeStep(fn, arg, returning) {
-  const children = [[fn.leadingComment, fn.expr, fn.trailingComment].map(skipIfOnlyWS), " ", arg]
-
-  // Handle special non-function cases
-  switch (fn.expr.token) {
-    case "yield":
-    case "await":
-      if (returning) {
-        return [
-          children,
-          returning
-        ]
-      }
-
-      return [
-        children,
-        null
-      ]
-
-    case "return":
-      // Return ignores ||> returning argument
-      return [{
-        type: "ReturnStatement",
-        children,
-      }, null]
-  }
-
-  if (returning) {
-    return [
-      constructInvocation(fn, arg),
-      returning
-    ]
-
-  }
-
-  return [constructInvocation(fn, arg), null]
-}
-
 // Given a string of spaces and tabs, and the current tab size
 // (where `undefined` means "tabs are the same width as 1 space"),
 // compute the indentation level counted as spaces.
@@ -535,23 +369,6 @@ function dedentBlockSubstitutions($0: [ASTLeaf, (ASTLeaf | (ASTNode[] & {token: 
 
   type: "TemplateLiteral"
   children: results
-
-function deepCopy(node: ASTNode): ASTNode {
-  if (node == null) return node
-  if (typeof node !== "object") return node
-
-  if (Array.isArray(node)) {
-    return node.map(deepCopy)
-  }
-
-  // Use from entries to clone objects
-  // map the values to clone the children
-  return Object.fromEntries(
-    Object.entries(node).map(([key, value]) => {
-      return [key, deepCopy(value)]
-    })
-  ) as any
-}
 
 // Negate expression inside condition
 function negateCondition(condition)
@@ -1197,26 +1014,6 @@ function processParams(f): void {
   expressions.unshift(...prefix)
 }
 
-function removeParentPointers(node): void {
-  if (node == null) return
-  if (typeof node !== "object") return
-
-  // NOTE: Arrays are transparent and skipped when traversing via parent
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      removeParentPointers(child)
-    }
-    return
-  }
-
-  node.parent = null
-  if (node.children) {
-    for (const child of node.children) {
-      removeParentPointers(child)
-    }
-  }
-}
-
 /**
  * Replace `child` with `replacement` inside the `block`.
  * Assumes a `StatementTuple[]` for `block.expressions`
@@ -1826,37 +1623,6 @@ function braceBlock(block: BlockStatement)
     block.children.push("}")
     block.bare = false
 
-/**
- * Convert general ExtendedExpression into LeftHandSideExpression.
- * More generally wrap in parentheses if necessary.
- * (Consider renaming and making parentheses depend on context.)
- */
-function makeLeftHandSideExpression(expression)
-  return expression if expression.parenthesized
-  switch (expression.type)
-    case "Ref":
-    case "AmpersandRef":
-    case "Identifier":
-    case "Literal":
-    case "IterationExpression": // already a CallExpression
-    case "CallExpression":
-    case "MemberExpression":
-    case "NewExpression":
-    case "ParenthesizedExpression":
-    case "IfExpression": // already wrapped in parens
-    case "DebuggerExpression": // wrapIIFE
-    case "SwitchExpression": // wrapIIFE
-    case "ThrowExpression": // wrapIIFE
-    case "TryExpression": // wrapIIFE
-      return expression
-
-  makeNode {
-    type: "ParenthesizedExpression"
-    children: ["(", expression, ")"]
-    expression
-    implicit: true
-  }
-
 // Wrap expression in parentheses to make into a statement when:
 // * object literal expression
 // * anonymous function expression
@@ -2093,44 +1859,6 @@ function makeGetterMethod(name, ws, value, returnType, block?: BlockStatement, k
     block,
     parameters,
   }
-
-/**
- * Returns a new ref if the expression needs a ref (not a simple value).
- * Otherwise returns undefined.
- */
-function needsRef(expression, base = "ref") {
-  switch (expression.type) {
-    case "Ref":
-    case "Identifier":
-    case "Literal":
-      return
-  }
-  return makeRef(base)
-}
-
-function makeRef(base = "ref", id = base): ASTRef {
-  return {
-    type: "Ref",
-    base,
-    id,
-  }
-}
-
-// Transform into a ref if needed
-function maybeRef(exp: ASTNode, base: string = "ref"): ASTNode {
-  if (!needsRef(exp)) return exp
-  return makeRef(base)
-}
-
-// Return an array of Rule names that correspond to the current call stack
-function parsePosition() {
-  let s = Error().stack.split(/\n    at /)
-  s.shift()
-  s = s.filter((e) => !e.match(/^eval/)).map((e) => e.split(' ')[0])
-  s = s.slice(1, s.indexOf('Program') + 1)
-
-  return s
-}
 
 function processCoffeeInterpolation(s, parts, e, $loc) {
   // Check for no interpolations
@@ -3013,174 +2741,6 @@ function processPatternMatching(statements: ASTNode, ReservedWord: ParseRule): v
     })
 }
 
-// head: expr
-// body: [ws, pipe, ws, expr][]
-
-function processPipelineExpressions(statements): void {
-  gatherRecursiveAll(statements, (n) => n.type is "PipelineExpression")
-    .forEach((s) => {
-      const [ws, , body] = s.children
-      let [, arg] = s.children
-
-      let i = 0, l = body.length
-
-      const children = [ws]
-
-      let usingRef = null
-
-      for (i = 0; i < l; i++) {
-        const step = body[i]
-        const [leadingComment, pipe, trailingComment, expr] = step
-        const returns = pipe.token is "||>"
-        let ref, result,
-          returning = returns ? arg : null
-
-        if (pipe.token is "|>=") {
-          let initRef
-          if (i is 0) {
-            :outer switch (arg.type) {
-              case "MemberExpression":
-                // If there is only a single access then we don't need a ref
-                if (arg.children.length <= 2) break
-              case "CallExpression":
-                const access = arg.children.pop()
-
-                switch (access.type) {
-                  case "PropertyAccess":
-                  case "SliceExpression":
-                    break
-                  default:
-                    children.unshift({
-                      type: "Error",
-                      $loc: pipe.token.$loc,
-                      message: `Can't assign to ${access.type}`,
-                    })
-                    arg.children.push(access)
-                    break outer
-                }
-
-                usingRef = makeRef()
-                initRef = {
-                  type: "AssignmentExpression",
-                  children: [usingRef, " = ", arg, ","],
-                }
-
-                arg = {
-                  type: "MemberExpression",
-                  children: [usingRef, access]
-                }
-
-                break;
-            }
-
-            // assignment node
-            const lhs = [[
-              [initRef],
-              arg,
-              [],
-              { token: "=", children: [" = "] }
-            ]];
-
-            Object.assign(s, {
-              type: "AssignmentExpression",
-              children: [lhs, children],
-              names: null,
-              lhs,
-              assigned: arg,
-              exp: children,
-            })
-
-            // Clone so that the same node isn't on the left and right because splice manipulation
-            // moves things around and can cause a loop in the graph
-            arg = clone(arg)
-
-            // except keep the ref the same
-            if (arg.children[0].type is "Ref") {
-              arg.children[0] = usingRef
-            }
-
-          } else {
-            children.unshift({
-              type: "Error",
-              $loc: pipe.token.$loc,
-              message: "Can't use |>= in the middle of a pipeline",
-            })
-          }
-        } else {
-          if (i is 0) s.children = children
-        }
-
-        if (returns and (ref = needsRef(arg))) {
-          // Use the existing ref if present
-          usingRef = usingRef or ref
-          arg = {
-            type: "ParenthesizedExpression",
-            children: ["(", {
-              type: "AssignmentExpression",
-              children: [usingRef, " = ", arg],
-            }, ")"],
-          }
-          returning = usingRef
-        }
-
-        [result, returning] = constructPipeStep(
-          {
-            leadingComment: skipIfOnlyWS(leadingComment),
-            trailingComment: skipIfOnlyWS(trailingComment),
-            expr
-          },
-          arg,
-          returning,
-        )
-
-        if (result.type is "ReturnStatement") {
-          // Attach errors/warnings if there are more steps
-          if (i < l - 1) {
-            result.children.push({
-              type: "Error",
-              message: "Can't continue a pipeline after returning",
-            })
-          }
-          arg = result
-          if (children[children.length - 1] is ",") {
-            children.pop()
-            children.push(";")
-          }
-          break
-        }
-
-        if (returning) {
-          arg = returning
-          children.push(result, ",")
-        } else {
-          arg = result
-        }
-      }
-
-      if (usingRef) {
-        s.hoistDec = {
-          type: "Declaration",
-          children: ["let ", usingRef],
-          names: [],
-        }
-      }
-
-      children.push(arg)
-
-      // Wrap with parens because comma operator has low precedence
-      if !children.some(?.type is "ReturnStatement") and children.some & is ","
-        { parent } := s
-        parenthesizedExpression := makeLeftHandSideExpression { ...s }
-        Object.assign s, parenthesizedExpression, {
-          parent,
-          hoistDec: undefined
-        }
-
-      // Update parent pointers
-      addParentPointers(s, s.parent)
-    })
-}
-
 function processTypes(node: ASTNode)
   // T? -> T | undefined; T?? -> T | undefined | null
   gatherRecursiveAll node, (n) => n.type is "UnaryType"
@@ -3742,26 +3302,6 @@ function spliceChild(node: ASTNode, child: ASTNode, del, ...replacements)
   if index < 0
     throw new Error "spliceChild: child not found"
   children.splice index, del, ...replacements
-
-/**
- * Used to ignore the result of __ if it is only whitespace
- * Useful to preserve spacing around comments
- */
-function skipIfOnlyWS(target) {
-  if (!target) return target
-  if (Array.isArray(target)) {
-    if (target.length is 1) {
-      return skipIfOnlyWS(target[0])
-    } else if (target.every((e) => (skipIfOnlyWS(e) is undefined))) {
-      return undefined
-    }
-    return target
-  }
-  if (target.token != null and target.token.trim() is '') {
-    return undefined
-  }
-  return target
-}
 
 function typeOfJSX(node, config, getRef) {
   switch (node.type) {

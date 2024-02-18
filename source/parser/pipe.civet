@@ -1,0 +1,264 @@
+import { gatherRecursiveAll } from ./traversal.civet
+import {
+  addParentPointers
+  clone
+  makeLeftHandSideExpression
+  makeNode
+  makeRef
+  needsRef
+  skipIfOnlyWS
+  updateParentPointers
+} from ./util.civet
+
+function constructInvocation(fn, arg) {
+  const fnArr = [fn.leadingComment, fn.expr, fn.trailingComment]
+
+  // Unwrap ampersand blocks
+  let expr = fn.expr
+  while (expr.type is "ParenthesizedExpression") {
+    expr = expr.expression
+  }
+  if (expr.ampersandBlock) {
+    const { ref, body } = expr
+
+    ref.type = "PipedExpression"
+    ref.children = [makeLeftHandSideExpression(arg)]
+    updateParentPointers ref
+
+    return makeNode {
+      type: "UnwrappedExpression",
+      children: [skipIfOnlyWS(fn.leadingComment), body, skipIfOnlyWS(fn.trailingComment)],
+    }
+  }
+
+  expr = fn.expr
+  const lhs = makeLeftHandSideExpression(expr)
+
+  // Attach comments
+  let comment = skipIfOnlyWS(fn.trailingComment)
+  if (comment) lhs.children.splice(2, 0, comment)
+  comment = skipIfOnlyWS(fn.leadingComment)
+  if (comment) lhs.children.splice(1, 0, comment)
+
+  switch (arg.type) {
+    case "CommaExpression":
+      arg = makeLeftHandSideExpression(arg)
+      break
+  }
+
+  return {
+    type: "CallExpression",
+    children: [lhs, "(", arg, ")"],
+  }
+}
+
+function constructPipeStep(fn, arg, returning) {
+  const children = [[fn.leadingComment, fn.expr, fn.trailingComment].map(skipIfOnlyWS), " ", arg]
+
+  // Handle special non-function cases
+  switch (fn.expr.token) {
+    case "yield":
+    case "await":
+      if (returning) {
+        return [
+          children,
+          returning
+        ]
+      }
+
+      return [
+        children,
+        null
+      ]
+
+    case "return":
+      // Return ignores ||> returning argument
+      return [{
+        type: "ReturnStatement",
+        children,
+      }, null]
+  }
+
+  if (returning) {
+    return [
+      constructInvocation(fn, arg),
+      returning
+    ]
+
+  }
+
+  return [constructInvocation(fn, arg), null]
+}
+
+
+// head: expr
+// body: [ws, pipe, ws, expr][]
+
+function processPipelineExpressions(statements): void {
+  gatherRecursiveAll(statements, (n) => n.type is "PipelineExpression")
+    .forEach((s) => {
+      const [ws, , body] = s.children
+      let [, arg] = s.children
+
+      let i = 0, l = body.length
+
+      const children = [ws]
+
+      let usingRef = null
+
+      for (i = 0; i < l; i++) {
+        const step = body[i]
+        const [leadingComment, pipe, trailingComment, expr] = step
+        const returns = pipe.token is "||>"
+        let ref, result,
+          returning = returns ? arg : null
+
+        if (pipe.token is "|>=") {
+          let initRef
+          if (i is 0) {
+            :outer switch (arg.type) {
+              case "MemberExpression":
+                // If there is only a single access then we don't need a ref
+                if (arg.children.length <= 2) break
+              case "CallExpression":
+                const access = arg.children.pop()
+
+                switch (access.type) {
+                  case "PropertyAccess":
+                  case "SliceExpression":
+                    break
+                  default:
+                    children.unshift({
+                      type: "Error",
+                      $loc: pipe.token.$loc,
+                      message: `Can't assign to ${access.type}`,
+                    })
+                    arg.children.push(access)
+                    break outer
+                }
+
+                usingRef = makeRef()
+                initRef = {
+                  type: "AssignmentExpression",
+                  children: [usingRef, " = ", arg, ","],
+                }
+
+                arg = {
+                  type: "MemberExpression",
+                  children: [usingRef, access]
+                }
+
+                break;
+            }
+
+            // assignment node
+            const lhs = [[
+              [initRef],
+              arg,
+              [],
+              { token: "=", children: [" = "] }
+            ]];
+
+            Object.assign(s, {
+              type: "AssignmentExpression",
+              children: [lhs, children],
+              names: null,
+              lhs,
+              assigned: arg,
+              exp: children,
+            })
+
+            // Clone so that the same node isn't on the left and right because splice manipulation
+            // moves things around and can cause a loop in the graph
+            arg = clone(arg)
+
+            // except keep the ref the same
+            if (arg.children[0].type is "Ref") {
+              arg.children[0] = usingRef
+            }
+
+          } else {
+            children.unshift({
+              type: "Error",
+              $loc: pipe.token.$loc,
+              message: "Can't use |>= in the middle of a pipeline",
+            })
+          }
+        } else {
+          if (i is 0) s.children = children
+        }
+
+        if (returns and (ref = needsRef(arg))) {
+          // Use the existing ref if present
+          usingRef = usingRef or ref
+          arg = {
+            type: "ParenthesizedExpression",
+            children: ["(", {
+              type: "AssignmentExpression",
+              children: [usingRef, " = ", arg],
+            }, ")"],
+          }
+          returning = usingRef
+        }
+
+        [result, returning] = constructPipeStep(
+          {
+            leadingComment: skipIfOnlyWS(leadingComment),
+            trailingComment: skipIfOnlyWS(trailingComment),
+            expr
+          },
+          arg,
+          returning,
+        )
+
+        if (result.type is "ReturnStatement") {
+          // Attach errors/warnings if there are more steps
+          if (i < l - 1) {
+            result.children.push({
+              type: "Error",
+              message: "Can't continue a pipeline after returning",
+            })
+          }
+          arg = result
+          if (children[children.length - 1] is ",") {
+            children.pop()
+            children.push(";")
+          }
+          break
+        }
+
+        if (returning) {
+          arg = returning
+          children.push(result, ",")
+        } else {
+          arg = result
+        }
+      }
+
+      if (usingRef) {
+        s.hoistDec = {
+          type: "Declaration",
+          children: ["let ", usingRef],
+          names: [],
+        }
+      }
+
+      children.push(arg)
+
+      // Wrap with parens because comma operator has low precedence
+      if !children.some(?.type is "ReturnStatement") and children.some & is ","
+        { parent } := s
+        parenthesizedExpression := makeLeftHandSideExpression { ...s }
+        Object.assign s, parenthesizedExpression, {
+          parent,
+          hoistDec: undefined
+        }
+
+      // Update parent pointers
+      addParentPointers(s, s.parent)
+    })
+}
+
+export {
+  processPipelineExpressions
+}

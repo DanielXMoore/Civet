@@ -1,14 +1,74 @@
 import type {
-  ASTLeaf,
-  ASTNode,
-  ASTNodeBase,
-  TypeIdentifierNode,
+  ASTRef
+  ASTLeaf
+  ASTNode
+  ASTNodeBase
+  TypeIdentifierNode
   TypeNode
 } from ./types.civet
 
 import {
   gatherRecursiveWithinFunction
 } from ./traversal.civet
+
+/**
+ * Adds parent pointers to all nodes in the AST. Elements within
+ * arrays of nodes receive the closest non-array object parent.
+ */
+function addParentPointers(node: ASTNode, parent?: ASTNodeBase): void
+  if (not node?) return
+  if (typeof node !== "object") return
+
+  // NOTE: Arrays are transparent and skipped when traversing via parent
+  if Array.isArray(node)
+    for child of node
+      addParentPointers(child, parent)
+    return
+
+  node = node as ASTNodeBase
+  node.parent = parent
+  if node.children
+    for child of node.children
+      addParentPointers(child, node)
+
+/**
+ * Clone an AST node including children (removing parent pointes)
+ * This gives refs new identities which may not be what we want.
+ *
+ * TODO: preserve ref identities
+ */
+function clone(node: ASTNode) {
+  removeParentPointers(node)
+  return deepCopy(node)
+}
+
+function closest(node: ASTNodeBase, types: string[])
+  do
+    if (types.includes(node.type)) {
+      return node
+    }
+  while (node = node.parent!)
+  return
+
+function removeParentPointers(node): void {
+  if (node == null) return
+  if (typeof node !== "object") return
+
+  // NOTE: Arrays are transparent and skipped when traversing via parent
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      removeParentPointers(child)
+    }
+    return
+  }
+
+  node.parent = null
+  if (node.children) {
+    for (const child of node.children) {
+      removeParentPointers(child)
+    }
+  }
+}
 
 function isEmptyBareBlock(node: ASTNode): boolean {
   if (node?.type !== "BlockStatement") return false
@@ -147,20 +207,158 @@ function hasAwait(exp)
 function hasYield(exp)
   gatherRecursiveWithinFunction(exp, ({ type }) => type is "Yield").length > 0
 
+function deepCopy(node: ASTNode): ASTNode {
+  if (node == null) return node
+  if (typeof node !== "object") return node
+
+  if (Array.isArray(node)) {
+    return node.map(deepCopy)
+  }
+
+  // Use from entries to clone objects
+  // map the values to clone the children
+  return Object.fromEntries(
+    Object.entries(node).map(([key, value]) => {
+      return [key, deepCopy(value)]
+    })
+  ) as any
+}
+
+/**
+ * Convert general ExtendedExpression into LeftHandSideExpression.
+ * More generally wrap in parentheses if necessary.
+ * (Consider renaming and making parentheses depend on context.)
+ */
+function makeLeftHandSideExpression(expression)
+  return expression if expression.parenthesized
+  switch (expression.type)
+    case "Ref":
+    case "AmpersandRef":
+    case "Identifier":
+    case "Literal":
+    case "IterationExpression": // already a CallExpression
+    case "CallExpression":
+    case "MemberExpression":
+    case "NewExpression":
+    case "ParenthesizedExpression":
+    case "IfExpression": // already wrapped in parens
+    case "DebuggerExpression": // wrapIIFE
+    case "SwitchExpression": // wrapIIFE
+    case "ThrowExpression": // wrapIIFE
+    case "TryExpression": // wrapIIFE
+      return expression
+
+  makeNode {
+    type: "ParenthesizedExpression"
+    children: ["(", expression, ")"]
+    expression
+    implicit: true
+  }
+
+/**
+ * Just update parent pointers for the children of a node,
+ * recursing into arrays but not objects.  More efficient version of
+ * `addParentPointers` when just injecting one new node.
+ */
+function updateParentPointers(node: ASTNode, parent?: ASTNodeBase, depth = 1): void
+  if (not node?) return
+  if (typeof node !== "object") return
+
+  // NOTE: Arrays are transparent and skipped when traversing via parent
+  if Array.isArray(node)
+    for child of node
+      updateParentPointers(child, parent, depth)
+    return
+
+  node = node as ASTNodeBase
+  if (parent?) node.parent = parent
+  if depth and node.children
+    for child of node.children
+      updateParentPointers(child, node, depth-1)
+
+function makeNode<T extends ASTNodeBase>(node: T): T
+  updateParentPointers node
+  node
+
+function makeRef(base = "ref", id = base): ASTRef
+  return {
+    type: "Ref",
+    base,
+    id,
+  }
+
+/**
+ * Returns a new ref if the expression needs a ref (not a simple value).
+ * Otherwise returns undefined.
+ */
+function needsRef(expression, base = "ref")
+  switch (expression.type) {
+    case "Ref":
+    case "Identifier":
+    case "Literal":
+      return
+  }
+  return makeRef(base)
+
+// Transform into a ref if needed
+function maybeRef(exp: ASTNode, base: string = "ref"): ASTNode
+  if (!needsRef(exp)) return exp
+  return makeRef(base)
+
+// Return an array of Rule names that correspond to the current call stack
+function parsePosition()
+  let s = Error().stack.split(/\n    at /)
+  s.shift()
+  s = s.filter((e) => !e.match(/^eval/)).map((e) => e.split(' ')[0])
+  s = s.slice(1, s.indexOf('Program') + 1)
+
+  return s
+
+/**
+ * Used to ignore the result of __ if it is only whitespace
+ * Useful to preserve spacing around comments
+ */
+function skipIfOnlyWS(target)
+  if (!target) return target
+  if (Array.isArray(target)) {
+    if (target.length is 1) {
+      return skipIfOnlyWS(target[0])
+    } else if (target.every((e) => (skipIfOnlyWS(e) is undefined))) {
+      return undefined
+    }
+    return target
+  }
+  if (target.token != null and target.token.trim() is '') {
+    return undefined
+  }
+  return target
+
 export {
-  getTrimmingSpace,
-  hasAwait,
-  hasYield,
-  insertTrimmingSpace,
-  isAsyncGeneratorVoidType,
-  isComma,
-  isEmptyBareBlock,
-  isExit,
-  isFunction,
-  isGeneratorVoidType,
-  isPromiseVoidType,
-  isTemplateLiteral,
-  isVoidType,
-  isWhitespaceOrEmpty,
+  addParentPointers
+  clone
+  closest
+  deepCopy
+  getTrimmingSpace
+  hasAwait
+  hasYield
+  insertTrimmingSpace
+  isAsyncGeneratorVoidType
+  isComma
+  isEmptyBareBlock
+  isExit
+  isFunction
+  isGeneratorVoidType
+  isPromiseVoidType
+  isTemplateLiteral
+  isVoidType
+  isWhitespaceOrEmpty
+  makeLeftHandSideExpression
+  makeNode
+  makeRef
+  maybeRef
+  needsRef
+  parsePosition
+  skipIfOnlyWS
   startsWith
+  updateParentPointers
 }
