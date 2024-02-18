@@ -7,31 +7,22 @@
  */
 
 import type {
-  ASTError
   ASTLeaf
   ASTNode
   ASTNodeBase
-  ASTRef
-  AtBinding
   Binding
   BlockStatement
   DeclarationStatement
   FunctionNode
-  IfStatement
-  IterationStatement
   LabeledStatement
-  Literal
   MethodDefinition
-  ParenthesizedExpression
   ParseRule
   ReturnTypeAnnotation
   StatementTuple
-  SwitchStatement
   TabConfig
-  ThisAssignments
   TypeSuffix
   WSNode
-} from ./types.civet
+} from types.civet
 
 import {
   gatherRecursiveWithinFunction
@@ -39,7 +30,7 @@ import {
   gatherNodes
   gatherRecursive
   gatherRecursiveAll
-} from ./traversal.civet
+} from traversal.civet
 
 import {
   addParentPointers
@@ -63,20 +54,26 @@ import {
   maybeRef
   startsWith
   updateParentPointers
-} from ./util.civet
+} from util.civet
 
 import {
   blockWithPrefix
   braceBlock
   getIndent
+  hoistRefDecs
   makeEmptyBlock
 } from block.civet
 
-import { processPipelineExpressions } from ./pipe.civet
-import { forRange, processForInOf } from ./for.civet
-import { processDeclarationConditions, processPatternMatching } from ./pattern-matching.civet
-import { gatherBindingCode } from ./binding.civet
-import { processBinaryOpExpression } from ./op.civet
+import { processPipelineExpressions } from pipe.civet
+import { forRange, processForInOf } from for.civet
+import { processDeclarationConditions, processPatternMatching } from pattern-matching.civet
+import {
+  adjustAtBindings
+  adjustBindingElements
+  gatherBindingCode
+} from binding.civet
+import { processBinaryOpExpression } from op.civet
+import { createConstLetDecs, createVarDecs } from auto-dec.civet
 
 function makeAmpersandFunction(bodyAfterRef = []): ASTNode
   ref := makeRef("$")
@@ -121,103 +118,6 @@ function addPostfixStatement(statement: StatementTuple, ws: ASTNode, post)
   if post.type is "IfStatement"
     post.then = block
   return post
-
-/**
- * Adjusts `@binding` inside object properties that need to be aliased
- * see test/function.civet binding pattern
- */
-function adjustAtBindings(statements: ASTNode, asThis = false): void {
-  gatherRecursiveAll(statements, (n) => n.type is "AtBindingProperty")
-    .forEach((binding) => {
-      const { ref } = binding
-
-      if (asThis) {
-        // Convert from @x to x: this.x keeping any whitespace or initializer to the right
-        const atBinding = binding.binding
-        atBinding.children.pop()
-        atBinding.type = undefined
-
-        binding.children.unshift(ref.id, ": this.", ref.base)
-        binding.type = "Property"
-        binding.ref = undefined
-        return
-      }
-
-      if (ref.names[0] !== ref.base) {
-        binding.children.unshift(ref.base, ": ")
-      }
-    })
-}
-
-function adjustBindingElements(elements: ASTNodeBase[]) {
-  const names = elements.flatMap((p) => p.names or []),
-    { length } = elements
-
-  let blockPrefix,
-    restIndex = -1,
-    restCount = 0
-
-  elements.forEach(({ type }, i) => {
-    if (type is "BindingRestElement") {
-      if (restIndex < 0) restIndex = i
-      restCount++
-    }
-  })
-
-  if (restCount is 0) {
-    return {
-      children: elements,
-      names,
-      blockPrefix,
-      length,
-    }
-  } else if (restCount is 1) {
-    const rest = elements[restIndex]
-    const after = elements.slice(restIndex + 1)
-
-    const restIdentifier = rest.binding.ref or rest.binding
-    names.push(...rest.names or [])
-
-    let l = after.length
-
-    if (l) {
-      // increment l if trailing comma
-      if (arrayElementHasTrailingComma(after[l - 1])) l++
-
-      blockPrefix = {
-        type: "PostRestBindingElements",
-        children: ["[", insertTrimmingSpace(after, ""), "] = ", restIdentifier, ".splice(-", l.toString(), ")"],
-        names: after.flatMap((p) => p.names),
-      }
-    }
-
-    return {
-      names,
-      children: [...elements.slice(0, restIndex), {
-        ...rest,
-        children: rest.children.slice(0, -1) // remove trailing comma
-      }],
-      blockPrefix,
-      length,
-    }
-  }
-
-  const err = {
-    type: "Error",
-    children: ["Multiple rest elements in array pattern"],
-  }
-
-  return {
-    names,
-    children: [...elements, err],
-    blockPrefix,
-    length,
-  }
-}
-
-function arrayElementHasTrailingComma(elementNode)
-  const lastChild = elementNode.children.-1
-  return lastChild and lastChild[lastChild.length - 1]?.token is ","
 
 assert := {
   equal(a, b, msg): void
@@ -806,41 +706,6 @@ function replaceNode(node: ASTNodeBase, newNode: ASTNode): void
     throw new Error "replaceNode failed: didn't find child node in parent"
   if newNode <? "object" and not Array.isArray newNode
     newNode.parent = node.parent
-
-function hoistRefDecs(statements: StatementTuple[]): void {
-  gatherRecursiveAll(statements, (s) => s.hoistDec)
-    .forEach((node) => {
-      let { hoistDec } = node
-      node.hoistDec = null
-
-      const { ancestor, child } = findAncestor node, (ancestor) =>
-        ancestor.type is "BlockStatement" and (!ancestor.bare or ancestor.root)
-
-      if (ancestor) {
-        insertHoistDec(ancestor, child, hoistDec)
-      } else {
-        throw new Error("Couldn't find block to hoist declaration into.")
-      }
-
-      return
-    })
-}
-
-function insertHoistDec(block: BlockStatement, node: ASTNode | StatementTuple, dec: ASTNode): void
-  // NOTE: This is more accurately 'statements'
-  { expressions } := block
-  index := expressions.findIndex (exp) =>
-    exp is node or (Array.isArray(exp) and exp[1] is node)
-
-  if index < 0
-    throw new Error("Couldn't find expression in block for hoistable declaration.")
-
-  statement := [ expressions[index][0], dec, ";" ] as StatementTuple
-  expressions[index][0] = ""
-  expressions.splice index, 0, statement
-
-  // hoistDec wasn't previously a child, so now needs parent pointers
-  addParentPointers dec, block
 
 function patternAsValue(pattern) {
   switch (pattern.type) {
@@ -1681,13 +1546,6 @@ function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule
   adjustAtBindings(statements)
 }
 
-function findDecs(statements) {
-  const declarationNames = gatherNodes(statements, ({ type }) => type is "Declaration")
-    .flatMap((d) => d.names)
-
-  return new Set(declarationNames)
-}
-
 function populateRefs(statements: ASTNode): void {
   const refNodes = gatherRecursive(statements, ({ type }) => type is "Ref")
 
@@ -1717,191 +1575,6 @@ function populateRefs(statements: ASTNode): void {
     })
   }
 }
-
-// CoffeeScript compatible automatic var insertion
-function createVarDecs(statements, scopes, pushVar?) {
-  // NOTE: var and let/const have different scoping rules
-  // need to keep var scopes when entering functions and within a var scope keep
-  // track of lexical scopes within blocks
-  function hasDec(name) {
-    return scopes.some((s) => s.has(name))
-  }
-
-  function findAssignments(statements, decs) {
-    let assignmentStatements = gatherNodes(statements, (node) => {
-      return node.type is "AssignmentExpression"
-    })
-
-    if (assignmentStatements.length) {
-      // Get nested assignments that could be in expressions
-      assignmentStatements = assignmentStatements
-        .concat(findAssignments(assignmentStatements.map((s) => s.children), decs))
-    }
-
-    return assignmentStatements
-  }
-
-  // Let descendent blocks add the var at the outer enclosing function scope
-  if (!pushVar) {
-    pushVar = function (name) {
-      varIds.push(name)
-      decs.add(name)
-    }
-  }
-
-  decs := findDecs statements
-  scopes.push decs
-  varIds := []
-  assignmentStatements := findAssignments statements, scopes
-  undeclaredIdentifiers := assignmentStatements.flatMap ?.names or []
-
-  // Unique, undeclared identifiers in this scope
-  undeclaredIdentifiers.filter((x, i, a) => {
-    if (!hasDec(x)) return a.indexOf(x) is i
-  }).forEach(pushVar)
-
-  const fnNodes = gatherNodes(statements, isFunction)
-  const forNodes = gatherNodes(statements, (s) => s.type is "ForStatement")
-
-  const blockNodes = new Set(gatherNodes(statements, (s) => s.type is "BlockStatement"))
-  // Remove function blocks and for statements, they get handled separately because they have additional parameter scopes and lexical scopes to add
-  fnNodes.forEach(({ block }) => blockNodes.delete(block))
-  forNodes.forEach(({ block }) => blockNodes.delete(block))
-
-  // recurse into nested blocks
-  blockNodes.forEach (block) =>
-    createVarDecs(block.expressions, scopes, pushVar)
-
-  // recurse into for loops
-  forNodes.forEach ({ block, declaration }) =>
-    scopes.push(new Set(declaration.names))
-    createVarDecs(block.expressions, scopes, pushVar)
-    scopes.pop()
-
-  // recurse into nested functions
-  fnNodes.forEach ({ block, parameters }) =>
-    scopes.push(new Set(parameters.names))
-    createVarDecs(block.expressions, scopes)
-    scopes.pop()
-
-  if (varIds.length) {
-    // get indent from first statement
-    const indent = getIndent(statements[0])
-    let delimiter = ";"
-    if (statements[0][1]?.parent?.root) {
-      delimiter = ";\n"
-    }
-    // TODO: Declaration ast node
-    statements.unshift([indent, {
-      type: "Declaration"
-      children: ["var ", varIds.join(", ")]
-    }, delimiter])
-  }
-
-  scopes.pop()
-}
-
-function createConstLetDecs(statements, scopes, letOrConst: "let" | "const"): void {
-  function findVarDecs(statements, decs) {
-    const declarationNames = gatherRecursive statements, (node) =>
-        node.type is "Declaration" &&
-        node.children &&
-        node.children.length > 0 &&
-        node.children[0].token &&
-        node.children[0].token.startsWith('var') ||
-        node.type is "FunctionExpression"
-      .filter((node) => node.type is "Declaration")
-      .flatMap((node) => node.names)
-
-    return new Set(declarationNames)
-  }
-
-  let declaredIdentifiers = findVarDecs(statements)
-
-  function hasDec(name) {
-    return declaredIdentifiers.has(name) or scopes.some((s) => s.has(name))
-  }
-
-  function gatherBlockOrOther(statement) {
-    return gatherNodes(statement, (s) => s.type is "BlockStatement" or s.type is "AssignmentExpression" or s.type is "Declaration").flatMap((node) => {
-      if (node.type == "BlockStatement")
-        // bare blocks is not a safe position to insert let declaration
-        return node.bare ? gatherBlockOrOther(node.expressions) : node
-      else if (node.children and node.children.length)
-        return [...gatherBlockOrOther(node.children), node]
-      else
-        return []
-    })
-  }
-
-  let currentScope = new Set()
-  scopes.push(currentScope)
-
-  const fnNodes = gatherNodes(statements, isFunction)
-  const forNodes = gatherNodes(statements, (s) => s.type is "ForStatement")
-
-  let targetStatements: StatementTuple[] = []
-  for (const statement of statements) {
-    const nodes = gatherBlockOrOther(statement)
-    let undeclaredIdentifiers = []
-    for (const node of nodes) {
-      if (node.type == "BlockStatement") {
-        let block = node
-        let fnNode = fnNodes.find((fnNode) => fnNode.block is block)
-        let forNode = forNodes.find((forNode) => forNode.block is block)
-        if (fnNode != null) {
-          scopes.push(new Set(fnNode.parameters.names))
-          createConstLetDecs(block.expressions, scopes, letOrConst)
-          scopes.pop()
-        }
-        else if (forNode != null) {
-          scopes.push(new Set(forNode.declaration.names))
-          createConstLetDecs(block.expressions, scopes, letOrConst)
-          scopes.pop()
-        }
-        else
-          createConstLetDecs(block.expressions, scopes, letOrConst)
-        continue
-      }
-      // Assignment and Declaration all use 'names'.
-      if (node.names == null) continue
-      let names = node.names.filter((name) => !hasDec(name))
-      if (node.type == "AssignmentExpression")
-        undeclaredIdentifiers.push(...names)
-      names.forEach((name) => currentScope.add(name))
-    }
-
-    if (undeclaredIdentifiers.length > 0) {
-      let indent = statement[0]
-      // Is this statement a simple assingment like 'a = 1'?
-      let firstIdentifier = gatherNodes(statement[1], (node) => node.type == "Identifier")[0]
-      if (undeclaredIdentifiers.length == 1
-        and statement[1].type == 'AssignmentExpression'
-        and statement[1].names.length == 1
-        and statement[1].names[0] == undeclaredIdentifiers[0]
-        and firstIdentifier and firstIdentifier.names == undeclaredIdentifiers[0]
-        and gatherNodes(statement[1], (node) => node.type is "ObjectBindingPattern").length == 0)
-        statement[1].children.unshift([`${letOrConst} `])
-      else {
-        let tail = "\n"
-        // Does this statement start with a newline?
-        if (gatherNodes(indent, (node) => node.token and node.token.endsWith("\n")).length > 0)
-          tail = undefined
-        // Have to use 'let' instead of 'const' if the assignment is inside an expression
-        targetStatements.push [indent, {
-          type: "Declaration",
-          children: ["let ", ...undeclaredIdentifiers.join(", ")],
-          names: undeclaredIdentifiers,
-        }, tail]
-      }
-    }
-    targetStatements.push(statement)
-  }
-
-  scopes.pop()
-  statements.splice(0, statements.length, ...targetStatements)
-}
-
 
 /**
  * Support for `return.value` and `return =`
