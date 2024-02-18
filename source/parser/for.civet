@@ -1,0 +1,252 @@
+import type { ASTNode, ASTNodeBase, ASTLeaf, ASTError } from ./types.civet
+import {
+  makeRef
+  maybeRef
+  insertTrimmingSpace
+  literalValue
+} from ./util.civet
+
+// Construct for loop from RangeLiteral
+function forRange(open, forDeclaration, range, stepExp, close) {
+  const { start, end, inclusive } = range
+
+  const counterRef = makeRef("i")
+
+  let stepRef
+  if (stepExp) {
+    stepExp = insertTrimmingSpace(stepExp, "")
+    stepRef = maybeRef(stepExp, "step")
+  }
+
+  const startRef = maybeRef(start, "start")
+  const endRef = maybeRef(end, "end")
+
+  const startRefDec = (startRef !== start) ? [startRef, " = ", start, ", "] : []
+  const endRefDec = (endRef !== end) ? [endRef, " = ", end, ", "] : []
+
+  let ascDec = [], ascRef, asc
+  if (stepRef) {
+    if (stepRef !== stepExp) {
+      ascDec = [", ", stepRef, " = ", stepExp]
+    }
+  } else if (start.type is "Literal" and end.type is "Literal") {
+    asc = literalValue(start) <= literalValue(end)
+  } else {
+    ascRef = makeRef("asc")
+    ascDec = [", ", ascRef, " = ", startRef, " <= ", endRef]
+  }
+
+  let varAssign = [], varLetAssign = varAssign, varLet = varAssign, blockPrefix
+  if (forDeclaration?.declare) { // var/let/const declaration of variable
+    if (forDeclaration.declare.token is "let") {
+      const varName = forDeclaration.children.splice(1)  // strip let
+      varAssign = [...insertTrimmingSpace(varName, ""), " = "]
+      varLet = [",", ...varName, " = ", counterRef]
+    } else { // const or var: put inside loop
+      // TODO: missing indentation
+      blockPrefix = [
+        ["", forDeclaration, " = ", counterRef, ";"]
+      ]
+    }
+  } else if (forDeclaration) { // Coffee-style for loop
+    varAssign = varLetAssign = [forDeclaration, " = "]
+  }
+
+  const declaration = {
+    type: "Declaration",
+    children: ["let ", ...startRefDec, ...endRefDec, counterRef, " = ", ...varLetAssign, startRef, ...varLet, ...ascDec],
+    names: forDeclaration?.names,
+  }
+
+  const counterPart = inclusive
+    ? [counterRef, " <= ", endRef, " : ", counterRef, " >= ", endRef]
+    : [counterRef, " < ", endRef, " : ", counterRef, " > ", endRef]
+
+  const condition = stepRef
+    ? [stepRef, " !== 0 && (", stepRef, " > 0 ? ", ...counterPart, ")"]
+    : ascRef
+      ? [ascRef, " ? ", ...counterPart]
+      : asc ? counterPart.slice(0, 3) : counterPart.slice(4)
+
+  const increment = stepRef
+    ? [...varAssign, counterRef, " += ", stepRef]
+    : ascRef
+      ? [...varAssign, ascRef, " ? ++", counterRef, " : --", counterRef]
+      : [...varAssign, asc ? "++" : "--", counterRef]
+
+  return {
+    declaration,
+    children: [open, declaration, "; ", ...condition, "; ", ...increment, close],
+    blockPrefix,
+  }
+}
+
+function processForInOf($0: [
+  awaits: ASTNode,
+  eachOwn: undefined | [ASTLeaf, ASTNode],
+  open: ASTNode,
+  declaration: ASTNode,
+  declaration2: [ws1: ASTNode, comma: ASTLeaf, ws2: ASTNode, decl2: ASTNode],
+  ws: ASTNode,
+  inOf: ASTLeaf,
+  exp: ASTNodeBase,
+  step: ASTNode,
+  close: ASTNode
+], getRef) {
+  let [awaits, eachOwn, open, declaration, declaration2, ws, inOf, exp, step, close] = $0
+
+  if (exp.type is "RangeExpression" and inOf.token is "of" and !declaration2) {
+    // TODO: add support for `declaration2` to efficient `forRange`
+    return forRange(open, declaration, exp, step, close)
+  } else if (step) {
+    throw new Error("for..of/in cannot use 'by' except with range literals")
+  }
+
+  let eachOwnError: ASTError | undefined
+  let hoistDec, blockPrefix: ASTNode[] = []
+
+  // for each item[, index] of array
+  if (eachOwn and eachOwn[0].token is "each") {
+    if (inOf.token is "of") {
+      const counterRef = makeRef("i")
+      const lenRef = makeRef("len")
+      const expRef = maybeRef(exp)
+
+      const increment = "++"
+      let assignmentNames = [...declaration.names]
+
+      if (declaration2) {
+        const [, , ws2, decl2] = declaration2  // strip __ Comma __
+        blockPrefix.push(["", [
+          insertTrimmingSpace(ws2, ""), decl2, " = ", counterRef
+        ], ";"])
+        assignmentNames.push(...decl2.names)
+      }
+
+      const expRefDec = (expRef !== exp)
+        // Trim a single leading space if present
+        ? [insertTrimmingSpace(expRef, " "), " = ", insertTrimmingSpace(exp, ""), ", "]
+        : []
+
+      blockPrefix.push(["", {
+        type: "Declaration",
+        children: [declaration, " = ", insertTrimmingSpace(expRef, ""), "[", counterRef, "]"],
+        names: assignmentNames,
+      }, ";"])
+
+      declaration = {
+        type: "Declaration",
+        children: ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", insertTrimmingSpace(expRef, ""), ".length"],
+        names: []
+      }
+
+      const condition = [counterRef, " < ", lenRef, "; "]
+      const children = [open, declaration, "; ", condition, counterRef, increment, close]
+      return { declaration, children, blockPrefix }
+    } else {
+      eachOwnError = {
+        type: "Error",
+        message: "'each' is only meaningful in for..of loops",
+      }
+    }
+  }
+
+  // for own..in
+  let own = eachOwn and eachOwn[0].token is "own";
+  let expRef: ASTNode | undefined
+  if (own and inOf.token !== "in") {
+    own = false
+    eachOwnError = {
+      type: "Error",
+      message: "'own' is only meaningful in for..in loops",
+    }
+  }
+
+  if (!declaration2 and !own) {
+    return {
+      declaration,
+      blockPrefix,
+      children: [awaits, eachOwnError, open, declaration, ws, inOf, expRef ?? exp, step, close], // omit declaration2, replace eachOwn with eachOwnError, replace exp with expRef
+    }
+  }
+
+  let ws2: ASTNode | undefined, decl2: ASTNode | undefined
+  if (declaration2) [, , ws2, decl2] = declaration2  // strip __ Comma __
+
+  switch (inOf.token) {
+    case "of": { // for item, index of iter
+      const counterRef = makeRef("i")
+      hoistDec = {
+        type: "Declaration",
+        children: ["let ", counterRef, " = 0"],
+        names: [],
+      }
+      blockPrefix.push(["", {
+        type: "Declaration",
+        children: [insertTrimmingSpace(ws2, ""), decl2, " = ", counterRef, "++"],
+        names: decl2.names,
+      }, ";"])
+      break
+    }
+
+    case "in": { // for key, value of object
+      // First, wrap object in ref if complex expression
+      const expRef = maybeRef(exp)
+      if (expRef !== exp) {
+        hoistDec = {
+          type: "Declaration",
+          children: ["let ", expRef],
+          names: [],
+        }
+        exp = {
+          type: "AssignmentExpression",
+          children: [" ", expRef, " =", exp],
+        }
+      }
+      // Replace key with single identifier if it's a pattern,
+      // so that we can use it to dereference value.
+      let { binding } = declaration
+      if (binding?.type !== "Identifier") {
+        const keyRef = makeRef("key")
+        blockPrefix.push(["", [
+          declaration, " = ", keyRef
+        ], ";"])
+        declaration = {
+          type: "ForDeclaration",
+          binding: binding = keyRef,
+          children: ["const ", keyRef],
+          names: [],
+        }
+      }
+      // for own..in
+      if (own) {
+        const hasPropRef = getRef("hasProp")
+        blockPrefix.push(["", ["if (!", hasPropRef, "(", insertTrimmingSpace(expRef, ""), ", ", insertTrimmingSpace(binding, ""), ")) continue"], ";"])
+      }
+      if (decl2) {
+        blockPrefix.push(["", {
+          type: "Declaration",
+          children: [insertTrimmingSpace(ws2, ""), decl2, " = ", insertTrimmingSpace(expRef, ""), "[", insertTrimmingSpace(binding, ""), "]"],
+          names: decl2.names,
+        }, ";"])
+      }
+      break
+    }
+
+    default:
+      throw new Error(`for item, index must use 'of' or 'in' instead of '${inOf.token}'`)
+  }
+
+  return {
+    declaration,
+    children: [awaits, eachOwnError, open, declaration, ws, inOf, exp, step, close], // omit declaration2, replace each with eachOwnError
+    blockPrefix,
+    hoistDec,
+  }
+}
+
+
+export {
+  forRange
+  processForInOf
+}
