@@ -624,18 +624,23 @@ function remapFileName(fileName: string, transpilers: Map<string, Transpiler>): 
 // Incremental snapshot example from vue language tools
 // https://github.com/vuejs/language-tools/blob/5607f45835ab85e0b5a0747614a4ed9989a28cec/packages/language-core/src/virtualFile/computedFiles.ts#L218
 function fullDiffTextChangeRange(oldText: string, newText: string): ts.TextChangeRange | undefined {
-  for (let start = 0; start < oldText.length && start < newText.length; start++) {
+  const oldTextLength = oldText.length,
+    newTextLength = newText.length,
+    minLength = Math.min(oldTextLength, newTextLength);
+
+  for (let start = 0; start < minLength; start++) {
     if (oldText[start] !== newText[start]) {
-      let end = oldText.length;
-      for (let i = 0; i < oldText.length - start && i < newText.length - start; i++) {
-        if (oldText[oldText.length - i - 1] !== newText[newText.length - i - 1]) {
+      let end = oldTextLength;
+      let stop = minLength - start;
+      for (let i = 0; i < stop; i++) {
+        if (oldText[oldTextLength - i - 1] !== newText[newTextLength - i - 1]) {
           break;
         }
         end--;
       }
 
       let length = end - start;
-      let newLength = length + (newText.length - oldText.length);
+      let newLength = length + (newTextLength - oldTextLength);
       if (newLength < 0) {
         length -= newLength;
         newLength = 0;
