@@ -942,8 +942,8 @@ export operator has(x, y)
   y contains x
 </Playground>
 
-Custom infix operators have a default precedence between relational and
-arithmetic operators, and are left-associative.
+By default, custom infix operators have a precedence between relational and
+arithmetic operators, and are left-associative:
 
 <Playground>
 operator foo
@@ -952,14 +952,30 @@ a < b + c foo d * e foo f
 
 You can specify a custom precedence with `looser`/`tighter`/`same`
 followed by another operator (with symbols wrapped in parentheses).
-This specification can go after `operator` to affect several operators,
-and/or after the operator name to affect just that operator.
+This specification goes after the operator name or before a declaration.
 
 <Playground>
 operator dot looser (*) (p, q)
   p.x * q.x + p.y * q.y
 operator looser dot DOT := dot
 a + b * c dot d * e DOT f * g dot h * i + j
+</Playground>
+
+You can specify a custom associativity with
+`left`/`right`/`non`/`relational`/`arguments`:
+
+<Playground>
+operator x left  // left is default
+a x b x c
+operator y right
+a y b y c
+operator z non
+a z b
+// a z b z c is an error
+operator cmp relational
+a < b cmp c instanceof d
+operator combine arguments
+a combine b combine c
 </Playground>
 
 ### Operator Assignment
