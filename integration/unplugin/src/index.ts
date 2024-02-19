@@ -153,6 +153,9 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           ...configContents.options,
           target: ts.ScriptTarget.ESNext,
         };
+        // We use .tsx extensions when type checking, so need to enable
+        // JSX mode even if the user doesn't request/use it.
+        compilerOptions.jsx ??= "preserve";
         compilerOptionsWithSourceMap = {
           ...compilerOptions,
           sourceMap: true,
