@@ -963,19 +963,19 @@ a + b * c dot d * e DOT f * g dot h * i + j
 </Playground>
 
 You can specify a custom associativity with
-`left`/`right`/`nonassoc`/`relational`/`multiarg`:
+`left`/`right`/`non`/`relational`/`arguments`:
 
 <Playground>
 operator left x
 a x b x c
 operator right y
 a y b y c
-operator nonassoc z
+operator non z
 a z b
 // a z b z c is an error
 operator relational cmp
 a < b cmp c instanceof d
-operator multiarg combine
+operator arguments combine
 a combine b combine c
 </Playground>
 
