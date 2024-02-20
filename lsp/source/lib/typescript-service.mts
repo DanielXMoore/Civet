@@ -254,6 +254,9 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
       // Plain non-transpiled document
       if (!scriptFileNames.has(path)) {
         scriptFileNames.add(path)
+      }
+
+      if (!pathMap.has(path)) {
         pathMap.set(path, doc)
       }
 
