@@ -18,7 +18,6 @@ import type {
 } from "typescript"
 
 const {
-  ScriptSnapshot,
   createCompilerHost,
   createLanguageService,
   parseJsonConfigFileContent,
@@ -361,13 +360,13 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
       if (source && sourceDocVersion > transpiledDoc.version) {
         const transpiledCode = doTranspileAndUpdateMeta(transpiledDoc, sourceDocVersion, transpiler, sourcePath, source)
         if (transpiledCode !== undefined) {
-          snapshot = ScriptSnapshot.fromString(transpiledCode)
+          snapshot = Snap(transpiledCode)
         }
       }
 
       if (!snapshot) {
         // Use the old version if there was an error
-        snapshot = ScriptSnapshot.fromString(transpiledDoc.getText())
+        snapshot = Snap(transpiledDoc.getText())
       }
 
       snapshotMap.set(path, snapshot)
@@ -375,7 +374,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
     }
 
     // Regular non-transpiled file
-    snapshot = ScriptSnapshot.fromString(getPathSource(path))
+    snapshot = Snap(getPathSource(path))
     snapshotMap.set(path, snapshot)
     return snapshot
   }
@@ -620,6 +619,64 @@ function remapFileName(fileName: string, transpilers: Map<string, Transpiler>): 
   }
 
   return fileName
+}
+
+// Incremental snapshot example from vue language tools
+// https://github.com/vuejs/language-tools/blob/5607f45835ab85e0b5a0747614a4ed9989a28cec/packages/language-core/src/virtualFile/computedFiles.ts#L218
+function fullDiffTextChangeRange(oldText: string, newText: string): ts.TextChangeRange | undefined {
+  const oldTextLength = oldText.length,
+    newTextLength = newText.length,
+    minLength = Math.min(oldTextLength, newTextLength);
+
+  for (let start = 0; start < minLength; start++) {
+    if (oldText[start] !== newText[start]) {
+      let end = oldTextLength;
+      let stop = minLength - start;
+      for (let i = 0; i < stop; i++) {
+        if (oldText[oldTextLength - i - 1] !== newText[newTextLength - i - 1]) {
+          break;
+        }
+        end--;
+      }
+
+      let length = end - start;
+      let newLength = length + (newTextLength - oldTextLength);
+      if (newLength < 0) {
+        length -= newLength;
+        newLength = 0;
+      }
+
+      return {
+        span: { start, length },
+        newLength,
+      };
+    }
+  }
+
+  return undefined;
+}
+
+const Snap = (newText: string) => {
+  const changeRanges = new Map<ts.IScriptSnapshot, ts.TextChangeRange | undefined>();
+
+  const snapshot: ts.IScriptSnapshot = {
+    getText: (start, end) => newText.slice(start, end),
+    getLength: () => newText.length,
+    getChangeRange(oldSnapshot) {
+      if (!changeRanges.has(oldSnapshot)) {
+        changeRanges.set(oldSnapshot, undefined);
+        const oldText = oldSnapshot.getText(0, oldSnapshot.getLength());
+        const changeRange = fullDiffTextChangeRange(oldText, newText);
+        if (changeRange) {
+          changeRanges.set(oldSnapshot, changeRange);
+        }
+      }
+
+      return changeRanges.get(oldSnapshot);
+    },
+  };
+
+  return snapshot as ts.IScriptSnapshot;
 }
 
 export default TSService
