@@ -75,7 +75,7 @@ function tryFsResolve(file: string): string | undefined {
 
 function resolveAbsolutePath(rootDir: string, id: string, implicitExtension: boolean) {
   const file = path.join(rootDir, id);
-  // Check for existence of resolved file and unsolved id,
+  // Check for existence of resolved file and unresolved id,
   // without and with implicit .civet extension, and return first existing
   return tryFsResolve(file) ||
     (implicitExtension && implicitCivet(file)) ||
@@ -275,23 +275,20 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       if (/\0/.test(id)) return null;
 
       id = cleanCivetId(id);
-      const absolutePath = path.isAbsolute(id)
+      let resolvedId = path.isAbsolute(id)
         ? resolveAbsolutePath(rootDir, id, implicitExtension)
         : path.resolve(path.dirname(importer ?? ''), id);
-      if (!absolutePath) return null;
-
-      let relativeId = path.relative(process.cwd(), absolutePath);
+      if (!resolvedId) return null;
 
       // Implicit .civet extension
-      if (!relativeId.endsWith('.civet')) {
+      if (!resolvedId.endsWith('.civet')) {
         if (!implicitExtension) return null;
-        const implicitId = implicitCivet(relativeId)
+        const implicitId = implicitCivet(resolvedId)
         if (!implicitId) return null;
-        relativeId = implicitId
+        resolvedId = implicitId
       }
 
-      const relativePath = relativeId + outExt;
-      return relativePath;
+      return resolvedId + outExt;
     },
     loadInclude(id) {
       return isCivetTranspiled(id);
@@ -299,7 +296,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
     async load(id) {
       if (!isCivetTranspiled(id)) return null;
 
-      const filename = path.resolve(process.cwd(), id.slice(0, -outExt.length));
+      const filename = path.resolve(rootDir, id.slice(0, -outExt.length));
       const rawCivetSource = await fs.promises.readFile(filename, 'utf-8');
       this.addWatchFile(filename);
 
@@ -441,13 +438,13 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         // `file` is an absolute path to the changed file on disk,
         // so for our case it should end with .civet extension
         if (!file.endsWith('.civet')) return;
-        // Convert into relative path as would be output by `resolveId`
-        const relativeId = slash(path.relative(process.cwd(), file) + outExt);
+        // Convert into path as would be output by `resolveId`
+        const resolvedId = slash(path.resolve(file) + outExt);
         // Check for module with this name
-        const module = server.moduleGraph.getModuleById(relativeId);
+        const module = server.moduleGraph.getModuleById(resolvedId);
         if (module) {
           // Invalidate modules depending on this one
-          server.moduleGraph.onFileChange(relativeId);
+          server.moduleGraph.onFileChange(resolvedId);
           // Hot reload this module
           return [ ...modules, module ]
         }
