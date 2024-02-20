@@ -21,7 +21,7 @@ import {
 } from 'vscode-languageserver-textdocument';
 import TSService from './lib/typescript-service.mjs';
 import * as Previewer from "./lib/previewer.mjs";
-import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier } from './lib/util.mjs';
+import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier, logTiming } from './lib/util.mjs';
 import assert from "assert"
 import path from "node:path"
 import ts, {
@@ -517,9 +517,9 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
   // Non-transpiled
   if (sourcePath.match(tsSuffix)) {
     const diagnostics: Diagnostic[] = [
-      ...service.getSyntacticDiagnostics(sourcePath),
-      ...service.getSemanticDiagnostics(sourcePath),
-      ...service.getSuggestionDiagnostics(sourcePath),
+      ...logTiming("service.getSyntacticDiagnostics", service.getSyntacticDiagnostics)(sourcePath),
+      ...logTiming("service.getSemanticDiagnostics", service.getSemanticDiagnostics)(sourcePath),
+      ...logTiming("service.getSuggestionDiagnostics", service.getSuggestionDiagnostics)(sourcePath),
     ].map((diagnostic) => convertDiagnostic(diagnostic, document))
 
     return connection.sendDiagnostics({
@@ -578,9 +578,9 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
     }).filter(x => !!x))
   } else {
     [
-      ...service.getSyntacticDiagnostics(transpiledPath),
-      ...service.getSemanticDiagnostics(transpiledPath),
-      ...service.getSuggestionDiagnostics(transpiledPath),
+      ...logTiming("service.getSyntacticDiagnostics", service.getSyntacticDiagnostics)(transpiledPath),
+      ...logTiming("service.getSemanticDiagnostics", service.getSemanticDiagnostics)(transpiledPath),
+      ...logTiming("service.getSuggestionDiagnostics", service.getSuggestionDiagnostics)(transpiledPath),
     ].forEach((diagnostic) => {
       diagnostics.push(convertDiagnostic(diagnostic, transpiledDoc, sourcemapLines))
     })
