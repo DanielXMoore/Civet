@@ -437,6 +437,21 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       config(config: UserConfig) {
         rootDir = path.resolve(process.cwd(), config.root ?? '');
 
+        config.optimizeDeps ??= {};
+        config.optimizeDeps.esbuildOptions ??= {};
+        config.optimizeDeps.esbuildOptions.plugins ??= [];
+        config.optimizeDeps.esbuildOptions.plugins.push(
+          // @ts-ignore esbuild types from Vite might not match our esbuild
+          unplugin.esbuild({
+            ...options,
+            js: undefined,
+            ts: 'preserve',
+            dts: undefined,
+            emitDeclaration: false,
+            typecheck: false,
+          })
+        );
+
         if (implicitExtension) {
           config.resolve ??= {};
           config.resolve.extensions ??= [];
@@ -481,4 +496,5 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
   };
 };
 
-export default createUnplugin(rawPlugin)
+var unplugin = createUnplugin(rawPlugin)
+export default unplugin
