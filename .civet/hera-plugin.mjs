@@ -4,15 +4,14 @@ const { compile: heraCompile } = Hera
 export default {
   transpilers: [{
     extension: ".hera",
-    target: ".cjs",
+    target: ".ts",
     compile: function (path, source) {
-      const code = heraCompile(source, {
+      return heraCompile(source, {
         filename: path,
+        sourceMap: true,
+        types: true,
+        module: true,
       })
-
-      return {
-        code
-      }
     }
   }],
 }
