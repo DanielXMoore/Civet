@@ -283,6 +283,16 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
                   filePath
                 );
 
+                // Work around unplugin+esbuild bug where it only creates the
+                // root output directory, not any subdirectories.
+                if (meta.framework === 'esbuild') {
+                  fs.mkdirSync(
+                    path.dirname(
+                      path.resolve(esbuildOptions.outdir!, pathFromDistDir)
+                    ), { recursive: true }
+                  );
+                }
+
                 this.emitFile({
                   source: content,
                   fileName: pathFromDistDir,
@@ -290,7 +300,10 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
                 });
               },
               undefined,
-              true
+              true, // emitDtsOnly
+              undefined,
+              // @ts-ignore @internal interface
+              true, // forceDtsEmit
             );
           }
         }
