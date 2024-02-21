@@ -39,7 +39,7 @@ export type PluginOptions = {
   dts?: boolean;
 };
 
-const isCivetTranspiled = (id: string) => /\.civet\.[jt]sx([?#].*)?$/.test(id);
+const isCivetTranspiled = /(\.civet)(\.[jt]sx)([?#].*)?$/;
 const postfixRE = /[?#].*$/s;
 const isWindows = os.platform() === 'win32';
 const windowsSlashRE = /\\/g;
@@ -152,6 +152,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         compilerOptions = {
           ...configContents.options,
           target: ts.ScriptTarget.ESNext,
+          composite: false,
         };
         // We use .tsx extensions when type checking, so need to enable
         // JSX mode even if the user doesn't request/use it.
@@ -167,7 +168,31 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       if (transformTS) {
         const ts = await tsPromise!;
 
-        const system = tsvfs.createFSBackedSystem(fsMap, process.cwd(), ts);
+        // Create a virtual file system with all source files processed so far,
+        // but which further resolves any Civet dependencies that are needed
+        // just for typechecking (e.g. `import type` which get removed in JS).
+        const system = tsvfs.createFSBackedSystem(fsMap, process.cwd(), ts)
+        const {fileExists: systemFileExists, readFile: systemReadFile} = system
+        system.fileExists = (filename: string): boolean => {
+          if (!filename.endsWith('.civet.tsx')) return systemFileExists(filename)
+          if (fsMap.has(filename)) return true
+          return systemFileExists(filename.slice(0, -4))
+        };
+        system.readFile = (filename: string, encoding: string = 'utf-8'): string | undefined => {
+          if (!filename.endsWith('.civet.tsx')) return systemReadFile(filename)
+          if (fsMap.has(filename)) return fsMap.get(filename)
+          const civetFilename = filename.slice(0, -4)
+          const rawCivetSource = fs.readFileSync(civetFilename, {
+            encoding: encoding as BufferEncoding
+          })
+          const compiledTS = civet.compile(rawCivetSource, {
+            filename,
+            js: false,
+          });
+          fsMap.set(filename, compiledTS)
+          return compiledTS
+        };
+
         const host = tsvfs.createVirtualCompilerHost(
           system,
           compilerOptions,
@@ -291,12 +316,14 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       return resolvedId + outExt;
     },
     loadInclude(id) {
-      return isCivetTranspiled(id);
+      return isCivetTranspiled.test(id);
     },
     async load(id) {
-      if (!isCivetTranspiled(id)) return null;
+      const match = isCivetTranspiled.exec(id);
+      if (!match) return null;
+      const basename = id.slice(0, match.index + match[1].length);
 
-      const filename = path.resolve(rootDir, id.slice(0, -outExt.length));
+      const filename = path.resolve(rootDir, basename);
       const rawCivetSource = await fs.promises.readFile(filename, 'utf-8');
       this.addWatchFile(filename);
 
