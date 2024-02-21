@@ -309,7 +309,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         }
       }
     },
-    resolveId(id, importer) {
+    resolveId(id, importer, options) {
       if (/\0/.test(id)) return null;
 
       id = cleanCivetId(id);
@@ -324,6 +324,12 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         const implicitId = implicitCivet(resolvedId)
         if (!implicitId) return null;
         resolvedId = implicitId
+      }
+
+      // Tell Vite that this is a virtual module during dependency scanning
+      if ((options as unknown as {scan?: boolean}).scan &&
+          meta.framework === 'vite') {
+        resolvedId = `\0${resolvedId}`
       }
 
       return resolvedId + outExt;
@@ -449,21 +455,6 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
     vite: {
       config(config: UserConfig) {
         rootDir = path.resolve(process.cwd(), config.root ?? '');
-
-        config.optimizeDeps ??= {};
-        config.optimizeDeps.esbuildOptions ??= {};
-        config.optimizeDeps.esbuildOptions.plugins ??= [];
-        config.optimizeDeps.esbuildOptions.plugins.push(
-          // @ts-ignore esbuild types from Vite might not match our esbuild
-          unplugin.esbuild({
-            ...options,
-            js: undefined,
-            ts: 'preserve',
-            dts: undefined,
-            emitDeclaration: false,
-            typecheck: false,
-          })
-        );
 
         if (implicitExtension) {
           config.resolve ??= {};
