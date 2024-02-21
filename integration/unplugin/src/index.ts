@@ -442,7 +442,14 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         config.optimizeDeps.esbuildOptions.plugins ??= [];
         config.optimizeDeps.esbuildOptions.plugins.push(
           // @ts-ignore esbuild types from Vite might not match our esbuild
-          unplugin.esbuild({...options, js: undefined, ts: 'preserve'})
+          unplugin.esbuild({
+            ...options,
+            js: undefined,
+            ts: 'preserve',
+            dts: undefined,
+            emitDeclaration: false,
+            typecheck: false,
+          })
         );
 
         if (implicitExtension) {
