@@ -315,7 +315,7 @@ export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
         // find best line without going beyond
         const [_p, _f, srcLine, srcOffset] = mapping
         if (srcLine <= origLine) {
-          if (srcLine >= bestLine && (srcOffset <= origOffset)) {
+          if (srcLine >= bestLine && (srcOffset <= origOffset) && (srcOffset >= bestOffset)) {
             bestLine = srcLine
             bestOffset = srcOffset
             foundLine = i

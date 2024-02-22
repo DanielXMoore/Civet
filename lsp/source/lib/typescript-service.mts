@@ -8,8 +8,8 @@ import type {
 import BundledCivetModule from "@danielx/civet"
 import BundledCivetConfigModule from "@danielx/civet/config"
 
-import ts, { JsxEmit, isExternalModuleNameRelative } from "typescript"
-const { version: typescriptVersion } = ts
+import ts from "typescript"
+const { version: typescriptVersion, JsxEmit, isExternalModuleNameRelative } = ts
 import type {
   CompilerHost,
   CompilerOptions,
