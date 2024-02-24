@@ -313,6 +313,36 @@ console.log ```
 ```
 </Playground>
 
+## Length Shorthand
+
+`.#` in a property acces is short for `.length`
+
+<Playground>
+array.#
+"a string also".#
+</Playground>
+
+When used on its own as `#` it is `this.length`
+
+<Playground>
+function push(item)
+  @[#] = item
+</Playground>
+
+<Playground>
+function wrap(index)
+  @[index %% #]
+</Playground>
+
+When used with `in` it is a check for the `"length"` property.
+
+<Playground>
+# in x
+</Playground>
+
+It looks and behaves similary to [private fields](#private-fields) with the exception that `.length` is not private.
+
+
 ## Regular Expressions
 
 Civet supports JavaScript regular expression literals `/.../`, provided the

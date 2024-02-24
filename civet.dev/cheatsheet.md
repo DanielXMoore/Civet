@@ -241,6 +241,7 @@ json.'long property'
 json.`${movie} name`
 matrix.0.0
 array.-1
+array.#
 ```
 
 ```ts
@@ -304,6 +305,13 @@ url |> fetch |> await
 |> .json() |> await
 ||> (json) => console.log "json:", json
 |> callback
+```
+
+```ts
+// this.length shorthand
+@[#] = item
+@[index %% #]
+floor # / 2
 ```
 
 </div>
