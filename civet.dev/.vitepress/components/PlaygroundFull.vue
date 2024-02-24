@@ -43,6 +43,11 @@ function onInput(civet: string, js: string) {
 const evalOutput = ref<null | string>(null);
 const evalComplete = ref<boolean>(true);
 
+declare global {
+  interface Window {
+    civetconsole: Record<string, (...args: unknown[]) => void>;
+  }
+}
 window.civetconsole = {};
 Object.keys(console).forEach((key) => {
   window.civetconsole[key] = (...args) => {

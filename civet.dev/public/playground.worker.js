@@ -8,73 +8,14 @@ onmessage = async (e) => {
   const highlighter = await getHighlighter();
   const inputHtml = highlighter.codeToHtml(code, { lang: 'coffee' });
 
+  let tsCode, ast, errors = []
   try {
-    let ast = Civet.compile(code, { ast: true });
-    const errors = [];
-    let tsCode = Civet.generate(ast, { errors });
+    ast = Civet.compile(code, { ast: true });
+    tsCode = Civet.generate(ast, { errors });
     if (errors.length) {
       // TODO: Better error display; copied from main.civet
       throw new Error(`Parse errors: ${errors.map($ => $.message).join("\n")}`)
     }
-    let jsCode = '';
-
-    if (jsOutput) {
-      // Wrap in IIFE if there's a top-level await
-      const topLevelAwait = Civet.lib.gatherRecursive(ast,
-        (n) => n.type === 'Await',
-        Civet.lib.isFunction
-      ).length > 0
-      if (topLevelAwait) {
-        const prefix = /^(\s*|;|\'([^'\\]|\\.)*\'|\"([^"\\]|\\.)*\"|\/\/.*|\/\*[^]*?\*\/)*/.exec(code)[0]
-        const rest = code.slice(prefix.length)
-        .replace(/\/\/.*|\/\*[^]*?\*\//g, '')
-        const coffee = /['"]civet[^'"]*coffee(Compat|-compat|Do|-do)/.test(prefix)
-        ast = Civet.compile(
-          prefix +
-          (coffee ? 'do ->\n' : 'async do\n') +
-          rest.replace(/^/gm, ' '),
-          { ast: true }
-        );
-      }
-
-      // Convert console to civetconsole for Playground execution
-      Civet.lib.gatherRecursive(ast,
-        (n) => n.type === 'Identifier' && n.children?.token === "console"
-      ).forEach((node) => {
-        node.children.token = "civetconsole"
-      })
-
-      jsCode = Civet.generate(ast, { js: true, errors })
-
-      if (topLevelAwait) {
-        jsCode += `.then((x)=>x!==undefined&&civetconsole.log("[EVAL] "+x))`
-      }
-
-      // Parse errors specific to JS generation
-      if (errors.length) {
-        jsCode = `civetconsole.error("Civet failed to generate JavaScript code:\\n${errors.map($ => $.message.replace(/[\\"]/g, '\\$&')).join("\\n")}")`
-        console.log(jsCode)
-      }
-    }
-
-    if (prettierOutput) {
-      try {
-        tsCode = prettier.format(tsCode, {
-          parser: 'typescript',
-          plugins: prettierPlugins,
-          printWidth: 50,
-        });
-      } catch (err) {
-        console.info('Prettier error. Fallback to raw civet output', {
-          tsCode,
-          err,
-        });
-      }
-    }
-
-    const outputHtml = highlighter.codeToHtml(tsCode, { lang: 'tsx' });
-
-    postMessage({ uid, inputHtml, outputHtml, jsCode });
   } catch (error) {
     if (Civet.isCompileError(error)) {
       console.info('Snippet compilation error!', error);
@@ -89,7 +30,76 @@ onmessage = async (e) => {
       console.error(error)
       postMessage({ uid, inputHtml, outputHtml: error.message, error });
     }
+    return
   }
+
+  let jsCode = '';
+  if (jsOutput) {
+    // Wrap in IIFE if there's a top-level await
+    // Use Civet's async do, so Civet does implicit return of last value
+    try {
+      const topLevelAwait = Civet.lib.gatherRecursive(ast,
+        (n) => n.type === 'Await',
+        Civet.lib.isFunction
+      ).length > 0
+      if (topLevelAwait) {
+        const [prologue, rest] = Civet.parse(code,
+          {startRule: 'ProloguePrefix'})
+        const prefix = code.slice(0, -rest.length)
+        const coffee = prologue.some((p) => p.type === "CivetPrologue" &&
+          (p.config.coffeeCompat || p.config.coffeeDo))
+        ast = Civet.compile(
+          prefix +
+          (coffee ? '(do ->\n' : 'async do\n') +
+          rest.replace(/^/gm, ' ') +
+          (coffee ? ')' : ''),
+          { ast: true }
+        );
+      }
+
+      // Convert console to civetconsole for Playground execution
+      Civet.lib.gatherRecursive(ast,
+        (n) => n.type === 'Identifier' && n.children?.token === "console"
+      ).forEach((node) => {
+        node.children.token = "civetconsole"
+      })
+
+      jsCode = Civet.generate(ast, { js: true, errors })
+
+      if (topLevelAwait) {
+        jsCode += `.catch((x)=>civetconsole.log("[THROWN] "+x))`
+        jsCode += `.then((x)=>x!==undefined&&civetconsole.log("[EVAL] "+x))`
+      }
+
+      if (errors.length) {
+        // TODO: Better error display; copied from main.civet
+        throw new Error(`Parse errors: ${errors.map($ => $.message).join("\n")}`)
+      }
+    } catch (error) {
+      // Parse errors specific to JS generation
+      jsCode = `civetconsole.error("Civet failed to generate JavaScript code:\\n${error.message.replace(/[\\"]/g, '\\$&').replace(/\n/g, '\\n')}")`
+      console.log(jsCode)
+    }
+  }
+
+  if (prettierOutput) {
+    try {
+      tsCode = prettier.format(tsCode, {
+        parser: 'typescript',
+        plugins: prettierPlugins,
+        printWidth: 50,
+      });
+    } catch (err) {
+      console.info('Prettier error. Fallback to raw civet output', {
+        tsCode,
+        err,
+      });
+    }
+  }
+
+  const outputHtml = highlighter.codeToHtml(tsCode, { lang: 'tsx' });
+
+  postMessage({ uid, inputHtml, outputHtml, jsCode });
 };
 
 let highlighter;
