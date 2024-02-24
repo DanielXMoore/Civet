@@ -315,14 +315,14 @@ console.log ```
 
 ## Length Shorthand
 
-`.#` in a property acces is short for `.length`
+The property access `.#` in is short for `.length`:
 
 <Playground>
 array.#
 "a string also".#
 </Playground>
 
-When used on its own as `#` it is `this.length`
+On its own, `#` is shorthand for `this.length`:
 
 <Playground>
 function push(item)
@@ -334,14 +334,13 @@ function wrap(index)
   @[index %% #]
 </Playground>
 
-When used with `in` it is a check for the `"length"` property.
+`# in` checks for the `"length"` property:
 
 <Playground>
 # in x
 </Playground>
 
-It looks and behaves similary to [private fields](#private-fields) with the exception that `.length` is not private.
-
+Length shorthand looks and behaves similar to [private fields](#private-fields), with the exception that `.length` is not private.
 
 ## Regular Expressions
 
@@ -2060,7 +2059,8 @@ no
 
 ### CoffeeScript Comments
 
-If you don't need [private class fields](#private-fields),
+If you don't need [private class fields](#private-fields)
+or [length shorthand](#length-shorthand),
 you can enable `#` for single-line comments:
 
 <Playground>
