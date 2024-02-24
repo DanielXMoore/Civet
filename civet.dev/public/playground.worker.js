@@ -43,15 +43,11 @@ onmessage = async (e) => {
         Civet.lib.isFunction
       ).length > 0
       if (topLevelAwait) {
-        // Eat prologue strings and comments
-        let prefix = /^(\s*|;|\'([^'\\]|\\.)*\'|\"([^"\\]|\\.)*\"|\/\/.*|\/\*[^]*?\*\/)*/.exec(code)[0]
-        // Trim prologue to end at the last newline or semicolon;
-        // otherwise, e.g. "x" |> console.log would eat the "x"
-        prefix = /^[^]*(\n|;)/.exec(prefix)?.[0] ?? ''
-        const rest = code.slice(prefix.length)
-        .replace(/\/\/.*|\/\*[^]*?\*\//g, '');
-        // Civet prologue must end with a newline
-        const coffee = /['"]civet[^'"]*coffee(Compat|-compat|Do|-do)[^'"]*['"][;\s]*?\n/.test(prefix)
+        const [prologue, rest] = Civet.parse(code,
+          {startRule: 'ProloguePrefix'})
+        const prefix = code.slice(0, -rest.length)
+        const coffee = prologue.some((p) => p.type === "CivetPrologue" &&
+          (p.config.coffeeCompat || p.config.coffeeDo))
         ast = Civet.compile(
           prefix +
           (coffee ? '(do ->\n' : 'async do\n') +
