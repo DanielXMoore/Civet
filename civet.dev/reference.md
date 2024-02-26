@@ -1770,6 +1770,18 @@ elt as HTMLInputElement
 elt as! HTMLInputElement
 </Playground>
 
+You can use `as tuple` to give an array literal a
+[tuple type](https://www.typescriptlang.org/docs/handbook/2/objects.html#tuple-types).
+
+<Playground>
+[1, "hello"] as tuple
+// type [number, string]
+[1, "hello"] as const as tuple
+// type [1, "hello"]
+[1, "hello"] as const
+// type readonly [1, "hello"]
+</Playground>
+
 ## Modules
 
 ### `from` Shorthand
