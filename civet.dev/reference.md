@@ -1483,10 +1483,19 @@ obj := { @id }
 
 ### Bind
 
+Shorthand for [bind](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_objects/Function/bind)ing methods to their object:
+
 <Playground>
 bound := object@.method
 bound := object@method
 bound := @@method
+</Playground>
+
+You can specify arguments to prepend via an immediate
+[function call](#function-calls):
+
+<Playground>
+message := console@log "[MSG] "
 </Playground>
 
 ### Private Fields
