@@ -293,7 +293,18 @@ export function containsRange(range: Range, otherRange: Range): boolean {
   }
   return true;
 }
-
+/**
+ * The normal direction for sourcemapping is reverse, given a position in the generated file it points to a position in the source file.
+ *
+ * To do the opposite and find the position in the generated file from the source file ("forward map") we want to find the "best" mapping.
+ * The best mapping is the closest mapping with line <= original line (ideally it will be equal to the original line), and column <= (original column).
+ *
+ * To find that mapping we check every reverse mapping holding on to the best one so far.
+ * If we're in the middle of an identifier and the best one begins a few characters before the original column that is probably fine since we don't map
+ * into the middle of identifiers.
+ *
+ * We linearly advance the found line and offset by the difference.
+ */
 export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
   assert("line" in position, "position must have line")
   assert("character" in position, "position must have character")
