@@ -1,4 +1,5 @@
 import type {
+  ASTNode
   ASTNodeBase
   FunctionNode
   LabeledStatement
@@ -209,33 +210,28 @@ function patternAsValue(pattern)
 // does construct an else clause pushing undefined in if statements that lack them
 // and adds to the beginning and the end of the expression's children.
 // Maybe these insertion modifications can be refactored to be more DRY eventually.
-function insertPush(node, ref): void
+function assignResults(node: StatementTuple[] | ASTNode, collect: (node: ASTNode) => ASTNode): void
   if (!node) return
   // TODO: unify this with the `exp` switch
-  switch (node.type) {
+  switch node.type
     case "BlockStatement":
       if node.expressions.length
-        insertPush(node.expressions.-1, ref)
+        assignResults(node.expressions.-1, collect)
       else
-        node.expressions.push([ref, ".push(void 0);"])
+        node.expressions.push(["", collect("void 0"), ";"])
       return
     case "CaseBlock":
       node.clauses.forEach (clause) =>
-        insertPush(clause, ref)
+        assignResults(clause, collect)
       return
-    // NOTE: "CaseClause"s don't push
-    case "WhenClause":
-      insertPush(node.block, ref)
+    when "WhenClause", "DefaultClause", "PatternClause"
+      assignResults(node.block, collect)
       return
-    case "DefaultClause":
-      insertPush(node.block, ref)
-      return
-  }
-  if (!Array.isArray(node)) return
+
+  return  unless Array.isArray node
 
   [, exp] .= node
   return unless exp
-  indent := getIndent(node)
 
   outer := exp
   {type} .= exp
@@ -243,7 +239,7 @@ function insertPush(node, ref): void
     exp = (exp as LabeledStatement).statement
     {type} = exp
 
-  switch (exp.type) {
+  switch exp.type
     case "BreakStatement":
     case "ContinueStatement":
     case "DebuggerStatement":
@@ -252,48 +248,49 @@ function insertPush(node, ref): void
     case "ThrowStatement":
       return
     case "Declaration":
-      exp.children.push(["", [";", ref, ".push(",
-        patternAsValue(exp.bindings.-1.pattern), ")"]])
+      exp.children.push([
+        "", [";", collect(patternAsValue(exp.bindings.-1.pattern)) ]
+      ])
       return
     case "ForStatement":
     case "IterationStatement":
     case "DoStatement":
-      wrapIterationReturningResults(exp, outer, ref)
+      wrapIterationReturningResults(exp, outer, collect)
       return
     case "BlockStatement":
-      insertPush(exp.expressions[exp.expressions.length - 1], ref)
+      assignResults(exp.expressions[exp.expressions.length - 1], collect)
       return
     case "IfStatement":
       // if block
-      insertPush(exp.then, ref)
+      assignResults(exp.then, collect)
       if exp.then.bare and not exp.then.semicolon
         exp.then.children.push exp.then.semicolon = ";"
+
       // else block
-      if (exp.else) insertPush(exp.else[2], ref)
-      // Add else block pushing undefined if no else block
-      else exp.children.push([" else {\n", indent, ref, ".push(undefined)\n", indent, "}"])
+      if (exp.else)
+        assignResults(exp.else[2], collect)
+      else // Add else block pushing undefined if no else block
+        exp.children.push([" else {", collect("undefined"), "}"])
       return
     case "PatternMatchingStatement":
-      insertPush(exp.children[0][0], ref)
+      assignResults(exp.children[0][0], collect)
       return
     case "SwitchStatement":
       // insert a results.push in each case block
-      insertPush(exp.children[2], ref)
+      assignResults(exp.children[2], collect)
       return
     case "TryStatement":
       // NOTE: CoffeeScript doesn't add a push to an empty catch block but does add if there is any statement in the catch block
       // we always add a push to the catch block
       // NOTE: does not insert a push in the finally block
-      exp.blocks.forEach((block) => insertPush(block, ref))
+      exp.blocks.forEach((block) => assignResults(block, collect))
       return
-  }
 
   // Don't push if there's a trailing semicolon
-  if (node[node.length - 1]?.type is "SemicolonDelimiter") return
+  return if node.-1?.type is "SemicolonDelimiter"
 
   // Insert push wrapping expression
-  node.splice(1, 0, ref, ".push(")
-  node.push(")")
+  node[1] = collect(node[1])
 
 // [indent, statement, semicolon]
 function insertReturn(node: ASTNode, outerNode: ASTNode = node): void
@@ -407,10 +404,10 @@ function insertSwitchReturns(exp): void
   exp.caseBlock.clauses.forEach (clause) =>
     insertReturn clause
 
-function wrapIterationReturningResults(statement, outer, outerRef?): void
+function wrapIterationReturningResults(statement, outer, collect?: (node: ASTNode) => ASTNode): void
   if statement.type is "DoStatement"
-    if outerRef
-      insertPush(statement.block, outerRef)
+    if collect
+      assignResults(statement.block, collect)
     else
       insertReturn(statement.block, outer)
     return
@@ -422,11 +419,13 @@ function wrapIterationReturningResults(statement, outer, outerRef?): void
     children: ["const ", resultsRef, "=[];"],
   }
 
-  insertPush(statement.block, resultsRef)
+  assignResults statement.block, (node) =>
+    // TODO: real node
+    [ resultsRef, ".push(", node, ")" ]
 
   outer.children.unshift(declaration)
-  if outerRef
-    statement.children.push(";", outerRef, ".push(", resultsRef, ");")
+  if collect
+    statement.children.push ";", collect(resultsRef), ";"
   else
     statement.children.push(";return ", resultsRef, ";")
 
@@ -520,7 +519,9 @@ function expressionizeIteration(exp): void
   const resultsRef = makeRef("results")
 
   // insert `results.push` to gather results array
-  insertPush(block, resultsRef)
+  assignResults block, (node) =>
+    // TODO: real node
+    [ resultsRef, ".push(", node, ")" ]
   braceBlock(block)
 
   // Wrap with IIFE
@@ -537,4 +538,5 @@ function expressionizeIteration(exp): void
 export {
   expressionizeIteration
   processFunctions
+  assignResults
 }
