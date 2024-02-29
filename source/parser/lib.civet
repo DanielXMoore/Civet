@@ -43,6 +43,7 @@ import {
   makeRef
   maybeRef
   parenthesizeType
+  updateParentPointers
   wrapIIFE
   wrapWithReturn
 } from ./util.civet
@@ -57,7 +58,11 @@ import {
 
 import { processPipelineExpressions } from ./pipe.civet
 import { forRange, processForInOf } from ./for.civet
-import { processFunctions, expressionizeIteration } from ./function.civet
+import {
+  assignResults,
+  processFunctions,
+  expressionizeIteration
+} from ./function.civet
 import { processDeclarationConditions, processPatternMatching } from ./pattern-matching.civet
 import {
   adjustAtBindings
@@ -573,7 +578,8 @@ function processDeclarations(statements: StatementTuple[]): void
   // @ts-ignore
   gatherRecursiveAll statements, .type is "Declaration"
   // @ts-ignore
-  .forEach ({ bindings }: DeclarationStatement) =>
+  .forEach (statement: DeclarationStatement) =>
+    { bindings } := statement as DeclarationStatement
     bindings?.forEach (binding) =>
       suffix := binding.suffix
       if suffix and suffix.optional and suffix.t
@@ -584,13 +590,33 @@ function processDeclarations(statements: StatementTuple[]): void
       if initializer
         exp := initializer[2]
 
-function processBindingPatternLHS(lhs, tail): void {
+        if exp.type is "StatementExpression"
+          ref := makeRef()
+          statementExp := exp.statement
+
+          // Detach statement and assign results to ref
+          assignResults statementExp, (resultNode) =>
+            makeNode
+              type: "AssignmentExpression",
+              children: [ref, " = ", resultNode]
+
+          initializer[2] = ref
+
+          refDec :=
+            type: "Declaration",
+            children: ["let ", ref, ";"],
+
+          // insert statement before the declaration
+          statement.children.unshift(refDec, statementExp, ";")
+
+          updateParentPointers statementExp, statement
+
+function processBindingPatternLHS(lhs, tail): void
   // Expand AtBindings first before gathering splices
   adjustAtBindings(lhs, true)
   const [splices, thisAssignments] = gatherBindingCode(lhs)
   // TODO: This isn't quite right for compound assignments, may need to wrap with parens and use comma to return the complete value
   tail.push(...splices.map((s) => [", ", s]), ...thisAssignments.map((a) => [", ", a]))
-}
 
 function processAssignments(statements): void {
   // Move assignments/updates within LHS of assignments/updates
@@ -785,6 +811,15 @@ function processTypes(node: ASTNode)
         ")"
       ]
 
+/**
+Wrap any remaining statement expressions in IIFE.
+*/
+function processStatementExpressions(statements: StatementTuple[]): void
+  gatherRecursiveAll(statements, .type is "StatementExpression")
+    .forEach (exp) =>
+      exp.children = wrapIIFE(exp.children)
+
+
 function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule): void {
   // invariants
   assert.equal(m.forbidBracedApplication.length, 1, "forbidBracedApplication")
@@ -803,6 +838,7 @@ function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule
   processPipelineExpressions(statements)
   processDeclarations(statements)
   processAssignments(statements)
+  processStatementExpressions(statements)
   processPatternMatching(statements, ReservedWord)
 
   // Modify iteration expressions
