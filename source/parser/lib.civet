@@ -14,7 +14,9 @@ import type {
   BlockStatement
   DeclarationStatement
   MethodDefinition
+  ParenthesizedExpression
   ParseRule
+  StatementExpression
   StatementTuple
   TypeSuffix
   WSNode
@@ -129,17 +131,27 @@ function negateCondition(condition)
     ]
   { ...condition, expression, children }
 
-function expressionizeIfClause(clause, b, e)
-  { condition } := clause  // remove 'if'
+function expressionizeBlock(blockOrExpression: ASTNode)
+  if { expressions } := blockOrExpression
+    l := expressions.length
+    expressions.map ([ws, s, _delim], i) ->
+      if i is l - 1
+        [ws, s]
+      else
+        [ws, s, ","]
+  else
+    blockOrExpression
+
+function expressionizeIfClause(condition: ParenthesizedExpression, b: ASTNode, e?: [WSNode , ASTLeaf, ASTNode, WSNode])
   [ ...condRest, closeParen ] := condition.children  // separate ')'
   children := [
     ...condRest
     "?"
-    b
+    expressionizeBlock b
   ]
   if e
     // Replace 'else' in e[1] with ':'. (e[0] is space before 'else')
-    children.push e[0], ":", ...e[2..]
+    children.push e[0], ":", expressionizeBlock(e[2]), ...e[3..]
   else
     children.push ":void 0"
   children.push closeParen
@@ -771,8 +783,8 @@ function processAssignments(statements): void {
     })
 }
 
-function attachPostfixStatementAsExpression(exp, post): void {
-  switch (post[1].type) {
+function attachPostfixStatementAsExpression(exp, post)
+  switch post[1].type
     case "ForStatement":
     case "IterationStatement":
     case "DoStatement": {
@@ -785,11 +797,9 @@ function attachPostfixStatementAsExpression(exp, post): void {
       }
     }
     case "IfStatement":
-      return expressionizeIfClause(post[1], exp)
+      return expressionizeIfClause post[1].condition, exp
     default:
       throw new Error("Unknown postfix statement")
-  }
-}
 
 function processTypes(node: ASTNode)
   // T? -> T | undefined; T?? -> T | undefined | null
@@ -828,9 +838,22 @@ Wrap any remaining statement expressions in IIFE.
 */
 function processStatementExpressions(statements: StatementTuple[]): void
   gatherRecursiveAll(statements, .type is "StatementExpression")
-    .forEach (exp) =>
-      exp.children = wrapIIFE(exp.children)
+    .forEach (_exp) =>
+      exp := _exp as! StatementExpression
+      { statement: [, statement] } := exp
+      let ws
+      unless exp.children[0] is exp.statement
+        ws = exp.children[0]
 
+      if statement.type is "IfStatement"
+        debugger
+        // TODO: detect non-expressionable ifs and wrap in iife
+        exp.statement = expressionizeIfClause(statement.condition, statement.then, statement.else)
+        exp.children = [exp.statement]
+      else
+        exp.children = wrapIIFE(exp.children)
+
+      exp.children.unshift(ws) if ws
 
 function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule): void {
   // invariants
@@ -1078,7 +1101,6 @@ export {
   dedentBlockString
   dedentBlockSubstitutions
   deepCopy
-  expressionizeIfClause
   expressionizeTypeIf
   forRange
   gatherBindingCode
