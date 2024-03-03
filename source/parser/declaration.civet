@@ -1,10 +1,15 @@
 import {
   ASTLeaf
   ASTNode
+  ASTRef
   Binding
   Children
+  DeclarationStatement
+  IfStatement
   Initializer
+  IterationStatement
   StatementTuple
+  SwitchStatement
   TypeSuffix
   WSNode
 } from ./types.civet
@@ -93,7 +98,7 @@ function processDeclarations(statements: StatementTuple[]): void
       if initializer
         prependStatementExpressionBlock initializer, statement
 
-function prependStatementExpressionBlock(initializer: Initializer, statement: {children: Children}): void
+function prependStatementExpressionBlock(initializer: Initializer, statement: {children: Children}): ASTRef?
   exp .= initializer[2]
 
   // Handle nested statement expression
@@ -107,6 +112,7 @@ function prependStatementExpressionBlock(initializer: Initializer, statement: {c
   pre: ASTNode[] := []
   statementExp := exp.statement
   blockStatement: StatementTuple := ["", statementExp]
+  let ref: ASTRef
 
   if statementExp.type is "IterationExpression"
     // Async iterations remain inline wrapped with IIFE
@@ -116,9 +122,9 @@ function prependStatementExpressionBlock(initializer: Initializer, statement: {c
     blockStatement[1] = statement
 
     wrapIterationReturningResults statement, children: blockStatement, ->
-    initializer[2] = statement.resultsRef
+    ref = initializer[2] = statement.resultsRef
   else
-    ref := initializer[2] = makeRef()
+    ref = initializer[2] = makeRef()
 
     assignResults blockStatement, (resultNode) =>
       //@ts-ignore
@@ -137,38 +143,50 @@ function prependStatementExpressionBlock(initializer: Initializer, statement: {c
   // insert statement before the declaration
   //@ts-ignore
   statement.children.unshift(pre, blockStatement, ";")
-
   updateParentPointers blockStatement, statement
 
-function processDeclarationCondition(condition, rootCondition, parent): void
+  return ref
+
+function processDeclarationCondition(condition, rootCondition, parent: { children: Children }): void
   return unless condition.type is "DeclarationCondition"
-  ref := makeRef()
 
   { decl, bindings } := condition.declaration as DeclarationStatement
   // TODO: Add support for `let` and `const` declarations with multiple bindings in conditions
   binding := bindings[0]
   { pattern, suffix, initializer, splices, thisAssignments } := binding
 
-  grandparent := condition.parent?.parent
-  children :=
-    // Check that the declaration is a plain assignment (no pattern-matching) and the immediate grandchild of an `if` or `while`
-    // More complex conditions (triggered by pattern matching or `until`/`unless`) don't need double parens
-    // @ts-ignore Just because pattern might not have a type at runtime doesn't mean it's unsafe
-    if pattern.type is "Identifier" and (grandparent?.type is "IfStatement" or grandparent?.type is "WhileStatement")
-      ["(", ref, initializer, ")"]
-    else
-      [ref, initializer]
+  let ref = prependStatementExpressionBlock(initializer!, parent)
 
-  Object.assign condition, {
-    type: "AssignmentExpression"
-    children
-    hoistDec:
-      type: "Declaration"
-      children: ["let ", ref, suffix]
-      names: []
-    pattern
-    ref
-  }
+  if ref
+    Object.assign condition, {
+      type: "AssignmentExpression"
+      children: [ref]
+      pattern
+      ref
+      statementDeclaration: true
+    }
+  else
+    ref = makeRef()
+    grandparent := condition.parent?.parent
+    children :=
+      // Check that the declaration is a plain assignment (no pattern-matching) and the immediate grandchild of an `if` or `while`
+      // More complex conditions (triggered by pattern matching or `until`/`unless`) don't need double parens
+      // @ts-ignore Just because pattern might not have a type at runtime doesn't mean it's unsafe
+      if pattern.type is "Identifier" and (grandparent?.type is "IfStatement" or grandparent?.type is "WhileStatement")
+        ["(", ref, initializer, ")"]
+      else
+        [ref, initializer]
+
+    Object.assign condition, {
+      type: "AssignmentExpression"
+      children
+      hoistDec:
+        type: "Declaration"
+        children: ["let ", ref, suffix]
+        names: []
+      pattern
+      ref
+    }
 
   // condition wasn't previously a child, so now needs parent pointers
   addParentPointers condition, parent
@@ -218,12 +236,17 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
     when "IfStatement"
       { else: e} := s
       block := blockWithPrefix(condition.expression.blockPrefix, s.then)
-      s.then = block
 
       if block.bare and e and not block.semicolon
         block.children.push block.semicolon = ";"
 
-      s.children.splice(2, 1, block)
+      // Replace then block with prefixed block
+      s.children = s.children.map (c) =>
+        if c is s.then
+          block
+        else
+          c
+      s.then = block
 
       // Update parent pointers since declaration conditions have expanded
       updateParentPointers(block, s)
@@ -237,27 +260,45 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
       updateParentPointers(newBlock, s)
 
     when "SwitchStatement"
-      { blockPrefix, ref } := condition.expression
+      { blockPrefix, ref, statementDeclaration } := condition.expression as! { blockPrefix: StatementTuple[], ref: ASTRef, statementDeclaration: boolean}
       return unless blockPrefix
 
-      s.condition =
+      newCondition :=
         type: "ParenthesizedExpression"
         children: ["(", ref, ")"]
         expression: ref
         parent: s
-      s.children[1] = s.condition
+
+      // @ts-ignore
+      s.children = s.children.map (c) ->
+        if c is s.condition
+          newCondition
+        else
+          c
+
+      // @ts-ignore
+      s.condition = newCondition
       updateParentPointers s
 
-      // wraps the entire switch statement
-      block := blockWithPrefix [["", [{
-        type: "Declaration",
-        children: ["let ", ...condition.expression.children],
-      }], ";"], ...blockPrefix], makeEmptyBlock()
-      updateParentPointers block, s.parent
+      if statementDeclaration
+        // Hacky way to make sure the declaration is after the hoisted statement declaration
+        // TODO better unify this with hoistDec mechanics
+        block := makeEmptyBlock()
+        replaceBlockExpression(s.parent as BlockStatement, s, block)
+        block.expressions.push ["", s]
+        s.children.splice s.children.findIndex(.token is "switch"), 0, blockPrefix
+        s.parent = block
+      else
+        // wraps the entire switch statement
+        block := blockWithPrefix [["", [{
+          type: "Declaration",
+          children: ["let ", ...condition.expression.children],
+        }], ";"], ...blockPrefix], makeEmptyBlock()
+        updateParentPointers block, s.parent
 
-      replaceBlockExpression(s.parent as BlockStatement, s, block)
-      block.expressions.push ["", s]
-      s.parent = block
+        replaceBlockExpression(s.parent as BlockStatement, s, block)
+        block.expressions.push ["", s]
+        s.parent = block
 
 export {
   processAssignmentDeclaration
