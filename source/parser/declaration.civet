@@ -10,10 +10,21 @@ import {
 } from ./types.civet
 
 import {
+  blockWithPrefix
+  makeEmptyBlock
+  replaceBlockExpression
+} from ./block.civet
+
+import {
   gatherRecursiveAll
 } from ./traversal.civet
 
 import {
+  getPatternConditions
+} from ./pattern-matching.civet
+
+import {
+  addParentPointers
   convertOptionalType
   makeNode
   makeRef
@@ -80,9 +91,9 @@ function processDeclarations(statements: StatementTuple[]): void
 
       { initializer } := binding
       if initializer
-        prependBlockStatement initializer, statement
+        prependStatementExpressionBlock initializer, statement
 
-function prependBlockStatement(initializer: Initializer, statement: {children: Children}): void
+function prependStatementExpressionBlock(initializer: Initializer, statement: {children: Children}): void
   exp .= initializer[2]
 
   // Handle nested statement expression
@@ -91,44 +102,165 @@ function prependBlockStatement(initializer: Initializer, statement: {children: C
     ws = exp[0]
     exp = exp[1]!
 
-  if exp.type is "StatementExpression"
-    pre: ASTNode[] := []
-    statementExp := exp.statement
-    blockStatement: StatementTuple := ["", statementExp]
+  return unless exp.type is "StatementExpression"
 
-    if statementExp.type is "IterationExpression"
-      // Async iterations remain inline wrapped with IIFE
-      return if statementExp.async
+  pre: ASTNode[] := []
+  statementExp := exp.statement
+  blockStatement: StatementTuple := ["", statementExp]
 
-      statement := statementExp.statement
-      blockStatement[1] = statement
+  if statementExp.type is "IterationExpression"
+    // Async iterations remain inline wrapped with IIFE
+    return if statementExp.async
 
-      wrapIterationReturningResults statement, children: blockStatement, ->
-      initializer[2] = statement.resultsRef
-    else
-      ref := initializer[2] = makeRef()
+    statement := statementExp.statement
+    blockStatement[1] = statement
 
-      assignResults blockStatement, (resultNode) =>
-        //@ts-ignore
-        makeNode
-          type: "AssignmentExpression",
-          children: [ref, " = ", resultNode]
+    wrapIterationReturningResults statement, children: blockStatement, ->
+    initializer[2] = statement.resultsRef
+  else
+    ref := initializer[2] = makeRef()
 
-      refDec :=
-        type: "Declaration",
-        children: ["let ", ref, ";"],
-
-      pre.unshift refDec
+    assignResults blockStatement, (resultNode) =>
       //@ts-ignore
-      pre.push ws if ws
+      makeNode
+        type: "AssignmentExpression",
+        children: [ref, " = ", resultNode]
 
-    // insert statement before the declaration
+    refDec :=
+      type: "Declaration",
+      children: ["let ", ref, ";"],
+
+    pre.unshift refDec
     //@ts-ignore
-    statement.children.unshift(pre, blockStatement, ";")
+    pre.push ws if ws
 
-    updateParentPointers blockStatement, statement
+  // insert statement before the declaration
+  //@ts-ignore
+  statement.children.unshift(pre, blockStatement, ";")
+
+  updateParentPointers blockStatement, statement
+
+function processDeclarationCondition(condition, rootCondition, parent): void
+  return unless condition.type is "DeclarationCondition"
+  ref := makeRef()
+
+  { decl, bindings } := condition.declaration as DeclarationStatement
+  // TODO: Add support for `let` and `const` declarations with multiple bindings in conditions
+  binding := bindings[0]
+  { pattern, suffix, initializer, splices, thisAssignments } := binding
+
+  grandparent := condition.parent?.parent
+  children :=
+    // Check that the declaration is a plain assignment (no pattern-matching) and the immediate grandchild of an `if` or `while`
+    // More complex conditions (triggered by pattern matching or `until`/`unless`) don't need double parens
+    // @ts-ignore Just because pattern might not have a type at runtime doesn't mean it's unsafe
+    if pattern.type is "Identifier" and (grandparent?.type is "IfStatement" or grandparent?.type is "WhileStatement")
+      ["(", ref, initializer, ")"]
+    else
+      [ref, initializer]
+
+  Object.assign condition, {
+    type: "AssignmentExpression"
+    children
+    hoistDec:
+      type: "Declaration"
+      children: ["let ", ref, suffix]
+      names: []
+    pattern
+    ref
+  }
+
+  // condition wasn't previously a child, so now needs parent pointers
+  addParentPointers condition, parent
+
+  Object.assign rootCondition,
+    blockPrefix: [
+      ["", [ decl, pattern, suffix, " = ", ref, ...splices ], ";"],
+      ...thisAssignments
+    ]
+
+function processDeclarationConditions(node: ASTNode): void
+  gatherRecursiveAll node, (n) =>
+    n.type is "IfStatement" or n.type is "IterationStatement" or n.type is "SwitchStatement"
+  .forEach processDeclarationConditionStatement
+
+/**
+ * Processes adding additional conditions when declarations are used as a condition in IfStatements, WhileStatements, and SwitchStatements.
+ * Also does additional processing for IfStatements that used to be in the parser (inserting semi-colon on bare-block consequent with else).
+ */
+function processDeclarationConditionStatement(s: IfStatement | IterationStatement | SwitchStatement): void
+  { condition } := s
+  return unless condition?.expression
+  { expression } .= condition
+  // Support for negated conditions built by unless/until
+  switch expression
+    {type: 'UnaryExpression', children: ['!', {type: 'ParenthesizedExpression', expression: expression2}]}
+      expression = expression2
+  processDeclarationCondition expression, condition.expression, s
+
+  { ref, pattern } := expression
+
+  if pattern
+    conditions .= []
+    getPatternConditions(pattern, ref, conditions)
+
+    conditions = conditions.filter (c) =>
+      !(c.length is 3 and c[0] is "typeof " and c[1] is ref and c[2] is " === 'object'") and
+      !(c.length is 2 and c[0] is ref and c[1] is " != null")
+
+    if conditions.length
+      condition.children.unshift "("
+      conditions.forEach (c) ->
+        condition.children.push " && ", c
+      condition.children.push ")"
+
+  switch s.type
+    when "IfStatement"
+      { else: e} := s
+      block := blockWithPrefix(condition.expression.blockPrefix, s.then)
+      s.then = block
+
+      if block.bare and e and not block.semicolon
+        block.children.push block.semicolon = ";"
+
+      s.children.splice(2, 1, block)
+
+      // Update parent pointers since declaration conditions have expanded
+      updateParentPointers(block, s)
+
+    when "IterationStatement"
+      { children, block } := s
+      newBlock := blockWithPrefix(condition.expression.blockPrefix, block)
+      s.children = children.map (c) => c?.type is "BlockStatement" ? newBlock : c
+
+      // Update parent pointers since declaration conditions have expanded
+      updateParentPointers(newBlock, s)
+
+    when "SwitchStatement"
+      { blockPrefix, ref } := condition.expression
+      return unless blockPrefix
+
+      s.condition =
+        type: "ParenthesizedExpression"
+        children: ["(", ref, ")"]
+        expression: ref
+        parent: s
+      s.children[1] = s.condition
+      updateParentPointers s
+
+      // wraps the entire switch statement
+      block := blockWithPrefix [["", [{
+        type: "Declaration",
+        children: ["let ", ...condition.expression.children],
+      }], ";"], ...blockPrefix], makeEmptyBlock()
+      updateParentPointers block, s.parent
+
+      replaceBlockExpression(s.parent as BlockStatement, s, block)
+      block.expressions.push ["", s]
+      s.parent = block
 
 export {
   processAssignmentDeclaration
+  processDeclarationConditions
   processDeclarations
 }
