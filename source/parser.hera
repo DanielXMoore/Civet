@@ -14,7 +14,6 @@ import {
   dedentBlockString,
   dedentBlockSubstitutions,
   deepCopy,
-  expressionizeIfClause,
   expressionizeTypeIf,
   forRange,
   gatherBindingCode,
@@ -48,6 +47,7 @@ import {
   quoteString,
   reorderBindingRestProperty,
   replaceNodes,
+  skipImplicitArguments,
   typeOfJSX,
 } from "./parser/lib.civet"
 
@@ -167,14 +167,7 @@ ExpressionizedStatementWithTrailingCallExpressions
 
 ExpressionizedStatement
   # perf: assertion to exit early
-  /(?=async|debugger|if|unless|do|for|loop|until|while|switch|throw|try)/ _ExpressionizedStatement -> $2
-
-_ExpressionizedStatement
-  IfExpression
-  UnlessExpression
-  IterationExpression
-  StatementExpression:s ->
-    const statement = ["", s]
+  /(?=async|debugger|if|unless|do|for|loop|until|while|switch|throw|try)/ StatementExpression:statement ->
     return {
       type: "StatementExpression",
       statement,
@@ -183,6 +176,8 @@ _ExpressionizedStatement
 
 StatementExpression
   DebuggerStatement
+  IfStatement
+  IterationExpression
   SwitchStatement
   ThrowStatement
   TryStatement
@@ -212,15 +207,8 @@ Arguments
 ImplicitArguments
   ApplicationStart InsertOpenParen:open _?:ws NonPipelineArgumentList:args InsertCloseParen:close ->
     // Don't treat as call if this is a postfix for/while/until/if/unless
-    if (args.length === 1) {
-      let arg0 = args[0]
-      if (Array.isArray(arg0)) arg0 = arg0[1] // skip whitespace
-      if (arg0.type === "IterationExpression" &&
-          arg0.subtype !== "DoStatement" && !arg0.async &&
-          isEmptyBareBlock(arg0.block)) {
-        return $skip
-      }
-    }
+    if (skipImplicitArguments(args)) return $skip
+
     return {
       type: "Call",
       args,
@@ -719,6 +707,8 @@ ParenthesizedExpression
     if (!$3) return $skip
     const [exp, ws, close] = $3
     switch (exp.type) {
+      case "StatementExpression":
+        if (exp.statement.type !== "IterationExpression") break
       case "IterationExpression":
         // Avoid extra parenthetical wrapping in `(for x in y ...)`
         // TODO: losing comments in `ws`
@@ -3904,101 +3894,6 @@ UnlessClause
       children: [kind, condition],
       condition,
     }
-
-# NOTE: Added IfExpression from CoffeeScript
-IfExpression
-  IfClause:clause ExpressionBlock:b ElseExpressionClause?:e ->
-    return expressionizeIfClause(clause, b, e)
-
-UnlessExpression
-  UnlessClause:clause ExpressionBlock:b ElseExpressionClause?:e ->
-    return expressionizeIfClause(clause, b, e)
-
-ElseExpressionClause
-  ( ( Nested Else ) / ( _? Else ) ) ElseExpressionBlock ->
-    return [...$1, $2]
-
-# Block of expressions that can't include pure statements
-ExpressionBlock
-  InsertOpenParen NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseParen ->
-    // Each element of exps is a list of same-line expressions. Flatten.
-    exps = exps.flat()
-
-    // If there is only one expression and it doesn't require parens, then return it as is, preserving whitespace
-    if (exps.length === 1) {
-      let [ws, exp] = exps[0]
-      switch (exp.type) {
-        case "Identifier":
-        case "Literal":
-          return [ws, exp]
-      }
-    }
-
-    // Remove final trailing expression delimiter
-    exps = exps.map((e, i) => {
-      if (i === exps.length - 1) {
-        return e.slice(0, -1)
-      }
-      return e
-    })
-
-    return {
-      type: "BlockExpressions",
-      expressions: exps,
-      children: [$1, exps, $3, $4, $5],
-    }
-  Then ExtendedExpression
-
-ElseExpressionBlock
-  InsertOpenParen NestedBlockExpressions:exps InsertNewline InsertIndent InsertCloseParen ->
-    // Each element of exps is a list of same-line expressions. Flatten.
-    exps = exps.flat()
-
-    // If there is only one expression and it doesn't require parens, then return it as is, preserving whitespace
-    if (exps.length === 1) {
-      let [ws, exp] = exps[0]
-      switch (exp.type) {
-        case "Identifier":
-        case "Literal":
-          return [ws, exp]
-      }
-    }
-
-    // Remove final trailing expression delimiter
-    exps = exps.map((e, i) => {
-      if (i === exps.length - 1) {
-        return e.slice(0, -1)
-      }
-      return e
-    })
-
-    return {
-      type: "BlockExpressions",
-      expressions: exps,
-      children: [$1, exps, $3, $4, $5],
-    }
-  !EOS ExpressionWithObjectApplicationForbidden -> $2
-
-NestedBlockExpressions
-  PushIndent NestedBlockExpression*:exps PopIndent ->
-    if (!exps.length) return $skip
-    return exps
-
-NestedBlockExpression
-  Nested:nested BlockExpressionPart+:expressions ->
-    return [
-      [nested, ...expressions[0]],
-      ...expressions.slice(1).map(s => ["", ...s]),
-    ]
-
-BlockExpressionPart
-  # NOTE: !EOS forces semicolon after all but last statement, forbids leading __
-  # NOTE: _? allows for leading inline comments
-  !EOS _?:ws PostfixedExpression:exp ExpressionDelimiter:delimiter ->
-    if (ws) {
-      exp = {...exp, children: [ ws, ...exp.children ]}
-    }
-    return [exp, delimiter]
 
 # https://262.ecma-international.org/#prod-IterationStatement
 IterationStatement

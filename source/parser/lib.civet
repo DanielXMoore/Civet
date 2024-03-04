@@ -7,16 +7,19 @@
  */
 
 import type {
-  ASTLeaf
+  AssignmentExpression
   ASTNode
   ASTNodeBase
-  Binding
   BlockStatement
-  DeclarationStatement
+  DoStatement
+  ExpressionNode
+  ForStatement
+  IfStatement
+  IterationStatement
   MethodDefinition
   ParseRule
+  StatementExpression
   StatementTuple
-  TypeSuffix
   WSNode
 } from ./types.civet
 
@@ -27,7 +30,7 @@ import {
 
 import {
   addParentPointers
-  convertOptionalType
+  assert
   deepCopy
   getTrimmingSpace
   hasAwait
@@ -43,7 +46,6 @@ import {
   makeRef
   maybeRef
   parenthesizeType
-  updateParentPointers
   wrapIIFE
   wrapWithReturn
 } from ./util.civet
@@ -52,18 +54,26 @@ import {
   blockWithPrefix
   duplicateBlock
   hoistRefDecs
+  makeBlockFragment
   makeEmptyBlock
   processBlocks
 } from ./block.civet
 
+import {
+  prependStatementExpressionBlock
+  processAssignmentDeclaration
+  processDeclarationConditions
+  processDeclarations
+} from ./declaration.civet
+
 import { processPipelineExpressions } from ./pipe.civet
 import { forRange, processForInOf } from ./for.civet
 import {
-  assignResults,
-  processFunctions,
+  processFunctions
   expressionizeIteration
+  skipImplicitArguments
 } from ./function.civet
-import { processDeclarationConditions, processPatternMatching } from ./pattern-matching.civet
+import { processPatternMatching } from ./pattern-matching.civet
 import {
   adjustAtBindings
   adjustBindingElements
@@ -108,12 +118,6 @@ function addPostfixStatement(statement: StatementTuple, ws: ASTNode, post)
     post.then = block
   return post
 
-assert := {
-  equal(a, b, msg): void
-    /* c8 ignore next */
-    throw new Error(`Assertion failed [${msg}]: ${a} !== ${b}`) if a !== b
-}
-
 // Negate expression inside condition
 function negateCondition(condition)
   { expression } .= condition
@@ -129,17 +133,74 @@ function negateCondition(condition)
     ]
   { ...condition, expression, children }
 
-function expressionizeIfClause(clause, b, e)
-  { condition } := clause  // remove 'if'
+/**
+Somewhat incomplete detection of expressions used to
+determine when we have to wrap if blocks in IIFE instead of
+converting to ternary expressions.
+*/
+function isExpression(node: ASTNode): boolean
+  if Array.isArray(node)
+    return node.every(isExpression)
+
+  if typeof node is "string"
+    // TODO: may not quite be correct
+    return true
+
+  switch node?.type
+    case "BlockStatement"
+    case "DebuggerStatement"
+    case "Declaration"
+    case "IfStatement"
+    case "IterationStatement"
+    case "ReturnStatement"
+    case "SwitchStatement"
+    case "ThrowStatement"
+    case "TryStatement"
+      return false
+
+  return true
+
+function expressionizeBlock(blockOrExpression: ASTNode)
+  if { expressions } := blockOrExpression
+    l := expressions.length
+    results := []
+
+    for [ws, s, _delim], i of expressions
+      if (!isExpression(s)) return
+      wrapped := makeLeftHandSideExpression s
+      if i is l - 1
+        results.push [ws, wrapped]
+      else
+        results.push [ws, wrapped, ","]
+
+    if results.length > 1
+      return makeLeftHandSideExpression results
+
+    return results
+  else
+    blockOrExpression
+
+function expressionizeIfStatement(statement: IfStatement)
+  { condition, then: b, else: e } := statement
   [ ...condRest, closeParen ] := condition.children  // separate ')'
+
+  expressionizedBlock := expressionizeBlock b
+
+  unless expressionizedBlock
+    return wrapIIFE([["", statement]])
+
   children := [
     ...condRest
     "?"
-    b
+    expressionizedBlock
   ]
   if e
+    e2 := expressionizeBlock(e[2])
+    unless e2
+      return wrapIIFE([["", statement]])
+
     // Replace 'else' in e[1] with ':'. (e[0] is space before 'else')
-    children.push e[0], ":", ...e[2..]
+    children.push e[0], ":", e2, ...e[3..]
   else
     children.push ":void 0"
   children.push closeParen
@@ -537,92 +598,6 @@ function makeGetterMethod(name, ws, value, returnType, block?: BlockStatement, k
     parameters,
   }
 
-function processAssignmentDeclaration(decl: ASTLeaf, pattern: Binding["pattern"], suffix: TypeSuffix, ws: WSNode, assign: ASTLeaf, e: ASTNode)
-  // Adjust position to space before assignment to make TypeScript remapping happier
-  decl = {
-    ...decl,
-    $loc:
-      pos: assign.$loc.pos - 1
-      length: assign.$loc.length + 1
-  }
-
-  [splices, assignments] .= gatherBindingCode pattern
-
-  splices = splices.map (s) => [", ", s]
-  thisAssignments := assignments.map (a) => ["", a, ";"] as const
-
-  initializer := [ws, assign, e]
-  binding := makeNode {
-    type: "Binding",
-    pattern,
-    initializer,
-    splices,
-    suffix,
-    thisAssignments,
-    children: [pattern, suffix, initializer]
-  }
-
-  children := [decl, binding]
-
-  makeNode {
-    type: "Declaration",
-    pattern.names,
-    decl,
-    bindings: [binding],
-    splices,
-    thisAssignments,
-    children,
-  }
-
-function processDeclarations(statements: StatementTuple[]): void
-  // @ts-ignore
-  gatherRecursiveAll statements, .type is "Declaration"
-  // @ts-ignore
-  .forEach (statement: DeclarationStatement) =>
-    { bindings } := statement as DeclarationStatement
-    bindings?.forEach (binding) =>
-      suffix := binding.suffix
-      if suffix and suffix.optional and suffix.t
-        // Convert `let x?: T` to `let x: undefined | T`
-        convertOptionalType suffix
-
-      { initializer } := binding
-      if initializer
-        exp .= initializer[2]
-
-        // Handle nested statement expression
-        let ws
-        if Array.isArray(exp)
-          ws = exp[0]
-          exp = exp[1]!
-
-        if exp.type is "StatementExpression"
-          ref := makeRef()
-          statementExp := exp.statement
-
-          // Detach statement and assign results to ref
-          assignResults statementExp, (resultNode) =>
-            makeNode
-              //@ts-ignore
-              type: "AssignmentExpression",
-              children: [ref, " = ", resultNode]
-
-          initializer[2] = ref
-
-          refDec :=
-            type: "Declaration",
-            children: ["let ", ref, ";"],
-
-          pre := [refDec]
-          //@ts-ignore
-          pre.push ws if ws
-
-          // insert statement before the declaration
-          //@ts-ignore
-          statement.children.unshift(pre, statementExp, ";")
-
-          updateParentPointers statementExp, statement
-
 function processBindingPatternLHS(lhs, tail): void
   // Expand AtBindings first before gathering splices
   adjustAtBindings(lhs, true)
@@ -677,9 +652,19 @@ function processAssignments(statements): void {
       // TODO: need to make this a parenthesized expression when when we add parens
     })
 
-  gatherRecursiveAll(statements, (n) => n.type is "AssignmentExpression" and n.names is null)
-    .forEach((exp) => {
+  replaceNodesRecursive statements, (n) => n.type is "AssignmentExpression" and n.names is null, (exp: AssignmentExpression): AssignmentExpression | BlockStatement | ExpressionNode => {
       let { lhs: $1, exp: $2 } = exp, tail = [], i = 0, len = $1.length
+
+      let block?: BlockStatement
+      // Extract StatementExpression as block
+      if exp.parent.type is "BlockStatement" and !$1.-1?.-1?.special// can only prepend to assignments that are children of blocks
+        block = makeBlockFragment()
+        if ref := prependStatementExpressionBlock([null,null,$2], block)
+          exp.children = exp.children.map (c: ASTNode) -> if c is $2 then ref else c
+          // @ts-ignore
+          $2 = ref
+        else
+          block = undefined
 
       // identifier=, xor=, ++=
       if $1.some((left) => left[left.length - 1].special)
@@ -692,7 +677,7 @@ function processAssignments(statements): void {
         exp.children.splice index, 1,
           exp.exp = $2 = [call, "(", lhs, ", ", $2, ")"]
         if omitLhs
-          replaceNode exp, $2
+          return $2
 
       // Force parens around destructuring object assignments
       // Walk from left to right the minimal number of parens are added and enclose all destructured assignments
@@ -752,7 +737,7 @@ function processAssignments(statements): void {
 
               exp.children = [$1]
               exp.names = []
-              return
+              return exp
             }
           } else if (lhs.type is "ObjectBindingPattern" or lhs.type is "ArrayBindingPattern") {
             processBindingPatternLHS(lhs, tail)
@@ -768,15 +753,25 @@ function processAssignments(statements): void {
       const index = exp.children.indexOf($2)
       if (index < 0) throw new Error("Assertion error: exp not in AssignmentExpression")
       exp.children.splice(index + 1, 0, ...tail)
-    })
+
+      if block
+        block.parent = exp.parent
+        block.expressions.push(["", exp])
+        exp.parent = block
+        return block
+
+      return exp
+    }
 }
 
-function attachPostfixStatementAsExpression(exp, post): void {
-  switch (post[1].type) {
+function attachPostfixStatementAsExpression(exp, post: [WSNode, IfStatement | IterationStatement | DoStatement | ForStatement])
+  postfixStatement := post[1]
+
+  switch postfixStatement.type
     case "ForStatement":
     case "IterationStatement":
     case "DoStatement": {
-      const statement = addPostfixStatement(exp, ...post)
+      statement := addPostfixStatement(exp, ...post)
       return {
         type: "IterationExpression",
         children: [statement],
@@ -785,11 +780,9 @@ function attachPostfixStatementAsExpression(exp, post): void {
       }
     }
     case "IfStatement":
-      return expressionizeIfClause(post[1], exp)
+      return expressionizeIfStatement { ...postfixStatement, then: exp }
     default:
       throw new Error("Unknown postfix statement")
-  }
-}
 
 function processTypes(node: ASTNode)
   // T? -> T | undefined; T?? -> T | undefined | null
@@ -828,9 +821,27 @@ Wrap any remaining statement expressions in IIFE.
 */
 function processStatementExpressions(statements: StatementTuple[]): void
   gatherRecursiveAll(statements, .type is "StatementExpression")
-    .forEach (exp) =>
-      exp.children = wrapIIFE(exp.children)
+    .forEach (_exp) =>
+      exp := _exp as! StatementExpression
+      { statement } := exp
+      let ws
+      unless exp.children[0] is exp.statement
+        ws = exp.children[0]
 
+      switch statement.type
+        when "IfStatement"
+          // TODO: detect non-expressionable ifs and wrap in iife
+          if expression := expressionizeIfStatement(statement)
+            exp.statement = expression
+            exp.children = [exp.statement]
+          else
+            exp.children = wrapIIFE([["", statement]])
+        when "IterationExpression"
+          // Do nothing, handled separately currently
+        else
+          exp.children = wrapIIFE([["", statement]])
+
+      exp.children.unshift(ws) if ws
 
 function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule): void {
   // invariants
@@ -984,18 +995,44 @@ function reorderBindingRestProperty(props) {
  */
 function replaceNodes(root, predicate, replacer)
   return root unless root?
+
   array := Array.isArray(root) ? root : root.children
+
   unless array
     if predicate root
       return replacer root, root
     else
       return root
+
   for each node, i of array
     return unless node?
     if predicate node
       array[i] = replacer node, root
     else
       replaceNodes node, predicate, replacer
+
+  return root
+
+function replaceNodesRecursive(root, predicate, replacer)
+  return root unless root?
+
+  array := Array.isArray(root) ? root : root.children
+
+  unless array
+    if predicate root
+      return replacer root, root
+    else
+      return root
+
+  for each node, i of array
+    continue unless node?
+    if predicate node
+      ret := replacer node, root
+      replaceNodesRecursive ret, predicate, replacer
+      array[i] = ret
+    else
+      replaceNodesRecursive node, predicate, replacer
+
   return root
 
 function typeOfJSX(node, config, getRef) {
@@ -1078,7 +1115,6 @@ export {
   dedentBlockString
   dedentBlockSubstitutions
   deepCopy
-  expressionizeIfClause
   expressionizeTypeIf
   forRange
   gatherBindingCode
@@ -1113,6 +1149,7 @@ export {
   quoteString
   reorderBindingRestProperty
   replaceNodes
+  skipImplicitArguments
   typeOfJSX
   wrapIIFE
 }
