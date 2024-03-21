@@ -118,6 +118,21 @@ function addPostfixStatement(statement: StatementTuple, ws: ASTNode, post)
     post.then = block
   return post
 
+/**
+ * Adjusts the index access to use brackets instead of dot
+ * while accounting for optional chaining.
+ */
+function adjustIndexAccess(dot: ASTNode | ASTNode[]): ASTNode
+  if gatherRecursive(dot, (node) => node.token is "?").length
+    // ?. turns into ?.[
+    dot = [ ...dot, "[" ]
+  else
+    // . turns into [
+    dot = replaceNodes(deepCopy(dot), (node) => node.token is ".",
+      (node) => ({ ...node, token: "[" }))
+
+  return dot
+
 // Negate expression inside condition
 function negateCondition(condition)
   { expression } .= condition
@@ -843,7 +858,39 @@ function processStatementExpressions(statements: StatementTuple[]): void
 
       exp.children.unshift(ws) if ws
 
-function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule): void {
+function processNegativeIndexAccess(statements: StatementTuple[]): void
+  gatherRecursiveAll(statements, (n) => n.type is "NegativeIndex")
+    .forEach (exp) =>
+      { parent } := exp
+      index := parent.children.indexOf(exp)
+      let ref, subexp
+      if index is 1
+        child := parent.children[0]
+        ref = maybeRef(child)
+        if ref !== child
+          subexp = parent.children.splice 0, 1
+      else if index > 1
+        ref = makeRef()
+        subexp = parent.children.splice 0, index
+      else
+        throw new Error("Invalid parse tree for negative index access")
+
+      if subexp
+        exp.hoistDec = {
+          type: "Declaration",
+          children: ["let ", ref],
+          names: [],
+        }
+        parent.children.unshift makeLeftHandSideExpression
+          type: "AssignmentExpression"
+          children: [ref, " = ", subexp]
+
+      exp.len.children = [
+        ref,
+        ".length"
+      ]
+
+function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule): void
   // invariants
   assert.equal(m.forbidBracedApplication.length, 1, "forbidBracedApplication")
   assert.equal(m.forbidClassImplicitCall.length, 1, "forbidClassImplicitCall")
@@ -856,6 +903,7 @@ function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule
 
   const { expressions: statements } = root
 
+  processNegativeIndexAccess(statements)
   processTypes(statements)
   processDeclarationConditions(statements, m.getRef)
   processPipelineExpressions(statements)
@@ -892,7 +940,6 @@ function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule
 
   populateRefs(statements)
   adjustAtBindings(statements)
-}
 
 function populateRefs(statements: ASTNode): void {
   const refNodes = gatherRecursive(statements, ({ type }) => type is "Ref")
@@ -1109,6 +1156,7 @@ function typeOfJSXFragment(node, config, getRef) {
 export {
   addPostfixStatement
   adjustBindingElements
+  adjustIndexAccess
   attachPostfixStatementAsExpression
   blockWithPrefix
   convertObjectToJSXAttributes
