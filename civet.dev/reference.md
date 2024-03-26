@@ -1621,6 +1621,14 @@ class Civet
 declare function jsonParse(json: string): ???
 </Playground>
 
+### Signed Number Literals
+
+`+1` is invalid in TypeScript but valid in Civet.
+
+<Playground>
+declare function sign(n: number): -1 | 0 | +1
+</Playground>
+
 ### Optional Types
 
 Similar to function parameters and object properties,
