@@ -7,16 +7,19 @@
  */
 
 import type {
-  AssignmentExpression
+  AccessStart
   ASTNode
   ASTNodeBase
   ASTRef
+  AssignmentExpression
   BlockStatement
+  CallExpression
   DoStatement
   ExpressionNode
   ForStatement
   IfStatement
   IterationStatement
+  MemberExpression
   MethodDefinition
   ParseRule
   StatementExpression
@@ -124,14 +127,17 @@ function addPostfixStatement(statement: StatementTuple, ws: ASTNode, post)
  * Adjusts the index access to use brackets instead of dot
  * while accounting for optional chaining.
  */
-function adjustIndexAccess(dot: ASTNode | ASTNode[]): ASTNode
-  if gatherRecursive(dot, (node) => node.token is "?").length
+function adjustIndexAccess(dot: AccessStart): AccessStart
+  if dot.optional
     // ?. turns into ?.[
-    dot = [ ...dot, "[" ]
+    return {
+      ...dot,
+      children: [...dot.children, "["]
+    }
   else
-    // . turns into [
-    dot = replaceNodes(deepCopy(dot), (node) => node.token is ".",
-      (node) => ({ ...node, token: "[" }))
+    dot = replaceNodes deepCopy(dot),
+      (node) => node.token is ".",
+      (node) => ({ ...node, token: "[" })
 
   return dot
 
@@ -431,6 +437,7 @@ function processCallMemberExpression(node)
 function replaceNode(node: ASTNodeBase, newNode: ASTNode): void
   unless node.parent?
     throw new Error "replaceNode failed: node has no parent"
+
   function recurse(children: ASTNode[]): boolean
     for each child, i of children
       if child is node
@@ -439,8 +446,10 @@ function replaceNode(node: ASTNodeBase, newNode: ASTNode): void
       else if Array.isArray child
         return true if recurse child
     return false
+
   unless recurse node.parent.children
     throw new Error "replaceNode failed: didn't find child node in parent"
+
   if newNode <? "object" and not Array.isArray newNode
     newNode.parent = node.parent
 
@@ -646,6 +655,7 @@ function processAssignments(statements): void {
           return expr.assigned
         }
       }
+
       const pre = [], post = []
       switch (exp.type) {
         case "AssignmentExpression":
@@ -681,13 +691,12 @@ function processAssignments(statements): void {
 
         if newMemberExp !== assigned
           if newMemberExp.usesRef
-            exp.hoistDec = {
+            newMemberExp.hoistDec = {
               type: "Declaration"
               children: ["let ", ref]
               names: []
             }
-          exp.children = [newMemberExp]
-          newMemberExp.parent = exp
+          replaceNode exp, newMemberExp
 
   replaceNodesRecursive statements,
     (n) => n.type is "AssignmentExpression" and n.names is null,
@@ -791,7 +800,7 @@ function processAssignments(statements): void {
         assignment := $1[i]
         [ws1, lhs, ws2, op] := assignment
 
-        if lhs.type is "MemberExpression"
+        if lhs.type is "MemberExpression" or lhs.type is "CallExpression"
           newMemberExp := unchainOptionalMemberExpression lhs, optionalChainRef, (children) =>
             // NOTE: This only executes when lhs contains chains
             // this mutates the assignments array to account for the parts moved into the conditionals
@@ -829,45 +838,60 @@ function processAssignments(statements): void {
     }
 }
 
-function unchainOptionalMemberExpression(exp: MemberExpression, ref: ASTRef, innerExp: (exp) => ASTNode)
+function unchainOptionalMemberExpression(exp: MemberExpression | CallExpression, ref: ASTRef, innerExp: (exp) => ASTNode)
   j .= 0
   { children } := exp
   usesRef .= false
-  hasOptional .= false
-  head := []
-  tail := []
-  let base
+  conditions := []
 
   // NOTE: not caching length because the array mutates inside
   while j < children.length
     child := children[j]
-    if child.type is "PropertyAccess"
-      if child.children[0]?.[0]?.token is "?"
-        hasOptional = true
-        child.children[0].shift()
+    type := child?.type
+    hasOptional .= false
 
-        if j > 1 or needsRef children[0]
-          usesRef = true
-          base = makeLeftHandSideExpression
-            type: "AssignmentExpression"
-            children: [ref, " = ", children.splice(0, j)]
+    switch type
+      when "PropertyAccess"
+        if child.dot?.optional
+          hasOptional = true
+          child.dot.children.shift()
+          child.dot.optional = false
+      when "Call"
+        if child.optional
+          hasOptional = true
+          child.children.shift()
+          child.optional = undefined
 
-          base.parent = child
-          children.unshift ref
+    if hasOptional
+      let base
 
-          j = 0
-        else
-          base = children[0]
+      if j > 1 or needsRef children[0]
+        usesRef = true
+        base = makeLeftHandSideExpression
+          type: "AssignmentExpression"
+          children: [ref, " = ", children.splice(0, j)]
 
-        tail.push " : void 0"
-        head.push base, " != null ? "
+        base.parent = child
+        children.unshift ref
+
+        j = 0
+      else
+        base = children[0]
+
+      conditions.push [ base, " != null" ]
 
     j++
 
-  if hasOptional
+  if l := conditions.length
+    cs := conditions.map (c, i) =>
+      if i is l - 1
+        c
+      else
+        [c, " && "]
+
     {
       ...exp
-      children: [...head, innerExp(children), ...tail]
+      children: [...cs, " ? ", innerExp(children), " : void 0"]
       usesRef
     }
   else // Unchanged
