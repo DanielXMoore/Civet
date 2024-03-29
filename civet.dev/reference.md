@@ -456,8 +456,18 @@ obj.key ?= "civet"
 ### Optional Chaining
 
 <Playground>
+obj?.prop
 obj?[key]
 fun?(arg)
+</Playground>
+
+### Optional Chain Assignment
+
+<Playground>
+obj?.prop = value
+obj?[key] = value
+fun?(arg).prop = value
+fun?(arg)?.prop?[key] = value
 </Playground>
 
 ### Existence Checking
