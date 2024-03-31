@@ -1,4 +1,4 @@
-{ compile, parse } from ./main.civet
+{ compile, generate, parse, lib } from ./main.civet
 { findConfig, loadConfig } from ./config.civet
 
 // unplugin ends up getting installed in the same dist directory
@@ -268,23 +268,66 @@ export function repl(options: Options)
         process.exit 0
       else if input.endsWith '\n\n'  // finished input with blank line
         let output: string
+        if options.compile or options.ast
+          try
+            output = compile input, {...options, filename}
+          catch error
+            //console.error "Failed to transpile Civet:"
+            console.error error
+            return callback null, undefined
+          return callback null, output
+
+        ast .= compile input, {...options, filename, ast: true}
+
+        // Wrap in IIFE if there's a top-level await
+        // Use Civet's async do, so Civet does implicit return of last value
+        // (copied from playground.worker.js)
+        topLevelAwait := lib.gatherRecursive(ast,
+          .type is 'Await',
+          lib.isFunction
+        ).length > 0
+        if topLevelAwait
+          [prologue, rest] := parse input, startRule: 'ProloguePrefix'
+          prefix := input.slice 0, -rest.length
+          coffee := prologue.some (p) => p.type is "CivetPrologue" and
+            (p.config.coffeeCompat or p.config.coffeeDo)
+          ast = compile
+            prefix +
+            (coffee ? '(do ->\n' : 'async do\n') +
+            rest.replace(/^/gm, ' ') +
+            (coffee ? ')' : ''),
+            {...options, filename, ast: true}
+
+        errors: unknown[] := []
         try
-          output = compile input, {...options, filename}
+          output = generate ast, { errors }
         catch error
           //console.error "Failed to transpile Civet:"
           console.error error
           return callback null, undefined
-        if options.compile or options.ast
-          callback null, output
-        else
-          let result: string
+        if errors.length
+          // TODO: Better error display; copied from main.civet
+          console.error `Parse errors: ${errors.map(.message).join("\n")}`
+          return callback null, undefined
+
+        let result: string
+        try
+          result = vm.runInContext output, context, {
+            filename
+            importModuleDynamically
+          }
+        catch error
+          return callback error as Error, undefined
+
+        if topLevelAwait
+          // If there was a top-level await, the result is a promise
+          // that we need to await before returning it.
           try
-            result = vm.runInContext output, context, {
-              filename
-              importModuleDynamically
-            }
+            result = await result
           catch error
-            return callback error as Error, undefined
+            callback error as Error, undefined
+          callback null, result
+        else
           callback null, result
       else  // still reading
         callback (new nodeRepl.Recoverable new Error "Enter a blank line to execute code."), null
