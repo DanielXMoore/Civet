@@ -11,7 +11,7 @@ import {
   adjustIndexAccess,
   attachPostfixStatementAsExpression,
   blockWithPrefix,
-  convertNamedImportsToObjectExpression,
+  convertNamedImportsToObject,
   convertObjectToJSXAttributes,
   dedentBlockString,
   dedentBlockSubstitutions,
@@ -1073,7 +1073,7 @@ CallExpression
     })
   # Import declaration as an expression
   Import:imp _:ws1 NamedImports:named __:ws2 FromClause:from ->
-    const object = convertNamedImportsToObjectExpression(named)
+    const object = convertNamedImportsToObject(named)
     const dot = "."
     return processCallMemberExpression({
       type: "CallExpression",
@@ -1088,6 +1088,7 @@ CallExpression
           dot,
           object,
           children: [ws1, dot, object],
+          reversed: true,
         }
       ]
     })
@@ -4770,22 +4771,21 @@ ImportDeclaration
       type: "ImportDeclaration",
       children: [imp, $0.slice(1)],
     }
-  Import __ TypeKeyword __ ImportClause __ FromClause -> { type: "ImportDeclaration", ts: true, children: $0 }
-  Import __ ImportClause __ FromClause -> { type: "ImportDeclaration", children: $0 }
-  Import __ ModuleSpecifier -> { type: "ImportDeclaration", children: $0 }
+  Import __ TypeKeyword __ ImportClause:imports __ FromClause:from -> { type: "ImportDeclaration", ts: true, children: $0, imports, from }
+  Import __ ImportClause:imports __ FromClause:from -> { type: "ImportDeclaration", children: $0, imports, from }
+  Import __ ModuleSpecifier:module -> { type: "ImportDeclaration", children: $0, module }
   # NOTE: Added import shorthand
   # NOTE: Not adding $loc to source map here yet because it will point to the start of the identifier
   # the proper place may be to use the From location
-  ImpliedImport:i ( TypeKeyword __ )?:t ImportClause:c __:w FromClause:f ->
+  ImpliedImport:i ( TypeKeyword __ )?:t ImportClause:imports __:w FromClause:from ->
     // Map implied import location to `from`
     // The pos and length adjustment better match how tsc outputs to include the space before `from` with the `from` token
     i.$loc = {
-      pos: f[0].$loc.pos-1,
-      length: f[0].$loc.length+1,
+      pos: from[0].$loc.pos-1,
+      length: from[0].$loc.length+1,
     }
-    const children = [i, t, c, w, f]
-    if (!t) return children
-    return { type: "ImportDeclaration", ts: true, children }
+    const children = [i, t, imports, w, from]
+    return { type: "ImportDeclaration", ts: !!t, children, imports, from }
 
 ImpliedImport
   "" ->
@@ -4797,15 +4797,18 @@ ImportClause
     if (rest) {
       return {
         type: "Declaration",
-        children: $0,
+        children: [binding, ...rest],
         names: [...binding.names, ...rest[3].names],
+        binding,
+        specifiers: rest[3].specifiers,
       }
     }
 
     return {
       type: "Declaration",
-      children: $0,
+      children: [binding],
       names: binding.names,
+      binding,
     }
   NameSpaceImport
   NamedImports
@@ -5038,6 +5041,55 @@ ImplicitExportSpecifier
 
 # https://262.ecma-international.org/#prod-Declaration
 Declaration
+  ImportDeclaration:decl ->
+    if (decl.ts || decl.module || !decl.imports || !decl.from) return $skip
+    const { imports } = decl
+    if (!imports.binding && !imports.specifiers) return $skip
+    const pattern = imports.binding ||
+      convertNamedImportsToObject(imports, true)
+    const c = "const"
+    const initializer = [
+      " = ",
+      {type: "Await", children: ["await"]},
+      " ",
+      decl.children[0], // import
+      "(",
+      insertTrimmingSpace(decl.from.slice(1), ""),
+      ")",
+    ]
+    const bindings = [{
+      type: "Binding",
+      names: pattern.names,
+      pattern,
+      initializer,
+      children: [pattern, initializer],
+    }]
+    if (imports.binding && imports.specifiers) {
+      // import x, {y} --> const x = await import(...), {y} = x
+      const pattern2 = convertNamedImportsToObject(imports.children.at(-1), true)
+      const initializer2 = [
+        " = ",
+        pattern,
+      ]
+      bindings.push({
+        type: "Binding",
+        names: imports.specifiers.names,
+        pattern: pattern2,
+        initializer: initializer2,
+        children: [pattern2, initializer2],
+      })
+    }
+    return {
+      type: "Declaration",
+      names: imports.names,
+      bindings,
+      decl: c,
+      children: [
+        c, " ",
+        bindings.flatMap((binding, i) => i > 0 ? [", ", binding] : [binding]),
+      ]
+    }
+    return decl
   HoistableDeclaration
   ClassDeclaration
   LexicalDeclaration:d ->
