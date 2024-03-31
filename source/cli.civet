@@ -1,4 +1,4 @@
-{ compile, parse } from ./main.civet
+{ compile, generate, parse, lib } from ./main.civet
 { findConfig, loadConfig } from ./config.civet
 
 // unplugin ends up getting installed in the same dist directory
@@ -8,7 +8,7 @@ let unplugin:
   buildEnd: (this: {emitFile: (data: {source: string, fileName: string, type: string}) => void}) => Promise<void>
   load: (this: {addWatchFile: (filename: string) => void}, filename: string) => Promise<{code: string, map: unknown}>
 
-function version: string
+export function version: string
   require("../package.json").version
 
 if process.argv.includes "--version"
@@ -90,7 +90,7 @@ interface ParsedArgs
   scriptArgs: string[]
   options: Options
 
-function parseArgs(args: string[]): ParsedArgs
+export function parseArgs(args: string[]): ParsedArgs
   options: Options := {}
   Object.defineProperty options, 'run',
     get: (this: Options) -> not (@ast or @compile or @typecheck or @emitDeclaration)
@@ -200,7 +200,39 @@ declare global
   var quit: () => void, exit: () => void
   var v8debug: unknown
 
-function repl(options: Options)
+export function repl(options: Options)
+  vm := await import 'vm'
+  // Node 21.7.0+ supports dynamic import() in vm calls via this constant:
+  importModuleDynamically .= vm.constants?.USE_MAIN_CONTEXT_DEFAULT_LOADER
+  unless importModuleDynamically
+    // For older Node, we need to provide our own dynamic import function,
+    // which requires `--experimental-vm-modules`.  Check if we did it already:
+    if vm.SourceTextModule?
+      { pathToFileURL } := await import 'url'
+      importModuleDynamically = (specifier: string) =>
+        if /^\.\.?[/\\]/.test specifier
+          import pathToFileURL path.join process.cwd(), specifier
+        else
+          import specifier
+    else
+      // If not, run this script with `--experimental-vm-modules`.
+      execArgv := [ '--experimental-vm-modules' ]
+      { register } := await import 'module'
+      /* This doesn't work; --loader seems to force ESM mode which breaks CLI.
+      unless register
+        // On Node <20.6.0, we need to use `--loader` for the ESM loader.
+        execArgv.push '--loader', '@danielx/civet/esm'
+      */
+      if process.env.NODE_OPTIONS
+        execArgv.push process.env.NODE_OPTIONS
+      { fork } := await import 'child_process'
+      fork __filename, process.argv[2..], {
+        execArgv
+        stdio: 'inherit'
+      }
+      return
+
+  require '../register.js'
   console.log `Civet ${version()} REPL.  Enter a blank line to ${
     switch
       when options.ast then 'parse'
@@ -209,7 +241,6 @@ function repl(options: Options)
   } code.`
   global.quit = global.exit = => process.exit 0
   nodeRepl := await import 'repl'
-  vm := await import 'vm'
   r := nodeRepl.start
     prompt:
       switch
@@ -237,25 +268,71 @@ function repl(options: Options)
         process.exit 0
       else if input.endsWith '\n\n'  // finished input with blank line
         let output: string
+        if options.compile or options.ast
+          try
+            output = compile input, {...options, filename}
+          catch error
+            //console.error "Failed to transpile Civet:"
+            console.error error
+            return callback null, undefined
+          return callback null, output
+
+        ast .= compile input, {...options, filename, ast: true}
+
+        // Wrap in IIFE if there's a top-level await
+        // Use Civet's async do, so Civet does implicit return of last value
+        // (copied from playground.worker.js)
+        topLevelAwait := lib.gatherRecursive(ast,
+          .type is 'Await',
+          lib.isFunction
+        ).length > 0
+        if topLevelAwait
+          [prologue, rest] := parse input, startRule: 'ProloguePrefix'
+          prefix := input.slice 0, -rest.length
+          coffee := prologue.some (p) => p.type is "CivetPrologue" and
+            (p.config.coffeeCompat or p.config.coffeeDo)
+          ast = compile
+            prefix +
+            (coffee ? '(do ->\n' : 'async do\n') +
+            rest.replace(/^/gm, ' ') +
+            (coffee ? ')' : ''),
+            {...options, filename, ast: true}
+
+        errors: unknown[] := []
         try
-          output = compile input, {...options, filename}
+          output = generate ast, { errors }
         catch error
           //console.error "Failed to transpile Civet:"
           console.error error
           return callback null, undefined
-        if options.compile or options.ast
-          callback null, output
-        else
-          let result: string
+        if errors.length
+          // TODO: Better error display; copied from main.civet
+          console.error `Parse errors: ${errors.map(.message).join("\n")}`
+          return callback null, undefined
+
+        let result: string
+        try
+          result = vm.runInContext output, context, {
+            filename
+            importModuleDynamically
+          }
+        catch error
+          return callback error as Error, undefined
+
+        if topLevelAwait
+          // If there was a top-level await, the result is a promise
+          // that we need to await before returning it.
           try
-            result = vm.runInContext output, context, {filename}
+            result = await result
           catch error
-            return callback error as Error, undefined
+            callback error as Error, undefined
+          callback null, result
+        else
           callback null, result
       else  // still reading
         callback (new nodeRepl.Recoverable new Error "Enter a blank line to execute code."), null
 
-function cli
+export function cli
   argv := process.argv  // process.argv gets overridden when running scripts
   {filenames, scriptArgs, options} .= parseArgs argv[2..]
 
@@ -374,7 +451,7 @@ function cli
     else if options.run
       esm := /^\s*(import|export)\b/m.test output
       if esm
-        // Run ESM code via `node --loader @danielx/civet/esm` subprocess
+        // Run ESM code via `node --import @danielx/civet/register` subprocess
         if stdin
           // If code was read on stdin via command-line argument "-", try to
           // save it in a temporary file in same directory so paths are correct.
@@ -386,7 +463,20 @@ function cli
             console.error e
             process.exit 1
         { fork } := await import 'child_process'
-        execArgv := [ '--loader', '@danielx/civet/esm' ]
+
+        { register } := await import 'module'
+        let execArgv
+        if register
+          // On Node 20.6.0+, module.register does the work for us;
+          // we just need to `--import` ESM/CJS registration.
+          execArgv = [ '--import', '@danielx/civet/register' ]
+        else
+          // On Node <20.6.0, we need to use `--loader` for the ESM loader.
+          execArgv = [
+            '--loader', '@danielx/civet/esm' // ESM
+            '--require', '@danielx/civet/register' // CJS
+          ]
+
         debugRe := /--debug|--inspect/
         isDebug := v8debug <? "object" or debugRe.test(process.execArgv.join(' ')) or debugRe.test(process.env.NODE_OPTIONS ?? '')
         if process.env.NODE_OPTIONS

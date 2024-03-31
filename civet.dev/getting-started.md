@@ -79,17 +79,14 @@ Simple execution of a .civet source file (CommonJS or ESM):
 civet source.civet ...args...
 ```
 
-Directly execute a .civet CommonJS source file in Node:
+Directly execute a .civet CommonJS or ESM source file in Node:
 
 ```sh
-node -r @danielx/civet/register source.civet ...args...
+node --import @danielx/civet/register source.civet ...args...
 ```
 
-Directly execute a .civet ESM source file in Node:
-
-```sh
-node --loader @danielx/civet/esm source.civet ...args...
-```
+On Node <20.6.0, you also need to specify `--loader @danielx/civet/esm`
+for ESM `import` of .civet files.
 
 Directly execute a .civet or .ts source file that mixes .civet and .ts code,
 using [ts-node](https://typestrong.org/ts-node/):
@@ -100,7 +97,7 @@ node --loader ts-node/esm --loader @danielx/civet/esm source.civet ...args...
 
 ## Transpilation
 
-Simple compilation of one civet source file to TypeScript:
+Simple compilation of one .civet source file to TypeScript:
 
 ```sh
 npx @danielx/civet < source.civet > output.ts
