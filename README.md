@@ -22,10 +22,9 @@ The modern way to write TypeScript.
   [esbuild](source/esbuild-plugin.civet),
   [Vite](https://github.com/edemaine/vite-plugin-civet),
   -->
+  [ESM/CJS loader](source/esm.civet),
   [Babel](source/babel-plugin.mjs),
   [Gulp](integration/gulp),
-  [ESM module resolution](source/esm.civet),
-  [CJS](register.js),
   [Bun](source/bun-civet.civet)
 - Starter templates for [Solid](https://github.com/orenelbaum/solid-civet-template) and [Solid Start](https://github.com/orenelbaum/solid-start-civet-template)
 
@@ -43,8 +42,8 @@ civet -c
 civet < source.civet > output.ts
 # Execute a .civet script
 civet source.civet ...args...
-# Execute a .civet source file in node using ts-node
-node --loader ts-node/esm --loader @danielx/civet/esm source.civet
+# Execute a .civet source file in node
+node --import @danielx/civet/register source.civet
 ```
 
 ![image](https://user-images.githubusercontent.com/18894/184558519-b675a903-7490-43ba-883e-0d8addacd4b9.png)
