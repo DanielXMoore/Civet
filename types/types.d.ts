@@ -32,8 +32,13 @@ declare module "@danielx/civet" {
   }>
   export type CompileOptions = {
     filename?: string
-    js?: boolean
     sourceMap?: boolean
+    inlineMap?: boolean
+    ast?: boolean | "raw"
+    js?: boolean
+    noCache?: boolean
+    hits?: string
+    trace?: string
     parseOptions?: ParseOptions
   }
 
