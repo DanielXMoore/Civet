@@ -35,10 +35,11 @@ onmessage = async (e) => {
 
   let jsCode = '';
   if (jsOutput) {
-    // Wrap in IIFE if there's a top-level await
+    // Wrap in IIFE if there's a top-level await or import
     // Use Civet's async do, so Civet does implicit return of last value
     try {
-      const topLevelAwait = Civet.lib.hasAwait(ast)
+      const topLevelAwait = Civet.lib.hasAwait(ast) ||
+        Civet.lib.hasImportDeclaration(ast)
       if (topLevelAwait) {
         const [prologue, rest] = Civet.parse(code,
           {startRule: 'ProloguePrefix'})
