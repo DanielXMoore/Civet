@@ -11,10 +11,13 @@ import {
   adjustIndexAccess,
   attachPostfixStatementAsExpression,
   blockWithPrefix,
+  convertNamedImportsToObject,
   convertObjectToJSXAttributes,
   dedentBlockString,
   dedentBlockSubstitutions,
   deepCopy,
+  dynamizeImportDeclaration,
+  dynamizeImportDeclarationExpression,
   expressionizeTypeIf,
   forRange,
   gatherBindingCode,
@@ -1070,6 +1073,9 @@ CallExpression
       type: "CallExpression",
       children: [$1, ...$2, ...rest.flat()],
     })
+  # Import declaration as an expression
+  Import _ NamedImports __ FromClause ->
+    return dynamizeImportDeclarationExpression($0)
   # Dynamic import(), with optional parentheses when not used at top level.
   # (At top level, ImportDeclaration will match first.)
   # NOTE: Using ExtendedExpression to allow for If/Switch expressions
@@ -4749,22 +4755,21 @@ ImportDeclaration
       type: "ImportDeclaration",
       children: [imp, $0.slice(1)],
     }
-  Import __ TypeKeyword __ ImportClause __ FromClause -> { type: "ImportDeclaration", ts: true, children: $0 }
-  Import __ ImportClause __ FromClause -> { type: "ImportDeclaration", children: $0 }
-  Import __ ModuleSpecifier -> { type: "ImportDeclaration", children: $0 }
+  Import __ TypeKeyword __ ImportClause:imports __ FromClause:from -> { type: "ImportDeclaration", ts: true, children: $0, imports, from }
+  Import __ ImportClause:imports __ FromClause:from -> { type: "ImportDeclaration", children: $0, imports, from }
+  Import __ ModuleSpecifier:module -> { type: "ImportDeclaration", children: $0, module }
   # NOTE: Added import shorthand
   # NOTE: Not adding $loc to source map here yet because it will point to the start of the identifier
   # the proper place may be to use the From location
-  ImpliedImport:i ( TypeKeyword __ )?:t ImportClause:c __:w FromClause:f ->
+  ImpliedImport:i ( TypeKeyword __ )?:t ImportClause:imports __:w FromClause:from ->
     // Map implied import location to `from`
     // The pos and length adjustment better match how tsc outputs to include the space before `from` with the `from` token
     i.$loc = {
-      pos: f[0].$loc.pos-1,
-      length: f[0].$loc.length+1,
+      pos: from[0].$loc.pos-1,
+      length: from[0].$loc.length+1,
     }
-    const children = [i, t, c, w, f]
-    if (!t) return children
-    return { type: "ImportDeclaration", ts: true, children }
+    const children = [i, t, imports, w, from]
+    return { type: "ImportDeclaration", ts: !!t, children, imports, from }
 
 ImpliedImport
   "" ->
@@ -4776,26 +4781,31 @@ ImportClause
     if (rest) {
       return {
         type: "Declaration",
-        children: $0,
+        children: [binding, ...rest],
         names: [...binding.names, ...rest[3].names],
+        binding,
+        specifiers: rest[3].specifiers,
       }
     }
 
     return {
       type: "Declaration",
-      children: $0,
+      children: [binding],
       names: binding.names,
+      binding,
     }
   NameSpaceImport
   NamedImports
 
 # https://262.ecma-international.org/#prod-NameSpaceImport
 NameSpaceImport
-  Star ImportAsToken __ ImportedBinding:binding  ->
+  Star:star ImportAsToken __ ImportedBinding:binding  ->
     return {
       type: "Declaration",
       children: $0,
-      names: binding.names
+      names: binding.names,
+      binding,
+      star,
     }
 
 # https://262.ecma-international.org/#prod-NamedImports
@@ -4806,12 +4816,15 @@ NamedImports
     return {
       type: "Declaration",
       children: $0,
-      names
+      names,
+      specifiers,
     }
 
 # https://262.ecma-international.org/#prod-FromClause
 FromClause
-  From __ ModuleSpecifier
+  From __ ModuleSpecifier:module ->
+    if (!Array.isArray(module)) return $0
+    return [ $1, $2, ...module ]
 
 # https://github.com/tc39/proposal-import-assertions
 # https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-5.html#import-assertions
@@ -4819,7 +4832,13 @@ FromClause
 # https://devblogs.microsoft.com/typescript/announcing-typescript-5-3/#import-attributes
 # NOTE: Forbid newline before `with` which could mean a function call
 ImportAssertion
-  _? ( "with" / "assert" ) NonIdContinue _? ObjectLiteral
+  _? ( "with" / "assert" ):keyword NonIdContinue _? ObjectLiteral:object ->
+    return {
+      type: "ImportAssertion",
+      keyword,
+      object,
+      children: $0,
+    }
 
 # https://devblogs.microsoft.com/typescript/announcing-typescript-3-8-beta/#type-only-imports-exports
 TypeAndImportSpecifier
@@ -4842,13 +4861,15 @@ TypeAndImportSpecifier
 
 # https://262.ecma-international.org/#prod-ImportSpecifier
 ImportSpecifier
-  __ ModuleExportName ImportAsToken __ ImportedBinding:binding ObjectPropertyDelimiter ->
+  __ ModuleExportName:source ImportAsToken __ ImportedBinding:binding ObjectPropertyDelimiter ->
     return {
+      source,
       binding,
       children: $0,
     }
   __ ImportedBinding:binding ObjectPropertyDelimiter ->
     return {
+      source: binding,
       binding,
       children: $0,
     }
@@ -5014,6 +5035,11 @@ ImplicitExportSpecifier
 
 # https://262.ecma-international.org/#prod-Declaration
 Declaration
+  ImportDeclaration:decl ->
+    if (decl.ts || decl.module || !decl.imports || !decl.from) return $skip
+    const { imports } = decl
+    if (!imports.binding && !imports.specifiers) return $skip
+    return dynamizeImportDeclaration(decl)
   HoistableDeclaration
   ClassDeclaration
   LexicalDeclaration:d ->

@@ -46,6 +46,12 @@ import {
   gatherBindingCode
 } from ./binding.civet
 
+import {
+  convertNamedImportsToObject
+  insertTrimmingSpace
+  processCallMemberExpression
+} from ./lib.civet
+
 function processAssignmentDeclaration(decl: ASTLeaf, pattern: Binding["pattern"], suffix: TypeSuffix, ws: WSNode, assign: ASTLeaf, e: ASTNode)
   // Adjust position to space before assignment to make TypeScript remapping happier
   decl = {
@@ -319,7 +325,104 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
         block.expressions.push ["", s]
         s.parent = block
 
+// Convert FromClause into arguments for dynamic import
+function dynamizeFromClause(from)
+  from = from[1..]  // remove 'from'
+  from = insertTrimmingSpace from, ""
+  if from.-1?.type is "ImportAssertion"
+    assert := from.pop()
+    from.push ", {", assert.keyword, ":", assert.object, "}"
+  ["(", ...from, ")"]
+
+function dynamizeImportDeclaration(decl)
+  { imports } := decl
+  { star, binding, specifiers } .= imports
+  justDefault := binding and not specifiers and not star
+  pattern := do
+    if binding
+      if specifiers
+        makeRef()
+      else
+        binding
+    else
+      convertNamedImportsToObject(imports, true)
+  c := "const"
+  initializer := [
+    " = "
+    if justDefault then "("
+    {type: "Await", children: ["await"]}
+    " "
+    decl.children[0] // import
+    dynamizeFromClause decl.from
+    if justDefault then ").default"
+  ]
+  bindings := [{
+    type: "Binding"
+    names: pattern.names
+    pattern
+    initializer
+    children: [pattern, initializer]
+  }]
+  if binding and specifiers
+    // import x, {y} --> const ref = await import(...), x = ref.default, {y} = ref
+    pattern2 := binding
+    initializer2 := [
+      " = "
+      pattern
+      ".default"
+    ]
+    bindings.push
+      type: "Binding"
+      names: binding.names
+      pattern: pattern2
+      initializer: initializer2
+      children: [pattern2, initializer2]
+    pattern3 := convertNamedImportsToObject(imports.children.at(-1), true)
+    initializer3 := [
+      " = "
+      pattern
+    ]
+    bindings.push
+      type: "Binding"
+      names: specifiers.names
+      pattern: pattern3
+      initializer: initializer3
+      children: [pattern3, initializer3]
+  {
+    type: "Declaration"
+    names: imports.names
+    bindings
+    decl: c
+    children: [
+      c, " "
+      bindings.flatMap (binding, i) => i > 0 ? [", ", binding] : [binding]
+    ]
+  }
+
+function dynamizeImportDeclarationExpression($0)
+  [imp, ws1, named, ws2, from] := $0
+  object := convertNamedImportsToObject(named)
+  dot := "."
+  processCallMemberExpression {
+    type: "CallExpression",
+    children: [
+      { type: "Await", children: "await" }, " ",
+      imp,
+      insertTrimmingSpace(ws2, ""),
+      dynamizeFromClause(from),
+      {
+        type: "PropertyGlob",
+        dot,
+        object,
+        children: [ws1, dot, object],
+        reversed: true,
+      }
+    ]
+  }
+
 export {
+  dynamizeImportDeclaration
+  dynamizeImportDeclarationExpression
   prependStatementExpressionBlock
   processAssignmentDeclaration
   processDeclarationConditions

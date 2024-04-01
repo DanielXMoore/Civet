@@ -1823,10 +1823,37 @@ import {X: LocalX, Y: LocalY} from "./util"
 ### Dynamic Import
 
 If it's not the start of a statement,
-dynamic `import` does not require parentheses.
+dynamic `import` does not require parentheses:
 
 <Playground>
 {x} = await import url
+</Playground>
+
+### Dynamic Import Declarations
+
+If you're not at the top level, `import` declarations get transformed
+into dynamic imports:
+
+<Playground>
+function load
+  * as utils from ./utils
+  { version: nodeVer,
+    execPath as nodePath } from process
+  fs, {readFile} from fs
+  return {utils, nodeVer, nodePath, fs, readFile}
+</Playground>
+
+::: info
+Note that the `import` gets `await`ed, so the function becomes asynchronous.
+:::
+
+You can also use `import` declarations as expressions, as a shorthand for
+`await`ing and destructuring a dynamic `import`:
+
+<Playground>
+urlPath := import {
+  fileURLToPath, pathToFileURL
+} from url
 </Playground>
 
 ### Export Shorthand
