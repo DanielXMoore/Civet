@@ -38,10 +38,7 @@ onmessage = async (e) => {
     // Wrap in IIFE if there's a top-level await
     // Use Civet's async do, so Civet does implicit return of last value
     try {
-      const topLevelAwait = Civet.lib.gatherRecursive(ast,
-        (n) => n.type === 'Await',
-        Civet.lib.isFunction
-      ).length > 0
+      const topLevelAwait = Civet.lib.hasAwait(ast)
       if (topLevelAwait) {
         const [prologue, rest] = Civet.parse(code,
           {startRule: 'ProloguePrefix'})
@@ -55,6 +52,17 @@ onmessage = async (e) => {
           (coffee ? ')' : ''),
           { ast: true }
         );
+        // Hoist top-level declarations outside the IIFE wrapper
+        Civet.lib.gatherRecursive(ast, (p) => p.type === 'BlockStatement')
+        .forEach((topBlock) => {
+          Civet.lib.gatherRecursiveWithinFunction(topBlock,
+            (p) => p.type === 'Declaration'
+          ).forEach((decl) => {
+            const type = decl.children.shift() // const/let/var
+            if (!Array.isArray(ast)) ast = [ast]
+            ast.unshift(`var ${decl.names.join(',')};`)
+          })
+        })
       }
 
       // Convert console to civetconsole for Playground execution
