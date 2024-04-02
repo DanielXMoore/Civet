@@ -97,6 +97,7 @@ function clear() {
     compile-at-start
     emit-js-output
     hide-link
+    show-prettier
     :b64-code="b64Code"
     :clear-trigger="clearTrigger"
   />

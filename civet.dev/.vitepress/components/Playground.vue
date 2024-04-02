@@ -11,6 +11,7 @@ const props = defineProps<{
   emitJsOutput?: boolean;
   clearTrigger?: boolean;
   hideLink?: boolean;
+  showPrettier?: boolean;
 }>();
 
 const userCode = ref(b64.decode(props.b64Code));
@@ -41,10 +42,16 @@ onMounted(async () => {
   }
 });
 
+// Prettier toggle for full Playground
+const showPrettier = props.showPrettier;
+const prettier = ref(true);
+watch(prettier, compile);
+
 async function compile() {
   const snippet = await compileCivetToHtml({
     code: userCode.value + '\n',
     jsOutput: props.emitJsOutput,
+    prettierOutput: showPrettier && prettier.value,
   });
 
   emit('input', userCode.value, snippet.jsCode);
@@ -114,10 +121,16 @@ const playgroundUrl = computed(() => {
         <div v-if="outputHtml" v-html="outputHtml" />
         <slot v-else name="output" />
       </div>
-      <label class="compilation-info">
-        <input type="checkbox" v-model="ligatures"/>
-        Ligatures
-      </label>
+      <div class="compilation-info">
+        <label>
+          <input type="checkbox" v-model="ligatures"/>
+          Ligatures
+        </label>
+        <label v-if="showPrettier">
+          <input type="checkbox" v-model="prettier"/>
+          Prettier
+        </label>
+      </div>
     </div>
   </div>
 </template>
