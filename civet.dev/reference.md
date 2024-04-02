@@ -315,23 +315,22 @@ console.log ```
 
 ## Length Shorthand
 
-The property access `.#` in is short for `.length`:
+The property access `.#` or just `#` is short for `.length`:
 
 <Playground>
 array.#
+array#
 "a string also".#
 </Playground>
 
 On its own, `#` is shorthand for `this.length`:
 
 <Playground>
-function push(item)
-  @[#] = item
-</Playground>
-
-<Playground>
-function wrap(index)
-  @[index %% #]
+class List
+  push(item)
+    @[#] = item
+  wrap(index)
+    @[index %% #]
 </Playground>
 
 `# in` checks for the `"length"` property:
@@ -1512,6 +1511,8 @@ message := console@log "[MSG] "
 
 [Private class fields](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes/Private_class_fields)
 do not need an explicit `this.` or `@` prefix.
+When accessing a private field of another object,
+you can rewrite `#` in place of `.#`.
 
 <Playground>
 class Counter
@@ -1519,7 +1520,7 @@ class Counter
   increment(): void
     #count++
   add(other: Counter): void
-    #count += other.#count if #count in other
+    #count += other#count if #count in other
   set(#count)
 </Playground>
 
