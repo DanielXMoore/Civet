@@ -103,6 +103,10 @@ return
     x.value()
 </Playground>
 
+<Playground>
+const fs = import {readFile, writeFile} from "fs"
+</Playground>
+
 [TC39 proposal: `do` expressions](https://github.com/tc39/proposal-do-expressions)
 
 <Playground>
