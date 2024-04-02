@@ -80,6 +80,14 @@ while {data, next} := node
   node = next
 </Playground>
 
+You can check for nonnull instead of truthy values with a `?`:
+
+<Playground>
+sum .= 0
+while number? := next()
+  sum += number
+</Playground>
+
 ## Objects
 
 ### Unbraced Literals
