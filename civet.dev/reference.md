@@ -1256,6 +1256,12 @@ for let item of list
   console.log item
 </Playground>
 
+<Playground>
+for var item of list
+  console.log item
+console.log "Last item:", item
+</Playground>
+
 You can also keep track of the current index of the iteration
 by specifying a comma and a second variable (also defaulting to `const`):
 
