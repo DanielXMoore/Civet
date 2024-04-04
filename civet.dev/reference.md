@@ -271,6 +271,8 @@ reversed := [10..1]
 indices := [0...array.length]
 </Playground>
 
+An infinite range `[x..]` is supported when [looping](#range-loop).
+
 ### Array/String Slicing
 
 `[i..j]` includes `i` and `j`, while `[i...j]` includes `i` but not `j`.
@@ -1402,6 +1404,11 @@ for i of [0...array.length]
 <Playground>
 for [1..5]
   attempt()
+</Playground>
+
+<Playground>
+for i of [1..]
+  attempt i
 </Playground>
 
 ### Until Loop
