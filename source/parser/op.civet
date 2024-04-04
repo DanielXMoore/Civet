@@ -2,6 +2,7 @@ import type {
   ASTNodeBase
   ASTNode
   BinaryOp
+  Existence
 } from ./types.civet
 
 import {
@@ -204,10 +205,10 @@ function makeAsConst(node: ASTNode)
   else
     node
 
-function isExistence(exp: ASTNodeBase)
-  if exp.type is "ParenthesizedExpression" and exp.implicit
+function isExistence(exp: ASTNode): Existence?
+  if exp?.type is "ParenthesizedExpression" and exp.implicit
     exp = exp.expression
-  if exp.type is "Existence"
+  if exp?.type is "Existence"
     return exp
 
 function isRelationalOp(op: BinaryOp)
@@ -217,78 +218,64 @@ function isRelationalOp(op: BinaryOp)
 * binops is an array of [__, op, __, exp] tuples
 * first is an expression
 */
-function expandChainedComparisons([first, binops]: [unknown, [unknown, BinaryOp, unknown, unknown][]])
-  // TODO: add refs to ensure middle expressions are evaluated only once
+function expandChainedComparisons([first, binops]: [ASTNode, [ASTNode, BinaryOp, ASTNode, ASTNode][]])
+  return [first] unless binops.length
 
-  results := []
-
-  i .= 0
-  l := binops.length
+  results: ASTNode[] := []
 
   start .= 0
   // indexes of chainable ops
-  chains .= []
-  let op
+  chains: number[] := []
 
-  while i < l
-    ([, op] = binops[i])
-
+  var i = 0
+  for each var [, op], var i of binops
     // NOTE: Treat Coffee `in` and `not in` ops as relational.
     if isRelationalOp op
       chains.push i
     else if getPrecedence(op) < precedenceRelational
       // end of the chain
-      processChains op
-      first = undefined
+      processChains()
+      first = results.pop()
 
-    i++
-
-  processChains op if op?
+  processChains()
 
   return results
 
-  function processChains(op: BinaryOp): void
-    if first and isRelationalOp op
+  function processChains: void
+    if chains.length > 0
+      // At least one relational op, so expand any existence operators `x?`
       first = expandExistence first
-
-    if chains.length > 1
-      chains.forEach (index, k) =>
-        if (k > 0) {
+      for each index, k of chains
+        if k > 0
           // NOTE: Inserting ws tokens to keep even operator spacing in the resulting array
-          results.push(" ", "&&", " ")
-        }
+          results.push " ", "&&", " "
 
         binop := binops[index]
-        [ , , , exp] .= binop
-        exp = binop[3] = expandExistence(exp)
+        exp := binop[3] = expandExistence binop[3]
 
-        let endIndex
-        if (k < chains.length - 1) {
-          endIndex = chains[k + 1]
-        } else {
-          endIndex = i + 1
-        }
-
-        results.push(first, ...binops.slice(start, endIndex).flat())
-        first = [exp].concat(binops.slice(index + 1, endIndex))
+        results.push first
+        endIndex := chains[k + 1] ?? i + 1
+        results.push ...binops[start...endIndex].flat()
+        // TODO: add refs to ensure middle expressions are evaluated only once
+        // NOTE: This first gets discarded if we're in the last iteration of the chain
+        first = [exp] ++ binops[index + 1...endIndex]
         start = endIndex
     else
       // Advance start if there was no chain
-      results.push first if first
+      results.push first
       results.push ...binops[start...i + 1].flat()
       start = i + 1
 
     chains.length = 0
 
-  function expandExistence(exp)
+  function expandExistence(exp: ASTNode): ASTNode
     // Expand existence operator like x?
-    const existence = isExistence(exp)
-    if existence
-      results.push(existence, " ", "&&", " ")
-      return existence.expression
-
-    return exp
-  ;
+    if existence := isExistence(exp)
+      results.push existence, " ", "&&", " "
+      existence.expression
+    else
+      exp
+  ; // avoid implicit return of hoisted function
 
 export {
   getPrecedence

@@ -493,6 +493,7 @@ a < b <= c
 a ≤ b ≤ c  // Unicode
 a ≡ b ≣ c ≠ d ≢ e
 a is b is not c
+0 <= a? < n
 a instanceof b not instanceof c
 x? instanceof Function
 </Playground>
