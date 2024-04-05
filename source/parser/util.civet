@@ -14,6 +14,14 @@ import {
   gatherRecursiveWithinFunction
 } from ./traversal.civet
 
+import {
+  processBinaryOpExpression
+} from ./op.civet
+
+import {
+  processUnaryExpression
+} from ./unary.civet
+
 assert := {
   equal(a: unknown, b: unknown, msg: string): void
     /* c8 ignore next */
@@ -263,6 +271,109 @@ function makeAmpersandFunction(bodyAfterRef = []): ASTNode
   }
 
 /**
+* A more complete version of makeAmpersandFunction that handles unary prefix
+*/
+function makeAmpersandFunctionExpression(prefix: UnaryOp[], rhs: AmpersandBlockBody): ASTNode
+  let ref, body, typeSuffix
+
+  // Only unary ops
+  if (!rhs) {
+    body = ref = makeRef("$")
+  } else {
+    ({ref, typeSuffix} = rhs)
+    if (!ref) {
+      throw new Error("Could not find ref in ampersand shorthand block")
+    }
+    body = rhs
+  }
+  if (prefix.length) {
+    body = {
+      type: "UnaryExpression",
+      children: [ processUnaryExpression(prefix, body, undefined) ]
+    }
+  }
+
+  parameters := {
+    type: "Parameters",
+    children: typeSuffix ? ["(", ref, typeSuffix, ")"] : [ref],
+    names: [],
+  }
+  expressions := [body]
+  block := {
+    bare: true,
+    expressions,
+    children: [expressions],
+  }
+
+  children := [ parameters, " => ", block ]
+  async := hasAwait(body)
+  if (async) {
+    children.unshift("async ")
+  }
+
+  return {
+    type: "ArrowFunction",
+    signature: {
+      modifier: {
+        async,
+      },
+    },
+    children,
+    ref,
+    body,
+    ampersandBlock: true,
+    block,
+    parameters,
+  }
+
+function makeAmpersandBlockRHSBody(typeSuffix, callExpRest?, unaryPostfix?, assign?, binopRHS?): ASTNode
+  ref := makeRef("$")
+
+  exp .= {
+    type: "AmpersandRef",
+    children: [ref],
+    names: [],
+    ref,
+  }
+
+  if (callExpRest) {
+    exp.children.push(...callExpRest[1])
+  }
+
+  if (unaryPostfix) {
+    exp = processUnaryExpression([], exp, unaryPostfix)
+  }
+
+  if (assign) {
+    // Based on ActualAssignment
+    const [op1, more, rhs] = assign
+    const lhs = [
+      [undefined, exp, ...op1],
+      ...more.map((x) => [x[0], x[1], ...x[2]]),
+    ]
+    exp = {
+      type: "AssignmentExpression",
+      children: [lhs, rhs],
+      names: null,
+      lhs,
+      assigned: exp,
+      exp: rhs,
+    }
+  }
+
+  if (binopRHS) {
+    exp = {
+      children: processBinaryOpExpression([exp, binopRHS[1]]),
+    }
+  }
+
+  // Put at top level for AmpersandFunctionExpression to process
+  exp.ref = ref
+  exp.typeSuffix = typeSuffix
+
+  return exp
+
+/**
  * Convert general ExtendedExpression into LeftHandSideExpression.
  * More generally wrap in parentheses if necessary.
  * (Consider renaming and making parentheses depend on context.)
@@ -490,7 +601,9 @@ export {
   isFunction
   isWhitespaceOrEmpty
   literalValue
+  makeAmpersandBlockRHSBody
   makeAmpersandFunction
+  makeAmpersandFunctionExpression
   makeLeftHandSideExpression
   makeNode
   makeRef
