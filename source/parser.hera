@@ -32,7 +32,9 @@ import {
   isWhitespaceOrEmpty,
   lastAccessInCallExpression,
   literalValue,
+  makeAmpersandBlockRHSBody,
   makeAmpersandFunction,
+  makeAmpersandFunctionExpression,
   makeEmptyBlock,
   makeExpressionStatement,
   makeGetterMethod,
@@ -711,6 +713,7 @@ PrimaryExpression
   ClassExpression
   RegularExpressionLiteral
   ParenthesizedExpression
+  PartialPlaceholder
   # https://facebook.github.io/jsx/#sec-jsx-PrimaryExpression
   # NOTE: Modified to parse multiple JSXElement/JSXFragments as one fragment
   JSXImplicitFragment
@@ -742,6 +745,13 @@ ParenthesizedExpression
       type: "ParenthesizedExpression",
       children: [ open, exp, ws, close ],
       expression: exp,
+    }
+
+PartialPlaceholder
+  Dot:dot !/(?:\p{ID_Continue}|[\u200C\u200D$.])/ ->
+    return {
+      type: "PartialPlaceholder",
+      children: [ dot ],
     }
 
 # https://262.ecma-international.org/#prod-ClassDeclaration
@@ -2061,57 +2071,8 @@ AmpersandFunctionExpression
   UnaryOp*:prefix ( Ampersand / ( !NumericLiteral &( QuestionMark? Dot !Dot ) ) ) AmpersandBlockRHS?:rhs ->
     if (!prefix.length && !rhs) return $skip
 
-    let body, ref, typeSuffix
+    return makeAmpersandFunctionExpression(prefix, rhs)
 
-    // Only unary ops
-    if (!rhs) {
-      body = ref = makeRef("$")
-    } else {
-      ({ref, typeSuffix} = rhs)
-      if (!ref) {
-        throw new Error("Could not find ref in ampersand shorthand block")
-      }
-      body = rhs
-    }
-    if (prefix.length) {
-      body = {
-        type: "UnaryExpression",
-        children: [ processUnaryExpression(prefix, body, undefined) ]
-      }
-    }
-
-    const parameters = {
-      type: "Parameters",
-      children: typeSuffix ? ["(", ref, typeSuffix, ")"] : [ref],
-      names: [],
-    }
-    const expressions = [body]
-    const block = {
-      bare: true,
-      expressions,
-      children: [expressions],
-    }
-
-    const children = [ parameters, " => ", block ]
-    const async = hasAwait(body)
-    if (async) {
-      children.unshift("async ")
-    }
-
-    return {
-      type: "ArrowFunction",
-      signature: {
-        modifier: {
-          async,
-        },
-      },
-      children,
-      ref,
-      body,
-      ampersandBlock: true,
-      block,
-      parameters,
-    }
 
 # NOTE: Dynamic infix operators
 OperatorDeclaration
@@ -2201,51 +2162,8 @@ AmpersandTypeSuffix
 AmpersandBlockRHSBody
   AmpersandTypeSuffix?:typeSuffix (!_ CallExpressionRest+ )?:callExpRest UnaryPostfix?:unaryPostfix ( WAssignmentOp ( NotDedented UpdateExpression WAssignmentOp )* NonPipelineExtendedExpression )?:assign ( ![&] BinaryOpRHS+ )?:binopRHS ->
     if (!typeSuffix && !callExpRest && !binopRHS && !unaryPostfix) return $skip
-    const ref = makeRef("$")
 
-    let exp = {
-      type: "AmpersandRef",
-      children: [ref],
-      names: [],
-      ref,
-    }
-
-    if (callExpRest) {
-      exp.children.push(...callExpRest[1])
-    }
-
-    if (unaryPostfix) {
-      exp = processUnaryExpression([], exp, unaryPostfix)
-    }
-
-    if (assign) {
-      // Based on ActualAssignment
-      const [op1, more, rhs] = assign
-      const lhs = [
-        [undefined, exp, ...op1],
-        ...more.map((x) => [x[0], x[1], ...x[2]]),
-      ]
-      exp = {
-        type: "AssignmentExpression",
-        children: [lhs, rhs],
-        names: null,
-        lhs,
-        assigned: exp,
-        exp: rhs,
-      }
-    }
-
-    if (binopRHS) {
-      exp = {
-        children: processBinaryOpExpression([exp, binopRHS[1]]),
-      }
-    }
-
-    // Put at top level for AmpersandFunctionExpression to process
-    exp.ref = ref
-    exp.typeSuffix = typeSuffix
-
-    return exp
+    return makeAmpersandBlockRHSBody(typeSuffix, callExpRest, unaryPostfix, assign, binopRHS)
 
 ThinArrowFunction
   ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:suffix _? Arrow:arrow NoCommaBracedOrEmptyBlock:block ->
@@ -3226,6 +3144,13 @@ ComputedPropertyName
       type: "ComputedPropertyName",
       expression,
       children: [ $1, expression, $4 ],
+      implicit: true,
+    }
+  InsertOpenBracket:open PartialPlaceholder:expression InsertCloseBracket:close ->
+    return {
+      type: "ComputedPropertyName",
+      expression,
+      children: [ open, expression, close ],
       implicit: true,
     }
 

@@ -22,12 +22,14 @@ import type {
   MemberExpression
   MethodDefinition
   ParseRule
+  PartialPlaceholder
   StatementExpression
   StatementTuple
   WSNode
 } from ./types.civet
 
 import {
+  findAncestor
   gatherRecursive
   gatherRecursiveAll
   gatherRecursiveWithinFunction
@@ -47,7 +49,9 @@ import {
   isFunction
   isWhitespaceOrEmpty
   literalValue
+  makeAmpersandBlockRHSBody
   makeAmpersandFunction
+  makeAmpersandFunctionExpression
   makeLeftHandSideExpression
   makeNode
   makeRef
@@ -1055,6 +1059,7 @@ function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule
 
   const { expressions: statements } = root
 
+  processPartialPlaceholders(statements)
   processNegativeIndexAccess(statements)
   processTypes(statements)
   processDeclarationConditions(statements, m.getRef)
@@ -1122,6 +1127,47 @@ function populateRefs(statements: ASTNode): void {
     })
   }
 }
+
+function processPartialPlaceholders(statements: StatementTuple[]): void
+  partialMap := new Map<ASTNodeBase, PartialPlaceholder[]>()
+
+  gatherRecursiveAll statements, .type is "PartialPlaceholder"
+  .forEach (_exp) =>
+    exp := _exp as! PartialPlaceholder
+    { ancestor } .= findAncestor exp, ?.type is "Call"
+
+    ancestor = ancestor?.parent
+
+    while ancestor?.parent?.type is "UnaryExpression"
+      ancestor = ancestor.parent
+
+    if ancestor
+      if partialMap.has ancestor
+        partialMap.get(ancestor)!.push exp
+      else
+        partialMap.set ancestor, [exp]
+    else
+      replaceNode exp, {
+        type: "Error"
+        message: "Partial placeholder outside of call expression"
+        exp.parent
+      }
+
+  for [ancestor, placeholders] of partialMap
+    ref .= makeRef "$"
+
+    placeholders.forEach (exp) =>
+      replaceNode exp.children.-1, ref
+
+    rhs := {
+      ref,
+      children: [ancestor]
+    }
+
+    fnExp := makeAmpersandFunctionExpression [], rhs
+    replaceNode ancestor, fnExp
+
+  return
 
 function reorderBindingRestProperty(props) {
   const names = props.flatMap((p) => p.names)
@@ -1336,7 +1382,9 @@ export {
   isWhitespaceOrEmpty
   lastAccessInCallExpression
   literalValue
+  makeAmpersandBlockRHSBody
   makeAmpersandFunction
+  makeAmpersandFunctionExpression
   makeEmptyBlock
   makeExpressionStatement
   makeGetterMethod
