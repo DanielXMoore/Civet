@@ -10,7 +10,7 @@ title: Integrations
 
 ## Build tools
 
-- [unplugin](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin) integrates Civet into Vite, esbuild, Rollup, Webpack, and Rspack, including `.d.ts` generation (see [basic instructions](https://civet.dev/getting-started#building-a-project))
+- [unplugin](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin) integrates Civet into Vite, esbuild, Astro, Rollup, Webpack, and Rspack, including `.d.ts` generation (see [basic instructions](https://civet.dev/getting-started#building-a-project))
   - [Simpler esbuild plugin](https://github.com/DanielXMoore/Civet/blob/main/source/esbuild-plugin.civet)
   - [Older Vite plugin](https://github.com/edemaine/vite-plugin-civet) (no longer recommended)
 - [ESM/CJS loader](https://github.com/DanielXMoore/Civet/blob/main/register.js) for `import`/`require` to support `.civet` files
