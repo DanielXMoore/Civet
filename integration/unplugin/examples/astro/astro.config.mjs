@@ -1,12 +1,14 @@
 import { defineConfig } from 'astro/config';
-import civetVitePlugin from '@danielx/civet/vite';
+import civet from '@danielx/civet/astro';
 
 import solidJs from '@astrojs/solid-js';
 
 // https://astro.build/config
 export default defineConfig({
-  vite: {
-    plugins: [civetVitePlugin({})],
-  },
-  integrations: [solidJs()],
+  integrations: [
+    civet({
+      ts: 'preserve',
+    }),
+    solidJs(),
+  ],
 });

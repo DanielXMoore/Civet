@@ -23,6 +23,24 @@ export default defineConfig({
 });
 ```
 
+### Astro
+
+```ts
+// astro.config.ts
+import { defineConfig } from 'astro/config';
+import civet from '@danielx/civet/astro';
+
+// https://astro.build/config
+export default defineConfig({
+  // ...
+  integrations: [
+    civet({
+      // options
+    }),
+  ],
+});
+```
+
 ### Rollup
 
 ```ts

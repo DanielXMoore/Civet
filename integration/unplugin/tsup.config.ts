@@ -7,6 +7,7 @@ export default defineConfig({
     vite: 'src/vite.ts',
     rollup: 'src/rollup.ts',
     esbuild: 'src/esbuild.ts',
+    astro: 'src/astro.ts',
   },
   esbuildOptions(opts) {
     opts.chunkNames = 'unplugin-shared';
