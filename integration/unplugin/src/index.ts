@@ -14,6 +14,7 @@ import * as tsvfs from '@typescript/vfs';
 import type { UserConfig } from 'vite';
 import type { BuildOptions } from 'esbuild';
 import os from 'os';
+import { DEFAULT_EXTENSIONS } from './constants.js';
 
 // Copied from typescript to avoid importing the whole package
 enum DiagnosticCategory {
@@ -458,7 +459,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
 
         if (implicitExtension) {
           config.resolve ??= {};
-          config.resolve.extensions ??= [];
+          config.resolve.extensions ??= DEFAULT_EXTENSIONS;
           config.resolve.extensions.push('.civet');
         }
       },

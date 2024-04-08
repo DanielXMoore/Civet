@@ -20,6 +20,7 @@ cp source/babel-plugin.mjs dist/babel-plugin.mjs
 cp types/types.d.ts dist/types.d.ts
 
 # unplugin
+node -e 'import("./node_modules/vite/dist/node/constants.js").then((c)=>console.log(`export const DEFAULT_EXTENSIONS = ${JSON.stringify(c.DEFAULT_EXTENSIONS)}`))' >./integration/unplugin/src/constants.ts
 yarn --cwd ./integration/unplugin build
 cp ./integration/unplugin/dist/* ./dist
 
