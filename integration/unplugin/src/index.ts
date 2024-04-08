@@ -458,7 +458,11 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
 
         if (implicitExtension) {
           config.resolve ??= {};
-          config.resolve.extensions ??= [];
+          config.resolve.extensions ??= [
+            // Vite's DEFAULT_EXTENSIONs from
+            // https://github.com/vitejs/vite/blob/main/packages/vite/src/node/constants.ts#L29
+            '.mjs', '.js', '.mts', '.ts', '.jsx', '.tsx', '.json',
+          ];
           config.resolve.extensions.push('.civet');
         }
       },
