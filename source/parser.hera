@@ -249,6 +249,8 @@ ForbiddenImplicitCalls
   /(as|of|satisfies|then|when|implements|xor|xnor)(?!\p{ID_Continue}|[\u200C\u200D$])/
   # NOTE: Don't allow non-heregex regexes that begin with a space as first argument without parens
   "/ "
+  # NOTE: Binary & operator
+  /&\s/
   # Don't treat @@decorator @@decorator class ... as implicit calls
   ClassImplicitCallForbidden ( Class / AtAt )
   Identifier "=" Whitespace
@@ -405,7 +407,7 @@ RHS
 UnaryExpression
   # NOTE: Check for ampersand function expression first,
   # which can start with UnaryOps that need to be absorbed.
-  AmpersandFunctionExpression
+  ImplicitAmpersandFunctionExpression
 
   # NOTE: Merged AwaitExpression with UnaryOp
   # https://262.ecma-international.org/#prod-AwaitExpression
@@ -696,7 +698,7 @@ PipelineTailItem
   Return !AccessStart -> $1
   NWTypePostfix TypePostfix* ->
     return makeAmpersandFunction([" ", $1, ...$2])
-  AmpersandFunctionExpression
+  ImplicitAmpersandFunctionExpression
   !Ampersand PipelineHeadItem -> $2
 
 # https://262.ecma-international.org/#prod-PrimaryExpression
@@ -713,7 +715,7 @@ PrimaryExpression
   ClassExpression
   RegularExpressionLiteral
   ParenthesizedExpression
-  PartialPlaceholder
+  Placeholder
   # https://facebook.github.io/jsx/#sec-jsx-PrimaryExpression
   # NOTE: Modified to parse multiple JSXElement/JSXFragments as one fragment
   JSXImplicitFragment
@@ -747,11 +749,18 @@ ParenthesizedExpression
       expression: exp,
     }
 
-PartialPlaceholder
+Placeholder
   Dot:dot !/(?:\p{ID_Continue}|[\u200C\u200D$.])/ ->
     return {
-      type: "PartialPlaceholder",
+      type: "Placeholder",
+      subtype: "Partial",
       children: [ dot ],
+    }
+  Ampersand:amp ![&] ->
+    return {
+      type: "Placeholder",
+      subtype: "Argument",
+      children: [ amp ],
     }
 
 # https://262.ecma-international.org/#prod-ClassDeclaration
@@ -1964,10 +1973,6 @@ FunctionExpression
       children: [...signature.children, block],
       block,
     }
-  # Identity function shorthand
-  # NOTE: Currently shadows (&) binary & operator, we might want to revisit
-  "(&)" ->
-    return makeAmpersandFunction()
 
   # BinaryOp function shorthand
   OpenParen:open BinaryOp:op CloseParen:close ->
@@ -2062,17 +2067,31 @@ FunctionExpression
       block,
       parameters,
     }
+  ImplicitAmpersandFunctionExpression
 
-  AmpersandFunctionExpression
-
-  # Ruby/Crystal style block shorthand
-AmpersandFunctionExpression
+# Ruby/Crystal style block shorthand: &+1 -> $ => $+1
+# Most of this is now handled via Placeholder,
+# but this version is still used for .foo -> $ => $.foo
+ImplicitAmpersandFunctionExpression
   # NOTE: !NumericLiteral is so we don't match on `.1` etc.
-  UnaryOp*:prefix ( Ampersand / ( !NumericLiteral &( QuestionMark? Dot !Dot ) ) ) AmpersandBlockRHS?:rhs ->
+  UnaryOp*:prefix ( !NumericLiteral &( QuestionMark? Dot !Dot ) ) AmpersandBlockRHS?:rhs ->
     if (!prefix.length && !rhs) return $skip
 
     return makeAmpersandFunctionExpression(prefix, rhs)
 
+AmpersandBlockRHS
+  ForbidTrailingMemberProperty AmpersandBlockRHSBody? RestoreTrailingMemberProperty ->
+    if (!$2) return $skip
+    return $2
+
+AmpersandTypeSuffix
+  &( _? QuestionMark? _? Colon ) TypeSuffix -> $2
+
+AmpersandBlockRHSBody
+  AmpersandTypeSuffix?:typeSuffix (!_ CallExpressionRest+ )?:callExpRest UnaryPostfix?:unaryPostfix ( WAssignmentOp ( NotDedented UpdateExpression WAssignmentOp )* NonPipelineExtendedExpression )?:assign ( ![&] BinaryOpRHS+ )?:binopRHS ->
+    if (!typeSuffix && !callExpRest && !binopRHS && !unaryPostfix) return $skip
+
+    return makeAmpersandBlockRHSBody(typeSuffix, callExpRest, unaryPostfix, assign, binopRHS)
 
 # NOTE: Dynamic infix operators
 OperatorDeclaration
@@ -2150,20 +2169,6 @@ OperatorAssociativity
       return { relational: true, assoc: "non" }
     }
     return { assoc }
-
-AmpersandBlockRHS
-  ForbidTrailingMemberProperty AmpersandBlockRHSBody? RestoreTrailingMemberProperty ->
-    if (!$2) return $skip
-    return $2
-
-AmpersandTypeSuffix
-  &( _? QuestionMark? _? Colon ) TypeSuffix -> $2
-
-AmpersandBlockRHSBody
-  AmpersandTypeSuffix?:typeSuffix (!_ CallExpressionRest+ )?:callExpRest UnaryPostfix?:unaryPostfix ( WAssignmentOp ( NotDedented UpdateExpression WAssignmentOp )* NonPipelineExtendedExpression )?:assign ( ![&] BinaryOpRHS+ )?:binopRHS ->
-    if (!typeSuffix && !callExpRest && !binopRHS && !unaryPostfix) return $skip
-
-    return makeAmpersandBlockRHSBody(typeSuffix, callExpRest, unaryPostfix, assign, binopRHS)
 
 ThinArrowFunction
   ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:suffix _? Arrow:arrow NoCommaBracedOrEmptyBlock:block ->
@@ -3146,7 +3151,7 @@ ComputedPropertyName
       children: [ $1, expression, $4 ],
       implicit: true,
     }
-  InsertOpenBracket:open PartialPlaceholder:expression InsertCloseBracket:close ->
+  InsertOpenBracket:open Placeholder:expression InsertCloseBracket:close ->
     return {
       type: "ComputedPropertyName",
       expression,

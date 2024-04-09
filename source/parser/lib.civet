@@ -10,6 +10,7 @@ import type {
   AccessStart
   ASTNode
   ASTNodeBase
+  ASTNodeObject
   ASTRef
   AssignmentExpression
   BlockStatement
@@ -22,7 +23,7 @@ import type {
   MemberExpression
   MethodDefinition
   ParseRule
-  PartialPlaceholder
+  Placeholder
   StatementExpression
   StatementTuple
   WSNode
@@ -30,6 +31,7 @@ import type {
 
 import {
   findAncestor
+  findChildIndex
   gatherRecursive
   gatherRecursiveAll
   gatherRecursiveWithinFunction
@@ -58,6 +60,7 @@ import {
   maybeRef
   needsRef
   parenthesizeType
+  updateParentPointers
   wrapIIFE
   wrapWithReturn
 } from ./util.civet
@@ -444,7 +447,7 @@ function processCallMemberExpression(node)
 /**
  * Replace this node with another, by modifying its parent's children.
  */
-function replaceNode(node: ASTNodeBase, newNode: ASTNode): void
+function replaceNode(node: ASTNodeObject, newNode: ASTNode): void
   unless node.parent?
     throw new Error "replaceNode failed: node has no parent"
 
@@ -1059,7 +1062,7 @@ function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule
 
   const { expressions: statements } = root
 
-  processPartialPlaceholders(statements)
+  processPlaceholders(statements)
   processNegativeIndexAccess(statements)
   processTypes(statements)
   processDeclarationConditions(statements, m.getRef)
@@ -1128,36 +1131,63 @@ function populateRefs(statements: ASTNode): void {
   }
 }
 
-function processPartialPlaceholders(statements: StatementTuple[]): void
-  partialMap := new Map<ASTNodeBase, PartialPlaceholder[]>()
+function processPlaceholders(statements: StatementTuple[]): void
+  placeholderMap := new Map<ASTNodeBase, (Placeholder)[]>()
 
-  gatherRecursiveAll statements, .type is "PartialPlaceholder"
+  gatherRecursiveAll statements, .type is "Placeholder"
   .forEach (_exp) =>
-    exp := _exp as! PartialPlaceholder
-    { ancestor } .= findAncestor exp, ?.type is "Call"
-
-    ancestor = ancestor?.parent
-
-    while ancestor?.parent?.type is "UnaryExpression"
-      ancestor = ancestor.parent
+    exp := _exp as! Placeholder
+    let ancestor: ASTNodeBase
+    if exp.subtype is "Partial"
+      { ancestor } = findAncestor exp, .type is "Call"
+      ancestor = ancestor?.parent
+      while ancestor?.parent?.type is "UnaryExpression"
+        ancestor = ancestor.parent
+      unless ancestor
+        replaceNode exp, {
+          type: "Error"
+          message: 'Partial placeholder . outside of call expression'
+          exp.parent
+        }
+        return
+    else // ArgumentPlaceholder
+      let child
+      { ancestor, child } = findAncestor exp, ({type}) => type is "Call" or type is "BlockStatement"
+      if ancestor?.type is "Call"
+        ancestor = child
+      if ancestor?.type is "BlockStatement"
+        i := findChildIndex ancestor.expressions, exp
+        if i >= 0
+          unless ancestor.expressions[i][1]?.type is 'Wrapper'
+            ancestor.expressions[i][1] =
+              type: 'Wrapper'
+              children: [ ancestor.expressions[i][1] ]
+          updateParentPointers ancestor.expressions[i][1], ancestor
+          ancestor = ancestor.expressions[i][1]
+      unless ancestor
+        replaceNode exp, {
+          type: "Error"
+          message: 'Partial placeholder . outside of call expression'
+          exp.parent
+        }
 
     if ancestor
-      if partialMap.has ancestor
-        partialMap.get(ancestor)!.push exp
+      if placeholderMap.has ancestor
+        placeholderMap.get(ancestor)!.push exp
       else
-        partialMap.set ancestor, [exp]
+        placeholderMap.set ancestor, [exp]
     else
       replaceNode exp, {
         type: "Error"
-        message: "Partial placeholder outside of call expression"
+        message: `${exp.children.0?.token} placeholder outside of ${exp.subtype is "Partial" ? 'call expression' : 'block'}`
         exp.parent
       }
 
-  for [ancestor, placeholders] of partialMap
+  for [ancestor, placeholders] of placeholderMap
     ref .= makeRef "$"
 
     placeholders.forEach (exp) =>
-      replaceNode exp.children.-1, ref
+      replaceNode exp.children.0, ref
 
     rhs := {
       ref,
