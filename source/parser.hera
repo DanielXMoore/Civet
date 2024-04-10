@@ -32,7 +32,6 @@ import {
   isWhitespaceOrEmpty,
   lastAccessInCallExpression,
   literalValue,
-  makeAmpersandBlockRHSBody,
   makeAmpersandFunction,
   makeAmpersandFunctionExpression,
   makeEmptyBlock,
@@ -405,10 +404,6 @@ RHS
 
 # https://262.ecma-international.org/#prod-UnaryExpression
 UnaryExpression
-  # NOTE: Check for ampersand function expression first,
-  # which can start with UnaryOps that need to be absorbed.
-  ImplicitAmpersandFunctionExpression
-
   # NOTE: Merged AwaitExpression with UnaryOp
   # https://262.ecma-international.org/#prod-AwaitExpression
   # NOTE: Eliminated left recursion
@@ -698,7 +693,6 @@ PipelineTailItem
   Return !AccessStart -> $1
   NWTypePostfix TypePostfix* ->
     return makeAmpersandFunction([" ", $1, ...$2])
-  ImplicitAmpersandFunctionExpression
   !Ampersand PipelineHeadItem -> $2
 
 # https://262.ecma-international.org/#prod-PrimaryExpression
@@ -750,17 +744,27 @@ ParenthesizedExpression
     }
 
 Placeholder
+  # Partial function application: f(., x) -> $ => f($, x)
   Dot:dot !/(?:\p{ID_Continue}|[\u200C\u200D$.])/ ->
     return {
       type: "Placeholder",
       subtype: ".",
       children: [ dot ],
     }
+  # Ruby/Crystal style block shorthand: &+1 -> $ => $+1
   Ampersand:amp ![&] ->
     return {
       type: "Placeholder",
       subtype: "&",
       children: [ amp ],
+    }
+  # .x -> &.x
+  # NOTE: !NumericLiteral is so we don't match on `.1` etc.
+  &AccessStart &PropertyAccess !NumericLiteral ->
+    return {
+      type: "Placeholder",
+      subtype: "&",
+      children: [ { token: "&" } ],
     }
 
 # https://262.ecma-international.org/#prod-ClassDeclaration
@@ -2067,31 +2071,6 @@ FunctionExpression
       block,
       parameters,
     }
-  ImplicitAmpersandFunctionExpression
-
-# Ruby/Crystal style block shorthand: &+1 -> $ => $+1
-# Most of this is now handled via Placeholder,
-# but this version is still used for .foo -> $ => $.foo
-ImplicitAmpersandFunctionExpression
-  # NOTE: !NumericLiteral is so we don't match on `.1` etc.
-  UnaryOp*:prefix ( !NumericLiteral &( QuestionMark? Dot !Dot ) ) AmpersandBlockRHS?:rhs ->
-    if (!prefix.length && !rhs) return $skip
-
-    return makeAmpersandFunctionExpression(prefix, rhs)
-
-AmpersandBlockRHS
-  ForbidTrailingMemberProperty AmpersandBlockRHSBody? RestoreTrailingMemberProperty ->
-    if (!$2) return $skip
-    return $2
-
-AmpersandTypeSuffix
-  &( _? QuestionMark? _? Colon ) TypeSuffix -> $2
-
-AmpersandBlockRHSBody
-  AmpersandTypeSuffix?:typeSuffix (!_ CallExpressionRest+ )?:callExpRest UnaryPostfix?:unaryPostfix ( WAssignmentOp ( NotDedented UpdateExpression WAssignmentOp )* NonPipelineExtendedExpression )?:assign ( ![&] BinaryOpRHS+ )?:binopRHS ->
-    if (!typeSuffix && !callExpRest && !binopRHS && !unaryPostfix) return $skip
-
-    return makeAmpersandBlockRHSBody(typeSuffix, callExpRest, unaryPostfix, assign, binopRHS)
 
 # NOTE: Dynamic infix operators
 OperatorDeclaration
