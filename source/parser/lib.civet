@@ -46,6 +46,7 @@ import {
   hasImportDeclaration
   hasYield
   insertTrimmingSpace
+  isASTNodeObject
   isComma
   isEmptyBareBlock
   isFunction
@@ -58,6 +59,8 @@ import {
   makeNode
   makeRef
   maybeRef
+  maybeWrap
+  maybeUnwrap
   needsRef
   parenthesizeType
   updateParentPointers
@@ -463,8 +466,9 @@ function replaceNode(node: ASTNodeObject, newNode: ASTNode): void
   unless recurse node.parent.children
     throw new Error "replaceNode failed: didn't find child node in parent"
 
-  if newNode <? "object" and not Array.isArray newNode
+  if isASTNodeObject newNode
     newNode.parent = node.parent
+  node.parent = undefined
 
 // Wrap expression in parentheses to make into a statement when:
 // * object literal expression
@@ -1132,77 +1136,64 @@ function populateRefs(statements: ASTNode): void {
 }
 
 function processPlaceholders(statements: StatementTuple[]): void
-  placeholderMap := new Map<ASTNodeBase, (Placeholder)[]>()
+  placeholderMap := new Map<ASTNodeObject, (Placeholder)[]>()
 
   gatherRecursiveAll statements, .type is "Placeholder"
   .forEach (_exp) =>
     exp := _exp as! Placeholder
-    let ancestor: ASTNodeBase
-    if exp.subtype is "Partial"
+    let ancestor: ASTNodeObject?
+    if exp.subtype is "."
+      // Partial placeholder . lifts to the nearest call expression,
+      // including the call itself and any surrounding unary operations.
       { ancestor } = findAncestor exp, .type is "Call"
       ancestor = ancestor?.parent
       while ancestor?.parent?.type is "UnaryExpression"
         ancestor = ancestor.parent
       unless ancestor
-        replaceNode exp, {
+        replaceNode exp,
           type: "Error"
           message: 'Partial placeholder . outside of call expression'
-          exp.parent
-        }
         return
-    else // ArgumentPlaceholder
-      { ancestor } = findAncestor exp, ({type}) => type is "Call" or type is "BlockStatement"
+    else // "&"
+      // Ampersand placeholder & lifts to nearest call expression,
+      // excluding the call itself, or else to the nearest block statement.
+      let child
+      { ancestor, child } = findAncestor exp, ({type}) =>
+        type is "Call" or type is "BlockStatement"
       if ancestor?.type is "Call"
-        i := findChildIndex ancestor.args, exp
+        i := findChildIndex ancestor.args, child
         if i >= 0
-          unless ancestor.args[i] <? 'object'
-            ancestor.args[i] =
-              type: 'Wrapper'
-              children: [ ancestor.args[i] ]
-          updateParentPointers ancestor.args[i], ancestor
-          ancestor = ancestor.args[i]
+          ancestor.args[i] = maybeWrap ancestor.args[i], ancestor
+          ancestor = ancestor.args[i] as ASTNodeObject
         else
           ancestor = undefined
       else if ancestor?.type is "BlockStatement"
-        i := findChildIndex ancestor.expressions, exp
+        i := findChildIndex ancestor.expressions, child
         if i >= 0
-          unless ancestor.expressions[i][1] <? 'object'
-            ancestor.expressions[i][1] =
-              type: 'Wrapper'
-              children: [ ancestor.expressions[i][1] ]
-          updateParentPointers ancestor.expressions[i][1], ancestor
-          ancestor = ancestor.expressions[i][1]
+          ancestor.expressions[i][1] = maybeWrap ancestor.expressions[i][1], ancestor
+          ancestor = ancestor.expressions[i][1] as ASTNodeObject
         else
           ancestor = undefined
       unless ancestor
-        replaceNode exp, {
+        replaceNode exp,
           type: "Error"
-          message: 'Partial placeholder . outside of call expression'
-          exp.parent
-        }
+          message: 'Ampersand placeholder & outside of block'
 
-    if ancestor
+    if ancestor?
       if placeholderMap.has ancestor
         placeholderMap.get(ancestor)!.push exp
       else
         placeholderMap.set ancestor, [exp]
-    else
-      replaceNode exp, {
-        type: "Error"
-        message: `${exp.children.0?.token} placeholder outside of ${exp.subtype is "Partial" ? 'call expression' : 'block'}`
-        exp.parent
-      }
 
   for [ancestor, placeholders] of placeholderMap
-    console.log ancestor, placeholders
     ref .= makeRef "$"
 
-    placeholders.forEach (exp) =>
-      replaceNode exp.children.0, ref
+    for each placeholder of placeholders
+      replaceNode placeholder, ref
 
     rhs := {
-      ref,
-      children: [ancestor]
+      ref
+      children: [maybeUnwrap ancestor]
     }
 
     fnExp := makeAmpersandFunctionExpression [], rhs
