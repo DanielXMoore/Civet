@@ -910,6 +910,23 @@ You can also type the argument:
 increment := &: number + 1
 </Playground>
 
+### Partial Function Application
+
+Another shorthand for one-argument functions is to call a function
+with a `.` placeholder argument:
+
+<Playground>
+console.log "result:", .
+</Playground>
+
+More generally, if you use `.` within a function call, that call gets wrapped
+in a one-argument function and `.` gets replaced by that argument.
+You can use `.` multiple times in the same function:
+
+<Playground>
+compute ., . + 1, . * 2, (.).toString()
+</Playground>
+
 ### Binary Operators as Functions
 
 Wrapping a binary operator in parentheses turns it into a two-argument function:
