@@ -106,7 +106,7 @@ const playgroundUrl = computed(() => {
           Edit inline or
           <a
             :href="playgroundUrl"
-            @click.prevent
+            @click.left.exact.prevent
             class="edit-in-the-background"
           >
             edit in the Playground!
