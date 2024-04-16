@@ -62,7 +62,6 @@ import {
   maybeUnwrap
   needsRef
   parenthesizeType
-  updateParentPointers
   wrapIIFE
   wrapWithReturn
 } from ./util.civet
@@ -450,7 +449,8 @@ function processCallMemberExpression(node)
  * Replace this node with another, by modifying its parent's children.
  */
 function replaceNode(node: ASTNodeObject, newNode: ASTNode): void
-  unless node.parent?
+  { parent } := node
+  unless parent?
     throw new Error "replaceNode failed: node has no parent"
 
   function recurse(children: ASTNode[]): boolean
@@ -462,11 +462,17 @@ function replaceNode(node: ASTNodeObject, newNode: ASTNode): void
         return true if recurse child
     return false
 
-  unless recurse node.parent.children
+  unless recurse parent.children
     throw new Error "replaceNode failed: didn't find child node in parent"
 
+  // Adjust 'exp' etc. alias pointers
+  for key, value in parent
+    if value is node
+      parent[key] = newNode
+      return
+
   if isASTNodeObject newNode
-    newNode.parent = node.parent
+    newNode.parent = parent
   node.parent = undefined
 
 // Wrap expression in parentheses to make into a statement when:
@@ -750,7 +756,7 @@ function processAssignments(statements): void {
 
       let block?: BlockStatement
       // Extract StatementExpression as block
-      if exp.parent.type is "BlockStatement" and !$1.-1?.-1?.special// can only prepend to assignments that are children of blocks
+      if exp.parent?.type is "BlockStatement" and !$1.-1?.-1?.special// can only prepend to assignments that are children of blocks
         block = makeBlockFragment()
         if ref := prependStatementExpressionBlock([null,null,$2], block)
           exp.children = exp.children.map (c: ASTNode) -> if c is $2 then ref else c
@@ -1157,22 +1163,47 @@ function processPlaceholders(statements: StatementTuple[]): void
       // Ampersand placeholder & lifts to nearest call expression,
       // excluding the call itself, or else to the nearest block statement.
       let child
-      { ancestor, child } = findAncestor exp, ({type}) =>
-        type is "Call" or type is "BlockStatement"
-      if ancestor?.type is "Call"
-        i := findChildIndex ancestor.args, child
-        if i >= 0
-          ancestor.args[i] = maybeWrap ancestor.args[i], ancestor
-          ancestor = ancestor.args[i] as ASTNodeObject
-        else
-          ancestor = undefined
-      else if ancestor?.type is "BlockStatement"
-        i := findChildIndex ancestor.expressions, child
-        if i >= 0
-          ancestor.expressions[i][1] = maybeWrap ancestor.expressions[i][1], ancestor
-          ancestor = ancestor.expressions[i][1] as ASTNodeObject
-        else
-          ancestor = undefined
+      { ancestor, child } = findAncestor exp, (ancestor, child) =>
+        {type} := ancestor
+        (or)
+          type is "Call"
+          type is "BlockStatement"
+          type is "PipelineExpression"
+          // Right-hand side of assignment
+          type is "AssignmentExpression" and ancestor.exp is child
+      switch ancestor?.type
+        when "Call"
+          i := findChildIndex ancestor.args, child
+          if i >= 0
+            ancestor.args[i] = maybeWrap ancestor.args[i], ancestor
+            ancestor = ancestor.args[i] as ASTNodeObject
+          else
+            ancestor = undefined
+        when "BlockStatement"
+          i := findChildIndex ancestor.expressions, child
+          if i >= 0
+            ancestor.expressions[i][1] = maybeWrap ancestor.expressions[i][1], ancestor
+            ancestor = ancestor.expressions[i][1] as ASTNodeObject
+          else
+            ancestor = undefined
+        when "PipelineExpression"
+          i := findChildIndex ancestor, child
+          if i is 1  // head
+            ancestor.children[i] = maybeWrap ancestor.children[i], ancestor
+            ancestor = ancestor.children[i] as ASTNodeObject
+          else if i is 2  // tail item
+            j := findChildIndex ancestor.children[i], child
+            ancestor.children[i][j][3] = maybeWrap ancestor.children[i][j][3], ancestor
+            ancestor = ancestor.children[i][j][3] as ASTNodeObject
+          else
+            ancestor = undefined
+        when "AssignmentExpression"
+          i := findChildIndex ancestor, child
+          if i >= 0 and ancestor.exp is ancestor.children[i]
+            ancestor.exp = ancestor.children[i] = maybeWrap ancestor.exp
+            ancestor = ancestor.exp as ASTNodeObject
+          else
+            ancestor =  undefined
       unless ancestor
         replaceNode exp,
           type: "Error"
