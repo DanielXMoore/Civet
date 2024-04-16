@@ -42,6 +42,7 @@ import {
   maybeRef,
   modifyString,
   negateCondition,
+  prependWhitespace,
   processAssignmentDeclaration,
   processBinaryOpExpression,
   processCallMemberExpression,
@@ -111,12 +112,7 @@ TopLevelStatement
   # NOTE: !EOS forces semicolon after all but last statement, forbids leading __
   # NOTE: _? allows for leading inline comments
   !EOS _?:ws ModuleItem:statement StatementDelimiter:delimiter ->
-    if (ws) {
-      statement = {
-        ...statement,
-        children: [ws, ...statement.children],
-      }
-    }
+    statement = prependWhitespace(ws, statement)
     return [statement, delimiter]
 
 # Expressions with comma operator, or expressions with If and Switch
@@ -210,14 +206,14 @@ Arguments
     return $skip
 
 ImplicitArguments
-  ApplicationStart InsertOpenParen:open _?:ws NonPipelineArgumentList:args InsertCloseParen:close ->
+  ApplicationStart InsertOpenParen:open Trimmed_?:ws NonPipelineArgumentList:args InsertCloseParen:close ->
     // Don't treat as call if this is a postfix for/while/until/if/unless
     if (skipImplicitArguments(args)) return $skip
 
     return {
       type: "Call",
       args,
-      children: [open, insertTrimmingSpace(ws, ""), args, close]
+      children: [open, ws, args, close]
     }
 
 ExplicitArguments
@@ -249,7 +245,8 @@ ForbiddenImplicitCalls
   # NOTE: Don't allow non-heregex regexes that begin with a space as first argument without parens
   "/ "
   # NOTE: Exclude binary & operator with argument
-  "& " !IndentedFurther
+  # (which could otherwise be interpreted as an ampersand function)
+  &"&" BinaryOpRHS
   # Don't treat @@decorator @@decorator class ... as implicit calls
   ClassImplicitCallForbidden ( Class / AtAt )
   Identifier "=" Whitespace
@@ -442,7 +439,7 @@ UnaryPostfix
 
 TypePostfix
   _:ws NWTypePostfix:postfix ->
-    return [ws, postfix]
+    return prependWhitespace(ws, postfix)
 
 Tuple
   "tuple" NonIdContinue ->
@@ -498,7 +495,11 @@ UpdateExpressionSymbol
 
 # https://262.ecma-international.org/#prod-AssignmentExpression
 AssignmentExpression
-  # It is important for pipeline to have higher precedence than
+  # NOTE: ActualAssignment has highest precedence:
+  # `x = y |> z` parses as `x = (y |> z)` not `(x = y) |> z`
+  _?:ws ActualAssignment:assign ->
+    return prependWhitespace(ws, assign)
+  # NOTE: It is important for pipeline to have higher precedence than
   # usual binary operators, so that x |> & + 2 |> & * 3
   # is equivalent to x |> (& + 2) |> (& * 3)
   PipelineExpression
@@ -512,28 +513,27 @@ AssignmentExpression
 
 NonPipelineAssignmentExpression
   # NOTE: Try to match a single line assignment expression before matching newline then assignment expression
-  SingleLineAssignmentExpression
-  __ AssignmentExpressionTail
+  NonPipelineSingleLineAssignmentExpression
+  __ NonPipelineAssignmentExpressionTail
 
 SingleLineAssignmentExpression
   _?:ws AssignmentExpressionTail:tail ->
-    if (ws?.length) {
-      // Glom whitespace into identifiers and literals to ease checking of "simple" refs
-      // NOTE: This can get weird if we depend on the specific location of children
-      if (tail.children && tail.type !== "IterationExpression") {
-        return {
-          ...tail,
-          children: [...ws, ...tail.children]
-        }
-      }
-      return $0
-    }
-    return tail
+    return prependWhitespace(ws, tail)
+
+NonPipelineSingleLineAssignmentExpression
+  _?:ws NonPipelineAssignmentExpressionTail:tail ->
+    return prependWhitespace(ws, tail)
 
 AssignmentExpressionTail
   YieldExpression
   ArrowFunction
   ActualAssignment
+  ConditionalExpression
+
+NonPipelineAssignmentExpressionTail
+  YieldExpression
+  ArrowFunction
+  NonPipelineActualAssignment
   ConditionalExpression
 
 # An assignment that actually includes an assignment operator, not just passing down to a ConditionalExpression
@@ -543,6 +543,25 @@ ActualAssignment
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
   ( NotDedented UpdateExpression WAssignmentOp )+ ExtendedExpression ->
+    $1 = $1.map((x) => [x[0], x[1], ...x[2]])
+    $0 = [$1, $2]
+    return {
+      type: "AssignmentExpression",
+      children: $0,
+      // NOTE: This null marks the assignment for later processing to distinguish it
+      // from fake assignments that only add a name to a scope
+      names: null,
+      lhs: $1,
+      assigned: $1[0][1],
+      exp: $2,
+    }
+
+NonPipelineActualAssignment
+  # NOTE: Eliminated left recursion
+  # NOTE: Consolidated assignment ops
+  # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
+  # e.g. ++x *= 2 which we later convert to ++x, x *= 2
+  ( NotDedented UpdateExpression WAssignmentOp )+ NonPipelineExtendedExpression ->
     $1 = $1.map((x) => [x[0], x[1], ...x[2]])
     $0 = [$1, $2]
     return {
@@ -600,8 +619,7 @@ ArrowFunction
 FatArrow
   # Ensures at least one space before arrow
   _?:ws ( "=>" / "⇒" ) ->
-    if (!ws)
-      return " =>"
+    if (!ws) return " =>"
     return [ $1, "=>" ]
 
 TrailingDeclaration
@@ -1566,10 +1584,7 @@ NestedParameter
   Nested:ws Parameter+:params ->
     // Attach whitespace to first parameter
     params = [...params]
-    params[0] = {
-      ...params[0],
-      children: [ws, ...params[0].children],
-    }
+    params[0] = prependWhitespace(ws, params[0])
     return params
 
 Parameter
@@ -1609,7 +1624,7 @@ BindingIdentifier
   # NOTE: Added @param for binding identifiers
   # The parser will allow them in const/let/var declarations but JS/TS doesn't allow them there
   __:ws NWBindingIdentifier:identifier ->
-    return { ...identifier, children: [...ws, ...identifier.children] }
+    return prependWhitespace(ws, identifier)
 
 # Non-whitespace version of BindingIdentifier
 NWBindingIdentifier
@@ -1762,10 +1777,7 @@ NestedBindingPropertyList
     // Attach whitespace to first property
     return props.map( (prop, i) => {
       if (i > 0) return prop
-      return {
-        ...prop,
-        children: [ws, ...prop.children],
-      }
+      return prependWhitespace(ws, prop)
     })
 
 # https://262.ecma-international.org/#prod-BindingProperty
@@ -2471,9 +2483,7 @@ BlockStatementPart
   # NOTE: !EOS forces semicolon after all but last statement, forbids leading __
   # NOTE: _? allows for leading inline comments
   !EOS _?:ws StatementListItem:statement StatementDelimiter:delimiter ->
-    if (ws) {
-      statement = {...statement, children: [ ws, ...statement.children ]}
-    }
+    if (ws) statement = prependWhitespace(ws, statement)
     return [statement, delimiter]
 
 # https://262.ecma-international.org/#prod-Literal
@@ -2551,9 +2561,7 @@ _ArrayLiteral
     const [ content, ws, close ] = $3
 
     if (content.type === "RangeExpression") {
-      return {...content,
-        children: [...content.children, ...ws],
-      }
+      return prependWhitespace(ws, content)
     }
 
     let children
@@ -2880,7 +2888,7 @@ NestedPropertyDefinition
       if (!Array.isArray(prop)) prop = [prop]
       if (i === 0) {
         const [first, ...rest] = prop
-        prop = [ {...first, children: [...ws, ...first.children]}, ...rest ]
+        prop = [ prependWhitespace(ws, first), ...rest ]
       }
       const last = prop[prop.length-1]
       prop = [
@@ -2934,10 +2942,7 @@ ObjectPropertyDelimiter
 # NOTE: Must start on same line
 PropertyDefinition
   _?:ws NamedProperty:prop ->
-    return {
-      ...prop,
-      children: [ws, ...prop.children],
-    }
+    return prependWhitespace(ws, prop)
 
   # NOTE: Added LiveScript flagging shorthand {+x, -y} -> {x: true, y: false}
   # NOTE: extended to allow {!y} -> {y: false}
@@ -2972,10 +2977,7 @@ PropertyDefinition
     // NOTE: Forbidding EmptyBlock in MethodDefinition to allow `foo()`
     // shorthand for `foo: foo()`
     if (!def.block || def.block.empty) return $skip
-    return {
-      ...def,
-      children: [ws, ...def.children],
-    }
+    return prependWhitespace(ws, def)
   _?:ws DotDotDot:dots ExtendedExpression:exp ->
     return {
       type: "SpreadProperty",
@@ -2993,7 +2995,7 @@ PropertyDefinition
       switch (value.type) {
         // `{identifier}` remains `{identifier}`, the one shorthand JS supports
         case "Identifier":
-          return {...value, children: [ws, ...value.children]}
+          return prependWhitespace(ws, value)
         // PropertyGlob like x.{a,b} turns into ObjectExpression {a: x.a, b: x.b}
         // (via `processCallMemberExpression`)
         case "ObjectExpression":
@@ -3065,7 +3067,7 @@ PropertyDefinition
     }
   # NOTE: basic identifiers are now part of the rule above
   #_?:ws IdentifierReference:id ->
-  #  return {...id, children: [...ws, ...id.children]}
+  #  return prependWhitespace(ws, id)
 
 NamedProperty
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
@@ -5454,7 +5456,7 @@ NonNewlineWhitespace
 
 # Whitespace / comments with a single leading space trimmed off if possible
 Trimmed_
-  _?:ws ->
+  _:ws ->
     return insertTrimmingSpace(ws, "")
 
 # Optional whitespace including newlines and comments
@@ -5606,10 +5608,10 @@ Dot
   "." ->
     return { $loc, token: $1 }
   # English possessive
-  /['’]s/ _:ws ->
+  /['’]s/ Trimmed_:ws ->
     return [
       { $loc, token: "." },
-      insertTrimmingSpace(ws, ""),
+      ws,
     ]
 
 DotDot
@@ -7034,7 +7036,7 @@ TypePrimary
 ImportType
   "import" OpenParen __ StringLiteral __ CloseParen ( Dot IdentifierName )? TypeArguments?
   # NOTE: Added implicit import without parens
-  "import" InsertOpenParen Trimmed_ StringLiteral InsertCloseParen
+  "import" InsertOpenParen Trimmed_? StringLiteral InsertCloseParen
 
 TypeTuple
   OpenBracket ( NestedTypeList / TypeList? ) __ CloseBracket ->
