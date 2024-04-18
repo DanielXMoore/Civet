@@ -447,6 +447,8 @@ Remember that
 appends a single item unless it is an array
 (or has the [`Symbol.isConcatSpreadable` property](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/isConcatSpreadable)),
 in which case it flattens it into the target array.
+(The right-hand side also needs to offer the array-like interface:
+`length` and indexed access.)
 Civet's assignment operator behaves the same:
 
 <Playground>
