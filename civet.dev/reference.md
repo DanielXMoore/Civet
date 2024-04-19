@@ -884,7 +884,7 @@ x.map +&
 x.map typeof &
 await.allSettled x.map await &.json()
 x.forEach delete &.old
-x.filter (&)
+x.filter &
 </Playground>
 
 ::: info
@@ -936,12 +936,8 @@ Wrapping a binary operator in parentheses turns it into a two-argument function:
 <Playground>
 numbers.reduce (+)
 booleans.reduce (||), false
+masks.reduce (&), 0xfff
 </Playground>
-
-::: info
-One exception: `(&)` is currently the single-argument identity function,
-not two-argument bitwise and.
-:::
 
 ### Binary Operator Sections
 
