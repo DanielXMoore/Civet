@@ -447,6 +447,8 @@ Remember that
 appends a single item unless it is an array
 (or has the [`Symbol.isConcatSpreadable` property](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/isConcatSpreadable)),
 in which case it flattens it into the target array.
+(The right-hand side also needs to offer the array-like interface:
+`length` and indexed access.)
 Civet's assignment operator behaves the same:
 
 <Playground>
@@ -910,6 +912,23 @@ You can also type the argument:
 increment := &: number + 1
 </Playground>
 
+### Partial Function Application
+
+Another shorthand for one-argument functions is to call a function
+with a `.` placeholder argument:
+
+<Playground>
+console.log "result:", .
+</Playground>
+
+More generally, if you use `.` within a function call, that call gets wrapped
+in a one-argument function and `.` gets replaced by that argument.
+You can use `.` multiple times in the same function:
+
+<Playground>
+compute ., . + 1, . * 2, (.).toString()
+</Playground>
+
 ### Binary Operators as Functions
 
 Wrapping a binary operator in parentheses turns it into a two-argument function:
@@ -943,6 +962,12 @@ Add a space after them to make them binary operator sections.
 <Playground>
 (+x)
 (+ x)
+</Playground>
+
+The provided left- or right-hand side can include more binary operators:
+
+<Playground>
+counts.map (* 2 + 1)
 </Playground>
 
 ### Functions as Infix Operators

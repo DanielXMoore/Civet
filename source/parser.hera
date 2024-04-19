@@ -267,7 +267,15 @@ ArgumentsWithTrailingMemberExpressions
 TrailingMemberExpressions
   # NOTE: Assert "." to not match "?" or "!" as a member expression on the following line
   MemberExpressionRest* ( IndentedAtLeast &( "?"? "." ![0-9] ) MemberExpressionRest )* ->
-    return $1.concat($2)
+    return $1.concat($2.map(([ws, , memberExpressionRest]) => {
+      if (Array.isArray(memberExpressionRest)) {
+        return [ws, ...memberExpressionRest]
+      }
+      return {
+        ...memberExpressionRest,
+        children: [ws, ...memberExpressionRest.children]
+      }
+    }))
 
 AllowedTrailingMemberExpressions
   TrailingMemberPropertyAllowed TrailingMemberExpressions -> $2
@@ -893,17 +901,21 @@ ImplementsTarget
 # https://262.ecma-international.org/#prod-ClassBody
 # NOTE: Nesting and indentation sensitive
 ClassBody
-  __ OpenBrace NestedClassElements?:elements __ CloseBrace  ->
+  __ OpenBrace NestedClassElements?:expressions __ CloseBrace  ->
+    if (!expressions) expressions = $0[2] = []
     return {
-      type: "ClassBody",
+      type: "BlockStatement",
+      subtype: "ClassBody",
       children: $0,
-      elements,
+      expressions,
     }
-  InsertOpenBrace NestedClassElements?:elements InsertNewline InsertIndent InsertCloseBrace ->
+  InsertOpenBrace NestedClassElements?:expressions InsertNewline InsertIndent InsertCloseBrace ->
+    if (!expressions) expressions = $0[1] = []
     return {
-      type: "ClassBody",
+      type: "BlockStatement",
+      subtype: "ClassBody",
       children: $0,
-      elements,
+      expressions,
     }
 
 NestedClassElements
@@ -3939,25 +3951,42 @@ IterationExpression
 LoopStatement
   LoopClause:clause Block:block ->
     return {
+      ...clause,
       type: "IterationStatement",
       children: [...clause.children, block],
       block,
     }
 
 LoopClause
-  Loop -> {
-    type: "IterationStatement",
-    children: [$1],
-  }
+  Loop:kind ->
+    const expression = {
+      type: "Literal",
+      children: ["true"],
+      raw: "true",
+    }
+    const condition = {
+      type: "ParenthesizedExpression",
+      children: [ "(", expression, ")" ],
+      expression,
+    }
+    return {
+      type: "IterationStatement",
+      subtype: kind.token,
+      children: [kind, condition],
+      condition,
+    }
 
 # https://262.ecma-international.org/#prod-DoWhileStatement
 DoWhileStatement
   # NOTE: Condition provides optional parens
-  Do NoPostfixBracedBlock:block __ WhileClause -> {
-    type: "IterationStatement",
-    children: $0,
-    block: block
-  }
+  Do NoPostfixBracedBlock:block __ WhileClause:clause ->
+    return {
+      ...clause,
+      type: "IterationStatement",
+      subtype: "do-while",
+      children: $0,
+      block,
+    }
 
 DoStatement
   Do NoPostfixBracedBlock:block ->
@@ -3987,6 +4016,7 @@ WhileClause
 
     return {
       type: "IterationStatement",
+      subtype: kind.token,
       children: [kind, ws, condition],
       condition,
     }
@@ -5723,7 +5753,7 @@ LetOrConstOrVar
 Loop
   # NOTE: loop becomes while
   "loop" NonIdContinue ->
-    return { $loc, token: "while(true)" }
+    return { $loc, token: "while" }
 
 New
   "new" NonIdContinue ->
@@ -6970,7 +7000,7 @@ TypeIndexedAccess
       "]"
     ]
   # NOTE: Extension of coffeePrototype syntax: T::x -> T["x"]
-  CoffeePrototypeEnabled DoubleColon:p IdentifierName?:id ->
+  CoffeePrototypeEnabled DoubleColon:p ( IdentifierName / LengthShorthand )?:id ->
     const open = { ...p, token: '["' }
     return [
       open,
