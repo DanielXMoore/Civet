@@ -1,10 +1,15 @@
 import type {
+  AmpersandBlockBody
   ASTRef
   ASTLeaf
   ASTNode
   ASTNodeBase
+  ASTNodeObject
+  ASTNodeParent
+  IsParent
+  IsToken
   Literal
-  Parent
+  Whitespace
   TypeSuffix
   ReturnTypeAnnotation
   StatementTuple
@@ -32,7 +37,7 @@ assert := {
  * Adds parent pointers to all nodes in the AST. Elements within
  * arrays of nodes receive the closest non-array object parent.
  */
-function addParentPointers(node: ASTNode, parent?: ASTNodeBase): void
+function addParentPointers(node: ASTNode, parent?: ASTNodeObject): void
   if (not node?) return
   if (typeof node !== "object") return
 
@@ -42,7 +47,7 @@ function addParentPointers(node: ASTNode, parent?: ASTNodeBase): void
       addParentPointers(child, parent)
     return
 
-  node = node as ASTNodeBase
+  node = node as ASTNodeObject
   node.parent = parent
   if node.children
     for child of node.children
@@ -78,6 +83,37 @@ function removeParentPointers(node): void {
     }
   }
 }
+
+// If node is not an ASTNodeObject, wrap it in a special "Wrapper" node
+// so that it can have a parent (second argument).
+function maybeWrap(node: ASTNode, parent: ASTNodeObject?): ASTNodeObject
+  unless isASTNodeObject node
+    updateParentPointers node = {
+      type: 'Wrapper'
+      children: [ node ]
+      parent
+    }
+  node
+
+// Unwrap "Wrapper" node if there is one.
+// You should call `updateParentPointers` after this gets assigned somewhere.
+function maybeUnwrap(node: ASTNode): ASTNode
+  if node?.type is "Wrapper"
+    node.children[0]
+  else
+    node
+
+function isASTNodeObject(node: ASTNode): node is ASTNodeObject
+  (and)
+    node <? "object"
+    node != null
+    not Array.isArray node
+
+function isParent(node: ASTNode): node is IsParent
+  node? and node.children?
+
+function isToken(node: ASTNode): node is IsToken
+  node? and node.token?
 
 function isEmptyBareBlock(node: ASTNode): boolean {
   if (node?.type !== "BlockStatement") return false
@@ -155,36 +191,72 @@ function isComma(node: ASTNode): (ASTLeaf & { token: "," }) | undefined
  * maintains $loc for source maps
  */
 function insertTrimmingSpace(target: ASTNode, c: string): ASTNode
-  return target unless target
+  return target unless target?
 
   if Array.isArray target
     return c if target.length is 0
 
-    return target.map (e, i) =>
-      return insertTrimmingSpace(e, c) if i is 0
-      return e
-
-  if target.children
-    return {
+    target.map (e, i) =>
+      if i is 0
+        insertTrimmingSpace(e, c)
+      else
+        e
+  else if isParent target
+    {
       ...target
       children: insertTrimmingSpace(target.children, c)
     }
-
-  if target.token
-    return {
+  else if isToken target
+    {
       ...target
       token: target.token.replace(/^ ?/, c)
     }
+  else
+    target
 
-  return target
+function inplaceInsertTrimmingSpace(target: ASTNode, c: string): void
+  return target unless target?
+  if Array.isArray target
+    inplaceInsertTrimmingSpace target[0], c
+  else if isParent target
+    inplaceInsertTrimmingSpace target.children, c
+  else if isToken target
+    target.token = target.token.replace(/^ ?/, c)
 
 // Returns leading space as a string, or undefined if none
-function getTrimmingSpace(target: ASTNode) {
-  if (!target) return
-  if (Array.isArray(target)) return getTrimmingSpace(target[0])
-  if (target.children) return getTrimmingSpace(target.children[0])
-  if (target.token) return target.token.match(/^ ?/)[0]
-}
+function getTrimmingSpace(target: ASTNode)
+  return unless target?
+  if Array.isArray target
+    getTrimmingSpace target[0]
+  else if isParent target
+    getTrimmingSpace target.children[0]
+  else if isToken target
+    target.token.match(/^ ?/)![0]
+
+// Glom content e.g. whitespace into AST nodes
+// NOTE: This can get weird if we depend on the specific location of children
+function prepend(prefix: ASTNode, node: ASTNode): ASTNode
+  return node unless prefix and prefix.length
+  if Array.isArray node
+    [prefix, ...node]
+  else if isParent node
+    {
+      ...node
+      children: [prefix, ...node.children]
+    } as typeof node
+  // NOTE: Not glomming into an AST leaf; would need to flatten prefix
+  else
+    [prefix, node]
+
+function inplacePrepend(prefix: ASTNode, node: ASTNode): void
+  return unless prefix
+  return if Array.isArray(prefix) and not prefix.length
+  if Array.isArray node
+    node.unshift prefix
+  else if isParent node
+    node.children.unshift prefix
+  else
+    throw new Error "Can't prepend to a leaf node"
 
 // Convert (non-Template) Literal to actual JavaScript value
 function literalValue(literal: Literal)
@@ -221,7 +293,7 @@ function literalValue(literal: Literal)
   }
   throw new Error("Unrecognized literal " + JSON.stringify(literal))
 
-function startsWith(target: ASTNodeBase, value: RegExp)
+function startsWith(target: ASTNode, value: RegExp)
   if (!target) return
   if Array.isArray target
     let i = 0
@@ -232,9 +304,9 @@ function startsWith(target: ASTNodeBase, value: RegExp)
       i++
     if i < l
       return startsWith target[i], value
+  if (typeof target is "string") return value.test target
   if (target.children) return startsWith target.children, value
   if (target.token) return value.test target.token
-  if (typeof target is "string") return value.test target
 
 /**
  * Does this expression have an `await` in it and thus needs to be `async`?
@@ -290,130 +362,45 @@ function removeHoistDecs(node: ASTNode): void
     for child of node.children
       removeHoistDecs(child)
 
-function makeAmpersandFunction(bodyAfterRef = []): ASTNode
-  ref := makeRef("$")
-  body := [ref, ...bodyAfterRef]
-  parameters :=
-    type: "Parameters"
-    children: [ref]
-    names: []
-  block :=
-    expressions: body
+function makeAmpersandFunction(rhs: AmpersandBlockBody): ASTNode
+  {ref, typeSuffix, body} .= rhs
+  unless ref?
+    ref = makeRef "$"
+    inplacePrepend ref, body
+  if body?.type is "ObjectExpression"
+    body = makeLeftHandSideExpression body
 
-  return {
+  parameters := makeNode {
+    type: "Parameters"
+    children: typeSuffix ? ["(", ref, typeSuffix, ")"] : [ref]
+    names: []
+  }
+  expressions := [body]
+  block := makeNode {
+    bare: true
+    expressions
+    children: [expressions]
+  }
+
+  children := [ parameters, " => ", block ]
+  async := hasAwait(body)
+  if async
+    children.unshift("async ")
+
+  return makeNode {
     type: "ArrowFunction"
-    signature:
-      modifier: {}
-    children: [parameters, " => ", body]
+    signature: {
+      modifier: {
+        async
+      }
+    }
+    children
     ref
     body
     ampersandBlock: true
     block
     parameters
   }
-
-/**
-* A more complete version of makeAmpersandFunction that handles unary prefix
-*/
-function makeAmpersandFunctionExpression(prefix: UnaryOp[], rhs: AmpersandBlockBody): ASTNode
-  let ref, body, typeSuffix
-
-  // Only unary ops
-  if (!rhs) {
-    body = ref = makeRef("$")
-  } else {
-    ({ref, typeSuffix} = rhs)
-    if (!ref) {
-      throw new Error("Could not find ref in ampersand shorthand block")
-    }
-    body = rhs
-  }
-  if (prefix.length) {
-    body = {
-      type: "UnaryExpression",
-      children: [ processUnaryExpression(prefix, body, undefined) ]
-    }
-  }
-
-  parameters := {
-    type: "Parameters",
-    children: typeSuffix ? ["(", ref, typeSuffix, ")"] : [ref],
-    names: [],
-  }
-  expressions := [body]
-  block := {
-    bare: true,
-    expressions,
-    children: [expressions],
-  }
-
-  children := [ parameters, " => ", block ]
-  async := hasAwait(body)
-  if (async) {
-    children.unshift("async ")
-  }
-
-  return {
-    type: "ArrowFunction",
-    signature: {
-      modifier: {
-        async,
-      },
-    },
-    children,
-    ref,
-    body,
-    ampersandBlock: true,
-    block,
-    parameters,
-  }
-
-function makeAmpersandBlockRHSBody(typeSuffix, callExpRest?, unaryPostfix?, assign?, binopRHS?): ASTNode
-  ref := makeRef("$")
-
-  exp .= {
-    type: "AmpersandRef",
-    children: [ref],
-    names: [],
-    ref,
-  }
-
-  if (callExpRest) {
-    exp.children.push(...callExpRest[1])
-  }
-
-  if (unaryPostfix) {
-    exp = processUnaryExpression([], exp, unaryPostfix)
-  }
-
-  if (assign) {
-    // Based on ActualAssignment
-    const [op1, more, rhs] = assign
-    const lhs = [
-      [undefined, exp, ...op1],
-      ...more.map((x) => [x[0], x[1], ...x[2]]),
-    ]
-    exp = {
-      type: "AssignmentExpression",
-      children: [lhs, rhs],
-      names: null,
-      lhs,
-      assigned: exp,
-      exp: rhs,
-    }
-  }
-
-  if (binopRHS) {
-    exp = {
-      children: processBinaryOpExpression([exp, binopRHS[1]]),
-    }
-  }
-
-  // Put at top level for AmpersandFunctionExpression to process
-  exp.ref = ref
-  exp.typeSuffix = typeSuffix
-
-  return exp
 
 /**
  * Convert general ExtendedExpression into LeftHandSideExpression.
@@ -433,6 +420,7 @@ function makeLeftHandSideExpression(expression)
     case "NewExpression":
     case "ParenthesizedExpression":
     case "Ref":
+    case "Placeholder":
     case "StatementExpression": // wrapIIFE
       return expression
 
@@ -449,9 +437,9 @@ function makeLeftHandSideExpression(expression)
  * recursing into arrays but not objects.  More efficient version of
  * `addParentPointers` when just injecting one new node.
  */
-function updateParentPointers(node: ASTNode, parent?: Parent, depth = 1): void
-  if (not node?) return
-  if (typeof node !== "object") return
+function updateParentPointers(node: ASTNode, parent?: ASTNodeParent, depth = 1): void
+  return unless node?
+  return unless node <? "object"
 
   // NOTE: Arrays are transparent and skipped when traversing via parent
   if Array.isArray(node)
@@ -459,13 +447,13 @@ function updateParentPointers(node: ASTNode, parent?: Parent, depth = 1): void
       updateParentPointers(child, parent, depth)
     return
 
-  node = node as ASTNodeBase
-  if (parent?) node.parent = parent
-  if depth and node.children
+  node = node as ASTNodeObject
+  node.parent = parent if parent?
+  if depth and isParent node
     for child of node.children
       updateParentPointers(child, node, depth-1)
 
-function makeNode<T extends ASTNodeBase>(node: T): T
+function makeNode<T extends ASTNodeObject>(node: T): T
   updateParentPointers node
   node
 
@@ -638,23 +626,28 @@ export {
   hasAwait
   hasImportDeclaration
   hasYield
+  inplaceInsertTrimmingSpace
+  inplacePrepend
   insertTrimmingSpace
+  isASTNodeObject
   isComma
   isEmptyBareBlock
   isExit
   isFunction
   isWhitespaceOrEmpty
   literalValue
-  makeAmpersandBlockRHSBody
   makeAmpersandFunction
-  makeAmpersandFunctionExpression
   makeLeftHandSideExpression
   makeNode
   makeRef
   maybeRef
+  maybeWrap
+  maybeUnwrap
   needsRef
   parenthesizeType
+  prepend
   removeHoistDecs
+  removeParentPointers
   skipIfOnlyWS
   startsWith
   updateParentPointers

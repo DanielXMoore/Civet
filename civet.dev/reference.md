@@ -871,10 +871,11 @@ function search<T>(list: T[]): T | undefined
   list.destroy()
 </Playground>
 
-### Single-Argument Function Shorthand
+### Single-Argument Function Shorthand (`&`)
 
-`&` (optionally preceding by unary operators) marks the beginning of a
-single-argument function whose argument gets immediately used:
+`&` acts as a placeholder for the argument of a single-argument function,
+with the function wrapper lifted to just inside the nearest function call,
+assignment, or pipeline.
 
 <Playground>
 x.map &.name
@@ -882,13 +883,21 @@ x.map &.profile?.name[0...3]
 x.map &.callback a, b
 x.map +&
 x.map typeof &
-await.allSettled x.map await &.json()
 x.forEach delete &.old
-x.filter (&)
+await.allSettled x.map await &.json()
+x.map [&, true]
+x.map [&, &.toUpperCase()]
+x.map name: &
+x.filter &
+x.filter 0 <= & < n
+x.map (& + 1) % n
+capitalize := &[0].toUpperCase() +
+              &[1..].toLowerCase()
 </Playground>
 
 ::: info
-Short function block syntax like [Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc),
+Short function block syntax originally inspired by
+[Ruby symbol to proc](https://ruby-doc.org/core-3.1.2/Symbol.html#method-i-to_proc),
 [Crystal](https://crystal-lang.org/reference/1.6/syntax_and_semantics/blocks_and_procs.html#short-one-parameter-syntax),
 or [Elm record access](https://elm-lang.org/docs/records#access).
 :::
@@ -898,6 +907,7 @@ You can also omit `&` when starting with a `.` or `?.` property access:
 <Playground>
 x.map .name
 x.map ?.profile?.name[0...3]
+x.map `${.firstName} ${.lastName}`
 </Playground>
 
 You can also assign properties:
@@ -910,6 +920,7 @@ You can also type the argument:
 
 <Playground>
 increment := &: number + 1
+show := &: ??? |> JSON.stringify |> console.log
 </Playground>
 
 ### Partial Function Application
@@ -929,6 +940,14 @@ You can use `.` multiple times in the same function:
 compute ., . + 1, . * 2, (.).toString()
 </Playground>
 
+A key difference between `&` and `.` is that `.` lifts beyond a function call
+(and requires one), while `&` does not:
+
+<Playground>
+f a, &
+f a, .
+</Playground>
+
 ### Binary Operators as Functions
 
 Wrapping a binary operator in parentheses turns it into a two-argument function:
@@ -936,12 +955,8 @@ Wrapping a binary operator in parentheses turns it into a two-argument function:
 <Playground>
 numbers.reduce (+)
 booleans.reduce (||), false
+masks.reduce (&), 0xfff
 </Playground>
-
-::: info
-One exception: `(&)` is currently the single-argument identity function,
-not two-argument bitwise and.
-:::
 
 ### Binary Operator Sections
 

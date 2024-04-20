@@ -10,6 +10,8 @@ import type {
   AccessStart
   ASTNode
   ASTNodeBase
+  ASTNodeObject
+  ASTNodeParent
   ASTRef
   AssignmentExpression
   BlockStatement
@@ -22,14 +24,16 @@ import type {
   MemberExpression
   MethodDefinition
   ParseRule
-  PartialPlaceholder
+  Placeholder
   StatementExpression
   StatementTuple
+  TypeSuffix
   WSNode
 } from ./types.civet
 
 import {
   findAncestor
+  findChildIndex
   gatherRecursive
   gatherRecursiveAll
   gatherRecursiveWithinFunction
@@ -43,21 +47,25 @@ import {
   hasAwait
   hasImportDeclaration
   hasYield
+  inplaceInsertTrimmingSpace
+  inplacePrepend
   insertTrimmingSpace
+  isASTNodeObject
   isComma
   isEmptyBareBlock
   isFunction
   isWhitespaceOrEmpty
   literalValue
-  makeAmpersandBlockRHSBody
   makeAmpersandFunction
-  makeAmpersandFunctionExpression
   makeLeftHandSideExpression
   makeNode
   makeRef
   maybeRef
+  maybeWrap
+  maybeUnwrap
   needsRef
   parenthesizeType
+  prepend
   wrapIIFE
   wrapWithReturn
 } from ./util.civet
@@ -444,8 +452,9 @@ function processCallMemberExpression(node)
 /**
  * Replace this node with another, by modifying its parent's children.
  */
-function replaceNode(node: ASTNodeBase, newNode: ASTNode): void
-  unless node.parent?
+function replaceNode(node: ASTNodeObject, newNode: ASTNode, parent?: ASTNodeParent): void
+  parent ??= node.parent
+  unless parent?
     throw new Error "replaceNode failed: node has no parent"
 
   function recurse(children: ASTNode[]): boolean
@@ -457,11 +466,18 @@ function replaceNode(node: ASTNodeBase, newNode: ASTNode): void
         return true if recurse child
     return false
 
-  unless recurse node.parent.children
+  unless recurse parent.children
     throw new Error "replaceNode failed: didn't find child node in parent"
 
-  if newNode <? "object" and not Array.isArray newNode
-    newNode.parent = node.parent
+  // Adjust 'exp' etc. alias pointers
+  for key, value in parent
+    if value is node
+      parent[key] = newNode
+      return
+
+  if isASTNodeObject newNode
+    newNode.parent = parent
+  node.parent = undefined
 
 // Wrap expression in parentheses to make into a statement when:
 // * object literal expression
@@ -744,9 +760,12 @@ function processAssignments(statements): void {
 
       let block?: BlockStatement
       // Extract StatementExpression as block
-      if exp.parent.type is "BlockStatement" and !$1.-1?.-1?.special// can only prepend to assignments that are children of blocks
+      if exp.parent?.type is "BlockStatement" and !$1.-1?.-1?.special// can only prepend to assignments that are children of blocks
         block = makeBlockFragment()
-        if ref := prependStatementExpressionBlock([null,null,$2], block)
+        if ref := prependStatementExpressionBlock(
+          {type: "Initializer", exp: $2, children: [undefined, undefined, $2]}
+          block
+        )
           exp.children = exp.children.map (c: ASTNode) -> if c is $2 then ref else c
           // @ts-ignore
           $2 = ref
@@ -1059,7 +1078,7 @@ function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule
 
   const { expressions: statements } = root
 
-  processPartialPlaceholders(statements)
+  processPlaceholders(statements)
   processNegativeIndexAccess(statements)
   processTypes(statements)
   processDeclarationConditions(statements, m.getRef)
@@ -1128,44 +1147,123 @@ function populateRefs(statements: ASTNode): void {
   }
 }
 
-function processPartialPlaceholders(statements: StatementTuple[]): void
-  partialMap := new Map<ASTNodeBase, PartialPlaceholder[]>()
+function processPlaceholders(statements: StatementTuple[]): void
+  placeholderMap := new Map<ASTNodeObject, (Placeholder)[]>()
 
-  gatherRecursiveAll statements, .type is "PartialPlaceholder"
+  gatherRecursiveAll statements, .type is "Placeholder"
   .forEach (_exp) =>
-    exp := _exp as! PartialPlaceholder
-    { ancestor } .= findAncestor exp, ?.type is "Call"
+    exp := _exp as! Placeholder
+    let ancestor: ASTNodeObject?
+    if exp.subtype is "."
+      // Partial placeholder . lifts to the nearest call expression,
+      // including the call itself and any surrounding unary operations.
+      { ancestor } = findAncestor exp, .type is "Call"
+      ancestor = ancestor?.parent
+      while ancestor?.parent?.type is "UnaryExpression" or ancestor?.parent?.type is "NewExpression"
+        ancestor = ancestor.parent
+      unless ancestor
+        replaceNode exp,
+          type: "Error"
+          message: 'Partial placeholder . outside of call expression'
+        return
+    else // "&"
+      // Ampersand placeholder & lifts to nearest call expression,
+      // excluding the call itself, or else to the nearest block statement.
+      let child
+      { ancestor, child } = findAncestor exp, (ancestor, child) =>
+        {type} := ancestor
+        (or)
+          type is "Call"
+          type is "BlockStatement"
+          type is "PipelineExpression"
+          // Declaration
+          type is "Initializer"
+          // Right-hand side of assignment
+          type is "AssignmentExpression" and ancestor.exp is child
+      switch ancestor?.type
+        when "Call"
+          i := findChildIndex ancestor.args, child
+          if i >= 0
+            ancestor.args[i] = maybeWrap ancestor.args[i], ancestor
+            ancestor = ancestor.args[i] as ASTNodeObject
+          else
+            ancestor = undefined
+        when "BlockStatement"
+          i := findChildIndex ancestor.expressions, child
+          if i >= 0
+            ancestor.expressions[i][1] = maybeWrap ancestor.expressions[i][1], ancestor
+            ancestor = ancestor.expressions[i][1] as ASTNodeObject
+          else
+            ancestor = undefined
+        when "PipelineExpression"
+          i := findChildIndex ancestor, child
+          if i is 1  // head
+            // & in pipeline head (& |> ...) wraps function around entire pipeline
+            ancestor = ancestor
+          else if i is 2  // tail item
+            j := findChildIndex ancestor.children[i], child
+            ancestor.children[i][j][3] = maybeWrap ancestor.children[i][j][3], ancestor
+            ancestor = ancestor.children[i][j][3] as ASTNodeObject
+          else
+            ancestor = undefined
+        when "AssignmentExpression", "Initializer"
+          i := findChildIndex ancestor, child
+          if i >= 0 and ancestor.exp is ancestor.children[i]
+            ancestor.exp = ancestor.children[i] = maybeWrap ancestor.exp, ancestor
+            ancestor = ancestor.exp as ASTNodeObject
+          else
+            ancestor =  undefined
+      unless ancestor
+        replaceNode exp,
+          type: "Error"
+          message: 'Ampersand placeholder & outside of block'
 
-    ancestor = ancestor?.parent
-
-    while ancestor?.parent?.type is "UnaryExpression" or ancestor?.parent?.type is "NewExpression"
-      ancestor = ancestor.parent
-
-    if ancestor
-      if partialMap.has ancestor
-        partialMap.get(ancestor)!.push exp
+    if ancestor?
+      if placeholderMap.has ancestor
+        placeholderMap.get(ancestor)!.push exp
       else
-        partialMap.set ancestor, [exp]
-    else
-      replaceNode exp, {
-        type: "Error"
-        message: "Partial placeholder outside of call expression"
-        exp.parent
-      }
+        placeholderMap.set ancestor, [exp]
 
-  for [ancestor, placeholders] of partialMap
+  for [ancestor, placeholders] of placeholderMap
     ref .= makeRef "$"
 
-    placeholders.forEach (exp) =>
-      replaceNode exp.children.-1, ref
+    let typeSuffix: TypeSuffix?
+    for each placeholder of placeholders
+      // Take first typeSuffix (hope any additional type suffixes are identical)
+      typeSuffix ??= placeholder.typeSuffix
+      // NOTE: Replace last child instead of placeholder itself
+      // so that we preserve any whitespace that's been glommed as a prefix
+      replaceNode placeholder.children.-1, ref
 
-    rhs := {
-      ref,
-      children: [ancestor]
-    }
+    // Function wrapping can change parent; use original for replaceNode
+    {parent} := ancestor
+    body := maybeUnwrap ancestor
+    fnExp .= makeAmpersandFunction { ref, typeSuffix, body }
 
-    fnExp := makeAmpersandFunctionExpression [], rhs
-    replaceNode ancestor, fnExp
+    // Arrow function needs to be wrapped in parens in many contexts.
+    // This doesn't happen with "&", but can with ".".
+    let outer: boolean?
+    switch parent?.type
+      when "Call"
+        outer = ancestor is
+          parent.args[findChildIndex parent.args, ancestor]
+      when "BlockStatement"
+        outer = ancestor is
+          parent.expressions[findChildIndex parent.expressions, ancestor][1]
+      when "PipelineExpression"
+        outer = ancestor is
+          parent.children[2][findChildIndex parent.children[2], ancestor][3]
+      when "AssignmentExpression", "Initializer"
+        outer = ancestor is parent.exp
+    unless outer
+      fnExp = makeLeftHandSideExpression fnExp
+
+    replaceNode ancestor, fnExp, parent
+
+    // Move a leading space outside the function wrapper
+    if ws := getTrimmingSpace body
+      inplaceInsertTrimmingSpace body, ""
+      inplacePrepend ws, fnExp
 
   return
 
@@ -1382,9 +1480,7 @@ export {
   isWhitespaceOrEmpty
   lastAccessInCallExpression
   literalValue
-  makeAmpersandBlockRHSBody
   makeAmpersandFunction
-  makeAmpersandFunctionExpression
   makeEmptyBlock
   makeExpressionStatement
   makeGetterMethod
@@ -1394,6 +1490,7 @@ export {
   modifyString
   negateCondition
   precedenceStep
+  prepend
   processAssignmentDeclaration
   processBinaryOpExpression
   processCallMemberExpression

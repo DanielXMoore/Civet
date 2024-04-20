@@ -32,9 +32,7 @@ import {
   isWhitespaceOrEmpty,
   lastAccessInCallExpression,
   literalValue,
-  makeAmpersandBlockRHSBody,
   makeAmpersandFunction,
-  makeAmpersandFunctionExpression,
   makeEmptyBlock,
   makeExpressionStatement,
   makeGetterMethod,
@@ -43,6 +41,7 @@ import {
   maybeRef,
   modifyString,
   negateCondition,
+  prepend,
   processAssignmentDeclaration,
   processBinaryOpExpression,
   processCallMemberExpression,
@@ -112,12 +111,7 @@ TopLevelStatement
   # NOTE: !EOS forces semicolon after all but last statement, forbids leading __
   # NOTE: _? allows for leading inline comments
   !EOS _?:ws ModuleItem:statement StatementDelimiter:delimiter ->
-    if (ws) {
-      statement = {
-        ...statement,
-        children: [ws, ...statement.children],
-      }
-    }
+    statement = prepend(ws, statement)
     return [statement, delimiter]
 
 # Expressions with comma operator, or expressions with If and Switch
@@ -211,14 +205,14 @@ Arguments
     return $skip
 
 ImplicitArguments
-  ApplicationStart InsertOpenParen:open _?:ws NonPipelineArgumentList:args InsertCloseParen:close ->
+  ApplicationStart InsertOpenParen:open Trimmed_?:ws NonPipelineArgumentList:args InsertCloseParen:close ->
     // Don't treat as call if this is a postfix for/while/until/if/unless
     if (skipImplicitArguments(args)) return $skip
 
     return {
       type: "Call",
       args,
-      children: [open, insertTrimmingSpace(ws, ""), args, close]
+      children: [open, ws, args, close]
     }
 
 ExplicitArguments
@@ -245,10 +239,13 @@ ApplicationStart
 
 ForbiddenImplicitCalls
   # Reserved words that prevent spaced implicit function application
-  # ie: the 'of' in 'for x of ...'
-  /(as|of|satisfies|then|when|implements|xor|xnor)(?!\p{ID_Continue}|[\u200C\u200D$])/
+  # eg: the 'of' in 'for x of ...'
+  ReservedBinary
   # NOTE: Don't allow non-heregex regexes that begin with a space as first argument without parens
   "/ "
+  # NOTE: Exclude binary & operator with argument
+  # (which could otherwise be interpreted as an ampersand function)
+  &( /&(?=\s)/ !( NotDedented ( Ampersand / ReservedBinary ) ) ( IndentedFurther / !EOS ) ) BinaryOpRHS
   # Don't treat @@decorator @@decorator class ... as implicit calls
   ClassImplicitCallForbidden ( Class / AtAt )
   Identifier "=" Whitespace
@@ -261,6 +258,10 @@ ForbiddenImplicitCalls
     return $skip
   # `x ... y` is reserved for a range, but `x ...y` is an implicit call
   "... "
+
+# Binary operators that are reserved in that context
+ReservedBinary
+  /(as|of|satisfies|then|when|implements|xor|xnor)(?!\p{ID_Continue}|[\u200C\u200D$])/
 
 ArgumentsWithTrailingMemberExpressions
   Arguments:args AllowedTrailingMemberExpressions:trailing ->
@@ -301,29 +302,32 @@ CommaDelimiter
 # (like CommaDelimiter)
 ArgumentList
   # Check for same line arguments then nested arguments
-  ArgumentPart ( CommaDelimiter !EOS ArgumentPart )* ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+ ->
+  ArgumentPart ( CommaDelimiter !EOS _? ArgumentPart )* ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+ ->
     return [
       $1,
-      ...$2.flatMap(([comma, eos, arg]) => [comma, arg]),
+      ...$2.flatMap(([comma, eos, ws, arg]) => [comma, prepend(ws, arg)]),
       ...$3.flatMap(([comma, args]) =>
         Array.isArray(args) ? [comma, ...args] : [comma, args]
-      )
+      ),
     ]
   # NOTE: Added nested arguments on separate new lines
   NestedImplicitObjectLiteral ->
     return [ insertTrimmingSpace($1, '') ]
   NestedArgumentList
   # NOTE: Eliminated left recursion
-  ( _? ArgumentPart ) ( CommaDelimiter ( _? ArgumentPart ) )* ->
-    return [ $1, ...$2.flat() ]
+  _? ArgumentPart ( CommaDelimiter _? ArgumentPart )* ->
+    return [
+      prepend($1, $2),
+      ...$3.flatMap(([comma, ws, arg]) => [comma, prepend(ws, arg)]),
+    ]
 
 # NOTE: ArgumentList variant that forbids top-level pipeline operators
 NonPipelineArgumentList
   # Check for same line arguments then nested arguments
-  NonPipelineArgumentPart ( CommaDelimiter !EOS NonPipelineArgumentPart )* ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+ ->
+  NonPipelineArgumentPart ( CommaDelimiter !EOS _? NonPipelineArgumentPart )* ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+ ->
     return [
       $1,
-      ...$2.flatMap(([comma, eos, arg]) => [comma, arg]),
+      ...$2.flatMap(([comma, eos, ws, arg]) => [comma, prepend(ws, arg)]),
       ...$3.flatMap(([comma, args]) =>
         Array.isArray(args) ? [comma, ...args] : [comma, args]
       )
@@ -333,8 +337,11 @@ NonPipelineArgumentList
     return [ insertTrimmingSpace($1, '') ]
   NestedArgumentList
   # NOTE: Eliminated left recursion
-  ( _? NonPipelineArgumentPart ) ( CommaDelimiter ( _? NonPipelineArgumentPart ) )* ->
-    return [ $1, ...$2.flat() ]
+  _? NonPipelineArgumentPart ( CommaDelimiter _? NonPipelineArgumentPart )* ->
+    return [
+      prepend($1, $2),
+      ...$3.flatMap(([comma, ws, arg]) => [comma, prepend(ws, arg)]),
+    ]
 
 NestedArgumentList
   PushIndent NestedArgument*:args PopIndent ->
@@ -411,10 +418,6 @@ RHS
 
 # https://262.ecma-international.org/#prod-UnaryExpression
 UnaryExpression
-  # NOTE: Check for ampersand function expression first,
-  # which can start with UnaryOps that need to be absorbed.
-  AmpersandFunctionExpression
-
   # NOTE: Merged AwaitExpression with UnaryOp
   # https://262.ecma-international.org/#prod-AwaitExpression
   # NOTE: Eliminated left recursion
@@ -453,7 +456,7 @@ UnaryPostfix
 
 TypePostfix
   _:ws NWTypePostfix:postfix ->
-    return [ws, postfix]
+    return prepend(ws, postfix)
 
 Tuple
   "tuple" NonIdContinue ->
@@ -509,7 +512,11 @@ UpdateExpressionSymbol
 
 # https://262.ecma-international.org/#prod-AssignmentExpression
 AssignmentExpression
-  # It is important for pipeline to have higher precedence than
+  # NOTE: ActualAssignment has highest precedence:
+  # `x = y |> z` parses as `x = (y |> z)` not `(x = y) |> z`
+  _?:ws ActualAssignment:assign ->
+    return prepend(ws, assign)
+  # NOTE: It is important for pipeline to have higher precedence than
   # usual binary operators, so that x |> & + 2 |> & * 3
   # is equivalent to x |> (& + 2) |> (& * 3)
   PipelineExpression
@@ -523,28 +530,27 @@ AssignmentExpression
 
 NonPipelineAssignmentExpression
   # NOTE: Try to match a single line assignment expression before matching newline then assignment expression
-  SingleLineAssignmentExpression
-  __ AssignmentExpressionTail
+  NonPipelineSingleLineAssignmentExpression
+  __ NonPipelineAssignmentExpressionTail
 
 SingleLineAssignmentExpression
   _?:ws AssignmentExpressionTail:tail ->
-    if (ws?.length) {
-      // Glom whitespace into identifiers and literals to ease checking of "simple" refs
-      // NOTE: This can get weird if we depend on the specific location of children
-      if (tail.children && tail.type !== "IterationExpression") {
-        return {
-          ...tail,
-          children: [...ws, ...tail.children]
-        }
-      }
-      return $0
-    }
-    return tail
+    return prepend(ws, tail)
+
+NonPipelineSingleLineAssignmentExpression
+  _?:ws NonPipelineAssignmentExpressionTail:tail ->
+    return prepend(ws, tail)
 
 AssignmentExpressionTail
   YieldExpression
   ArrowFunction
   ActualAssignment
+  ConditionalExpression
+
+NonPipelineAssignmentExpressionTail
+  YieldExpression
+  ArrowFunction
+  NonPipelineActualAssignment
   ConditionalExpression
 
 # An assignment that actually includes an assignment operator, not just passing down to a ConditionalExpression
@@ -554,6 +560,25 @@ ActualAssignment
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
   ( NotDedented UpdateExpression WAssignmentOp )+ ExtendedExpression ->
+    $1 = $1.map((x) => [x[0], x[1], ...x[2]])
+    $0 = [$1, $2]
+    return {
+      type: "AssignmentExpression",
+      children: $0,
+      // NOTE: This null marks the assignment for later processing to distinguish it
+      // from fake assignments that only add a name to a scope
+      names: null,
+      lhs: $1,
+      assigned: $1[0][1],
+      exp: $2,
+    }
+
+NonPipelineActualAssignment
+  # NOTE: Eliminated left recursion
+  # NOTE: Consolidated assignment ops
+  # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
+  # e.g. ++x *= 2 which we later convert to ++x, x *= 2
+  ( NotDedented UpdateExpression WAssignmentOp )+ NonPipelineExtendedExpression ->
     $1 = $1.map((x) => [x[0], x[1], ...x[2]])
     $0 = [$1, $2]
     return {
@@ -611,8 +636,7 @@ ArrowFunction
 FatArrow
   # Ensures at least one space before arrow
   _?:ws ( "=>" / "⇒" ) ->
-    if (!ws)
-      return " =>"
+    if (!ws) return " =>"
     return [ $1, "=>" ]
 
 TrailingDeclaration
@@ -630,7 +654,7 @@ FatArrowBody
     if (exp.type === "ObjectExpression") {
       exp = makeLeftHandSideExpression(exp)
     }
-    const expressions = [exp]
+    const expressions = [["", exp]]
     return {
       type: "BlockStatement",
       bare: true,
@@ -668,10 +692,6 @@ ShortCircuitExpression
 
 PipelineExpression
   _?:ws PipelineHeadItem:head ( NotDedented Pipe __ PipelineTailItem )+:body ->
-    if (head.token === "&") {
-      head = makeAmpersandFunction()
-    }
-
     if (head.type === "ArrowFunction" && head.ampersandBlock) {
       const expressions = [ {
         type: "PipelineExpression",
@@ -696,16 +716,16 @@ PipelineHeadItem
   NonPipelineExtendedExpression
   # Allow a pipeline to be part of first step if within parenthesis
   ParenthesizedExpression
-  Ampersand
 
 PipelineTailItem
   AwaitOp !AccessStart -> $1
   Yield !AccessStart -> $1
   Return !AccessStart -> $1
   NWTypePostfix TypePostfix* ->
-    return makeAmpersandFunction([" ", $1, ...$2])
-  AmpersandFunctionExpression
-  !Ampersand PipelineHeadItem -> $2
+    return makeAmpersandFunction({
+      body: [" ", $1, ...$2],
+    })
+  PipelineHeadItem -> $1
 
 # https://262.ecma-international.org/#prod-PrimaryExpression
 PrimaryExpression
@@ -721,7 +741,7 @@ PrimaryExpression
   ClassExpression
   RegularExpressionLiteral
   ParenthesizedExpression
-  PartialPlaceholder
+  Placeholder
   # https://facebook.github.io/jsx/#sec-jsx-PrimaryExpression
   # NOTE: Modified to parse multiple JSXElement/JSXFragments as one fragment
   JSXImplicitFragment
@@ -755,12 +775,33 @@ ParenthesizedExpression
       expression: exp,
     }
 
-PartialPlaceholder
+Placeholder
+  # Partial function application: f(., x) -> $ => f($, x)
   Dot:dot !/(?:\p{ID_Continue}|[\u200C\u200D$.])/ ->
     return {
-      type: "PartialPlaceholder",
+      type: "Placeholder",
+      subtype: ".",
       children: [ dot ],
     }
+  # Ruby/Crystal style block shorthand: &+1 -> $ => $+1
+  Ampersand:amp ![&=] AmpersandTypeSuffix?:typeSuffix ->
+    return {
+      type: "Placeholder",
+      subtype: "&",
+      typeSuffix,
+      children: [ amp ],
+    }
+  # .x -> &.x
+  # NOTE: !NumericLiteral is so we don't match on `.1` etc.
+  &AccessStart &PropertyAccess !NumericLiteral ->
+    return {
+      type: "Placeholder",
+      subtype: "&",
+      children: [ { token: "&" } ],
+    }
+
+AmpersandTypeSuffix
+  &( _? QuestionMark? _? Colon ) TypeSuffix -> $2
 
 # https://262.ecma-international.org/#prod-ClassDeclaration
 ClassDeclaration
@@ -1565,10 +1606,7 @@ NestedParameter
   Nested:ws Parameter+:params ->
     // Attach whitespace to first parameter
     params = [...params]
-    params[0] = {
-      ...params[0],
-      children: [ws, ...params[0].children],
-    }
+    params[0] = prepend(ws, params[0])
     return params
 
 Parameter
@@ -1608,7 +1646,7 @@ BindingIdentifier
   # NOTE: Added @param for binding identifiers
   # The parser will allow them in const/let/var declarations but JS/TS doesn't allow them there
   __:ws NWBindingIdentifier:identifier ->
-    return { ...identifier, children: [...ws, ...identifier.children] }
+    return prepend(ws, identifier)
 
 # Non-whitespace version of BindingIdentifier
 NWBindingIdentifier
@@ -1761,10 +1799,7 @@ NestedBindingPropertyList
     // Attach whitespace to first property
     return props.map( (prop, i) => {
       if (i > 0) return prop
-      return {
-        ...prop,
-        children: [ws, ...prop.children],
-      }
+      return prepend(ws, prop)
     })
 
 # https://262.ecma-international.org/#prod-BindingProperty
@@ -1976,10 +2011,6 @@ FunctionExpression
       children: [...signature.children, block],
       block,
     }
-  # Identity function shorthand
-  # NOTE: Currently shadows (&) binary & operator, we might want to revisit
-  "(&)" ->
-    return makeAmpersandFunction()
 
   # BinaryOp function shorthand
   OpenParen:open BinaryOp:op CloseParen:close ->
@@ -2045,7 +2076,7 @@ FunctionExpression
       block,
       parameters,
     }
-  OpenParen:open __:ws1 !/\+\+|--|[\+-]\S/ BinaryOp:op __:ws2 NonPipelineAssignmentExpression:rhs CloseParen:close ->
+  OpenParen:open __:ws1 !/\+\+|--|[\+\-&]\S/ BinaryOp:op __:ws2 NonPipelineAssignmentExpression:rhs CloseParen:close ->
     const refA = makeRef("a"),
       body = processBinaryOpExpression([refA, [
         [ws1, op, ws2, rhs] // BinaryOpRHS
@@ -2074,17 +2105,6 @@ FunctionExpression
       block,
       parameters,
     }
-
-  AmpersandFunctionExpression
-
-  # Ruby/Crystal style block shorthand
-AmpersandFunctionExpression
-  # NOTE: !NumericLiteral is so we don't match on `.1` etc.
-  UnaryOp*:prefix ( Ampersand / ( !NumericLiteral &( QuestionMark? Dot !Dot ) ) ) AmpersandBlockRHS?:rhs ->
-    if (!prefix.length && !rhs) return $skip
-
-    return makeAmpersandFunctionExpression(prefix, rhs)
-
 
 # NOTE: Dynamic infix operators
 OperatorDeclaration
@@ -2162,20 +2182,6 @@ OperatorAssociativity
       return { relational: true, assoc: "non" }
     }
     return { assoc }
-
-AmpersandBlockRHS
-  ForbidTrailingMemberProperty AmpersandBlockRHSBody? RestoreTrailingMemberProperty ->
-    if (!$2) return $skip
-    return $2
-
-AmpersandTypeSuffix
-  &( _? QuestionMark? _? Colon ) TypeSuffix -> $2
-
-AmpersandBlockRHSBody
-  AmpersandTypeSuffix?:typeSuffix (!_ CallExpressionRest+ )?:callExpRest UnaryPostfix?:unaryPostfix ( WAssignmentOp ( NotDedented UpdateExpression WAssignmentOp )* NonPipelineExtendedExpression )?:assign ( ![&] BinaryOpRHS+ )?:binopRHS ->
-    if (!typeSuffix && !callExpRest && !binopRHS && !unaryPostfix) return $skip
-
-    return makeAmpersandBlockRHSBody(typeSuffix, callExpRest, unaryPostfix, assign, binopRHS)
 
 ThinArrowFunction
   ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:suffix _? Arrow:arrow NoCommaBracedOrEmptyBlock:block ->
@@ -2499,9 +2505,7 @@ BlockStatementPart
   # NOTE: !EOS forces semicolon after all but last statement, forbids leading __
   # NOTE: _? allows for leading inline comments
   !EOS _?:ws StatementListItem:statement StatementDelimiter:delimiter ->
-    if (ws) {
-      statement = {...statement, children: [ ws, ...statement.children ]}
-    }
+    if (ws) statement = prepend(ws, statement)
     return [statement, delimiter]
 
 # https://262.ecma-international.org/#prod-Literal
@@ -2579,9 +2583,7 @@ _ArrayLiteral
     const [ content, ws, close ] = $3
 
     if (content.type === "RangeExpression") {
-      return {...content,
-        children: [...content.children, ...ws],
-      }
+      return prepend(ws, content)
     }
 
     let children
@@ -2908,7 +2910,7 @@ NestedPropertyDefinition
       if (!Array.isArray(prop)) prop = [prop]
       if (i === 0) {
         const [first, ...rest] = prop
-        prop = [ {...first, children: [...ws, ...first.children]}, ...rest ]
+        prop = [ prepend(ws, first), ...rest ]
       }
       const last = prop[prop.length-1]
       prop = [
@@ -2962,10 +2964,7 @@ ObjectPropertyDelimiter
 # NOTE: Must start on same line
 PropertyDefinition
   _?:ws NamedProperty:prop ->
-    return {
-      ...prop,
-      children: [ws, ...prop.children],
-    }
+    return prepend(ws, prop)
 
   # NOTE: Added LiveScript flagging shorthand {+x, -y} -> {x: true, y: false}
   # NOTE: extended to allow {!y} -> {y: false}
@@ -3000,10 +2999,7 @@ PropertyDefinition
     // NOTE: Forbidding EmptyBlock in MethodDefinition to allow `foo()`
     // shorthand for `foo: foo()`
     if (!def.block || def.block.empty) return $skip
-    return {
-      ...def,
-      children: [ws, ...def.children],
-    }
+    return prepend(ws, def)
   _?:ws DotDotDot:dots ExtendedExpression:exp ->
     return {
       type: "SpreadProperty",
@@ -3015,12 +3011,13 @@ PropertyDefinition
 
   # NOTE: Added `{x.y?.z()}` shorthand for `{z: x.y?.z()}`
   # NOTE: this needs to be at the bottom to prevent shadowing NamedProperty
-  _?:ws !EOS UnaryOp*:pre CallExpression:value UnaryPostfix?:post ->
+  # NOTE: Prevent `.x` from expanding to `x: $ => $.x`
+  _?:ws !( EOS / "." ) UnaryOp*:pre CallExpression:value UnaryPostfix?:post ->
     if (!pre.length && !post) {
       switch (value.type) {
         // `{identifier}` remains `{identifier}`, the one shorthand JS supports
         case "Identifier":
-          return {...value, children: [ws, ...value.children]}
+          return prepend(ws, value)
         // PropertyGlob like x.{a,b} turns into ObjectExpression {a: x.a, b: x.b}
         // (via `processCallMemberExpression`)
         case "ObjectExpression":
@@ -3092,7 +3089,7 @@ PropertyDefinition
     }
   # NOTE: basic identifiers are now part of the rule above
   #_?:ws IdentifierReference:id ->
-  #  return {...id, children: [...ws, ...id.children]}
+  #  return prepend(ws, id)
 
 NamedProperty
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
@@ -3158,7 +3155,9 @@ ComputedPropertyName
       children: [ $1, expression, $4 ],
       implicit: true,
     }
-  InsertOpenBracket:open PartialPlaceholder:expression InsertCloseBracket:close ->
+  # `.: value` is shorthand for `[.]: value`
+  # (while `&: T` is a type annotation)
+  &"." InsertOpenBracket:open Placeholder:expression InsertCloseBracket:close ->
     return {
       type: "ComputedPropertyName",
       expression,
@@ -5134,7 +5133,11 @@ LexicalBinding
 # https://262.ecma-international.org/#prod-Initializer
 Initializer
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  __ Equals ExtendedExpression
+  __ Equals ExtendedExpression:exp -> {
+    type: "Initializer",
+    exp,
+    children: $0,
+  }
 
 # https://262.ecma-international.org/#prod-VariableStatement
 VariableStatement
@@ -5495,7 +5498,7 @@ NonNewlineWhitespace
 
 # Whitespace / comments with a single leading space trimmed off if possible
 Trimmed_
-  _?:ws ->
+  _:ws ->
     return insertTrimmingSpace(ws, "")
 
 # Optional whitespace including newlines and comments
@@ -5647,10 +5650,10 @@ Dot
   "." ->
     return { $loc, token: $1 }
   # English possessive
-  /['’]s/ _:ws ->
+  /['’]s/ Trimmed_:ws ->
     return [
       { $loc, token: "." },
-      insertTrimmingSpace(ws, ""),
+      ws,
     ]
 
 DotDot
@@ -7075,7 +7078,7 @@ TypePrimary
 ImportType
   "import" OpenParen __ StringLiteral __ CloseParen ( Dot IdentifierName )? TypeArguments?
   # NOTE: Added implicit import without parens
-  "import" InsertOpenParen Trimmed_ StringLiteral InsertCloseParen
+  "import" InsertOpenParen Trimmed_? StringLiteral InsertCloseParen
 
 TypeTuple
   OpenBracket ( NestedTypeList / TypeList? ) __ CloseBracket ->

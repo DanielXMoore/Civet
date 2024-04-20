@@ -54,6 +54,14 @@ data
   |> console.log
 </Playground>
 
+Fat pipes manipulate the same object repeatedly:
+
+<Playground>
+document.createElement('div')
+||> .className = 'civet'
+||> .appendChild document.createTextNode 'Civet'
+</Playground>
+
 Pipe expression with shorthand functions:
 
 <Playground>
@@ -68,6 +76,7 @@ x.map &.profile?.name[0...3]
 x.map &.callback a, b
 x.map &+1
 x.map -&
+x.map [&, &.toUpperCase()]
 </Playground>
 
 ### Custom Infix Operators
@@ -138,6 +147,7 @@ text = ```
 
 <Playground>
 a < b <= c
+value > min?
 a is b is not c
 a instanceof b not instanceof c
 </Playground>
