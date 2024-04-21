@@ -985,6 +985,13 @@ The provided left- or right-hand side can include more binary operators:
 counts.map (* 2 + 1)
 </Playground>
 
+You can also build functions using assignment operators on the right:
+
+<Playground>
+new Promise (resolve =)
+callback := (sum +=)
+</Playground>
+
 ### Functions as Infix Operators
 
 You can "bless" an existing function to behave as an infix operator
