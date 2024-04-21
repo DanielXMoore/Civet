@@ -875,7 +875,7 @@ function search<T>(list: T[]): T | undefined
 
 `&` acts as a placeholder for the argument of a single-argument function,
 with the function wrapper lifted to just inside the nearest function call,
-assignment, or pipeline.
+assignment, pipeline, `return`, or `yield`.
 
 <Playground>
 x.map &.name
