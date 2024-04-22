@@ -923,6 +923,12 @@ increment := &: number + 1
 show := &: ??? |> JSON.stringify |> console.log
 </Playground>
 
+::: info
+Note that `&` is the identity function while `(&)` is a
+[bitwise AND function](#binary-operators-as-functions).
+Prior to Civet 0.7.0, `(&)` was the identity function and `&` was invalid.
+:::
+
 ### Partial Function Application
 
 Another shorthand for one-argument functions is to call a function
