@@ -1,31 +1,34 @@
 import type {
   AmpersandBlockBody
+  ArrowFunction
   ASTRef
   ASTLeaf
   ASTNode
   ASTNodeBase
   ASTNodeObject
   ASTNodeParent
+  BlockStatement
   IsParent
   IsToken
   Literal
-  Whitespace
+  ParametersNode
+  StatementNode
   TypeSuffix
   ReturnTypeAnnotation
   StatementTuple
 } from ./types.civet
 
 import {
+  braceBlock
+} from ./block.civet
+
+import {
   gatherRecursiveWithinFunction
 } from ./traversal.civet
 
 import {
-  processBinaryOpExpression
-} from ./op.civet
-
-import {
-  processUnaryExpression
-} from ./unary.civet
+  insertReturn
+} from ./function.civet
 
 assert := {
   equal(a: unknown, b: unknown, msg: string): void
@@ -115,14 +118,13 @@ function isParent(node: ASTNode): node is IsParent
 function isToken(node: ASTNode): node is IsToken
   node? and node.token?
 
-function isEmptyBareBlock(node: ASTNode): boolean {
+function isEmptyBareBlock(node: ASTNode): boolean
   if (node?.type !== "BlockStatement") return false
-  const { bare, expressions } = node
+  { bare, expressions } := node
   return bare &&
     (expressions.length is 0 ||
       (expressions.length is 1 &&
         expressions[0][1]?.type is "EmptyStatement"))
-}
 
 function isFunction(node: ASTNode & { type: unknown, async?: boolean }): boolean
   { type } := node
@@ -132,6 +134,29 @@ function isFunction(node: ASTNode & { type: unknown, async?: boolean }): boolean
     type is "MethodDefinition"
     !!node.async
     // do blocks can be marked async to prevent automatic await
+
+// Keep this in sync with StatementNode in types.civet
+statementTypes := new Set [
+  "BlockStatement"
+  "BreakStatement"
+  "ContinueStatement"
+  "DebuggerStatement"
+  "Declaration"
+  "DoStatement"
+  "ForStatement"
+  "IfStatement"
+  "IterationStatement"
+  "LabeledStatement"
+  "ReturnStatement"
+  "SwitchStatement"
+  "ThrowStatement"
+  "TryStatement"
+]
+function isStatement(node: ASTNode): node is StatementNode
+  (and)
+    isASTNodeObject node
+    node.type?  // forbid leaf
+    statementTypes.has node.type
 
 function isWhitespaceOrEmpty(node): boolean {
   if (!node) return true
@@ -374,33 +399,42 @@ function makeAmpersandFunction(rhs: AmpersandBlockBody): ASTNode
     type: "Parameters"
     children: typeSuffix ? ["(", ref, typeSuffix, ")"] : [ref]
     names: []
-  }
-  expressions := [body]
+  } as ParametersNode
+  expressions := [[' ', body]] satisfies StatementTuple[]
   block := makeNode {
+    type: "BlockStatement"
     bare: true
     expressions
     children: [expressions]
-  }
+    implicitlyReturned: true
+  } as BlockStatement
 
-  children := [ parameters, " => ", block ]
+  children := [ parameters, " =>", block ]
   async := hasAwait(body)
   if async
     children.unshift("async ")
 
-  return makeNode {
+  fn := makeNode {
     type: "ArrowFunction"
-    signature: {
+    signature:
       modifier: {
         async
       }
-    }
     children
     ref
-    body
-    ampersandBlock: true
     block
     parameters
-  }
+    ampersandBlock: true
+    body
+  } as ArrowFunction
+
+  if isStatement body
+    braceBlock block
+    // Prevent unrolling braced block
+    fn.ampersandBlock = false
+    delete fn.body
+
+  fn
 
 /**
  * Convert general ExtendedExpression into LeftHandSideExpression.
@@ -634,6 +668,7 @@ export {
   isEmptyBareBlock
   isExit
   isFunction
+  isStatement
   isWhitespaceOrEmpty
   literalValue
   makeAmpersandFunction
