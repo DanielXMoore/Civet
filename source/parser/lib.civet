@@ -16,6 +16,8 @@ import type {
   AssignmentExpression
   BlockStatement
   CallExpression
+  ComptimeExpression
+  ComptimeStatement
   DoStatement
   ExpressionNode
   ForStatement
@@ -118,7 +120,7 @@ import {
   quoteString
 } from ./string.civet
 
-generate, { prune } from "../generate.civet"
+generate, { prune, type Options } from "../generate.civet"
 
 function addPostfixStatement(statement: StatementTuple, ws: ASTNode, post)
   expressions := [
@@ -1020,7 +1022,16 @@ function processStatementExpressions(statements: StatementTuple[]): void
           else
             replaceNode statement, wrapIIFE([["", statement]]), exp
         when "IterationExpression"
-          // Do nothing, handled separately currently
+          if statement.subtype is "ComptimeStatement"
+            // Transform ComptimeStatement into ComptimeExpression,
+            // with IIFE wrapper inside the ComptimeExpression
+            expression := wrapIIFE(statement.statement.block.expressions)
+            replaceNode statement, makeNode({
+              type: "ComptimeExpression"
+              expression
+              children: [expression]
+            }), exp
+          // else do nothing, handled separately currently
         else
           replaceNode statement, wrapIIFE([["", statement]]), exp
 
@@ -1263,25 +1274,31 @@ function processPlaceholders(statements: StatementTuple[]): void
   return
 
 function processComptime(statements: StatementTuple[]): void
-  gatherRecursive statements, .type is "ComptimeStatement"
+  gatherRecursive statements,
+    (node): node is (ComptimeStatement | ComptimeExpression) =>
+      node.type is "ComptimeStatement" or node.type is "ComptimeExpression"
   .forEach (exp) =>
-    console.log exp, exp.parent?.expressions
+    content := exp.type is "ComptimeStatement" ? exp.block : exp.expression
     // Convert the comptime block into JS code
-    options := js: true
-    js := generate prune(exp.block), options
-    console.log js
+    options: Options := js: true
+    js := generate prune(content), options
     // If there are any errors, leave the comptime subtree alone
     // (so there's still an error).
     return if options.errors?
-    data .= eval?.(`"use strict";${js}`)
-    try
-      data = JSON.stringify data
-    catch e
-      replaceNode exp,
-        type: "Error"
-        message: `comptime result ${data} not JSON serializable: ${e}`
-      return
-    exp.children = [data]
+    output := eval?.(`"use strict";${js}`)
+    if exp.type is "ComptimeExpression"
+      let string
+      try
+        string = JSON.stringify output
+      catch e
+        exp.children = [
+          type: "Error"
+          message: `comptime result ${output} not JSON serializable: ${e}`
+        ]
+        return
+      exp.children = [string]
+    else
+      exp.children = []
 
 function reorderBindingRestProperty(props) {
   const names = props.flatMap((p) => p.names)
