@@ -1483,6 +1483,28 @@ do
 while item?
 </Playground>
 
+### Labels
+
+<Playground>
+:outer while (list = next())?
+  for item of list
+    if finale item
+      break outer
+  continue :outer
+</Playground>
+
+::: info
+Labels have the colon on the left to avoid conflict with implicit object
+literals.  The colons are optional in `break` and `continue`.
+As a special case, Svelte's `$:` can be used with the colon on the right.
+:::
+
+<Playground>
+$: document.title = title
+</Playground>
+
+## Other Blocks
+
 ### Do Blocks
 
 To put multiple lines in a scope and possibly an expression,
@@ -1526,25 +1548,33 @@ await Promise.allSettled for url of urls
     await result.json()
 </Playground>
 
-### Labels
+### Comptime Blocks
+
+`comptime` blocks are similar to [`do` blocks](#do-blocks), but they execute
+*at Civet compilation time*.  The result of `eval`ing the block gets
+embedded (via `JSON.stringify`) into the output JavaScript code.
 
 <Playground>
-:outer while (list = next())?
-  for item of list
-    if finale item
-      break outer
-  continue :outer
+value := comptime 1+2+3
 </Playground>
+
+<Playground>
+console.log "3rd triangular number is", comptime
+  function triangle(n) do n and n + triangle n-1
+  triangle 3
+</Playground>
+
+Note that comptime blocks are executed as separate scripts, so they have no
+access to variables in outer scopes.  The block must also run synchronously,
+and the result must not have reference loops so it can be serialized via
+`JSON.stringify`.
+Some of these restrictions may be lifted in the future.
 
 ::: info
-Labels have the colon on the left to avoid conflict with implicit object
-literals.  The colons are optional in `break` and `continue`.
-As a special case, Svelte's `$:` can be used with the colon on the right.
+Inspired by [Rust's comptime crate](https://docs.rs/comptime/latest/comptime/),
+which is a simplified version of
+[Zig's comptime](https://ziglang.org/documentation/master/#comptime).
 :::
-
-<Playground>
-$: document.title = title
-</Playground>
 
 ## Classes
 
