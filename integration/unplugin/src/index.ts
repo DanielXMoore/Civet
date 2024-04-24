@@ -38,6 +38,7 @@ export type PluginOptions = {
   js?: boolean;
   /** @deprecated Use "emitDeclaration" instead */
   dts?: boolean;
+  comptime?: boolean;
 };
 
 const isCivetTranspiled = /(\.civet)(\.[jt]sx)([?#].*)?$/;
@@ -189,6 +190,9 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           const compiledTS = civet.compile(rawCivetSource, {
             filename,
             js: false,
+            parseOptions: {
+              comptime: Boolean(options.comptime)
+            },
           });
           fsMap.set(filename, compiledTS)
           return compiledTS
@@ -351,18 +355,23 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         code: string;
         sourceMap: SourceMap | string | undefined;
       };
+      const civetOptions = {
+        filename: id,
+        sourceMap: true,
+        parseOptions: {
+          comptime: Boolean(options.comptime)
+        },
+      } as const;
 
       if (options.ts === 'civet' && !transformTS) {
         compiled = civet.compile(rawCivetSource, {
-          filename: id,
+          ...civetOptions,
           js: true,
-          sourceMap: true,
         });
       } else {
         const compiledTS = civet.compile(rawCivetSource, {
-          filename: id,
+          ...civetOptions,
           js: false,
-          sourceMap: true,
         });
 
         const resolved = filename + outExt;
@@ -413,9 +422,8 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           case 'civet':
           default: {
             compiled = civet.compile(rawCivetSource, {
-              filename: id,
+              ...civetOptions,
               js: true,
-              sourceMap: true,
             });
 
             if (options.ts == undefined) {

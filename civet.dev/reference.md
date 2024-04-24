@@ -1564,7 +1564,7 @@ console.log "3rd triangular number is", comptime
   triangle 3
 </Playground>
 
-Note that comptime blocks are executed as separate scripts, so they have no
+Note that `comptime` blocks are executed as separate scripts, so they have no
 access to variables in outer scopes.  The block must also run synchronously.
 For serialization, the result must consist of built-in JavaScript types
 (including `Date`, `RegExp`, `Set`, and `Map`),
@@ -1574,10 +1574,22 @@ and there cannot be reference loops.
 Some of these restrictions may be lifted in the future.
 
 ::: info
-Inspired by [Rust's comptime crate](https://docs.rs/comptime/latest/comptime/),
-which is a simplified version of
-[Zig's comptime](https://ziglang.org/documentation/master/#comptime).
+Inspired by Rust crates
+[comptime](https://crates.io/crates/comptime) and
+[constime](https://crates.io/crates/constime),
+which are a simplified version of
+[Zig's comptime](https://ziglang.org/documentation/master/#comptime);
+and other similar compile-time features (sometimes called "macros")
+such as [C++'s constexpr](https://en.cppreference.com/w/cpp/language/constexpr).
 :::
+
+Because comptime enables execution of arbitrary code during compilation,
+it is not enabled by default, nor can it be enabled via a directive.
+In particular, the VSCode language server will not execute `comptime` blocks.
+You can enable `comptime` evaluation in the CLI using `civet --comptime`,
+and in the
+[unplugin](https://github.com/DanielXMoore/Civet/tree/main/integration/unplugin)
+using the `comptime: true` option.
 
 ## Classes
 
