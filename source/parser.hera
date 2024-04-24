@@ -22,6 +22,7 @@ import {
   forRange,
   gatherBindingCode,
   gatherRecursive,
+  getHelperRef,
   getIndentLevel,
   getPrecedence,
   getTrimmingSpace,
@@ -57,11 +58,56 @@ import {
 } from "./parser/lib.civet"
 
 /**
- * A global object to hold methods used in rule handlers
- * We can probably transition away from this now that Hera
- * supports importing from other files as well as inline JS.
+ * Globals
  */
-const module = {};
+let config;  // parser config options
+export const state = {};  // parser state
+
+Object.defineProperties(state, {
+  currentIndent: {
+    get() {
+      const {indentLevels: l} = state
+      return l[l.length-1]
+    },
+  },
+  classImplicitCallForbidden: {
+    get() {
+      const {forbidClassImplicitCall: s} = state
+      return s[s.length-1]
+    },
+  },
+  indentedApplicationForbidden: {
+    get() {
+      const {forbidIndentedApplication: s} = state
+      return s[s.length-1]
+    },
+  },
+  bracedApplicationForbidden: {
+    get() {
+      const {forbidBracedApplication: s} = state
+      return s[s.length-1]
+    },
+  },
+  trailingMemberPropertyForbidden: {
+    get() {
+      const {forbidTrailingMemberProperty: s} = state
+      return s[s.length-1]
+    },
+  },
+  newlineBinaryOpForbidden: {
+    get() {
+      const {forbidNewlineBinaryOp: s} = state
+      return s[s.length-1]
+    },
+  },
+  currentJSXTag: {
+    get() {
+      const {JSXTagStack: s} = state
+      return s[s.length-1]
+    },
+  },
+})
+
 ```
 
 Program
@@ -75,7 +121,7 @@ Program
       children: [statements],
       bare: true,
       root: true,
-    }, module.config, module, ReservedWord)
+    }, config, state, ReservedWord)
     return $0
 
 TopLevelStatements
@@ -246,10 +292,10 @@ ForbiddenImplicitCalls
   Identifier "=" Whitespace
   # NOTE: Custom operators created via `operator`
   Identifier:id !"(" ->
-    if (module.operators.has(id.name)) return $0
+    if (state.operators.has(id.name)) return $0
     return $skip
   OmittedNegation _? Identifier:id ->
-    if (module.operators.has(id.name)) return $0
+    if (state.operators.has(id.name)) return $0
     return $skip
   # `x ... y` is reserved for a range, but `x ...y` is an implicit call
   "... "
@@ -2101,14 +2147,14 @@ FunctionExpression
 OperatorDeclaration
   # `operator {x, y} := ...` declaration while blessing
   Operator:op OperatorBehavior?:behavior _:w LexicalDeclaration:decl ->
-    decl.names.forEach((name) => module.operators.set(name, behavior))
+    decl.names.forEach((name) => state.operators.set(name, behavior))
     return {
       ...decl,
       children: [ insertTrimmingSpace(w, ""), ...decl.children ]
     }
   # `operator id(a, b) {...}` defines a function
   OperatorSignature:signature BracedBlock:block ->
-    module.operators.set(signature.id.name, signature.behavior)
+    state.operators.set(signature.id.name, signature.behavior)
     return {
       ...signature,
       type: "FunctionExpression",
@@ -2119,8 +2165,8 @@ OperatorDeclaration
     }
   # `operator id` alone blesses `id` as an operator
   Operator:op _:w1 Identifier:id OperatorBehavior?:behavior ( CommaDelimiter _? Identifier OperatorBehavior? )*:ids ->
-    module.operators.set(id.name, behavior)
-    ids.forEach(([, , id2, behavior2]) => module.operators.set(id2.name, behavior2))
+    state.operators.set(id.name, behavior)
+    ids.forEach(([, , id2, behavior2]) => state.operators.set(id2.name, behavior2))
     return {
       id,
       children: [],
@@ -2158,7 +2204,7 @@ OperatorPrecedence
   # inspired by https://docs.raku.org/language/functions#Precedence
   _? ( "tighter" / "looser" / "same" ):mod NonIdContinue _? ( Identifier / ( OpenParen BinaryOp CloseParen ) ):op ->
     let prec = op.type === "Identifier"
-      ? module.operators.get(op.name).prec
+      ? state.operators.get(op.name).prec
       : getPrecedence(op[1])
     switch (mod) {
       case "tighter": prec += 1/64; break
@@ -3443,13 +3489,13 @@ OperatorAssignmentOp
   Xor "=" _? ->
     return {
       special: true,
-      call: module.getRef("xor"),
+      call: getHelperRef("xor"),
       children: [$2, ...$3 || []]
     }
   Xnor "=" _? ->
     return {
       special: true,
-      call: module.getRef("xnor"),
+      call: getHelperRef("xnor"),
       children: [$2, ...$3 || []]
     }
   Identifier "=" _? ->
@@ -3467,7 +3513,7 @@ AssignmentOpSymbol
   ( "++" / "⧺" ) Equals ->
     return {
       special: true,
-      call: module.getRef("concatAssign"),
+      call: getHelperRef("concatAssign"),
       omitLhs: true,
       children: [$2],
     }
@@ -3506,7 +3552,7 @@ NotDedentedBinaryOp
 
 IdentifierBinaryOp
   Identifier:id ->
-    if (module.operators.has(id.name)) return id
+    if (state.operators.has(id.name)) return id
     return $skip
 
 BinaryOp
@@ -3517,19 +3563,19 @@ _BinaryOp
     if (typeof $1 === "string") return { $loc, token: $1 }
     return $1
   Identifier:id ->
-    if (!module.operators.has(id.name)) return $skip
+    if (!state.operators.has(id.name)) return $skip
     return {
       call: id,
       special: true,
-      ...module.operators.get(id.name),
+      ...state.operators.get(id.name),
     }
   OmittedNegation __ Identifier:id ->
-    if (!module.operators.has(id.name)) return $skip
+    if (!state.operators.has(id.name)) return $skip
     return {
       call: id,
       special: true,
       negated: true,
-      ...module.operators.get(id.name),
+      ...state.operators.get(id.name),
     }
 
 # NOTE: Condensed binary operator symbols into one rule
@@ -3539,7 +3585,7 @@ BinaryOpSymbol
   "/"
   "%%" ->
     return {
-      call: module.getRef("modulo"),
+      call: getHelperRef("modulo"),
       special: true,
     }
   # NOTE: %% must be above %
@@ -3585,17 +3631,17 @@ BinaryOpSymbol
   # NOTE: CoffeeScript converts "!=" -> "!=="
   # Convert if CoffeeScript compat flag is set
   "!=" / "≠" ->
-    if(module.config.coffeeEq) return "!=="
+    if(config.coffeeEq) return "!=="
     return "!="
   "isnt" NonIdContinue ->
-    if(module.config.coffeeIsnt) return "!=="
+    if(config.coffeeIsnt) return "!=="
     return $skip
   "==="
   "≣" / "⩶" -> "==="
   # NOTE: CoffeeScript converts "==" -> "==="
   # Convert if CoffeeScript compat flag is set
   "==" / "≡" / "⩵" ->
-    if(module.config.coffeeEq) return "==="
+    if(config.coffeeEq) return "==="
     return "=="
   "and" NonIdContinue -> "&&"
   "&&"
@@ -3605,13 +3651,13 @@ BinaryOpSymbol
   # NOTE: ^^ must be above ^
   "^^" / ( "xor" NonIdContinue ) ->
     return {
-      call: module.getRef("xor"),
+      call: getHelperRef("xor"),
       special: true,
       prec: '^^',
     }
   /!\^\^?/ / ( "xnor" NonIdContinue ) ->
     return {
-      call: module.getRef("xnor"),
+      call: getHelperRef("xnor"),
       special: true,
       prec: '^^',
     }
@@ -3658,9 +3704,9 @@ BinaryOpSymbol
     }
   # NOTE: "is not" must come after "is not in"
   !CoffeeNotEnabled Is __ Not ->
-    if (module.config.objectIs) {
+    if (config.objectIs) {
       return {
-        call: module.getRef("is"),
+        call: getHelperRef("is"),
         relational: true,
         special: true,
         asConst: true,
@@ -3670,9 +3716,9 @@ BinaryOpSymbol
     return "!=="
   # NOTE: "is" must come after "is not" and "is in"
   Is ->
-    if (module.config.objectIs) {
+    if (config.objectIs) {
       return {
-        call: module.getRef("is"),
+        call: getHelperRef("is"),
         relational: true,
         special: true,
         asConst: true,
@@ -3692,7 +3738,7 @@ CoffeeOfOp
   Of -> "in"
   In ->
     return {
-      call: [module.getRef("indexOf"), ".call"],
+      call: [getHelperRef("indexOf"), ".call"],
       relational: true,
       reversed: true,
       suffix: " >= 0",
@@ -3707,7 +3753,7 @@ CoffeeOfOp
     }
   OmittedNegation __ In ->
     return {
-      call: [module.getRef("indexOf"), ".call"],
+      call: [getHelperRef("indexOf"), ".call"],
       relational: true,
       reversed: true,
       suffix: " < 0",
@@ -4101,7 +4147,7 @@ CoffeeForStatementParameters
       // TODO: Exp ref if exp is not a literal or identifier
 
       if (declaration.own) {
-        const hasPropRef = module.getRef("hasProp")
+        const hasPropRef = getHelperRef("hasProp")
 
         blockPrefix./**/push(["", ["if (!", hasPropRef, "(", exp, ", ", declaration, ")) continue"], ";"])
       }
@@ -4233,10 +4279,10 @@ ForStatementParameters
   # NOTE: Consolidated declarations
   # NOTE: Consolidated optional 'await'
   ( Await __ )? ( (Each / Own) __ )? ( OpenParen __ ) ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? ( __ CloseParen ) ->
-    return processForInOf($0, module.getRef)
+    return processForInOf($0, getHelperRef)
   # NOTE: Added optional parens
   ( Await __ )? ( (Each / Own) __ )? InsertOpenParen ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? InsertCloseParen ->
-    return processForInOf($0, module.getRef)
+    return processForInOf($0, getHelperRef)
   ForRangeParameters
 
 ForRangeParameters
@@ -4554,98 +4600,98 @@ LeftHandSideExpressionWithObjectApplicationForbidden
 
 ForbidClassImplicitCall
   "" ->
-    module.forbidClassImplicitCall.push(true)
+    state.forbidClassImplicitCall.push(true)
 
 AllowClassImplicitCall
   "" ->
-    module.forbidClassImplicitCall.push(false)
+    state.forbidClassImplicitCall.push(false)
 
 RestoreClassImplicitCall
   "" ->
-    module.forbidClassImplicitCall.pop()
+    state.forbidClassImplicitCall.pop()
 
 ClassImplicitCallForbidden
   "" ->
-    if (!module.classImplicitCallForbidden) return $skip
+    if (!state.classImplicitCallForbidden) return $skip
     return
 
 ForbidBracedApplication
   "" ->
-    module.forbidBracedApplication.push(true)
+    state.forbidBracedApplication.push(true)
 
 AllowBracedApplication
   "" ->
-    module.forbidBracedApplication.push(false)
+    state.forbidBracedApplication.push(false)
 
 RestoreBracedApplication
   "" ->
-    module.forbidBracedApplication.pop()
+    state.forbidBracedApplication.pop()
 
 BracedApplicationAllowed
   "" ->
-    if (module.config.verbose) {
-      console.log("forbidBracedApplication:", module.forbidBracedApplication)
+    if (config.verbose) {
+      console.log("forbidBracedApplication:", state.forbidBracedApplication)
     }
-    if (module.bracedApplicationForbidden) return $skip
+    if (state.bracedApplicationForbidden) return $skip
     return
 
 ForbidIndentedApplication
   "" ->
-    module.forbidIndentedApplication.push(true)
+    state.forbidIndentedApplication.push(true)
 
 AllowIndentedApplication
   "" ->
-    module.forbidIndentedApplication.push(false)
+    state.forbidIndentedApplication.push(false)
 
 RestoreIndentedApplication
   "" ->
-    module.forbidIndentedApplication.pop()
+    state.forbidIndentedApplication.pop()
 
 IndentedApplicationAllowed
   "" ->
-    if (module.config.verbose) {
-      console.log("forbidIndentedApplication:", module.forbidIndentedApplication)
+    if (config.verbose) {
+      console.log("forbidIndentedApplication:", state.forbidIndentedApplication)
     }
-    if (module.indentedApplicationForbidden) return $skip
+    if (state.indentedApplicationForbidden) return $skip
     return
 
 ForbidTrailingMemberProperty
   "" ->
-    module.forbidTrailingMemberProperty.push(true)
+    state.forbidTrailingMemberProperty.push(true)
 
 AllowTrailingMemberProperty
   "" ->
-    module.forbidTrailingMemberProperty.push(false)
+    state.forbidTrailingMemberProperty.push(false)
 
 RestoreTrailingMemberProperty
   "" ->
-    module.forbidTrailingMemberProperty.pop()
+    state.forbidTrailingMemberProperty.pop()
 
 TrailingMemberPropertyAllowed
   "" ->
-    if (module.config.verbose) {
-      console.log("forbidTrailingMemberProperty:", module.forbidTrailingMemberProperty)
+    if (config.verbose) {
+      console.log("forbidTrailingMemberProperty:", state.forbidTrailingMemberProperty)
     }
-    if (module.trailingMemberPropertyForbidden) return $skip
+    if (state.trailingMemberPropertyForbidden) return $skip
 
 AllowNewlineBinaryOp
   "" ->
-    module.forbidNewlineBinaryOp.push(false)
+    state.forbidNewlineBinaryOp.push(false)
 
 ForbidNewlineBinaryOp
   "" ->
-    module.forbidNewlineBinaryOp.push(true)
+    state.forbidNewlineBinaryOp.push(true)
 
 RestoreNewlineBinaryOp
   "" ->
-    module.forbidNewlineBinaryOp.pop()
+    state.forbidNewlineBinaryOp.pop()
 
 NewlineBinaryOpAllowed
   "" ->
-    if (module.config.verbose) {
-      console.log("forbidNewlineBinaryOp:", module.forbidNewlineBinaryOp)
+    if (config.verbose) {
+      console.log("forbidNewlineBinaryOp:", state.forbidNewlineBinaryOp)
     }
-    if (module.newlineBinaryOpForbidden) return $skip
+    if (state.newlineBinaryOpForbidden) return $skip
 
 AllowAll
   AllowTrailingMemberProperty AllowBracedApplication AllowIndentedApplication AllowClassImplicitCall AllowNewlineBinaryOp
@@ -4852,7 +4898,7 @@ TypeAndImportSpecifier
     if (spec.binding.type !== "Identifier") {
       throw new Error("Expected identifier after `operator`")
     }
-    module.operators.set(spec.binding.name, spec.behavior)
+    state.operators.set(spec.binding.name, spec.behavior)
     return {
       ...spec,
       children: [
@@ -4917,7 +4963,7 @@ ModuleExportName
 ModuleSpecifier
   UnprocessedModuleSpecifier ImportAssertion?:a ->
     let { token } = $1
-    if (module.config.rewriteTsImports) {
+    if (config.rewriteTsImports) {
       // Workaround to fix:
       // https://github.com/microsoft/TypeScript/issues/42151
       // import t.ts
@@ -4925,9 +4971,9 @@ ModuleSpecifier
       // convert .[mc]?ts to .[mc]?js
       token = token.replace(/\.([mc])?ts(['"])$/, ".$1js$2")
     }
-    if (module.config.rewriteCivetImports) {
+    if (config.rewriteCivetImports) {
       token = token.replace(/\.civet(['"])$/,
-        `${module.config.rewriteCivetImports.replace(/\$/g, '$$')}$1`)
+        `${config.rewriteCivetImports.replace(/\$/g, '$$')}$1`)
     }
 
     if (a)
@@ -5380,7 +5426,7 @@ TemplateLiteral
 
 _TemplateLiteral
   TripleTick ( TemplateBlockCharacters / TemplateSubstitution )* TripleTick ->
-    return dedentBlockSubstitutions($0, module.config.tab)
+    return dedentBlockSubstitutions($0, config.tab)
 
   Backtick ( TemplateCharacters / TemplateSubstitution )* Backtick ->
     return {
@@ -5390,7 +5436,7 @@ _TemplateLiteral
 
   # NOTE: actual CoffeeScript """ string behaviors are pretty weird, this is simplified
   TripleDoubleQuote ( TripleDoubleStringCharacters / CoffeeStringSubstitution )* TripleDoubleQuote ->
-    return dedentBlockSubstitutions($0, module.config.tab)
+    return dedentBlockSubstitutions($0, config.tab)
 
   # NOTE: ''' don't have interpolation so could be converted into a regular
   # String, but currently we use `template`s so the output looks similar to
@@ -5399,7 +5445,7 @@ _TemplateLiteral
   TripleSingleQuote:s TripleSingleStringCharacters:str TripleSingleQuote:e ->
     return {
       type: "TemplateLiteral",
-      children: [s, dedentBlockString(str, module.config.tab), e]
+      children: [s, dedentBlockString(str, config.tab), e]
     }
 
   # CoffeeScript Interpolation is enabled when "civet coffee-compat" or "civet coffee-interpolation" directive is present
@@ -5970,15 +6016,15 @@ JSXImplicitFragment
       type: "JSXFragment",
       children: [
         "<>\n",
-        module.currentIndent.token,
+        state.currentIndent.token,
         ...$0,
         "\n",
-        module.currentIndent.token,
+        state.currentIndent.token,
         "</>",
       ],
       jsxChildren: [$1].concat($2.map(([, tag]) => tag)),
     }
-    const type = typeOfJSX(jsx, module.config, module.getRef)
+    const type = typeOfJSX(jsx, config, getHelperRef)
     return type ? [
       { ts: true, children: ["("] },
       jsx,
@@ -6009,7 +6055,7 @@ JSXElement
       parts = [
         ...$0,
         "\n", // InsertNewline
-        module.currentIndent.token, // InsertIndent
+        state.currentIndent.token, // InsertIndent
         ["</", open[1], ">"],
       ]
     } else {
@@ -6031,12 +6077,12 @@ JSXSelfClosingElement
 
 PushJSXOpeningElement
   JSXOpeningElement ->
-    module.JSXTagStack.push($1[1])
+    state.JSXTagStack.push($1[1])
     return $1
 
 PopJSXStack
   "" ->
-    module.JSXTagStack.pop()
+    state.JSXTagStack.pop()
 
 # https://facebook.github.io/jsx/#prod-JSXOpeningElement
 JSXOpeningElement
@@ -6044,7 +6090,7 @@ JSXOpeningElement
 
 JSXOptionalClosingElement
   Whitespace? JSXClosingElement:close ->
-    if (module.currentJSXTag !== close[2]) return $skip
+    if (state.currentJSXTag !== close[2]) return $skip
     return $0
   ""
 
@@ -6063,7 +6109,7 @@ JSXFragment
       [
         ...$0,
         "\n", // InsertNewline
-        module.currentIndent.token, // InsertIndent
+        state.currentIndent.token, // InsertIndent
         "</>",
       ]
     return { type: "JSXFragment", children: parts, jsxChildren: children.jsxChildren }
@@ -6079,12 +6125,12 @@ JSXFragment
 
 PushJSXOpeningFragment
   "<>" ->
-    module.JSXTagStack.push("")
+    state.JSXTagStack.push("")
     return $1
 
 JSXOptionalClosingFragment
   Whitespace? JSXClosingFragment ->
-    if (module.currentJSXTag !== "") return $skip
+    if (state.currentJSXTag !== "") return $skip
     return $0
   ""
 
@@ -6095,7 +6141,7 @@ JSXClosingFragment
 JSXElementName
   # Implicit element name
   &( ( "#" / Dot ) JSXShorthandString ) ->
-    return module.config.defaultElement
+    return config.defaultElement
   # Merged in https://facebook.github.io/jsx/#prod-JSXNamespacedName
   # Merged in https://facebook.github.io/jsx/#prod-JSXMemberExpression
   $( JSXIdentifierName ( (Colon JSXIdentifierName) / ( Dot JSXIdentifierName )* ) )
@@ -6120,7 +6166,7 @@ JSXAttributes
     })
     if (classes.length) {
       // Check for non-shorthand class or className attribute
-      let className = module.config.react ? "className" : "class"
+      let className = config.react ? "className" : "class"
       attrs = attrs.filter((pair) => {
         const [, attr] = pair
         if ((attr[0][0] === "class" || attr[0][0] === "className") &&
@@ -6519,7 +6565,7 @@ JSXEOS
 JSXNested
   JSXEOS:eos Indent:indent ->
     const { level } = indent
-    const currentIndent = module.currentIndent
+    const currentIndent = state.currentIndent
     if (level !== currentIndent.level) return $skip
     return $0
 
@@ -7398,7 +7444,7 @@ InsertNewline
 
 InsertIndent
   "" ->
-    return module.currentIndent.token
+    return state.currentIndent.token
 
 InsertSpace
   "" ->
@@ -7422,141 +7468,96 @@ InsertType
 
 CoffeeBinaryExistentialEnabled
   "" ->
-    if(module.config.coffeeBinaryExistential) return
+    if(config.coffeeBinaryExistential) return
     return $skip
 
 CoffeeBooleansEnabled
   "" ->
-    if(module.config.coffeeBooleans) return
+    if(config.coffeeBooleans) return
     return $skip
 
 CoffeeClassesEnabled
   "" ->
-    if(module.config.coffeeClasses) return
+    if(config.coffeeClasses) return
     return $skip
 
 CoffeeCommentEnabled
   "" ->
-    if(module.config.coffeeComment) return
+    if(config.coffeeComment) return
     return $skip
 
 CoffeeDoEnabled
   "" ->
-    if(module.config.coffeeDo) return
+    if(config.coffeeDo) return
     return $skip
 
 CoffeeForLoopsEnabled
   "" ->
-    if(module.config.coffeeForLoops) return
+    if(config.coffeeForLoops) return
     return $skip
 
 CoffeeInterpolationEnabled
   "" ->
-    if(module.config.coffeeInterpolation) return
+    if(config.coffeeInterpolation) return
     return $skip
 
 CoffeeIsntEnabled
   "" ->
-    if(module.config.coffeeIsnt) return
+    if(config.coffeeIsnt) return
     return $skip
 
 CoffeeJSXEnabled
   "" ->
-    if(module.config.coffeeJSX) return
+    if(config.coffeeJSX) return
     return $skip
 
 CoffeeLineContinuationEnabled
   "" ->
-    if(module.config.coffeeLineContinuation) return
+    if(config.coffeeLineContinuation) return
     return $skip
 
 CoffeeNotEnabled
   "" ->
-    if(module.config.coffeeNot) return
+    if(config.coffeeNot) return
     return $skip
 
 CoffeeOfEnabled
   "" ->
-    if(module.config.coffeeOf) return
+    if(config.coffeeOf) return
     return $skip
 
 CoffeePrototypeEnabled
   "" ->
-    if(module.config.coffeePrototype) return
+    if(config.coffeePrototype) return
     return $skip
 
 ObjectIsEnabled
   "" ->
-    if(module.config.objectIs) return
+    if(config.objectIs) return
     return $skip
 
 # Reset module level data
 Reset
   "" ->
     // Storage for PushIndent/PopIndent
-    module.indentLevels = [{
+    state.indentLevels = [{
       level: 0,
       token: "",
     }]
 
-    module.forbidClassImplicitCall = [false]
-    module.forbidIndentedApplication = [false]
-    module.forbidBracedApplication = [false]
-    module.forbidTrailingMemberProperty = [false]
-    module.forbidNewlineBinaryOp = [false]
-    module.JSXTagStack = [undefined]
+    state.forbidClassImplicitCall = [false]
+    state.forbidIndentedApplication = [false]
+    state.forbidBracedApplication = [false]
+    state.forbidTrailingMemberProperty = [false]
+    state.forbidNewlineBinaryOp = [false]
+    state.JSXTagStack = [undefined]
 
-    module.operators = new Map
+    state.operators = new Map
 
-    if (!module._init) {
-      module._init = true
-      Object.defineProperties(module, {
-        currentIndent: {
-          get() {
-            const {indentLevels: l} = module
-            return l[l.length-1]
-          },
-        },
-        classImplicitCallForbidden: {
-          get() {
-            const {forbidClassImplicitCall: s} = module
-            return s[s.length-1]
-          },
-        },
-        indentedApplicationForbidden: {
-          get() {
-            const {forbidIndentedApplication: s} = module
-            return s[s.length-1]
-          },
-        },
-        bracedApplicationForbidden: {
-          get() {
-            const {forbidBracedApplication: s} = module
-            return s[s.length-1]
-          },
-        },
-        trailingMemberPropertyForbidden: {
-          get() {
-            const {forbidTrailingMemberProperty: s} = module
-            return s[s.length-1]
-          },
-        },
-        newlineBinaryOpForbidden: {
-          get() {
-            const {forbidNewlineBinaryOp: s} = module
-            return s[s.length-1]
-          },
-        },
-        currentJSXTag: {
-          get() {
-            const {JSXTagStack: s} = module
-            return s[s.length-1]
-          },
-        },
-      })
-    }
+    state.helperRefs = {}
+    state.prelude = []
 
-    module.config = {
+    config = {
       autoConst: false,
       autoVar: false,
       autoLet: false,
@@ -7586,174 +7587,16 @@ Reset
       verbose: false,
     }
 
-    const asAny = {
-      ts: true,
-      children: [" as any"]
-    }
-    module.prelude = []
-
-    const preludeVar = "var "
-    const declareRef = {
-      indexOf(indexOfRef) {
-        const typeSuffix = {
-          ts: true,
-          children: [": <T>(this: T[], searchElement: T) => number"]
-        }
-        // [indent, statement]
-        module.prelude.push(["", [preludeVar, indexOfRef, typeSuffix, " = [].indexOf", asAny, ";\n"]])
-      },
-      hasProp(hasPropRef) {
-        const typeSuffix = {
-          ts: true,
-          children: [": <T>(object: T, prop: PropertyKey) => boolean"]
-        }
-        // [indent, statement]
-        module.prelude.push(["", [preludeVar, hasPropRef, typeSuffix, " = ({}.constructor", asAny, ").hasOwn;\n"]])
-      },
-      is(isRef) {
-        // Thanks to @thetarnav for help with this TypeScript magic.
-        // If the second argument is more general, narrow it.
-        // Otherwise (including when the first argument is more general,
-        // or partial overlap), always narrow the first argument,
-        // as that's usually the one that matters.
-        // Waiting on https://github.com/Microsoft/TypeScript/issues/26916
-        // for proper narrowing of both arguments.
-        const typeSuffix = {
-          ts: true,
-          children: [": { <B, A extends B> (a: A, b: B): b is A, <A, B> (a: A, b: B): a is A & B }"]
-        }
-        // [indent, statement]
-        module.prelude.push(["", [preludeVar, isRef, typeSuffix, " = Object.is", asAny, ";\n"]])
-      },
-      /**
-       * Array length check with type guard.
-       * From tlgreg https://discord.com/channels/933472021310996512/1012166187196629113/1157386582546976873
-       */
-      len(lenRef) {
-        module.prelude.push(["", [{
-          ts: true,
-          children: [ "function ", lenRef, "<T extends readonly unknown[], N extends number>(arr: T, length: N): arr is T & { length: N } { return arr.length === length }" ]
-        }, {
-          js: true,
-          children: [ "function ", lenRef, "(arr, length) { return arr.length === length }" ]
-        }], "\n"])
-      },
-      modulo(moduloRef) {
-        const typeSuffix = {
-          ts: true,
-          children: [": (a: number, b: number) => number"]
-        }
-        // [indent, statement]
-        module.prelude.push(["", [preludeVar, moduloRef, typeSuffix, " = (a, b) => (a % b + b) % b;", "\n"]])
-      },
-      Falsy(FalsyRef) {
-        module.prelude.push(["", [{
-          ts: true,
-          children: ["type ", FalsyRef, " = false | 0 | '' | 0n | null | undefined;", "\n"]
-        }]])
-      },
-      xor(xorRef) {
-        const Falsy = module.getRef("Falsy")
-        const typeSuffix = {
-          ts: true,
-          children: [
-            ": <A, B>(a: A, b: B) => A extends ",
-            Falsy,
-            " ? B : B extends ",
-            Falsy,
-            " ? A : (false | (A & ",
-            Falsy,
-            " extends never ? never : B) | (B & ",
-            Falsy,
-            " extends never ? never : A))"
-          ]
-        }
-        // [indent, statement]
-        module.prelude.push(["", [preludeVar, xorRef, typeSuffix, " = (a, b) => (a ? !b && a : b)", asAny, ";", "\n"]])
-      },
-      xnor(xnorRef) {
-        const Falsy = module.getRef("Falsy")
-        const typeSuffix = {
-          ts: true,
-          children: [
-            ": <A, B>(a: A, b: B) => A & ",
-            Falsy,
-            " extends never ? B : (true | (B extends ",
-            Falsy,
-            " ? never : A) | (A extends ",
-            Falsy,
-            " ? never : B))"
-          ]
-        }
-        // [indent, statement]
-        module.prelude.push(["", [preludeVar, xnorRef, typeSuffix, " = (a, b) => (a ? b : !b || a)", asAny, ";", "\n"]])
-      },
-      returnSymbol(ref) {
-        module.prelude.push({
-          children: [
-            preludeVar, ref, " = Symbol(\"return\")';\n",
-          ],
-        })
-      },
-      concatAssign(ref) {
-        const typeSuffix = {
-          ts: true,
-          children: [
-            ": <B, A extends {push: (this: A, b: B) => void} | (B extends unknown[] ? {push: (this: A, ...b: B) => void} : never)>(lhs: A, rhs: B) => A",
-          ]
-        }
-        module.prelude.push({
-          children: [
-            preludeVar, ref, typeSuffix,
-            " = (lhs, rhs) => (((rhs", asAny, ")?.[Symbol.isConcatSpreadable] ?? Array.isArray(rhs)) ? (lhs", asAny, ").push.apply(lhs, rhs", asAny, ") : (lhs", asAny, ").push(rhs), lhs);\n"
-          ]
-        })
-      },
-      JSX(jsxRef) {
-        module.prelude.push({
-          ts: true,
-          children: [
-            "import type { JSX as ", jsxRef, " } from 'solid-js';\n",
-          ],
-        })
-      },
-      IntrinsicElements(intrinsicElementsRef) {
-        // JSX.IntrinsicElements[TagName] gives HTMLAttributes<ElementType> or
-        // SVGCoreAttributes<ElementType> or various subinterfaces of those.
-        // All of them extend DOMAttributes<ElementType>, though.  See
-        // https://raw.githubusercontent.com/ryansolid/dom-expressions/main/packages/dom-expressions/src/jsx.d.ts
-        // Thanks to @thetarnav for the TypeScript magic to extract ElementType.
-        // (TypeScript's HTMLElementTagNameMap and SVGElementTagNameMap are an
-        // alternative, but don't necessary match Solid's IntrinsicElements.)
-        const JSX = module.getRef("JSX")
-        module.prelude.push({
-          ts: true,
-          children: [
-            "type ", intrinsicElementsRef, "<K extends keyof ", JSX, ".IntrinsicElements> =\n",
-            "  ", JSX, ".IntrinsicElements[K] extends ", JSX, ".DOMAttributes<infer T> ? T : unknown;\n",
-          ],
-        })
-      },
-    }
-    const refs = {}
-
-    module.getRef = function (base) {
-      if (refs.hasOwnProperty(base)) return refs[base]
-      const ref = makeRef(base)
-      if (declareRef.hasOwnProperty(base)) declareRef[base](ref)
-      return refs[base] = ref
-    }
-
-    Object.defineProperty(module.config, "deno", {
+    Object.defineProperty(config, "deno", {
       set(b) {
-        module.config.rewriteTsImports = !b
+        config.rewriteTsImports = !b
       }
     })
     // default to deno compatibility if running in deno
-    module.config.deno = typeof Deno !== "undefined"
+    config.deno = typeof Deno !== "undefined"
 
     // Expand setting coffeeCompat to the individual options
-    Object.defineProperty(module.config, "coffeeCompat", {
+    Object.defineProperty(config, "coffeeCompat", {
       set(b) {
         for (const option of [
           "autoVar",
@@ -7772,21 +7615,21 @@ Reset
           "coffeeOf",
           "coffeePrototype",
         ]) {
-          module.config[option] = b
+          config[option] = b
         }
         if (b) {
-          module.config.objectIs = false
+          config.objectIs = false
         }
       }
     })
 
     // Hack to pass in parser config from main
     if (typeof parse !== "undefined") {
-      Object.assign(module.config, parse.config)
-      parse.config = module.config
+      Object.assign(config, parse.config)
+      parse.config = config
     } else {
-      Object.assign(module.config, exports.parse.config)
-      exports.parse.config = module.config
+      Object.assign(config, exports.parse.config)
+      exports.parse.config = config
     }
 
     // Hack to pass parser state to cache key
@@ -7795,20 +7638,20 @@ Reset
       children: [],
       getStateKey() {
         const stateInt =
-          ((module.currentIndent.level % 256) << 8) |
-          (module.classImplicitCallForbidden << 7) |
-          (module.indentedApplicationForbidden << 6) |
-          (module.bracedApplicationForbidden << 5) |
-          (module.trailingMemberPropertyForbidden << 4) |
-          (module.newlineBinaryOpForbidden << 3) |
+          ((state.currentIndent.level % 256) << 8) |
+          (state.classImplicitCallForbidden << 7) |
+          (state.indentedApplicationForbidden << 6) |
+          (state.bracedApplicationForbidden << 5) |
+          (state.trailingMemberPropertyForbidden << 4) |
+          (state.newlineBinaryOpForbidden << 3) |
           // This is slightly different than the rest of the state,
           // since it is affected by the directive prologue and may be hit
           // by the EOL rule early in the parse. Later if we wanted to
           // allow block scoping of the compat directives we would need to
           // add them all here.
-          (module.config.coffeeComment << 2)
+          (config.coffeeComment << 2)
 
-        return [stateInt, module.currentJSXTag]
+        return [stateInt, state.currentJSXTag]
       },
     }
 
@@ -7816,7 +7659,7 @@ Init
   Shebang? Prologue:directives ->
     directives.forEach((directive) => {
       if (directive.type === "CivetPrologue") {
-        Object.assign(module.config, directive.config)
+        Object.assign(config, directive.config)
       }
     })
 
@@ -7831,13 +7674,13 @@ ProloguePrefix
 
 # Indentation
 
-# Holds the last indent level in `module.lastIndent`
+# Holds the last indent level in `state.lastIndent`
 # Can get weird with backtracking but should work out as long as
 # EOS/Nested rules are used carefully and if we only compare to the
 # pushed value.
 Indent
   /[ \t]*/ ->
-    const level = getIndentLevel($0, module.config.tab)
+    const level = getIndentLevel($0, config.tab)
 
     return {
       $loc,
@@ -7850,14 +7693,14 @@ TrackIndented
   Indent:indent ->
     const {level} = indent
 
-    if (level <= module.currentIndent.level) {
+    if (level <= state.currentIndent.level) {
       return $skip
     }
-    if (module.config.verbose) {
+    if (config.verbose) {
       console.log("pushing indent", indent)
     }
 
-    module.indentLevels.push(indent)
+    state.indentLevels.push(indent)
     return $1
 
 # Indents one level deeper,
@@ -7870,10 +7713,10 @@ PushIndent
 
 PopIndent
   "" ->
-    if (module.config.verbose) {
-      console.log("popping indent", module.indentLevels[module.indentLevels.length-1], "->", module.indentLevels[module.indentLevels.length-2])
+    if (config.verbose) {
+      console.log("popping indent", state.indentLevels[state.indentLevels.length-1], "->", state.indentLevels[state.indentLevels.length-2])
     }
-    module.indentLevels./**/pop()
+    state.indentLevels./**/pop()
 
 # "Nested" actually means "new line at current indentation level",
 # where the current indentation level is set by TrackIndented / PushIndent
@@ -7881,20 +7724,20 @@ PopIndent
 # Consumes and returns the newline and indentation
 Nested
   EOS Indent:indent ->
-    if (indent.level === module.currentIndent.level) return $0
-    if (module.config.verbose) {
-      console.log(`failing Nested: ${indent.level} does not match current indent level ${module.currentIndent.level}`)
+    if (indent.level === state.currentIndent.level) return $0
+    if (config.verbose) {
+      console.log(`failing Nested: ${indent.level} does not match current indent level ${state.currentIndent.level}`)
     }
     return $skip
 
 IndentedFurther
   EOS Indent:indent ->
-    if (indent.level > module.currentIndent.level) return $0
+    if (indent.level > state.currentIndent.level) return $0
     return $skip
 
 IndentedAtLeast
   EOS Indent:indent ->
-    if (indent.level >= module.currentIndent.level) return $0
+    if (indent.level >= state.currentIndent.level) return $0
     return $skip
 
 NotDedented

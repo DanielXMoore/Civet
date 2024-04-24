@@ -1,0 +1,159 @@
+// Helper functions added to preamble of output code
+
+type { ASTNode, ASTRef, StatementTuple } from './types.civet'
+{ makeRef } from './util.civet'
+{ state } from "../parser.hera"
+declare var state: {
+  prelude: StatementTuple[]
+  helperRefs: Record<HelperName, ASTRef>
+}
+
+preludeVar := "var "
+
+function ts(children: string | ASTNode[]): ASTNode
+  ts: true
+  children: Array.isArray(children) ? children : [children]
+
+asAny := ts " as any"
+
+declareHelper := {
+  indexOf(indexOfRef): void
+    state.prelude.push ["", [ // [indent, statement]
+      preludeVar
+      indexOfRef
+      ts [": <T>(this: T[], searchElement: T) => number"]
+      " = [].indexOf"
+      asAny
+    ], ";\n"]
+  hasProp(hasPropRef): void
+    state.prelude.push ["", [ // [indent, statement]
+      preludeVar
+      hasPropRef
+      ts ": <T>(object: T, prop: PropertyKey) => boolean"
+      " = ({}.constructor"
+      asAny
+      ").hasOwn;\n"
+    ]]
+  is(isRef): void
+    // Thanks to @thetarnav for help with this TypeScript magic.
+    // If the second argument is more general, narrow it.
+    // Otherwise (including when the first argument is more general,
+    // or partial overlap), always narrow the first argument,
+    // as that's usually the one that matters.
+    // Waiting on https://github.com/Microsoft/TypeScript/issues/26916
+    // for proper narrowing of both arguments.
+    state.prelude.push ["", [ // [indent, statement]
+      preludeVar
+      isRef
+      ts ": { <B, A extends B> (a: A, b: B): b is A, <A, B> (a: A, b: B): a is A & B }"
+      " = Object.is"
+      asAny
+      ";\n"
+    ]]
+  /**
+   * Array length check with type guard.
+   * From tlgreg https://discord.com/channels/933472021310996512/1012166187196629113/1157386582546976873
+   */
+  len(lenRef): void
+    state.prelude.push ["", [
+      ts [ "function ", lenRef, "<T extends readonly unknown[], N extends number>(arr: T, length: N): arr is T & { length: N } { return arr.length === length }" ]
+      {
+        js: true
+        children: [ "function ", lenRef, "(arr, length) { return arr.length === length }" ]
+      }
+      "\n"
+    ]]
+  modulo(moduloRef): void
+    state.prelude.push ["", [ // [indent, statement]
+      preludeVar
+      moduloRef
+      ts ": (a: number, b: number) => number"
+      " = (a, b) => (a % b + b) % b;\n"
+    ]]
+  Falsy(FalsyRef): void
+    state.prelude.push ["", // [indent, statement]
+      ts ["type ", FalsyRef, " = false | 0 | '' | 0n | null | undefined;\n"]
+    ]
+  xor(xorRef): void
+    Falsy := getHelperRef "Falsy"
+    state.prelude.push ["", [ // [indent, statement]
+      preludeVar
+      xorRef
+      ts [
+        ": <A, B>(a: A, b: B) => A extends ", Falsy
+        " ? B : B extends ", Falsy
+        " ? A : (false | (A & ", Falsy
+        " extends never ? never : B) | (B & ", Falsy
+        " extends never ? never : A))"
+      ]
+      " = (a, b) => (a ? !b && a : b)"
+      asAny
+      ";\n"
+    ]]
+  xnor(xnorRef): void
+    Falsy := getHelperRef "Falsy"
+    state.prelude.push ["", [ // [indent, statement]
+      preludeVar
+      xnorRef
+      ts [
+        ": <A, B>(a: A, b: B) => A & ", Falsy,
+        " extends never ? B : (true | (B extends ", Falsy,
+        " ? never : A) | (A extends ", Falsy,
+        " ? never : B))"
+      ]
+      " = (a, b) => (a ? b : !b || a)"
+      asAny
+      ";\n"
+    ]]
+  returnSymbol(ref): void
+    state.prelude.push ["", [ // [indent, statement]
+      preludeVar
+      ref
+      " = Symbol(\"return\")';\n"
+    ]]
+  concatAssign(ref): void
+    state.prelude.push ["", [ // [indent, statement]
+      preludeVar
+      ref
+      ts [
+        ": <B, A extends {push: (this: A, b: B) => void} | (B extends unknown[] ? {push: (this: A, ...b: B) => void} : never)>(lhs: A, rhs: B) => A"
+      ]
+      " = (lhs, rhs) => (((rhs", asAny, ")?.[Symbol.isConcatSpreadable] ?? Array.isArray(rhs)) ? (lhs", asAny, ").push.apply(lhs, rhs", asAny, ") : (lhs", asAny, ").push(rhs), lhs);\n"
+    ]]
+  JSX(jsxRef): void
+    state.prelude.push ["", // [indent, statement]
+      ts ["import type { JSX as ", jsxRef, " } from 'solid-js'"]
+      ";\n"
+    ]
+  IntrinsicElements(intrinsicElementsRef): void
+    // JSX.IntrinsicElements[TagName] gives HTMLAttributes<ElementType> or
+    // SVGCoreAttributes<ElementType> or various subinterfaces of those.
+    // All of them extend DOMAttributes<ElementType>, though.  See
+    // https://raw.githubusercontent.com/ryansolid/dom-expressions/main/packages/dom-expressions/src/jsx.d.ts
+    // Thanks to @thetarnav for the TypeScript magic to extract ElementType.
+    // (TypeScript's HTMLElementTagNameMap and SVGElementTagNameMap are an
+    // alternative, but don't necessary match Solid's IntrinsicElements.)
+    JSX := getHelperRef "JSX"
+    state.prelude.push ["", // [indent, statement, delim]
+      ts [
+        "type ", intrinsicElementsRef
+        "<K extends keyof ", JSX, ".IntrinsicElements> =\n"
+        "  ", JSX, ".IntrinsicElements[K] extends ", JSX, ".DOMAttributes<infer T> ? T : unknown"
+      ]
+      ";\n"
+    ]
+} satisfies Record<string, (ref: ASTRef) => void>
+
+export type HelperName = keyof typeof declareHelper
+
+function getHelperRef(base: HelperName): ASTRef
+  return state.helperRefs[base] if base in state.helperRefs
+  ref := makeRef base
+  if base not in declareHelper
+    throw new Error `Unknown helper function: ${base}`
+  declareHelper[base](ref)
+  state.helperRefs[base] = ref
+
+export {
+  getHelperRef
+}
