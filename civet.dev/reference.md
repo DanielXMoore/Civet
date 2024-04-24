@@ -1552,7 +1552,7 @@ await Promise.allSettled for url of urls
 
 `comptime` blocks are similar to [`do` blocks](#do-blocks), but they execute
 *at Civet compilation time*.  The result of `eval`ing the block gets
-embedded (via `JSON.stringify`) into the output JavaScript code.
+embedded into the output JavaScript code.
 
 <Playground>
 value := comptime 1+2+3
@@ -1565,9 +1565,11 @@ console.log "3rd triangular number is", comptime
 </Playground>
 
 Note that comptime blocks are executed as separate scripts, so they have no
-access to variables in outer scopes.  The block must also run synchronously,
-and the result must not have reference loops so it can be serialized via
-`JSON.stringify`.
+access to variables in outer scopes.  The block must also run synchronously.
+For serialization, the result must
+consist of built-in JavaScript types (including `Set` and `Map`),
+functions cannot have properties or call other custom functions, and
+there cannot be reference loops.
 Some of these restrictions may be lifted in the future.
 
 ::: info

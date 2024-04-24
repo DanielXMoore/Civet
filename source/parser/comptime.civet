@@ -1,3 +1,5 @@
+"civet coffeePrototype"
+
 import type {
   ComptimeExpression
   ComptimeStatement
@@ -26,7 +28,7 @@ function processComptime(statements: StatementTuple[]): void
     if exp.type is "ComptimeExpression"
       let string
       try
-        string = JSON.stringify output
+        string = serialize output
       catch e
         exp.children = [
           type: "Error"
@@ -37,6 +39,74 @@ function processComptime(statements: StatementTuple[]): void
     else
       exp.children = []
 
+function serialize(value: ???): string
+  stack := new Set<object>
+  function recurse(val: ???): string
+    switch val
+      <? "string"
+        // Using JSON.stringify to handle escape sequences
+        JSON.stringify val
+      <? "number", <? "boolean", == null
+        String val // not toString to accomodate null/undefined
+      <? "bigint"
+        `${val}n`
+      <? "function"
+        // Some functions can actually be serialized
+        hasNoProps := (and)
+          Object.getOwnPropertyNames(val).every & is in ["length", "name", "arguments", "caller", "prototype"]
+          Object.getOwnPropertySymbols(val)# is 0
+          (or)
+            val:: is undefined
+            (and)
+              Object:: is Object.getPrototypeOf val::
+              Object.getOwnPropertyNames(val::)# is 1 // constructor
+              Object.getOwnPropertySymbols(val::)# is 0
+              val::constructor is val
+        unless hasNoProps
+          throw new TypeError "cannot serialize function with properties"
+        string := Function::toString.call val
+        if /\{\s+\[native code]\s+\}$/.test string
+          // builtin, or returned from Function::bind
+          throw new TypeError "cannot serialize native function"
+        string
+      <? "symbol"
+        if key? := Symbol.keyFor val
+          return `Symbol.for(${JSON.stringify key})`
+        throw new TypeError "cannot serialize unique symbol"
+      <? "object"
+        if stack.has val
+          throw new Error "circular reference detected"
+        if Array.isArray val
+          return `[${val.map(serialize).join ","}]`
+        stack.add val
+        str :=
+          switch Object.getPrototypeOf val
+            when Set::
+              "new Set([" + (
+                for item of val as Set<???>
+                  serialize item
+              ).join(",") + "])"
+            when Map::
+              "new Map([" + (
+                for [key, value] of val as Map<???, ???>
+                  `[${serialize key},${serialize value}]`
+              ).join(",") + "])"
+            when Object::
+              "{" + (
+                for own key, value in val as {[key: string]: ???}
+                  `${JSON.stringify key}:${serialize value}`
+              ).join(",") + "}"
+            else
+              // One day we may handle other classes like so:
+              // str += `__proto__:${val.constructor.name}`
+              throw new TypeError `cannot serialize value with prototype ${Object.getPrototypeOf val}`
+        stack.delete val
+        str
+      else
+        throw new TypeError `cannot serialize ${typeof val} value`
+  recurse value
+
 export {
   processComptime
+  serialize
 }
