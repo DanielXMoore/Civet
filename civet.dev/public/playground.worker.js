@@ -4,13 +4,13 @@ importScripts('https://cdn.jsdelivr.net/npm/shiki@0.14.7');
 importScripts('/__civet.js');
 
 onmessage = async (e) => {
-  const { uid, code, prettierOutput, jsOutput } = e.data;
+  const { uid, code, prettierOutput, jsOutput, parseOptions } = e.data;
   const highlighter = await getHighlighter();
   const inputHtml = highlighter.codeToHtml(code, { lang: 'coffee' });
 
   let tsCode, ast, errors = []
   try {
-    ast = Civet.compile(code, { ast: true });
+    ast = Civet.compile(code, { ast: true, parseOptions });
     tsCode = Civet.generate(ast, { errors });
     if (errors.length) {
       // TODO: Better error display; copied from main.civet
@@ -51,7 +51,7 @@ onmessage = async (e) => {
           (coffee ? '(do ->\n' : 'async do\n') +
           rest.replace(/^/gm, ' ') +
           (coffee ? ')' : ''),
-          { ast: true }
+          { ast: true, parseOptions }
         );
         // Hoist top-level declarations outside the IIFE wrapper
         Civet.lib.gatherRecursive(ast, (p) => p.type === 'BlockStatement')

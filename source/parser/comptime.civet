@@ -1,0 +1,123 @@
+"civet coffeePrototype"
+
+import type {
+  ComptimeExpression
+  ComptimeStatement
+  StatementTuple
+} from ./types.civet
+
+import {
+  gatherRecursive
+} from "./traversal.civet"
+
+{ getInitialConfig } from "../parser.hera"
+
+generate, { prune, type Options } from "../generate.civet"
+
+function processComptime(statements: StatementTuple[]): void
+  // Prevent comptime setting from being overridden by directives
+  // by looking at initialConfig instead of config
+  return unless getInitialConfig()?.comptime
+
+  gatherRecursive statements,
+    (node): node is (ComptimeStatement | ComptimeExpression) =>
+      node.type is "ComptimeStatement" or node.type is "ComptimeExpression"
+  .forEach (exp) =>
+    content := exp.type is "ComptimeStatement" ? exp.block : exp.expression
+    // Convert the comptime block into JS code
+    options: Options := js: true
+    js := generate prune(content), options
+    // If there are any errors, leave the comptime subtree alone
+    // (so there's still an error).
+    return if options.errors?
+    output := eval?.(`"use strict";${js}`)
+    if exp.type is "ComptimeExpression"
+      let string
+      try
+        string = serialize output
+      catch e
+        exp.children = [
+          type: "Error"
+          message: `comptime result ${output} not JSON serializable: ${e}`
+        ]
+        return
+      exp.children = [string]
+    else
+      exp.children = []
+
+function serialize(value: ???): string
+  stack := new Set<object>
+  function recurse(val: ???): string
+    switch val
+      <? "string"
+        // Using JSON.stringify to handle escape sequences
+        JSON.stringify val
+      <? "number", <? "boolean", == null
+        String val // not toString to accomodate null/undefined
+      <? "bigint"
+        `${val}n`
+      <? "function"
+        // Some functions can actually be serialized
+        hasNoProps := (and)
+          Object.getOwnPropertyNames(val).every & is in ["length", "name", "arguments", "caller", "prototype"]
+          Object.getOwnPropertySymbols(val)# is 0
+          (or)
+            val:: is undefined
+            (and)
+              Object:: is Object.getPrototypeOf val::
+              Object.getOwnPropertyNames(val::)# is 1 // constructor
+              Object.getOwnPropertySymbols(val::)# is 0
+              val::constructor is val
+        unless hasNoProps
+          throw new TypeError "cannot serialize function with properties"
+        string := Function::toString.call val
+        if /\{\s+\[native code]\s+\}$/.test string
+          // builtin, or returned from Function::bind
+          throw new TypeError "cannot serialize native function"
+        string
+      <? "symbol"
+        if key? := Symbol.keyFor val
+          return `Symbol.for(${JSON.stringify key})`
+        throw new TypeError "cannot serialize unique symbol"
+      <? "object"
+        if stack.has val
+          throw new Error "circular reference detected"
+        stack.add val
+        str :=
+          switch Object.getPrototypeOf val
+            when RegExp::
+              re := val as RegExp
+              `/${re.source}/${re.flags}`
+            when Date::
+              `new Date(${(val as Date).getTime()})`
+            when Set::
+              "new Set([" + (
+                for item of val as Set<???>
+                  recurse item
+              ).join(",") + "])"
+            when Map::
+              "new Map([" + (
+                for [key, value] of val as Map<???, ???>
+                  `[${recurse key},${recurse value}]`
+              ).join(",") + "])"
+            when Array::
+              `[${(val as ???[]).map(recurse).join ","}]`
+            when Object::
+              "{" + (
+                for own key, value in val as {[key: string]: ???}
+                  `${JSON.stringify key}:${recurse value}`
+              ).join(",") + "}"
+            else
+              // One day we may handle other classes like so:
+              // str += `__proto__:${val.constructor.name}`
+              throw new TypeError `cannot serialize object with prototype ${Object.getPrototypeOf val}`
+        stack.delete val
+        str
+      else
+        throw new TypeError `cannot serialize ${typeof val} value`
+  recurse value
+
+export {
+  processComptime
+  serialize
+}

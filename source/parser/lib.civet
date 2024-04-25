@@ -8,6 +8,7 @@
 
 import type {
   AccessStart
+  ASTLeaf
   ASTNode
   ASTNodeBase
   ASTNodeObject
@@ -108,6 +109,8 @@ import {
 } from ./op.civet
 import { processUnaryExpression } from ./unary.civet
 import { createConstLetDecs, createVarDecs } from ./auto-dec.civet
+import { processComptime } from ./comptime.civet
+import { getHelperRef } from ./helper.civet
 
 import {
   dedentBlockString
@@ -117,6 +120,12 @@ import {
   processCoffeeInterpolation
   quoteString
 } from ./string.civet
+
+import {
+  getConfig
+  getState
+  getInitialConfig
+} from ../parser.hera
 
 function addPostfixStatement(statement: StatementTuple, ws: ASTNode, post)
   expressions := [
@@ -221,7 +230,7 @@ function expressionizeBlock(blockOrExpression: ASTNode)
   else
     blockOrExpression
 
-function expressionizeIfStatement(statement: IfStatement)
+function expressionizeIfStatement(statement: IfStatement): ASTNode
   { condition, then: b, else: e } := statement
   [ ...condRest, closeParen ] := condition.children  // separate ')'
 
@@ -247,8 +256,8 @@ function expressionizeIfStatement(statement: IfStatement)
   children.push closeParen
 
   {
-    type: "IfExpression",
-    children,
+    type: "IfExpression"
+    children
   }
 
 function expressionizeTypeIf([ws, ifOp, condition, t, e])
@@ -306,7 +315,7 @@ function handleThisPrivateShorthands(value)
 /**
  * Process globs, bind shorthand, and call shortcuts, in Call/MemberExpression
  */
-function processCallMemberExpression(node)
+function processCallMemberExpression(node: ASTNodeParent): ASTNode
   { children } := node
 
   // Parenthesized operator like (+), immediately called, expands to
@@ -315,16 +324,22 @@ function processCallMemberExpression(node)
     op := children[0].parenthesizedOp
     call .= children[1]
     args := [...call.args] // shallow copy
-    call = { ...call, args }
+    call = {
+      ...call
+      args
+      children: call.children.map (x) => x is call.args ? args : x
+    }
     // Remove trailing comma
-    if comma := isComma args.-1
-      comma.token = ''
+    if isComma args.-1
+      args.-1 = deepCopy args.-1
+      (isComma(args.-1) as ASTLeaf).token = ''
     // Arguments already start and end with open and close parentheses.
     // Replace each comma with an instance of the operator and matching parens.
     commaCount .= 0
-    for each arg of args
-      if comma := isComma arg
-        comma.token = `)${op.token}(`
+    for each let arg, i of args
+      if isComma arg
+        arg = args[i] = deepCopy arg
+        (isComma(arg) as ASTLeaf).token = `)${op.token}(`
         commaCount++
     // Don't mess with (+)()
     if args.length
@@ -473,11 +488,11 @@ function replaceNode(node: ASTNodeObject, newNode: ASTNode, parent?: ASTNodePare
   for key, value in parent
     if value is node
       parent[key] = newNode
-      return
 
   if isASTNodeObject newNode
     newNode.parent = parent
-  node.parent = undefined
+  // Don't destroy node's parent, as we often include it within newNode
+  //node.parent = undefined
 
 // Wrap expression in parentheses to make into a statement when:
 // * object literal expression
@@ -958,9 +973,7 @@ function attachPostfixStatementAsExpression(exp, post: [WSNode, IfStatement | It
   postfixStatement := post[1]
 
   switch postfixStatement.type
-    case "ForStatement":
-    case "IterationStatement":
-    case "DoStatement": {
+    when "ForStatement", "IterationStatement", "DoStatement"
       statement := addPostfixStatement(exp, ...post)
       return {
         type: "IterationExpression",
@@ -968,10 +981,9 @@ function attachPostfixStatementAsExpression(exp, post: [WSNode, IfStatement | It
         block: statement.block,
         statement,
       }
-    }
-    case "IfStatement":
+    when "IfStatement"
       return expressionizeIfStatement { ...postfixStatement, then: exp }
-    default:
+    else
       throw new Error("Unknown postfix statement")
 
 function processTypes(node: ASTNode)
@@ -1014,23 +1026,26 @@ function processStatementExpressions(statements: StatementTuple[]): void
     .forEach (_exp) =>
       exp := _exp as! StatementExpression
       { statement } := exp
-      let ws
-      unless exp.children[0] is exp.statement
-        ws = exp.children[0]
 
       switch statement.type
         when "IfStatement"
           if expression := expressionizeIfStatement(statement)
-            exp.statement = expression
-            exp.children = [exp.statement]
+            replaceNode statement, expression, exp
           else
-            exp.children = wrapIIFE([["", statement]])
+            replaceNode statement, wrapIIFE([["", statement]]), exp
         when "IterationExpression"
-          // Do nothing, handled separately currently
+          if statement.subtype is "ComptimeStatement"
+            // Transform ComptimeStatement into ComptimeExpression,
+            // with IIFE wrapper inside the ComptimeExpression
+            expression := wrapIIFE(statement.statement.block.expressions)
+            replaceNode statement, makeNode({
+              type: "ComptimeExpression"
+              expression
+              children: [expression]
+            }), exp
+          // else do nothing, handled separately currently
         else
-          exp.children = wrapIIFE([["", statement]])
-
-      exp.children.unshift(ws) if ws
+          replaceNode statement, wrapIIFE([["", statement]]), exp
 
 function processNegativeIndexAccess(statements: StatementTuple[]): void
   gatherRecursiveAll(statements, (n) => n.type is "NegativeIndex")
@@ -1064,14 +1079,17 @@ function processNegativeIndexAccess(statements: StatementTuple[]): void
         ".length"
       ]
 
-function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule): void
+function processProgram(root: BlockStatement): void
+  state := getState()
+  config := getConfig()
+
   // invariants
-  assert.equal(m.forbidBracedApplication.length, 1, "forbidBracedApplication")
-  assert.equal(m.forbidClassImplicitCall.length, 1, "forbidClassImplicitCall")
-  assert.equal(m.forbidIndentedApplication.length, 1, "forbidIndentedApplication")
-  assert.equal(m.forbidNewlineBinaryOp.length, 1, "forbidNewlineBinaryOp")
-  assert.equal(m.forbidTrailingMemberProperty.length, 1, "forbidTrailingMemberProperty")
-  assert.equal(m.JSXTagStack.length, 1, "JSXTagStack")
+  assert.equal(state.forbidBracedApplication.length, 1, "forbidBracedApplication")
+  assert.equal(state.forbidClassImplicitCall.length, 1, "forbidClassImplicitCall")
+  assert.equal(state.forbidIndentedApplication.length, 1, "forbidIndentedApplication")
+  assert.equal(state.forbidNewlineBinaryOp.length, 1, "forbidNewlineBinaryOp")
+  assert.equal(state.forbidTrailingMemberProperty.length, 1, "forbidTrailingMemberProperty")
+  assert.equal(state.JSXTagStack.length, 1, "JSXTagStack")
 
   addParentPointers(root)
 
@@ -1080,12 +1098,12 @@ function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule
   processPlaceholders(statements)
   processNegativeIndexAccess(statements)
   processTypes(statements)
-  processDeclarationConditions(statements, m.getRef)
+  processDeclarationConditions(statements)
   processPipelineExpressions(statements)
   processDeclarations(statements)
   processAssignments(statements)
   processStatementExpressions(statements)
-  processPatternMatching(statements, ReservedWord, m.getRef)
+  processPatternMatching(statements)
 
   // Modify iteration expressions
   gatherRecursiveAll(statements, (n) => n.type is "IterationExpression")
@@ -1101,7 +1119,7 @@ function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule
   processFunctions(statements, config)
 
   // Insert prelude
-  statements.unshift(...m.prelude)
+  statements.unshift(...state.prelude)
 
   if (config.autoLet) {
     createConstLetDecs(statements, [], "let")
@@ -1115,6 +1133,8 @@ function processProgram(root: BlockStatement, config, m, ReservedWord: ParseRule
 
   populateRefs(statements)
   adjustAtBindings(statements)
+
+  processComptime(statements)
 
 function populateRefs(statements: ASTNode): void {
   const refNodes = gatherRecursive(statements, ({ type }) => type is "Ref")
@@ -1379,16 +1399,16 @@ function replaceNodesRecursive(root, predicate, replacer)
 
   return root
 
-function typeOfJSX(node, config, getRef) {
+function typeOfJSX(node, config) {
   switch (node.type) {
     case "JSXElement":
-      return typeOfJSXElement(node, config, getRef)
+      return typeOfJSXElement(node, config)
     case "JSXFragment":
-      return typeOfJSXFragment(node, config, getRef)
+      return typeOfJSXFragment(node, config)
   }
 }
 
-function typeOfJSXElement(node, config, getRef) {
+function typeOfJSXElement(node, config) {
   if (config.solid) {
     if (config.server and !config.client) {  // server only
       return ["string"]
@@ -1399,7 +1419,7 @@ function typeOfJSXElement(node, config, getRef) {
     // [https://www.typescriptlang.org/docs/handbook/jsx.html]
     const clientType =
       tag[0] is tag[0].toLowerCase() ?
-        [getRef("IntrinsicElements"), '<"', tag, '">'] :
+        [getHelperRef("IntrinsicElements"), '<"', tag, '">'] :
         ['ReturnType<typeof ', tag, '>']
     if (config.server) {  // isomorphic code for client + server
       return ["string", " | ", clientType]
@@ -1409,7 +1429,7 @@ function typeOfJSXElement(node, config, getRef) {
   }
 }
 
-function typeOfJSXFragment(node, config, getRef) {
+function typeOfJSXFragment(node, config) {
   if (config.solid) {
     let type = []
     let lastType
@@ -1422,11 +1442,11 @@ function typeOfJSXFragment(node, config, getRef) {
           }
           break
         case "JSXElement":
-          type.push(typeOfJSXElement(child, config, getRef))
+          type.push(typeOfJSXElement(child, config))
           break
         case "JSXFragment":
           // Solid flattens fragments of fragments into one array.
-          type.push(...typeOfJSXFragment(child, config, getRef))
+          type.push(...typeOfJSXFragment(child, config))
           break
         case "JSXChildExpression":
           // Solid discards empty expressions
@@ -1469,6 +1489,7 @@ export {
   gatherRecursive
   gatherRecursiveAll
   gatherRecursiveWithinFunction
+  getHelperRef
   getIndentLevel
   getPrecedence
   getTrimmingSpace

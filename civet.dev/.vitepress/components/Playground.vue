@@ -12,6 +12,9 @@ const props = defineProps<{
   clearTrigger?: boolean;
   hideLink?: boolean;
   showPrettier?: boolean;
+  raw?: boolean;
+  showComptime?: boolean;
+  comptime?: boolean;
 }>();
 
 const userCode = ref(b64.decode(props.b64Code));
@@ -47,11 +50,25 @@ const showPrettier = props.showPrettier;
 const prettier = ref(true);
 watch(prettier, compile);
 
+const showComptime = props.showComptime;
+const comptime = ref(false);
+watch(comptime, compile);
+const hasComptime = ref(false);
+
 async function compile() {
+  if (showComptime) {
+    if (!(hasComptime.value = /\bcomptime\b/.test(userCode.value))) {
+      // If we remove comptime code, reset the checkbox to off
+      // to avoid accidental comptime in the future
+      comptime.value = false;
+    }
+  }
+
   const snippet = await compileCivetToHtml({
     code: userCode.value + '\n',
     jsOutput: props.emitJsOutput,
-    prettierOutput: showPrettier && prettier.value,
+    prettierOutput: !props.raw && showPrettier && prettier.value,
+    parseOptions: { comptime: props.comptime || comptime.value },
   });
 
   emit('input', userCode.value, snippet.jsCode);
@@ -122,6 +139,10 @@ const playgroundUrl = computed(() => {
         <slot v-else name="output" />
       </div>
       <div class="compilation-info">
+        <label v-if="showComptime && hasComptime">
+          <input type="checkbox" v-model="comptime"/>
+          comptime
+        </label>
         <label>
           <input type="checkbox" v-model="ligatures"/>
           Ligatures

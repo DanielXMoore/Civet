@@ -1483,6 +1483,28 @@ do
 while item?
 </Playground>
 
+### Labels
+
+<Playground>
+:outer while (list = next())?
+  for item of list
+    if finale item
+      break outer
+  continue :outer
+</Playground>
+
+::: info
+Labels have the colon on the left to avoid conflict with implicit object
+literals.  The colons are optional in `break` and `continue`.
+As a special case, Svelte's `$:` can be used with the colon on the right.
+:::
+
+<Playground>
+$: document.title = title
+</Playground>
+
+## Other Blocks
+
 ### Do Blocks
 
 To put multiple lines in a scope and possibly an expression,
@@ -1526,25 +1548,49 @@ await Promise.allSettled for url of urls
     await result.json()
 </Playground>
 
-### Labels
+### Comptime Blocks
 
-<Playground>
-:outer while (list = next())?
-  for item of list
-    if finale item
-      break outer
-  continue :outer
+`comptime` blocks are similar to [`do` blocks](#do-blocks), but they execute
+*at Civet compilation time*.  The result of `eval`ing the block gets
+embedded into the output JavaScript code.
+
+<Playground comptime>
+value := comptime 1+2+3
 </Playground>
+
+<Playground comptime>
+console.log "3rd triangular number is", comptime
+  function triangle(n) do n and n + triangle n-1
+  triangle 3
+</Playground>
+
+Note that `comptime` blocks are executed as separate scripts, so they have no
+access to variables in outer scopes.  The block must also run synchronously.
+For serialization, the result must consist of built-in JavaScript types
+(including `Date`, `RegExp`, `Set`, and `Map`),
+functions cannot have properties or refer to variables/functions in an
+outer scope other than global,
+and there cannot be reference loops.
+Some of these restrictions may be lifted in the future.
 
 ::: info
-Labels have the colon on the left to avoid conflict with implicit object
-literals.  The colons are optional in `break` and `continue`.
-As a special case, Svelte's `$:` can be used with the colon on the right.
+Inspired by Rust crates
+[comptime](https://crates.io/crates/comptime) and
+[constime](https://crates.io/crates/constime),
+which are a simplified version of
+[Zig's comptime](https://ziglang.org/documentation/master/#comptime);
+and other similar compile-time features (sometimes called "macros")
+such as [C++'s constexpr](https://en.cppreference.com/w/cpp/language/constexpr).
 :::
 
-<Playground>
-$: document.title = title
-</Playground>
+Because `comptime` enables execution of arbitrary code during compilation, it
+is not enabled by default, nor can it be enabled via a directive or config file.
+In particular, the VSCode language server will not execute `comptime` blocks.
+You can enable `comptime` evaluation in the CLI using `civet --comptime`,
+and in the
+[unplugin](https://github.com/DanielXMoore/Civet/tree/main/integration/unplugin)
+using the `comptime: true` option.
+If not enabled, `comptime` blocks will execute at runtime.
 
 ## Classes
 

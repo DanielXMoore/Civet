@@ -196,6 +196,7 @@ esbuild.build({
       // outputExtension: '.tsx',        // appended to .civet in output
       // ts: 'civet',                    // TS -> JS transpilation mode
       // typecheck: false,               // check types via tsc
+      // comptime: false,                // evaluate comptime blocks
     })
   ]
 }).catch(() => process.exit(1))
