@@ -12,6 +12,8 @@ const props = defineProps<{
   clearTrigger?: boolean;
   hideLink?: boolean;
   showPrettier?: boolean;
+  raw?: boolean;
+  comptime?: boolean;
 }>();
 
 const userCode = ref(b64.decode(props.b64Code));
@@ -47,11 +49,14 @@ const showPrettier = props.showPrettier;
 const prettier = ref(true);
 watch(prettier, compile);
 
+const comptime = props.comptime;
+
 async function compile() {
   const snippet = await compileCivetToHtml({
     code: userCode.value + '\n',
     jsOutput: props.emitJsOutput,
-    prettierOutput: showPrettier && prettier.value,
+    prettierOutput: !props.raw && showPrettier && prettier.value,
+    parseOptions: { comptime },
   });
 
   emit('input', userCode.value, snippet.jsCode);

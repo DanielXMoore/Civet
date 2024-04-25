@@ -1554,11 +1554,11 @@ await Promise.allSettled for url of urls
 *at Civet compilation time*.  The result of `eval`ing the block gets
 embedded into the output JavaScript code.
 
-<Playground>
+<Playground comptime>
 value := comptime 1+2+3
 </Playground>
 
-<Playground>
+<Playground comptime>
 console.log "3rd triangular number is", comptime
   function triangle(n) do n and n + triangle n-1
   triangle 3

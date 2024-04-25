@@ -2,9 +2,10 @@
 export function compileCivet(
   code: string,
   civetInstance: any,
-  prettierInstance: any
+  prettierInstance: any,
+  parseOptions: any
 ) {
-  let tsCode = civetInstance.compile(code);
+  let tsCode = civetInstance.compile(code, { parseOptions });
   const tsRawCode = tsCode;
 
   if (prettierInstance) {

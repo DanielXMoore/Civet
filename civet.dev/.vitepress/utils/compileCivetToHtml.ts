@@ -17,6 +17,7 @@ export function compileCivetToHtml({
   code = '',
   prettierOutput = true,
   jsOutput = false,
+  parseOptions = {},
 }): Promise<{
   inputHtml: string;
   outputHtml?: string;
@@ -24,7 +25,7 @@ export function compileCivetToHtml({
   jsCode?: string;
 }> {
   uid++;
-  playgroundWorker.postMessage({ uid, code, prettierOutput, jsOutput });
+  playgroundWorker.postMessage({ uid, code, prettierOutput, jsOutput, parseOptions });
   return new Promise((resolve) => {
     msgMap[uid] = { resolve };
   });
