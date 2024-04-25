@@ -1583,13 +1583,14 @@ and other similar compile-time features (sometimes called "macros")
 such as [C++'s constexpr](https://en.cppreference.com/w/cpp/language/constexpr).
 :::
 
-Because comptime enables execution of arbitrary code during compilation,
-it is not enabled by default, nor can it be enabled via a directive.
+Because `comptime` enables execution of arbitrary code during compilation, it
+is not enabled by default, nor can it be enabled via a directive or config file.
 In particular, the VSCode language server will not execute `comptime` blocks.
 You can enable `comptime` evaluation in the CLI using `civet --comptime`,
 and in the
 [unplugin](https://github.com/DanielXMoore/Civet/tree/main/integration/unplugin)
 using the `comptime: true` option.
+If not enabled, `comptime` blocks will execute at runtime.
 
 ## Classes
 
