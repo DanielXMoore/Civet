@@ -1565,11 +1565,13 @@ console.log "3rd triangular number is", comptime
 </Playground>
 
 Note that `comptime` blocks are executed as separate scripts, so they have no
-access to variables in outer scopes.  The block must also run synchronously.
+access to variables in outer scopes.  The block must also run synchronously,
+so use `require` to load other modules.
 For serialization, the result must consist of built-in JavaScript types
-(including `Date`, `RegExp`, `Set`, and `Map`),
+(including numbers, bigints, strings, regexps, arrays, vanilla objects,
+some functions and symbols, `Date`, `RegExp`, `Set`, and `Map`);
 functions cannot have properties or refer to variables/functions in an
-outer scope other than global,
+outer scope other than global;
 and there cannot be reference loops.
 Some of these restrictions may be lifted in the future.
 
