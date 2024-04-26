@@ -190,9 +190,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           const compiledTS = civet.compile(rawCivetSource, {
             filename,
             js: false,
-            parseOptions: {
-              comptime: Boolean(options.comptime)
-            },
+            // can't afford to do comptime here; need to be synchronous
           });
           fsMap.set(filename, compiledTS)
           return compiledTS
@@ -364,12 +362,12 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       } as const;
 
       if (options.ts === 'civet' && !transformTS) {
-        compiled = civet.compile(rawCivetSource, {
+        compiled = await civet.compile(rawCivetSource, {
           ...civetOptions,
           js: true,
         });
       } else {
-        const compiledTS = civet.compile(rawCivetSource, {
+        const compiledTS = await civet.compile(rawCivetSource, {
           ...civetOptions,
           js: false,
         });
@@ -421,7 +419,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           }
           case 'civet':
           default: {
-            compiled = civet.compile(rawCivetSource, {
+            compiled = await civet.compile(rawCivetSource, {
               ...civetOptions,
               js: true,
             });
