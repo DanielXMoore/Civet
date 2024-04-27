@@ -223,8 +223,16 @@ ExpressionizedStatement
 
 StatementExpression
   DebuggerStatement
-  IfStatement
-  IterationExpression
+  IfStatement ->
+    // Forbid expressionizing `if condition` with no then or else clause,
+    // because it might be a postfix `if`
+    if (!$1.else && isEmptyBareBlock($1.then)) return $skip
+    return $1
+  IterationExpression ->
+    // Forbid expressionizing `while condition` with no block,
+    // because it might be a postfix `while`
+    if (isEmptyBareBlock($1.block)) return $skip
+    return $1
   SwitchStatement
   ThrowStatement
   TryStatement
@@ -303,6 +311,7 @@ ForbiddenImplicitCalls
   OmittedNegation _? Identifier:id ->
     if (state.operators.has(id.name)) return $0
     return $skip
+  PostfixStatement EmptyStatementBareBlock
   # `x ... y` is reserved for a range, but `x ...y` is an implicit call
   "... "
 
@@ -2380,6 +2389,11 @@ EmptyBlock
       empty: true,
     }
 
+# NOTE: We allow loop bodies to be empty, in which case they get a ; body
+BlockOrEmpty
+  Block
+  EmptyStatementBareBlock
+
 EmptyBareBlock
   # Implied empty block with no braces. Used in case statements.
   "" ->
@@ -2389,6 +2403,18 @@ EmptyBareBlock
       expressions,
       children: [expressions],
       bare: true,
+    }
+
+EmptyStatementBareBlock
+  # Implied empty block with empty statement (;). Used for empty loop bodies.
+  &EOS !IndentedFurther InsertEmptyStatement:s ->
+    const expressions = [["", s]]
+    return {
+      type: "BlockStatement",
+      expressions,
+      children: [expressions],
+      bare: true,
+      semicolon: s.children[0],
     }
 
 # A nonempty block that must include braces
@@ -3908,6 +3934,10 @@ EmptyStatement
   _? &";" ->
     return { type: "EmptyStatement", children: $1 || [] }
 
+InsertEmptyStatement
+  InsertSemicolon ->
+    return { type: "EmptyStatement", children: [$1] }
+
 # https://262.ecma-international.org/#prod-BlockStatement
 BlockStatement
   # NOTE: Added lookahead for `=` to allow for destructuring assignment without parens
@@ -3938,7 +3968,7 @@ LabelledItem
 IfStatement
   # NOTE: Added paren-less condition
   # NOTE: Block isn't Statement so we can handle implied braces by nesting
-  ( IfClause / UnlessClause ):clause Block:block ElseClause?:e ->
+  ( IfClause / UnlessClause ):clause BlockOrEmpty:block ElseClause?:e ->
     return {
       type: "IfStatement",
       children: [...clause.children, block, e],
@@ -3948,8 +3978,8 @@ IfStatement
     }
 
 ElseClause
-  Nested Else Block
-  _? Else Block
+  Nested Else BlockOrEmpty
+  _? Else BlockOrEmpty
 
 IfClause
   If Condition:condition ->
@@ -4003,7 +4033,7 @@ IterationExpression
 
 # NOTE: Added from CoffeeScript
 LoopStatement
-  LoopClause:clause Block:block ->
+  LoopClause:clause BlockOrEmpty:block ->
     return {
       ...clause,
       type: "IterationStatement",
@@ -4033,7 +4063,7 @@ LoopClause
 # https://262.ecma-international.org/#prod-DoWhileStatement
 DoWhileStatement
   # NOTE: Condition provides optional parens
-  Do NoPostfixBracedBlock:block __ WhileClause:clause ->
+  Do NoPostfixBracedOrEmptyBlock:block __ WhileClause:clause ->
     return {
       ...clause,
       type: "IterationStatement",
@@ -4043,7 +4073,7 @@ DoWhileStatement
     }
 
 DoStatement
-  Do NoPostfixBracedBlock:block ->
+  Do NoPostfixBracedOrEmptyBlock:block ->
     block = insertTrimmingSpace(block, "")
     return {
       type: "DoStatement",
@@ -4052,7 +4082,7 @@ DoStatement
     }
 
 ComptimeStatement
-  Comptime NoPostfixBracedBlock:block ->
+  Comptime NoPostfixBracedOrEmptyBlock:block ->
     block = insertTrimmingSpace(block, "")
     return {
       type: "ComptimeStatement",
@@ -4063,7 +4093,7 @@ ComptimeStatement
 # https://262.ecma-international.org/#prod-WhileStatement
 WhileStatement
   # NOTE: Condition provides optional parens
-  WhileClause:clause Block:block ->
+  WhileClause:clause BlockOrEmpty:block ->
     return {
       ...clause,
       children: [...clause.children, block],
@@ -4088,7 +4118,7 @@ WhileClause
 # https://262.ecma-international.org/#prod-ForInOfStatement
 # NOTE: Merged into single rule
 ForStatement
-  ForClause:clause Block:block ->
+  ForClause:clause BlockOrEmpty:block ->
     block = blockWithPrefix(clause.blockPrefix, block)
 
     return {
