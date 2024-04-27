@@ -190,7 +190,8 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           const compiledTS = civet.compile(rawCivetSource, {
             filename,
             js: false,
-            // can't afford to do comptime here; need to be synchronous
+            comptime: Boolean(options.comptime),
+            sync: true, // TS readFile API seems to need to be synchronous
           });
           fsMap.set(filename, compiledTS)
           return compiledTS

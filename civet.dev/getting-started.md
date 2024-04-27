@@ -126,9 +126,9 @@ To transpile within an ESM NodeJS app
 
 ```js
 import {compile} from "@danielx/civet"
-const tsCode = compile(civetCode)
-const tsCodeWithSourceMap = compile(civetCode, {inlineMap: true})
-const jsCode = compile(civetCode, {js: true})
+const tsCode = await compile(civetCode)
+const tsCodeWithSourceMap = await compile(civetCode, {inlineMap: true})
+const jsCode = await compile(civetCode, {js: true})
 ```
 
 To transpile within a CommonJS NodeJS app
@@ -138,6 +138,9 @@ To transpile within a CommonJS NodeJS app
 {compile} = require("@danielx/civet")
 // rest as above
 ```
+
+If you need compilation to be synchronous, pass in the `sync: true` option.
+This will disable certain features with `comptime`.
 
 To transpile in the browser, you can load the browser build `dist/browser.js`
 via a `<script>` tag, and access the global variable `Civet`, as in

@@ -26,7 +26,7 @@ for filename in process.argv[2..]
 
   loop
     try
-      civet.compile input, {filename}
+      civet.compile input, {filename, sync: true}
       break
     catch e
       match = e.message.match ///

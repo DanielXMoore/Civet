@@ -1565,8 +1565,9 @@ console.log "3rd triangular number is", comptime
 </Playground>
 
 Note that `comptime` blocks are executed as separate scripts, so they have no
-access to variables in outer scopes.  The block must also run synchronously,
-so use `require` to load other modules.
+access to variables in outer scopes.  The block can be async, so you can use
+[dynamic import declarations](#dynamic-import-declarations) (or `require`)
+to load other modules.
 For serialization, the result must consist of built-in JavaScript types
 (including numbers, bigints, strings, regexps, arrays, vanilla objects,
 some functions and symbols, `Date`, `RegExp`, `Set`, and `Map`);

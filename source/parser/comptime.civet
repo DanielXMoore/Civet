@@ -10,50 +10,77 @@ import {
   gatherRecursive
 } from "./traversal.civet"
 
-{ getFilename, getInitialConfig } from "../parser.hera"
+{ getFilename, getInitialConfig, getSync } from "../parser.hera"
 
 generate, { prune, type Options } from "../generate.civet"
 
-async function processComptime(statements: StatementTuple[]): Promise<void>
+function processComptime(statements: StatementTuple[]): void | Promise<void>
   // Prevent comptime setting from being overridden by directives
   // by looking at initialConfig instead of config
   return unless getInitialConfig()?.comptime
 
   prepareEval .= => // nothing on browser
-  try
-    path from "node:path"
-    { createRequire } from "node:module"
-    prepareEval = =>
-      global.__filename = path.resolve getFilename() ?? ""
-      global.__dirname = path.dirname global.__filename
-      global.require = createRequire global.__filename
+  if getSync()
+    runComptime statements, prepareEval
+    return
+  else
+    (async do
+      try
+        path from "node:path"
+        { createRequire } from "node:module"
+        prepareEval = =>
+          global.__filename = path.resolve getFilename() ?? ""
+          global.__dirname = path.dirname global.__filename
+          global.require = createRequire global.__filename
+    ).then :Promise<void> =>
+      await.all runComptime statements, prepareEval
 
+// Launch comptime evaluations, and return promises to await (in async mode)
+function runComptime(statements: StatementTuple[], prepareEval: =>): unknown[]
+  sync := getSync()
   gatherRecursive statements,
     (node): node is (ComptimeStatement | ComptimeExpression) =>
       node.type is "ComptimeStatement" or node.type is "ComptimeExpression"
-  .forEach (exp) =>
+  .map (exp) =>
     content := exp.type is "ComptimeStatement" ? exp.block : exp.expression
+
     // Convert the comptime block into JS code
     options: Options := js: true
     js := generate prune(content), options
     // If there are any errors, leave the comptime subtree alone
     // (so there's still an error).
     return if options.errors?
+
+    // Run the JS code at compile time (now)
     prepareEval()
-    output := eval?.(`"use strict";${js}`)
+    output .= eval?.(`"use strict";${js}`) as unknown
+
+    // Await result (in async mode only) and serialize output
+    let promise: unknown
     if exp.type is "ComptimeExpression"
-      let string
-      try
-        string = serialize output
-      catch e
-        exp.children = [
-          type: "Error"
-          message: `comptime result ${output} not JSON serializable: ${e}`
-        ]
-        return
-      exp.children = [string]
+      finish := =>
+        let string
+        try
+          string = serialize output
+        catch e
+          exp.children = [
+            type: "Error"
+            message: `comptime result ${output} not serializable: ${e}`
+          ]
+          return
+        exp.children = [string]
+      if sync
+        finish()
+      else
+        promise = async do
+          output = await output
+          finish()
     else
+      // Statements do not need to have their result inlined,
+      // but we still might need to await the output
+      promise = output
       exp.children = []
+    promise
 
 function serialize(value: ???): string
   stack := new Set<object>

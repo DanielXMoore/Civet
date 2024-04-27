@@ -20,10 +20,12 @@ export default function (api, civetOptions) {
     parserOverride(code, opts, parse) {
       let src
       if (opts.sourceFileName.endsWith(".civet")) {
-        const config = Object.assign({}, civetOptions, {
+        const config = {
+          ...civetOptions,
           filename: opts.sourceFileName,
           sourceMap: false,
-        })
+          sync: true, // parserOverride API is synchronous
+        }
 
         config.inlineMap ??= true
         config.js = true

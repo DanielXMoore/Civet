@@ -72,8 +72,8 @@ declare module "@danielx/civet" {
       code: string,
       sourceMap: SourceMap,
     } : string
-  export function compile<T extends CompileOptions>(source: string, options?: T):
-    T extends { parseOptions: { comptime: infer C } } ? C extends true ? Promise<CompileOutput<T>> : CompileOutput<T> : CompileOutput<T>
+  export function compile<const T extends CompileOptions>(source: string, options?: T):
+    T extends { sync: true } ? CompileOutput<T> : Promise<CompileOutput<T>>
   /** Warning: No caching */
   export function parse(source: string, options?: CompileOptions & {startRule?: string}): CivetAST
   /** Warning: No caching */
