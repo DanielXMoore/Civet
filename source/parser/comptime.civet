@@ -60,15 +60,18 @@ function serialize(value: ???): string
         `${val}n`
       <? "function"
         // Some functions can actually be serialized
-        hasNoProps := (and)
-          Object.getOwnPropertyNames(val).every & is in ["length", "name", "arguments", "caller", "prototype"]
-          Object.getOwnPropertySymbols(val)# is 0
-        unless hasNoProps
-          throw new TypeError "cannot serialize function with properties"
-        string := Function::toString.call val
+        string .= Function::toString.call val
         if /\{\s+\[native code]\s+\}$/.test string
           // builtin, or returned from Function::bind
           throw new TypeError "cannot serialize native function"
+        if /^class[\s{]/u.test string
+          // Skip other checks; properties on the function are `static` things in the class
+          return string
+
+        if stack.has val
+          throw new Error "circular reference detected"
+        stack.add val
+
         // Check for ES6 methods that have been removed from the object, and add "function" if possible
         if /^(?:async\s*)?(?:\*\s*)?\[/.test string
           // In general, the method name could be an arbitrary JS expression. This is not currently handled.
@@ -81,13 +84,26 @@ function serialize(value: ???): string
             Object.getOwnPropertyNames(val::)# <= 1 // constructor
             Object.getOwnPropertySymbols(val::)# is 0
             val::constructor is in [val, undefined]
-        isClass := /^class[\s{]/u.test string
         isGenerator := /^(?:async\s*)?(?:function\s*)?\*/u.test string
-        if protoHasProps and not (isClass or isGenerator)
+        if protoHasProps and not isGenerator
           throw new TypeError "cannot serialize function with modified prototype"
         unless /^(?:async\s+)?(?:(function|class)(?!\p{ID_Continue})|\(|(?:\p{ID_Start}|[_$])(?:\p{ID_Continue}|[\u200C\u200D$])*\s*=>)/u.test string
           // Slightly more annoying than just `'function ' + string`: need to insert it before `async`
-          return string.replace /^(async\s+)?/u, (_, maybeAsync = '') => maybeAsync + 'function '
+          string |>= .replace /^(async\s+)?/u, (_, maybeAsync = '') => maybeAsync + 'function '
+
+        // Properties that a function may have inherently even if they aren't explicitly assigned
+        defaultProps := ["length", "name", "arguments", "caller", "prototype"]
+
+        hasProps := not (and)
+          Object.getOwnPropertyNames(val).every & is in defaultProps
+          Object.getOwnPropertySymbols(val)# is 0
+        if hasProps
+          props := Object.getOwnPropertyDescriptors val
+          for prop of defaultProps
+            delete props[prop]
+          string = `Object.defineProperties(${string},${recurse props})`
+
+        stack.delete val
         string
       <? "symbol"
         if key? := Symbol.keyFor val
@@ -130,7 +146,7 @@ function serialize(value: ???): string
             when URL::
               `new URL(${JSON.stringify (val as URL).href})`
             when null
-              `Object.create(null,${serialize Object.getOwnPropertyDescriptors val})`
+              `Object.create(null,${recurse Object.getOwnPropertyDescriptors val})`
             when Int8Array::, Uint8Array::, Int16Array::, Uint16Array::, Int32Array::, Uint32Array::, Float32Array::, Float64Array::, Uint8ClampedArray::
               // There's no "TypedArray" interface in TS
               `new ${val.constructor.name}([${(val as any).join ','}])`
