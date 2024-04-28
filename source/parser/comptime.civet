@@ -88,8 +88,8 @@ function serialize(value: ???): string
         if protoHasProps and not isGenerator
           throw new TypeError "cannot serialize function with modified prototype"
         unless /^(?:async\s+)?(?:(function|class)(?!\p{ID_Continue})|\(|(?:\p{ID_Start}|[_$])(?:\p{ID_Continue}|[\u200C\u200D$])*\s*=>)/u.test string
-          // Slightly more annoying than just `'function ' + string`: need to insert it before `async`
-          string |>= .replace /^(async\s+)?/u, (_, maybeAsync = '') => maybeAsync + 'function '
+          // Slightly more annoying than just `'function ' + string`: need to insert it before `async`, and remove `get` or `set` if applicable
+          string |>= .replace /^(async\s+)?(?:[gs]et\s+(?=\p{ID_Start}))?/u, (_, maybeAsync = '') => maybeAsync + 'function '
 
         // Properties that a function may have inherently even if they aren't explicitly assigned
         defaultProps := ["length", "name", "arguments", "caller", "prototype"]
@@ -139,10 +139,29 @@ function serialize(value: ???): string
             when Array::
               `[${(val as ???[]).map(recurse).join ","}]`
             when Object::
-              "{" + (
-                for own key, value in val as {[key: string]: ???}
-                  `${JSON.stringify key}:${recurse value}`
-              ).join(",") + "}"
+              // The string representing the object's own enumerable, writable properties
+              objStr .= '{'
+              // The string representing other property descriptors, if applicable, not including the outermost braces
+              descStr .= ''
+              descriptors := Object.getOwnPropertyDescriptors(val) as Record<string | symbol, PropertyDescriptor>
+              for prop of (Object.getOwnPropertyNames(val) as (string|symbol)[]) ++ Object.getOwnPropertySymbols(val)
+                desc := descriptors[prop]
+                if desc.enumerable and desc.configurable and desc.writable
+                  if prop <? 'symbol'
+                    objStr += `[${recurse prop}]`
+                  else
+                    objStr += JSON.stringify prop
+                  objStr += `:${recurse desc.value},`
+                else
+                  if prop <? 'symbol'
+                    descStr += `[${recurse prop}]`
+                  else
+                    descStr += JSON.stringify prop
+                  descStr += `:${recurse desc},`
+              objStr += '}'
+              if descStr !== ''
+                objStr = `Object.defineProperties(${objStr},\{${descStr}\})`
+              objStr
             when URL::
               `new URL(${JSON.stringify (val as URL).href})`
             when null
