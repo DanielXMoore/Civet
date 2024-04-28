@@ -76,6 +76,22 @@ describe "comptime", ->
 
   describe "disabled", ->
     testCase """
+      empty
+      ---
+      comptime
+      ---
+      {}
+    """
+
+    testCase """
+      empty assigned
+      ---
+      x = comptime
+      ---
+      x = (()=>{})()
+    """
+
+    testCase """
       statement with indented block
       ---
       comptime
@@ -124,6 +140,8 @@ describe "serialize", ->
     assert.equal serialize(Infinity), "Infinity"
     assert.equal serialize(-Infinity), "-Infinity"
     assert.equal serialize(NaN), "NaN"
+    assert.equal serialize(0), "0"
+    assert.equal serialize(-0), "-0"
   it "big numbers", =>
     assert.equal serialize(1000000000000000n), "1000000000000000n"
   it "arrays and nulls", =>
@@ -134,6 +152,7 @@ describe "serialize", ->
     assert.equal serialize(Symbol.for 'MyKeyedSymbol'),
       'Symbol.for("MyKeyedSymbol")'
     assert.throws (=> serialize Symbol()), /cannot serialize unique symbol/
+    assert.equal serialize(Symbol.iterator), "Symbol.iterator"
   it "regexps", =>
     assert.equal serialize(/a[b\s]c/), "/a[b\\s]c/"
     assert.equal serialize(/abc/gi), "/abc/gi"
@@ -156,11 +175,17 @@ describe "serialize", ->
     // @ts-ignore Adding a type annotation adds parens to the output, so it's intentionally not typed
     assert.match serialize(&), /^\$(\d*) => \$\1$/
   it "regular functions", =>
-    assert.equal serialize((x: ???) -> x), "function (x) { return x; }"
+    assert.equal serialize((x: ???) -> x), "function(x) { return x }"
   it "functions with properties", =>
     func: any := (x: ???) => x
     func.a = 1
-    assert.throws (=> serialize func), /cannot serialize function with properties/
+    assert.equal
+      serialize func
+      'Object.defineProperties((x) => x,{"a":{"value":1,"writable":true,"enumerable":true,"configurable":true}})'
+
+    func2: any := (@: object) -> @
+    func2.prototype.a = 1
+    assert.throws (=> serialize func2), /cannot serialize function with modified prototype/
   it "native functions", =>
     assert.throws (=> serialize parseInt), /cannot serialize native function/
   it "circular", =>
@@ -170,6 +195,9 @@ describe "serialize", ->
     array: any := []
     array.push array
     assert.throws (=> serialize array), /circular reference detected/
+    func: any := &
+    func.func = func
+    assert.throws (=> serialize func), /circular reference detected/
   it "aliasing", =>
     inner: never[] := []
     outer := [inner, inner]
@@ -177,4 +205,71 @@ describe "serialize", ->
   it "ES6 methods", =>
     assert.equal serialize({ functionF() { } }.functionF), "function functionF() { }"
     assert.equal serialize({ async bar() { } }.bar), "async function bar() { }"
+    assert.equal serialize({ *x() { }, async *y() { } }), '{"x":function *x() { },"y":async function *y() { }}'
     assert.throws (=> serialize { [Math.sqrt 5]() {} }), /cannot serialize method with computed name/
+    assert.throws (=> serialize { *[Math.PI]() {} }), /cannot serialize method with computed name/
+    assert.throws (=> serialize { async [Number.EPSILON]() {} }), /cannot serialize method with computed name/
+    assert.throws (=> serialize { get [Symbol.toStringTag]() 'Object' }), /cannot serialize method with computed name/
+  it "null-prototype objects", =>
+    obj := Object.create null,
+      foo: value: 1, writable: true, enumerable: true, configurable: true
+      bar: value: true
+    assert.equal
+      serialize obj
+      'Object.create(null,{"foo":{"value":1,"writable":true,"enumerable":true,"configurable":true},"bar":{"value":true,"writable":false,"enumerable":false,"configurable":false}})'
+  it "typed arrays", =>
+    assert.equal serialize(new Uint32Array [1, 2, 3]), "new Uint32Array([1,2,3])"
+    assert.equal serialize(new Float64Array [1.0, 1.5, NaN]), "new Float64Array([1,1.5,NaN])"
+    assert.equal serialize(new BigInt64Array [1n, 2n, 3n]), "new BigInt64Array([1n,2n,3n])"
+    assert.equal serialize(Buffer.from [1, 2, 3]), "Buffer.from([1,2,3])"
+    assert.equal serialize(new Uint8ClampedArray [-1, 0, 2, 256]), "new Uint8ClampedArray([0,0,2,255])"
+  it "classes", =>
+    class C
+      toString()
+        'C'
+    assert.equal
+      serialize C
+      """
+      class C {
+            toString() {
+              return 'C'
+            }
+          }
+      """
+    class D < C
+      @tag = 'D'
+    assert.equal serialize(D), "class D extends C {\n      static tag = 'D'\n    }"
+  it "generator functions", =>
+    assert.equal serialize(:Iterator<number, void> -> yield 5), "function*() { yield 5 }"
+  it "URLs", =>
+    assert.equal serialize(new URL "https://google.com/"), 'new URL("https://google.com/")'
+  it "Non-default descriptors", =>
+    obj1 := { get random() 4 }
+    assert.equal
+      serialize obj1
+      'Object.defineProperties({},{"random":{"get":function random() { return 4 },"set":undefined,"enumerable":true,"configurable":true}})'
+
+    obj2 := x: 1
+    Object.defineProperty obj2, 'y', value: 1
+    assert.equal
+      serialize obj2
+      'Object.defineProperties({"x":1},{"y":{"value":1,"writable":false,"enumerable":false,"configurable":false}})'
+
+    // Technically a default descriptor, but symbol keys are weird in some ways
+    obj3 := { [Symbol.iterator]: -> yield 5 }
+    assert.equal
+      serialize obj3
+      '{[Symbol.iterator]:function*() { return yield 5 }}'
+  it "Non-extensible objects", =>
+    obj1 := Object.preventExtensions x: 1
+    assert.equal serialize(obj1), 'Object.preventExtensions({"x":1})'
+
+    obj2 := Object.seal x: 1
+    assert.equal
+      serialize obj2
+      'Object.preventExtensions(Object.defineProperties({},{"x":{"value":1,"writable":true,"enumerable":true,"configurable":false}}))'
+
+    obj3 := Object.freeze x: 1
+    assert.equal
+      serialize obj3
+      'Object.preventExtensions(Object.defineProperties({},{"x":{"value":1,"writable":false,"enumerable":true,"configurable":false}}))'

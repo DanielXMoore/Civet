@@ -89,39 +89,68 @@ function serialize(value: ???): string
       <? "string"
         // Using JSON.stringify to handle escape sequences
         JSON.stringify val
-      <? "number", <? "boolean", == null
+      <? "number"
+        if Object.is -0, val then '-0' else val.toString()
+      <? "boolean", == null
         String val // not toString to accomodate null/undefined
       <? "bigint"
         `${val}n`
       <? "function"
         // Some functions can actually be serialized
-        hasNoProps := (and)
-          Object.getOwnPropertyNames(val).every & is in ["length", "name", "arguments", "caller", "prototype"]
-          Object.getOwnPropertySymbols(val)# is 0
-          (or)
-            val:: is undefined
-            (and)
-              Object:: is Object.getPrototypeOf val::
-              Object.getOwnPropertyNames(val::)# is 1 // constructor
-              Object.getOwnPropertySymbols(val::)# is 0
-              val::constructor is val
-        unless hasNoProps
-          throw new TypeError "cannot serialize function with properties"
-        string := Function::toString.call val
+        string .= Function::toString.call val
         if /\{\s+\[native code]\s+\}$/.test string
           // builtin, or returned from Function::bind
           throw new TypeError "cannot serialize native function"
+        if /^class[\s{]/u.test string
+          // Skip other checks; properties on the function are `static` things in the class
+          return string
+
+        if stack.has val
+          throw new Error "circular reference detected"
+        stack.add val
+
         // Check for ES6 methods that have been removed from the object, and add "function" if possible
-        if string.0 is '['
+        if /^(?:async\s*)?(?:\*\s*|[gs]et\s+)?\[/.test string
           // In general, the method name could be an arbitrary JS expression. This is not currently handled.
           throw new Error "cannot serialize method with computed name"
-        unless /^(?:async\s+)?(?:function(?!\p{ID_Continue})|\(|(?:\p{ID_Start}|[_$])(?:\p{ID_Continue}|[\u200C\u200D$])*\s*=>)/u.test string
-          // Slightly more annoying than just `'function ' + string`: need to insert it before `async`
-          return string.replace /^(async\s+)?/u, (_, maybeAsync = '') => maybeAsync + 'function '
+        // Test for old-style classes done by creating a regular function and assigning to its prototype
+        protoHasProps := not (or)
+          val:: is undefined
+          (and)
+            Object:: is Object.getPrototypeOf val::
+            Object.getOwnPropertyNames(val::)# <= 1 // constructor
+            Object.getOwnPropertySymbols(val::)# is 0
+            val::constructor is in [val, undefined]
+        isGenerator := /^(?:async\s*)?(?:function\s*)?\*/u.test string
+        if protoHasProps and not isGenerator
+          throw new TypeError "cannot serialize function with modified prototype"
+        unless /^(?:async\s+)?(?:(function|class)(?!\p{ID_Continue})|\(|(?:\p{ID_Start}|[_$])(?:\p{ID_Continue}|[\u200C\u200D$])*\s*=>)/u.test string
+          // Slightly more annoying than just `'function ' + string`: need to insert it before `async`, and remove `get` or `set` if applicable
+          string |>= .replace /^(async\s+)?(?:[gs]et\s+(?=\p{ID_Start}))?/u, (_, maybeAsync = '') => maybeAsync + 'function '
+
+        // Properties that a function may have inherently even if they aren't explicitly assigned
+        defaultProps := ["length", "name", "arguments", "caller", "prototype"]
+
+        hasProps := not (and)
+          Object.getOwnPropertyNames(val).every & is in defaultProps
+          Object.getOwnPropertySymbols(val)# is 0
+        if hasProps
+          props := Object.getOwnPropertyDescriptors val
+          for prop of defaultProps
+            delete props[prop]
+          string = `Object.defineProperties(${string},${recurse props})`
+
+        stack.delete val
         string
       <? "symbol"
         if key? := Symbol.keyFor val
           return `Symbol.for(${JSON.stringify key})`
+        // Handle well-known symbols
+        // for-in doesn't find them, but getOwnPropertyNames does
+        for name of Object.getOwnPropertyNames Symbol
+          sym := (Symbol as! Record<string, symbol>)[name]
+          if val is sym
+            return `Symbol.${name}`
         throw new TypeError "cannot serialize unique symbol"
       <? "object"
         if stack.has val
@@ -147,10 +176,45 @@ function serialize(value: ???): string
             when Array::
               `[${(val as ???[]).map(recurse).join ","}]`
             when Object::
-              "{" + (
-                for own key, value in val as {[key: string]: ???}
-                  `${JSON.stringify key}:${recurse value}`
-              ).join(",") + "}"
+              // The string representing the object's own enumerable, writable properties
+              objStr .= '{'
+              // The string representing other property descriptors, if applicable, not including the outermost braces
+              descStr .= ''
+              for each prop of (Object.getOwnPropertyNames(val) as (string|symbol)[]) ++ Object.getOwnPropertySymbols(val)
+                desc := Object.getOwnPropertyDescriptor(val, prop)!
+                if desc.enumerable and desc.configurable and desc.writable
+                  if prop <? 'symbol'
+                    objStr += `[${recurse prop}]`
+                  else
+                    objStr += JSON.stringify prop
+                  objStr += `:${recurse desc.value},`
+                else
+                  if prop <? 'symbol'
+                    descStr += `[${recurse prop}]`
+                  else
+                    descStr += JSON.stringify prop
+                  descStr += `:${recurse desc},`
+              // remove trailing comma
+              if objStr# > 1
+                objStr = objStr[...-1]
+              objStr += '}'
+              if descStr !== ''
+                objStr = `Object.defineProperties(${objStr},\{${descStr[...-1]}\})`
+              if not Object.isExtensible val
+                objStr = `Object.preventExtensions(${objStr})`
+              objStr
+            when URL::
+              `new URL(${JSON.stringify (val as URL).href})`
+            when null
+              `Object.create(null,${recurse Object.getOwnPropertyDescriptors val})`
+            when Int8Array::, Uint8Array::, Int16Array::, Uint16Array::, Int32Array::, Uint32Array::, Float32Array::, Float64Array::, Uint8ClampedArray::
+              // There's no "TypedArray" interface in TS
+              `new ${val.constructor.name}([${(val as any).join ','}])`
+            when BigInt64Array::, BigUint64Array::
+              `new ${val.constructor.name}([${Array.from(val as ArrayLike<bigint>, `${&}n`).join ','}])`
+            // Spelled differently for browsers, where `Buffer` doesn't exist
+            when globalThis.Buffer?.prototype
+              `Buffer.from([${(val as Buffer).join ','}])`
             else
               // One day we may handle other classes like so:
               // str += `__proto__:${val.constructor.name}`
