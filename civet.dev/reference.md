@@ -1566,13 +1566,15 @@ console.log "3rd triangular number is", comptime
 
 Note that `comptime` blocks are executed as separate scripts, so they have no
 access to variables in outer scopes.  The block must also run synchronously.
-For serialization, the result must consist of built-in JavaScript types
-(including numbers, `BigInt`, strings, `Buffer`, `URL`, `RegExp`, `Date`,
-`Array`, `TypedArray`, `Set`, `Map`, vanilla objects,
-non-built-in functions, and symbols that are properties of `Symbol`);
-functions cannot refer to variables/functions in an
-outer scope other than global;
-and there cannot be reference loops.
+For serialization, the result must consist of built-in JavaScript types,
+including numbers, `BigInt`, strings, `Buffer`, `URL`, `RegExp`, `Date`,
+`Array`, `TypedArray`, `Set`, `Map`, objects (including getters, setters,
+property descriptors, `Object.create(null)`, `Object.preventExtensions`,
+`Object.freeze`, `Object.seal`, but no prototypes),
+non-built-in functions, classes, and symbols that are properties of `Symbol`.
+Functions cannot refer to variables/functions in an
+outer scope other than global.
+And there cannot be reference loops.
 Some of these restrictions may be lifted in the future.
 
 ::: info
