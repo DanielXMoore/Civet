@@ -66,6 +66,9 @@ if [, dir, base] := /^(.*\/)?([^/]*)$/.exec file
   console.log dir, base
 </Playground>
 
+Note that array lengths must match exactly because this is a form of
+[pattern matching](#pattern-matching).
+
 <Playground>
 if {x, y} := getLocation()
   console.log `At ${x}, ${y}`
@@ -1197,7 +1200,7 @@ switch x
 
 <Playground>
 switch x
-  [{type: "text", content: /\s+/}, ...rest]
+  [{type: "text", content: /^\s+$/}, ...rest]
     console.log "leading whitespace"
   [{type: "text", content}, ...rest]
     console.log "leading text:", content
@@ -1285,6 +1288,22 @@ function directionVector(dir: Direction)
       [0, -1]
     ^Direction.Up
       [0, +1]
+</Playground>
+
+If you just want to match a value against a single pattern, you can use a
+[declaration in a condition](#declarations-in-conditions-and-loops):
+
+<Playground>
+if [{type, content}, ...rest] := x
+  console.log "leading content", content
+</Playground>
+
+If you just want to check *whether* a value matches a single pattern,
+you can use the `is like` operator:
+
+<Playground>
+if x is like [{type, content: /^\s+$/}, ...]
+  console.log "leading whitespace"
 </Playground>
 
 ## Loops
