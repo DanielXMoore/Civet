@@ -1306,6 +1306,12 @@ if x is like [{type, content: /^\s+$/}, ...]
   console.log "leading whitespace"
 </Playground>
 
+In particular, this gives a nice shorthand for `RegExp.prototype.test`:
+
+<Playground>
+isInt := x is like /^[+-]?\d+$/
+</Playground>
+
 ## Loops
 
 All JavaScript loops are available,
