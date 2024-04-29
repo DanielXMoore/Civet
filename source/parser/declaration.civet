@@ -1,6 +1,7 @@
 import type {
   ASTLeaf
   ASTNode
+  ASTNodeParent
   ASTRef
   Binding
   Children
@@ -26,10 +27,10 @@ import {
 
 import {
   getPatternConditions
+  nonMatcherBindings
 } from ./pattern-matching.civet
 
 import {
-  addParentPointers
   convertOptionalType
   makeNode
   updateParentPointers
@@ -179,7 +180,7 @@ function prependStatementExpressionBlock(initializer: Initializer, statement: {c
 
   return ref
 
-function processDeclarationCondition(condition, rootCondition, parent: { children: Children }): void
+function processDeclarationCondition(condition, rootCondition, parent: ASTNodeParent): void
   return unless condition.type is "DeclarationCondition"
 
   { decl, bindings } := condition.declaration as DeclarationStatement
@@ -188,7 +189,7 @@ function processDeclarationCondition(condition, rootCondition, parent: { childre
   { pattern, suffix, initializer, splices, thisAssignments } .= binding
   nullCheck := suffix?.optional and not suffix.t and not suffix.nonnull
 
-  let ref = prependStatementExpressionBlock(initializer!, parent)
+  ref .= prependStatementExpressionBlock(initializer!, parent)
 
   if ref
     Object.assign condition, {
@@ -228,13 +229,12 @@ function processDeclarationCondition(condition, rootCondition, parent: { childre
     }
 
   // condition wasn't previously a child, so now needs parent pointers
-  addParentPointers condition, parent
+  updateParentPointers condition, parent
 
-  Object.assign rootCondition,
-    blockPrefix: [
-      ["", [ decl, pattern, suffix, " = ", ref, ...splices ], ";"],
-      ...thisAssignments
-    ]
+  rootCondition.blockPrefix = [
+    ["", [ decl, nonMatcherBindings(pattern), suffix, " = ", ref, ...splices ], ";"],
+    ...thisAssignments
+  ]
 
 function processDeclarationConditions(node: ASTNode): void
   gatherRecursiveAll node, (n) =>
@@ -259,15 +259,21 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
   { ref, pattern } := expression
 
   if pattern
-    conditions .= getPatternConditions(pattern, ref)
+    conditions := getPatternConditions(pattern, ref)
+    .filter (c) =>
+      switch c
+        // We already check whether the ref is truthy, so it's non-null
+        [^ref, " != null"]
+          false
+        // Keep top-level object checks to be consistent with pattern matching
+        // (e.g. exclude {length} := s from matching a string)
+        //["typeof ", ^ref, " === 'object'"]
+        else
+          true
 
-    conditions = conditions.filter (c) =>
-      !(c.length is 3 and c[0] is "typeof " and c[1] is ref and c[2] is " === 'object'") and
-      !(c.length is 2 and c[0] is ref and c[1] is " != null")
-
-    if conditions.length
+    if conditions#
       condition.children.unshift "("
-      conditions.forEach (c) ->
+      conditions.forEach (c) =>
         condition.children.push " && ", c
       condition.children.push ")"
 
