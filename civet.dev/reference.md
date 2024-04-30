@@ -1001,6 +1001,13 @@ new Promise (resolve =)
 callback := (sum +=)
 </Playground>
 
+You can also make sections from
+the [pattern matching operator `is like`](#pattern-matching):
+
+<Playground>
+array.filter (is like {type, children})
+</Playground>
+
 ### Functions as Infix Operators
 
 You can "bless" an existing function to behave as an infix operator
@@ -1299,7 +1306,7 @@ if [{type, content}, ...rest] := x
 </Playground>
 
 If you just want to check *whether* a value matches a single pattern,
-you can use the `is like` operator:
+you can use the `is like` or `is not like` operator:
 
 <Playground>
 if x is like [{type, content: /^\s+$/}, ...]
@@ -1310,6 +1317,7 @@ In particular, this gives a nice shorthand for `RegExp.prototype.test`:
 
 <Playground>
 isInt := x is like /^[+-]?\d+$/
+exists := x? is not like /^\s*$/
 </Playground>
 
 ## Loops
