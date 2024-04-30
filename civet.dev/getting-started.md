@@ -4,8 +4,9 @@ title: 'Getting started'
 
 # {{ $frontmatter.title }}
 
-If you have now been convinced that Civet is right for your current/next project,
+Now that you're convinced Civet is right for your current/next project,
 here is how to set up your environment to get productive right away and have a Good Time℠.
+[Cue&nbsp;the&nbsp;music](https://suno.com/song/55ffcf58-339a-4961-a285-0fbe685885f7)! 🎧
 
 ## Quick start
 
