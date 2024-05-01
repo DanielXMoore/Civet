@@ -72,6 +72,7 @@ declare module "@danielx/civet" {
   export function generate(ast: CivetAST, options?: CompileOptions): string
 
   const Civet: {
+    version: string
     compile: typeof compile
     isCompileError: typeof isCompileError
     parse: typeof parse
