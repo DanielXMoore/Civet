@@ -1,4 +1,4 @@
-import civetPlugin from "@danielx/civet/eslint"
+import civetPlugin from "eslint-plugin-civet"
 import js from "@eslint/js"
 
 export default [
