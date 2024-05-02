@@ -3,6 +3,8 @@ import type {
   ASTRef
   ParenthesizedExpression
   ParseRule
+  PatternExpression
+  StatementTuple
   SwitchStatement
 } from ./types.civet
 
@@ -12,12 +14,19 @@ import {
 
 import {
   addParentPointers
+  flatJoin
   isExit
-  makeRef
-  maybeRef
+  isWhitespaceOrEmpty
+  makeLeftHandSideExpression
 } from ./util.civet
 
 import {
+  makeRef
+  maybeRefAssignment
+} from ./ref.civet
+
+import {
+  blockWithPrefix
   braceBlock
 } from ./block.civet
 
@@ -37,6 +46,23 @@ import {
   ReservedWord
 } from ../parser.hera
 declare var ReservedWord: ParseRule
+
+function processPatternTest(lhs: ASTNode, patterns: PatternExpression[]): ASTNode
+  { ref, hoistDec, refAssignmentComma } := maybeRefAssignment lhs, "m"
+
+  conditionExpression := patterns
+  .map getPatternConditions ., ref
+  .map flatJoin ., " && "
+  |> flatJoin ., " || "
+
+  makeLeftHandSideExpression {
+    type: "PatternTest"
+    hoistDec
+    children: [
+      ...refAssignmentComma
+      conditionExpression
+    ]
+  }
 
 function processPatternMatching(statements: ASTNode): void {
   gatherRecursiveAll(statements, .type is "SwitchStatement")
@@ -70,18 +96,7 @@ function processPatternMatching(statements: ASTNode): void {
         // Unwrap parenthesized expression
         condition = condition.expression as ParenthesizedExpression
 
-      let hoistDec, refAssignment = [], ref = maybeRef(condition, "m");
-      if (ref !== condition) {
-        hoistDec = {
-          type: "Declaration",
-          children: ["let ", ref],
-          names: [],
-        }
-        refAssignment = [{
-          type: "AssignmentExpression",
-          children: [ref, " = ", condition],
-        }, ","]
-      }
+      { ref, hoistDec, refAssignmentComma } .= maybeRefAssignment condition, "m"
       let prev = [],
         root = prev
 
@@ -92,67 +107,26 @@ function processPatternMatching(statements: ASTNode): void {
           return
         }
 
-        let { patterns, block } = c
-        let pattern = patterns[0]
-
-        const indent = block.expressions?.[0]?.[0] or ""
+        { patterns, block } .= c
+        pattern .= patterns[0]
 
         // TODO: multiple binding patterns
 
-        const alternativeConditions = patterns.map((pattern, i) => {
-          const conditions = []
-          getPatternConditions(pattern, ref, conditions)
-          return conditions
-        })
+        conditionExpression := patterns
+        .map getPatternConditions ., ref
+        .map flatJoin ., " && "
+        |> flatJoin ., " || "
 
-        const conditionExpression = alternativeConditions.map((conditions, i) => {
-          const conditionArray = conditions.map((c, i) => {
-            if (i is 0) return c
-            return [" && ", ...c]
-          })
-
-          if (i is 0) return conditionArray
-          return [" || ", ...conditionArray]
-        })
-
-        const condition = {
-          type: "ParenthesizedExpression",
-          children: ["(", ...refAssignment, conditionExpression, ")"],
-          expression: conditionExpression,
+        condition := {
+          type: "ParenthesizedExpression"
+          children: ["(", ...refAssignmentComma, conditionExpression, ")"]
+          expression: conditionExpression
         }
 
-        const prefix = []
+        braceBlock block
+        block = blockWithPrefix getPatternBlockPrefix(pattern, ref), block
 
-        switch (pattern.type) {
-          case "ArrayBindingPattern":
-            if (pattern.length is 0) break
-          case "ObjectBindingPattern": {
-            // NOTE: Array matching pattern falls through so we use the null check
-            if (pattern.properties?.length is 0) break
-
-            // Gather bindings
-            let [splices, thisAssignments] = gatherBindingCode(pattern)
-            const patternBindings = nonMatcherBindings(pattern)
-
-            splices = splices.map((s) => [", ", nonMatcherBindings(s)])
-            thisAssignments = thisAssignments.map((a) => [indent, a, ";"])
-
-            const duplicateDeclarations = aggregateDuplicateBindings([patternBindings, splices])
-
-            prefix.push([indent, "const ", patternBindings, " = ", ref, splices, ";"])
-            prefix.push(...thisAssignments)
-            prefix.push(...duplicateDeclarations.map((d) => [indent, d, ";"]))
-
-            break
-          }
-        }
-
-        block.expressions.unshift(...prefix)
-
-        const next = []
-
-        // Add braces if necessary
-        braceBlock(block)
+        next := []
 
         // Insert else if there are more branches
         if (i < l - 1) next.push("\n", "else ")
@@ -165,7 +139,7 @@ function processPatternMatching(statements: ASTNode): void {
           hoistDec
         }]
         hoistDec = undefined
-        refAssignment = []
+        refAssignmentComma = []
         prev = next
       })
 
@@ -177,17 +151,17 @@ function processPatternMatching(statements: ASTNode): void {
 }
 
 function getPatternConditions(
-  pattern,
-  ref,
-  conditions,
-): void {
-  if (pattern.rest) return // No conditions for rest elements
+  pattern: PatternExpression,
+  ref: ASTNode,
+  conditions: ASTNode[] = [],
+): ASTNode[] {
+  if (pattern.rest) return conditions // No conditions for rest elements
 
   switch (pattern.type) {
     case "ArrayBindingPattern": {
       const { elements, length } = pattern,
         hasRest = elements.some((e) => e.rest),
-        l = (length - hasRest).toString(),
+        l = (length - +hasRest).toString(),
         lengthCheck = hasRest
         ? [ref, ".length >= ", l]
         : [getHelperRef("len"), "(", ref, ", ", l, ")"]
@@ -296,7 +270,37 @@ function getPatternConditions(
     default:
       break
   }
+  return conditions
 }
+
+function getPatternBlockPrefix(
+  pattern: PatternExpression
+  ref: ASTNode
+  decl: ASTNode = "const "
+  suffix?: ASTNode
+): StatementTuple[]?
+  switch pattern.type
+    when "ArrayBindingPattern"
+      return unless pattern.length
+    when "ObjectBindingPattern"
+      return unless pattern.properties.length
+    when "Literal", "RegularExpressionLiteral", "PinPattern", "ConditionFragment"
+      return
+
+  // Gather bindings
+  [splices, thisAssignments] .= gatherBindingCode(pattern)
+  patternBindings := nonMatcherBindings(pattern)
+
+  splices = splices.map (s) => [", ", nonMatcherBindings(s)]
+  thisAssignments = thisAssignments.map ['', &, ";"]
+
+  duplicateDeclarations := aggregateDuplicateBindings([patternBindings, splices])
+
+  [
+    ['', [decl, patternBindings, suffix, " = ", ref, ...splices], ";"]
+    ...thisAssignments
+    ...duplicateDeclarations.map ['', &, ";"]
+  ]
 
 function elideMatchersFromArrayBindings(elements) {
   return elements.map((el) => {
@@ -325,13 +329,13 @@ function elideMatchersFromPropertyBindings(properties) {
         const [ws] = children
 
         switch (value and value.type) {
-          case "ArrayBindingPattern":
-          case "ObjectBindingPattern":
+          when "ArrayBindingPattern", "ObjectBindingPattern"
+            bindings := nonMatcherBindings(value)
             return {
               ...p,
-              children: [ws, name, ": ", nonMatcherBindings(value), p.delim],
+              children: [ws, name, bindings && ": ", bindings, p.delim],
             }
-          case "Identifier":
+          when "Identifier"
             return p
           case "Literal":
           case "RegularExpressionLiteral":
@@ -351,21 +355,18 @@ function elideMatchersFromPropertyBindings(properties) {
   })
 }
 
-function nonMatcherBindings(pattern) {
-  switch (pattern.type) {
-    case "ArrayBindingPattern": {
-      const elements = elideMatchersFromArrayBindings(pattern.elements)
-      const children = ["[", elements, "]"]
-      return {
-        ...pattern,
-        children,
-        elements,
+function nonMatcherBindings(pattern)
+  switch pattern.type
+    when "ArrayBindingPattern"
+      elements := elideMatchersFromArrayBindings(pattern.elements)
+      {
+        ...pattern
+        elements
+        children: pattern.children.map & is pattern.elements ? elements : &
       }
-    }
-    case "PostRestBindingElements": {
+    when "PostRestBindingElements"
       const els = elideMatchersFromArrayBindings(pattern.children[1])
-
-      return {
+      {
         ...pattern,
         children: [
           pattern.children[0],
@@ -373,14 +374,15 @@ function nonMatcherBindings(pattern) {
           ...pattern.children.slice(2),
         ],
       }
-    }
-    case "ObjectBindingPattern":
-      return ["{", elideMatchersFromPropertyBindings(pattern.properties), "}"]
-
-    default:
-      return pattern
-  }
-}
+    when "ObjectBindingPattern"
+      properties := elideMatchersFromPropertyBindings(pattern.properties)
+      {
+        ...pattern
+        properties
+        children: pattern.children.map & is pattern.properties ? properties : &
+      }
+    else
+      pattern
 
 function aggregateDuplicateBindings(bindings) {
   props := gatherRecursiveAll bindings, .type is "BindingProperty"
@@ -463,5 +465,8 @@ function aliasBinding(p, ref: ASTRef): void
 
 export {
   getPatternConditions
+  getPatternBlockPrefix
+  nonMatcherBindings
   processPatternMatching
+  processPatternTest
 }

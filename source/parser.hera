@@ -40,6 +40,7 @@ import {
   makeLeftHandSideExpression,
   makeRef,
   maybeRef,
+  maybeRefAssignment,
   modifyString,
   negateCondition,
   prepend,
@@ -458,10 +459,12 @@ NonPipelineArgumentPart
 
 BinaryOpExpression
   UnaryExpression BinaryOpRHS* ->
-    if ($2.length) return processBinaryOpExpression($0)
-    return $1
+    if (!$2.length) return $1
+    return processBinaryOpExpression($0)
 
 BinaryOpRHS
+  ( _? / IndentedFurther / Nested ):ws1 IsLike:op _?:ws2 PatternExpressionList:patterns ->
+    return [ ws1, op, ws2, patterns ]
   # Snug binary ops a+b
   BinaryOp:op RHS:rhs ->
     // Insert empty whitespace placeholder to maintan structure
@@ -477,6 +480,15 @@ BinaryOpRHS
     return [...op, ...rhs]
   !NewlineBinaryOpAllowed SingleLineBinaryOpRHS -> $2
 
+IsLike
+  Is _? ( Not _? )?:not Like ->
+    return {
+      type: "PatternTest",
+      children: $0,
+      special: true,
+      negated: !!not,
+    }
+
 # Whitespace followed by RHS
 WRHS
   PushIndent ( Nested RHS )?:wrhs PopIndent ->
@@ -491,8 +503,9 @@ SingleLineBinaryOpRHS
     return [ws1 || [], op, ws2, rhs]
 
 RHS
-  UnaryExpression
+  # NOTE: Check for comptime block first, to avoid matching as function call
   ExpressionizedStatementWithTrailingCallExpressions
+  UnaryExpression
 
 # https://262.ecma-international.org/#prod-UnaryExpression
 UnaryExpression
@@ -1497,22 +1510,27 @@ PropertyAccess
     }
 
   # NOTE: Added CoffeeScript :: prototype shorthand only when enabled
-  CoffeePrototypeEnabled DoubleColon:p IdentifierName?:id ->
+  CoffeePrototypeEnabled PropertyAccessModifier?:modifier DoubleColon:p IdentifierName?:id ->
+    const dot = {token: ".", $loc: p.$loc}
+    // Based on AccessStart
+    const start = {
+      type: "AccessStart",
+      children: modifier ? [modifier, dot] : [dot],
+      optional: modifier?.token === "?",
+    }
     if (id) {
-      const dot = {token: ".prototype.", $loc: p.$loc}
       return {
         type: "PropertyAccess",
         name: id.name,
-        dot,
-        children: [ dot, id ],
+        dot: start,
+        children: [ start, "prototype.", id ],
       }
     } else {
-      const dot = {token: ".prototype", $loc: p.$loc}
       return {
         type: "PropertyAccess",
         name: "prototype",
-        dot,
-        children: [ dot ],
+        dot: start,
+        children: [ start, "prototype" ],
       }
     }
 
@@ -2160,6 +2178,19 @@ FunctionExpression
         assigned: lhs[0][1],
         expression: refB,
       },
+    })
+    return {
+      type: "ParenthesizedExpression",
+      children: [ open, fn, close ],
+      expression: fn,
+    }
+  OpenParen:open __:ws1 IsLike:op __:ws2 PatternExpressionList:rhs CloseParen:close ->
+    const refA = makeRef("a")
+    const fn = makeAmpersandFunction({
+      ref: refA,
+      body: processBinaryOpExpression([refA, [
+        [ws1, op, ws2, rhs] // BinaryOpRHS
+      ]])
     })
     return {
       type: "ParenthesizedExpression",
@@ -3130,17 +3161,8 @@ PropertyDefinition
     const { expression, type } = last
     if (type === "Index") {
       // TODO: If `last` is a suitable string literal, could use it for `name`.
-      ref = maybeRef(expression)
-      if (ref !== expression) {
-        hoistDec = {
-          type: "Declaration",
-          children: ["let ", ref],
-        }
-        refAssignment = {
-          type: "Assignment",
-          children: [ref, " = ", expression],
-        }
-
+      ({ ref, hoistDec, refAssignment } = maybeRefAssignment(expression))
+      if (refAssignment) {
         name = {
           type: "ComputedPropertyName",
           children: [last.children[0], "(", refAssignment, ",", ref, ")", ...last.children.slice(-2)],
@@ -4466,21 +4488,23 @@ CaseClause
     return {
       type: "PatternClause",
       children: $0,
-      block,
       patterns,
+      block,
     }
-  Case CaseExpressionList IgnoreColon ( ThenClause / BareBlock ) -> {
+  Case CaseExpressionList:cases IgnoreColon ( ThenClause / BareBlock ):block -> {
     type: "CaseClause",
-    children: $0
+    children: $0,
+    cases,
+    block,
   }
   # NOTE: Added "when" from CoffeeScript. `when` always inserts `break;`.
   When CaseExpressionList:cases IgnoreColon InsertOpenBrace ( ThenClause / BareBlock ):block InsertBreak:b InsertNewline InsertIndent InsertCloseBrace ->
     return {
       type: "WhenClause",
+      children: $0,
       cases,
       block,
       break: b,
-      children: $0,
     }
   # NOTE: Merged in default clause
   Default ImpliedColon ( ThenClause / BareBlock):block ->
@@ -4499,10 +4523,10 @@ CaseClause
     }
 
 PatternExpressionList
-  ConditionFragment:first ( _? Comma ( Nested / _ )? ConditionFragment )*:rest ->
+  PatternExpression:first ( _? Comma ( Nested / _ )? PatternExpression )*:rest ->
     return [first, ...rest.map(([, , , p]) => p)]
 
-ConditionFragment
+PatternExpression
   BindingPattern
   ForbidIndentedApplication ( SingleLineBinaryOpRHS+ )?:pattern RestoreIndentedApplication ->
     if (!pattern) return $skip
@@ -5732,7 +5756,7 @@ Comma
     return { $loc, token: $1 }
 
 Comptime
-  "comptime" NonIdContinue ->
+  "comptime" NonIdContinue !":" ->
     return { $loc, token: $1 }
 
 ConstructorShorthand
@@ -5868,6 +5892,10 @@ Is
 LetOrConstOrVar
   LetOrConst
   Var
+
+Like
+  "like" NonIdContinue ->
+    return { $loc, token: $1 }
 
 Loop
   # NOTE: loop becomes while

@@ -1,8 +1,10 @@
 import type {
   ASTLeaf
   ASTNode
+  ASTNodeParent
   ASTRef
   Binding
+  BlockStatement
   Children
   DeclarationStatement
   IfStatement
@@ -25,16 +27,21 @@ import {
 } from ./traversal.civet
 
 import {
+  getPatternBlockPrefix
   getPatternConditions
+  nonMatcherBindings
 } from ./pattern-matching.civet
 
 import {
-  addParentPointers
   convertOptionalType
   makeNode
-  makeRef
   updateParentPointers
 } from ./util.civet
+
+import {
+  makeRef
+  maybeRef
+} from ./ref.civet
 
 import {
   assignResults
@@ -107,7 +114,7 @@ function processDeclarations(statements: StatementTuple[]): void
       if initializer
         prependStatementExpressionBlock initializer, statement
 
-function prependStatementExpressionBlock(initializer: Initializer, statement: {children: Children}): ASTRef?
+function prependStatementExpressionBlock(initializer: Initializer, statement: ASTNodeParent): ASTRef?
   {expression: exp} .= initializer
 
   // Handle nested statement expression
@@ -176,16 +183,23 @@ function prependStatementExpressionBlock(initializer: Initializer, statement: {c
 
   return ref
 
-function processDeclarationCondition(condition, rootCondition, parent: { children: Children }): void
+function processDeclarationCondition(condition, rootCondition, parent: ASTNodeParent): void
   return unless condition.type is "DeclarationCondition"
 
   { decl, bindings } := condition.declaration as DeclarationStatement
   // TODO: Add support for `let` and `const` declarations with multiple bindings in conditions
   binding := bindings[0]
-  { pattern, suffix, initializer, splices, thisAssignments } .= binding
+  { pattern, suffix, initializer } .= binding
   nullCheck := suffix?.optional and not suffix.t and not suffix.nonnull
 
-  let ref = prependStatementExpressionBlock(initializer!, parent)
+  unless initializer?
+    condition.children = [
+      type: "Error"
+      message: "Missing initializer in declaration condition"
+    ]
+    return
+
+  ref: ASTNode .= prependStatementExpressionBlock(initializer!, parent)
 
   if ref
     Object.assign condition, {
@@ -196,16 +210,22 @@ function processDeclarationCondition(condition, rootCondition, parent: { childre
       statementDeclaration: true
     }
   else
-    ref = makeRef()
-    grandparent := condition.parent?.parent
-    children :=
+    { expression } := initializer
+    ref = maybeRef expression
+    simple := ref is expression
+    let children
+    if simple
+      ref = insertTrimmingSpace ref, ""
+      children = [ref]
+    else
+      children = [ref, initializer]
       // Wrap declaration that is a plain assignment (no pattern-matching) and the immediate grandchild of an `if` or `while`
       // to satisfy eslint's no-cond-assign rule
       // More complex conditions (triggered by pattern matching or `until`/`unless`) don't need double parens
+      grandparent := condition.parent?.parent
       if pattern.type is "Identifier" and (grandparent?.type is "IfStatement" or grandparent?.type is "IterationStatement") and not nullCheck
-        ["(", ref, initializer, ")"]
-      else
-        [ref, initializer]
+        children.unshift "("
+        children.push ")"
 
     // `x? := ...` as a condition means `x := ..., x?`
     if nullCheck
@@ -216,7 +236,7 @@ function processDeclarationCondition(condition, rootCondition, parent: { childre
     Object.assign condition, {
       type: "AssignmentExpression"
       children
-      hoistDec:
+      hoistDec: unless simple
         type: "Declaration"
         children: ["let ", ref, suffix]
         names: []
@@ -225,17 +245,14 @@ function processDeclarationCondition(condition, rootCondition, parent: { childre
     }
 
   // condition wasn't previously a child, so now needs parent pointers
-  addParentPointers condition, parent
+  updateParentPointers condition, parent
 
-  Object.assign rootCondition,
-    blockPrefix: [
-      ["", [ decl, pattern, suffix, " = ", ref, ...splices ], ";"],
-      ...thisAssignments
-    ]
+  rootCondition.blockPrefix = getPatternBlockPrefix(pattern, ref, decl, suffix)
 
 function processDeclarationConditions(node: ASTNode): void
-  gatherRecursiveAll node, (n) =>
-    n.type is "IfStatement" or n.type is "IterationStatement" or n.type is "SwitchStatement"
+  gatherRecursiveAll node,
+    (n): n is IfStatement | IterationStatement | SwitchStatement =>
+      n.type is "IfStatement" or n.type is "IterationStatement" or n.type is "SwitchStatement"
   .forEach (s) =>
     processDeclarationConditionStatement s
 
@@ -256,16 +273,21 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
   { ref, pattern } := expression
 
   if pattern
-    conditions .= []
-    getPatternConditions(pattern, ref, conditions)
+    conditions := getPatternConditions(pattern, ref)
+    .filter (c) =>
+      switch c
+        // We already check whether the ref is truthy, so it's non-null
+        [^ref, " != null"]
+          false
+        // Keep top-level object checks to be consistent with pattern matching
+        // (e.g. exclude {length} := s from matching a string)
+        //["typeof ", ^ref, " === 'object'"]
+        else
+          true
 
-    conditions = conditions.filter (c) =>
-      !(c.length is 3 and c[0] is "typeof " and c[1] is ref and c[2] is " === 'object'") and
-      !(c.length is 2 and c[0] is ref and c[1] is " != null")
-
-    if conditions.length
+    if conditions#
       condition.children.unshift "("
-      conditions.forEach (c) ->
+      conditions.forEach (c) =>
         condition.children.push " && ", c
       condition.children.push ")"
 
