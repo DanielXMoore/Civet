@@ -443,7 +443,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
 function TSService(projectURL = "./") {
   const logger = console
 
-  logger.info("CIVET", version)
+  logger.info("CIVET VSCODE PLUGIN", version)
   logger.info("TYPESCRIPT", typescriptVersion)
 
   const projectPath = fileURLToPath(projectURL)
@@ -467,7 +467,7 @@ function TSService(projectURL = "./") {
     tsConfigPath,
     undefined,
   )
-  logger.info("PARSED CONFIG\n", parsedConfig, "\n\n")
+  logger.info("PARSED TSCONFIG\n", parsedConfig, "\n\n")
 
   //@ts-ignore
   const baseHost = createCompilerHost(parsedConfig)
@@ -492,7 +492,8 @@ function TSService(projectURL = "./") {
     const civetPath = "@danielx/civet"
     Civet = projectRequire(civetPath)
     CivetConfig = projectRequire(`${civetPath}/config`)
-    console.info(`LOADED PROJECT CIVET: ${path.join(projectURL, civetPath)} \n\n`)
+    const CivetVersion = projectRequire(`${civetPath}/package.json`).version
+    console.info(`LOADED PROJECT CIVET ${CivetVersion}: ${path.join(projectURL, civetPath)} \n\n`)
   } catch (e) {
     console.info("USING BUNDLED CIVET")
   }
