@@ -10,7 +10,7 @@ onmessage = async (e) => {
 
   let tsCode, ast, errors = []
   try {
-    ast = Civet.compile(code, { ast: true, parseOptions });
+    ast = await Civet.compile(code, { ast: true, parseOptions });
     tsCode = Civet.generate(ast, { errors });
     if (errors.length) {
       // TODO: Better error display; copied from main.civet
@@ -46,7 +46,7 @@ onmessage = async (e) => {
         const prefix = code.slice(0, -rest.length)
         const coffee = prologue.some((p) => p.type === "CivetPrologue" &&
           (p.config.coffeeCompat || p.config.coffeeDo))
-        ast = Civet.compile(
+        ast = await Civet.compile(
           prefix +
           (coffee ? '(do ->\n' : 'async do\n') +
           rest.replace(/^/gm, ' ') +

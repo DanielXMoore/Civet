@@ -1,9 +1,10 @@
-import { parse, getConfig, setInitialConfig } from "./parser.hera"
+import { parse, parseProgram, getConfig } from "./parser.hera"
 import generate, { prune } from "./generate.civet"
 import * as lib from "./parser/lib.civet"
 import * as util from "./util.civet"
 { SourceMap } := util
-export { parse, generate, prune, lib, util }
+export { parse, parseProgram, generate, prune, lib, util }
+type { BlockStatement } from "./types.hera"
 
 import StateCache from "./state-cache.civet"
 
@@ -62,6 +63,7 @@ export type CompilerOptions
   inlineMap?: boolean
   ast?: boolean | "raw"
   js?: boolean
+  sync?: boolean
   noCache?: boolean
   hits?: string
   trace?: string
@@ -71,9 +73,12 @@ export type CompilerOptions
   updateSourceMap?: (output: string, inputPos?: number) => void
   errors?: unknown[]
 
-export compile := (src: string, options?: CompilerOptions) ->
-  if (!options)
-    options = {}
+type CompileOutput<T extends CompilerOptions> =
+  T extends { ast: true } ? BlockStatement : T extends { sourceMap: true } ? { code: string, sourceMap: ReturnType<typeof SourceMap> } : string
+
+export function compile<const T extends CompilerOptions>(src: string, options?: T): T extends { sync: true } ? CompileOutput<T> : Promise<CompileOutput<T>>
+  unless options
+    options = {} as T
   else
     options = {...options}
 
@@ -96,18 +101,17 @@ export compile := (src: string, options?: CompilerOptions) ->
 
   let ast
 
-  setInitialConfig(options.parseOptions)
   try
     //@ts-ignore
-    ast = parse(src, {
+    ast = parseProgram(src, {
+      options.parseOptions
+      options.sync
       filename
       events
     })
-    ast = prune ast unless options.ast is "raw"
   finally
-    setInitialConfig(undefined)
     if hits or trace
-      import('fs').then ({ writeFileSync }) ->
+      import("node:fs").then ({ writeFileSync }) ->
         if { logs } := events?.meta
           if trace
             writeFileSync trace, logs.join "\n"
@@ -133,33 +137,42 @@ export compile := (src: string, options?: CompilerOptions) ->
 
             writeFileSync hits, hitSummary
 
-  if options.ast
-    return ast
+  function rest(ast)
+    options = options!
+    ast = prune ast unless options.ast is "raw"
 
-  function checkErrors
-    if options!.errors?.length
-      // TODO: Better error display
-      //@ts-ignore
-      throw new Error `Parse errors: ${options.errors.map(.message).join("\n")} `
+    if options.ast
+      return ast
 
-  if options.sourceMap or options.inlineMap
-    sm := SourceMap(src)
-    options.updateSourceMap = sm.updateSourceMap
-    code := generate ast, options
+    function checkErrors
+      if options.errors?.length
+        // TODO: Better error display
+        //@ts-ignore
+        throw new Error `Parse errors: ${options.errors.map(.message).join("\n")} `
+
+    if options.sourceMap or options.inlineMap
+      sm := SourceMap(src)
+      options.updateSourceMap = sm.updateSourceMap
+      code := generate ast, options
+      checkErrors()
+
+      if options.inlineMap
+        //@ts-ignore
+        return SourceMap.remap code, sm, filename, filename + '.tsx'
+      else
+        return {
+          code,
+          sourceMap: sm
+        }
+
+    result := generate ast, options
     checkErrors()
+    return result
 
-    if options.inlineMap
-      //@ts-ignore
-      return SourceMap.remap code, sm, filename, filename + '.tsx'
-    else
-      return {
-        code,
-        sourceMap: sm
-      }
-
-  result := generate ast, options
-  checkErrors()
-  return result
+  if ast.then?
+    ast.then rest
+  else
+    rest ast
 
 type CacheKey = [string, number, number, string]
 
@@ -257,4 +270,4 @@ export isCompileError = (err: unknown) ->
   //@ts-ignore
   [err.message, err.name, err.filename, err.line, err.column, err.offset].every & !== undefined
 
-export default { parse, generate, util, compile, isCompileError }
+export default { parse, parseProgram, generate, util, compile, isCompileError }

@@ -42,6 +42,8 @@ declare module "@danielx/civet" {
     trace?: string
     parseOptions?: ParseOptions
   }
+  export type SyncCompileOptions = CompileOptions &
+    { parseOptions?: { comptime?: false } }
 
   export type SourceMapping = [number] | [number, number, number, number]
 
@@ -64,11 +66,19 @@ declare module "@danielx/civet" {
   }
   export function isCompileError(err: any): err is ParseError
 
-  export function compile<T extends CompileOptions>(source: string, options?: T): T extends { sourceMap: true } ? {
-    code: string,
-    sourceMap: SourceMap,
-  } : string
-  export function parse(source: string): CivetAST
+  type CompileOutput<T extends CompileOptions> =
+    T extends { ast: true } ? CivetAST :
+    T extends { sourceMap: true } ? {
+      code: string,
+      sourceMap: SourceMap,
+    } : string
+  export function compile<const T extends CompileOptions>(source: string, options?: T):
+    T extends { sync: true } ? CompileOutput<T> : Promise<CompileOutput<T>>
+  /** Warning: No caching */
+  export function parse(source: string, options?: CompileOptions & {startRule?: string}): CivetAST
+  /** Warning: No caching */
+  export function parseProgram<T extends CompileOptions>(source: string, options?: T):
+    T extends { comptime: true } ? Promise<CivetAST> : CivetAST
   export function generate(ast: CivetAST, options?: CompileOptions): string
 
   const Civet: {

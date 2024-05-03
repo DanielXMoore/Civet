@@ -552,6 +552,9 @@ function TSService(projectURL = "./") {
         filename: path,
         sourceMap: true,
         errors,
+        // We don't process comptime in LSP so don't need async yet
+        sync: true,
+        comptime: false,
       })
 
     return Object.assign(result, { errors })

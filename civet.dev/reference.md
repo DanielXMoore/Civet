@@ -1598,7 +1598,9 @@ console.log "3rd triangular number is", comptime
 </Playground>
 
 Note that `comptime` blocks are executed as separate scripts, so they have no
-access to variables in outer scopes.  The block must also run synchronously.
+access to variables in outer scopes.  The block can be async,
+but `import`s are currently relative to Civet's codebase,
+so you should use `require` to load other modules.
 For serialization, the result must consist of built-in JavaScript types,
 including numbers, `BigInt`, strings, `Buffer`, `URL`, `RegExp`, `Date`,
 `Array`, `TypedArray`, `Set`, `Map`, objects (including getters, setters,

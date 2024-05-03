@@ -5,7 +5,8 @@ export function compileCivet(
   prettierInstance: any,
   parseOptions: any
 ) {
-  let tsCode = civetInstance.compile(code, { parseOptions });
+  // This SSR rendering code must be synchronous because of Markdown API
+  let tsCode = civetInstance.compile(code, { parseOptions, sync: true });
   const tsRawCode = tsCode;
 
   if (prettierInstance) {

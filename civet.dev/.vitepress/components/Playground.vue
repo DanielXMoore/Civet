@@ -57,10 +57,11 @@ const hasComptime = ref(false);
 
 async function compile() {
   if (showComptime) {
-    if (!(hasComptime.value = /\bcomptime\b/.test(userCode.value))) {
+    hasComptime.value = /\bcomptime\b/.test(userCode.value);
+    if (comptime.value && !hasComptime.value) {
       // If we remove comptime code, reset the checkbox to off
       // to avoid accidental comptime in the future
-      comptime.value = false;
+      comptime.value = userCode.value.includes('comptime');
     }
   }
 
