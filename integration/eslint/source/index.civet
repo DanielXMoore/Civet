@@ -1,0 +1,94 @@
+Civet, { type CompileOptions } from '@danielx/civet'
+civetMeta from '@danielx/civet/package.json' with type: 'json'
+pluginMeta from '../package.json' with type: 'json'
+{ remapPosition } from '@danielx/civet/ts-diagnostic'
+type { ESLint, Linter } from 'eslint'
+js from "@eslint/js"
+
+sourceMaps := new Map
+
+// Customizable plugin generating function, for specified Civet options
+export function civet(options: CompileOptions = {js: true}): ESLint.Plugin
+  function preprocess(code: string, filename: string)
+    { code: text, sourceMap } := Civet.compile code, {
+      ...options
+      filename
+      sourceMap: true
+      sync: true
+    }
+    sourceMaps.set filename, sourceMap
+    [{ text, filename }]
+
+  function postprocess(_messages: Linter.LintMessage[][], filename: string)
+    // Length 1 corresponding to the return value of `preprocess`
+    [messages] := _messages
+    if sourceMap := sourceMaps.get filename
+      sourceMapLines := sourceMap.data.lines
+      for each message of messages
+        if message.line?
+          [message.line, message.column] = remap message.line, message.column
+        if message.endLine?
+          [message.endLine, message.endColumn] = remap message.endLine, message.endColumn
+
+      function remap(line: number, column: number?)
+        column ?= 1
+        pos := remapPosition {
+          line: line - 1
+          character: column - 1
+        }, sourceMapLines
+        [
+          pos.line + 1
+          pos.character + 1
+        ]
+    else
+      console.warn "eslint-plugin-civet: missing sourcemap for", filename
+    messages
+
+  plugin := {
+    meta:
+      name: "civet"
+      version: pluginMeta.version
+    processors:
+      civet: {
+        meta:
+          name: "civet"
+          version: civetMeta.version
+        preprocess
+        postprocess
+      }
+    configs:
+      overrides:
+        name: "civet/overrides"
+        rules:
+          "no-extra-semi": "off"
+          "no-constant-condition": ["error", checkLoops: false]
+          "no-empty": ["error", allowEmptyCatch: true]
+  }
+
+  plugin.configs.base =
+    name: "civet/base"
+    files: ["**/*.civet"]
+    plugins:
+      civet: plugin
+    processor: "civet/civet"
+
+  function makeConfig(config: Linter.Config)
+    return config unless config.rules?
+    // For any rule that's enabled, select override instead
+    rules := { ... config.rules }
+    for rule in plugin.configs.overrides.rules
+      if rule in rules
+        rules[rule] = plugin.configs.overrides.rules[rule]
+    return { ...config, rules }
+
+  for config of ["recommended", "all"] as const
+    plugin.configs[config] = [
+      plugin.configs.base
+      makeConfig js.configs[config]
+    ]
+
+  plugin
+
+// Default export is a plugin, so that it works from CLI
+// But can also access the plugin generating function via .civet
+export default civet() ||> .civet = civet
