@@ -488,8 +488,12 @@ function TSService(projectURL = "./") {
   // Use Civet from the project if present
   let Civet = BundledCivetModule
   let CivetConfig = BundledCivetConfigModule
+  const civetPath = "@danielx/civet"
   try {
-    const civetPath = "@danielx/civet"
+    projectRequire(`${civetPath}/lsp/package.json`)
+    console.info("USING DEVELOPMENT VERSION OF CIVET -- BE SURE TO yarn build")
+  } catch (e) {}
+  try {
     Civet = projectRequire(civetPath)
     CivetConfig = projectRequire(`${civetPath}/config`)
     const CivetVersion = projectRequire(`${civetPath}/package.json`).version
