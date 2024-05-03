@@ -1,7 +1,6 @@
 //import civetPlugin from "eslint-plugin-civet"
 import tsCivetPlugin from "eslint-plugin-civet/ts"
 //import js from "@eslint/js"
-console.log(tsCivetPlugin.configs)
 
 export default [
   //--- Simple version, TypeScript:
