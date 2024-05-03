@@ -21,26 +21,26 @@ npm install -D eslint-plugin-civet @danielx/civet eslint @eslint/js typescript-e
 Here is a sample `eslint.config.mjs` (ESM mode):
 
 ```js
-import civetPluginTS from "eslint-plugin-civet/ts"
+import civetPlugin from "eslint-plugin-civet/ts"
 
 export default [
   // Rules from eslint.configs.recommended
-  ...civetPlugin.configs.jsRecommended
+  ...civetPlugin.configs.jsRecommended,
   // Rules from tseslint.configs.strict
-  ...civetPlugin.configs.strict
+  ...civetPlugin.configs.strict,
 ]
 ```
 
 Here is a sample `eslint.config.cjs` (CJS mode):
 
 ```js
-const civetPluginTS = require("eslint-plugin-civet/ts")
+const civetPlugin = require("eslint-plugin-civet/ts")
 
 module.exports = [
   // Rules from eslint.configs.recommended
-  ...civetPlugin.configs.jsRecommended
+  ...civetPlugin.configs.jsRecommended,
   // Rules from tseslint.configs.strict
-  ...civetPlugin.configs.strict
+  ...civetPlugin.configs.strict,
 ]
 ```
 
@@ -91,14 +91,14 @@ export default [
   {
     files: ["**/*.civet"],
     plugins: {
-      civet: civetPlugin
+      civet: civetPlugin,
     },
     processor: "civet/civet",
     // Here is where you would override specific rules.
     // We provide an `overrides` rule set that disables rules that
     // don't work well with Civet output.
-    ...civetPlugin.configs.overrides
-  }
+    ...civetPlugin.configs.overrides,
+  },
 ]
 ```
 
