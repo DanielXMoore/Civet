@@ -57,25 +57,23 @@ function runComptime(statements: StatementTuple[]): unknown[]
     return if options.errors?
 
     // Run the JS code at compile time (now)
-    let output: unknown, context: object
+    let output: unknown, context: NodeJS.Dict<unknown>, contextGlobal?: NodeJS.Dict<unknown>
     try
       context = vm.createContext?() ?? globalThis
       filename := context.__filename = resolve getFilename() ?? ""
       context.__dirname = dirname filename
       context.require = createRequire filename
       if vm.runInContext?
-        // Copy serializable globals over to vm context
-        for global of [
-          "RegExp", "Date", "Set", "Map", "URL"
-          "Int8Array", "Uint8Array", "Int16Array", "Uint16Array", "Int32Array"
-          "Uint32Array", "Float32Array", "Float64Array", "Uint8ClampedArray"
-          "BigInt64Array", "BigUint64Array", "Buffer"
-        ]
-          context[global] = globalThis[global]
-        // Exception: Array and Object literals will use different prototypes.
-        // Use isArray to detect all Array types.
-        // But require() will use Object from the main context.
-        context.Object2 = Object
+        // Copy over Node-specific built-ins to new context, based on
+        // https://github.com/nodejs/node/blob/c7e42092f34f019fa0c4d9a2d0d49719af2f5daa/lib/repl.js#L1110
+        contextGlobal = vm.runInContext "globalThis", context
+        builtins := new Set Object.getOwnPropertyNames contextGlobal
+        for name of Object.getOwnPropertyNames globalThis
+          continue if builtins.has name
+          Object.defineProperty contextGlobal, name, {
+            __proto__: null
+            ...Object.getOwnPropertyDescriptor globalThis, name
+          }
         output = vm.runInContext js, context, {
           filename
           importModuleDynamically:
@@ -99,14 +97,7 @@ function runComptime(statements: StatementTuple[]): unknown[]
       finish := =>
         let string
         try
-          if vm.runInContext?
-            // Run serializer within context, so Object is the correct object
-            context.output = output
-            string = vm.runInContext
-              `${serialize(serialize)}serialize(output)`
-              context
-          else
-            string = serialize output
+          string = serialize output, contextGlobal
         catch e
           exp.children = [
             type: "Error"
@@ -127,7 +118,7 @@ function runComptime(statements: StatementTuple[]): unknown[]
       exp.children = []
     promise
 
-function serialize(value: ???): string
+function serialize(value: ???, context?: NodeJS.Dict<any>): string
   stack := new Set<object>
   function recurse(val: ???): string
     switch val
@@ -203,22 +194,22 @@ function serialize(value: ???): string
         stack.add val
         str :=
           switch Object.getPrototypeOf val
-            when RegExp::
+            when RegExp::, context?.RegExp::
               re := val as RegExp
               `/${re.source}/${re.flags}`
-            when Date::
+            when Date::, context?.Date::
               `new Date(${(val as Date).getTime()})`
-            when Set::
+            when Set::, context?.Set::
               "new Set([" + (
                 for item of val as Set<???>
                   recurse item
               ).join(",") + "])"
-            when Map::
+            when Map::, context?.Map::
               "new Map([" + (
                 for [key, value] of val as Map<???, ???>
                   `[${recurse key},${recurse value}]`
               ).join(",") + "])"
-            when Object::, globalThis.Object2?::
+            when Object::, context?.Object::
               // The string representing the object's own enumerable, writable properties
               objStr .= '{'
               // The string representing other property descriptors, if applicable, not including the outermost braces
@@ -246,17 +237,17 @@ function serialize(value: ???): string
               if not Object.isExtensible val
                 objStr = `Object.preventExtensions(${objStr})`
               objStr
-            when URL::
+            when URL::, context?.URL::
               `new URL(${JSON.stringify (val as URL).href})`
             when null
               `Object.create(null,${recurse Object.getOwnPropertyDescriptors val})`
-            when Int8Array::, Uint8Array::, Int16Array::, Uint16Array::, Int32Array::, Uint32Array::, Float32Array::, Float64Array::, Uint8ClampedArray::
+            when Int8Array::, Uint8Array::, Int16Array::, Uint16Array::, Int32Array::, Uint32Array::, Float32Array::, Float64Array::, Uint8ClampedArray::, context?.Int8Array::, context?.Uint8Array::, context?.Int16Array::, context?.Uint16Array::, context?.Int32Array::, context?.Uint32Array::, context?.Float32Array::, context?.Float64Array::, context?.Uint8ClampedArray::
               // There's no "TypedArray" interface in TS
               `new ${val.constructor.name}([${(val as any).join ','}])`
-            when BigInt64Array::, BigUint64Array::
+            when BigInt64Array::, BigUint64Array::, context?.BigInt64Array::, context?.BigUint64Array::
               `new ${val.constructor.name}([${Array.from(val as ArrayLike<bigint>, `${&}n`).join ','}])`
             // Spelled differently for browsers, where `Buffer` doesn't exist
-            when globalThis.Buffer?::
+            when globalThis.Buffer?::, context?.Buffer?::
               `Buffer.from([${(val as Buffer).join ','}])`
             else
               if Array.isArray val
