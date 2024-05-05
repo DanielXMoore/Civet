@@ -1,23 +1,31 @@
 import type {
   ASTNode
   ASTRef
+  BlockStatement
+  Condition
+  ElseClause
   ParenthesizedExpression
   ParseRule
+  PatternClause
   PatternExpression
   StatementTuple
   SwitchStatement
 } from ./types.civet
 
 import {
+  replaceNode
+} from ./lib.civet
+
+import {
   gatherRecursiveAll
 } from ./traversal.civet
 
 import {
-  addParentPointers
   flatJoin
   isExit
-  isWhitespaceOrEmpty
   makeLeftHandSideExpression
+  makeNode
+  updateParentPointers
 } from ./util.civet
 
 import {
@@ -64,14 +72,14 @@ function processPatternTest(lhs: ASTNode, patterns: PatternExpression[]): ASTNod
     ]
   }
 
-function processPatternMatching(statements: ASTNode): void {
+function processPatternMatching(statements: ASTNode): void
   gatherRecursiveAll(statements, .type is "SwitchStatement")
-    .forEach((s: SwitchStatement) => {
+    .forEach (s: SwitchStatement) =>
       { caseBlock } := s
       { clauses } := caseBlock
 
       // Remove inserted `break;` in `when` clauses that don't need them
-      for c of clauses
+      for each c of clauses
         if c.type is "WhenClause" and c.break
           if isExit c.block
             c.children.splice c.children.indexOf(c.break), 1
@@ -81,13 +89,13 @@ function processPatternMatching(statements: ASTNode): void {
       isPattern .= false
       if clauses.some .type is "PatternClause"
         isPattern = true
-        clauses.forEach (c) =>
+        for each c of clauses
           // else/default clause is ok
           unless c.type is "PatternClause" or c.type is "DefaultClause"
             errors = true
             c.children.push
-              type: "Error",
-              message: "Can't mix pattern matching and non-pattern matching clauses",
+              type: "Error"
+              message: "Can't mix pattern matching and non-pattern matching clauses"
 
       return if errors or !isPattern
 
@@ -97,27 +105,30 @@ function processPatternMatching(statements: ASTNode): void {
         condition = condition.expression as ParenthesizedExpression
 
       { ref, hoistDec, refAssignmentComma } .= maybeRefAssignment condition, "m"
-      let prev = [],
-        root = prev
+      root: ASTNode[] := []
+      prev .= root
+      let e?: ElseClause
 
       l := clauses.length
-      clauses.forEach((c, i) => {
-        if (c.type is "DefaultClause") {
-          prev.push(c.block)
-          return
-        }
+      for each c, i of clauses
+        if c.type is "DefaultClause"
+          if e?
+            replaceNode e.block, c.block, e
+          else
+            prev.push c.block
+          break
 
-        { patterns, block } .= c
+        { patterns, block } .= c as PatternClause
         pattern .= patterns[0]
 
         // TODO: multiple binding patterns
 
-        conditionExpression := patterns
+        conditionExpression: ASTNode[] := patterns
         .map getPatternConditions ., ref
         .map flatJoin ., " && "
         |> flatJoin ., " || "
 
-        condition := {
+        condition: Condition := makeNode {
           type: "ParenthesizedExpression"
           children: ["(", ...refAssignmentComma, conditionExpression, ")"]
           expression: conditionExpression
@@ -126,29 +137,37 @@ function processPatternMatching(statements: ASTNode): void {
         braceBlock block
         block = blockWithPrefix getPatternBlockPrefix(pattern, ref), block
 
-        next := []
-
         // Insert else if there are more branches
-        if (i < l - 1) next.push("\n", "else ")
+        if i < l - 1
+          expressions: StatementTuple[] := []
+          block := makeNode {
+            type: "BlockStatement"
+            expressions
+            children: [expressions]
+            bare: true
+          } satisfies BlockStatement
+          e = makeNode {
+            type: "ElseClause"
+            block
+            children: ["\n", "else ", block]
+          } satisfies ElseClause
+        else
+          e = undefined
 
-        prev.push ["", {
+        prev.push ["", makeNode {
           type: "IfStatement"
-          children: ["if", condition, block, next]
+          children: ["if", condition, block, e]
           then: block
-          else: next
+          else: e
           hoistDec
         }]
         hoistDec = undefined
         refAssignmentComma = []
-        prev = next
-      })
+        prev = e.block.expressions if e?
 
       s.type = "PatternMatchingStatement"
-      s.children = [root]
-      // Update parent pointers
-      addParentPointers(s, s.parent)
-    })
-}
+      s.children = root
+      updateParentPointers s
 
 function getPatternConditions(
   pattern: PatternExpression,
