@@ -3,6 +3,7 @@
 // These get replaced by shims from browser.civet on the browser
 { resolve, dirname } from "node:path"
 { createRequire } from "node:module"
+vm from "node:vm"
 
 import type {
   ComptimeExpression
@@ -24,10 +25,7 @@ function processComptime(statements: StatementTuple[]): void | Promise<void>
   // by looking at initialConfig instead of config
   return unless getInitialConfig()?.comptime
 
-  promises := runComptime statements, :void =>
-    globalThis.__filename = resolve getFilename() ?? ""
-    globalThis.__dirname = dirname globalThis.__filename
-    globalThis.require = createRequire globalThis.__filename
+  promises := runComptime statements
   if getSync()
     return
   else
@@ -36,7 +34,7 @@ function processComptime(statements: StatementTuple[]): void | Promise<void>
       ;
 
 // Launch comptime evaluations, and return promises to await (in async mode)
-function runComptime(statements: StatementTuple[], prepareEval: => void): unknown[]
+function runComptime(statements: StatementTuple[]): unknown[]
   sync := getSync()
   gatherRecursive statements,
     (node): node is (ComptimeStatement | ComptimeExpression) =>
@@ -52,16 +50,42 @@ function runComptime(statements: StatementTuple[], prepareEval: => void): unknow
 
     // Convert the comptime block into JS code
     options: Options := js: true
-    js := generate prune(content), options
+    js .= generate prune(content), options
+    js = `"use strict";${js}`
     // If there are any errors, leave the comptime subtree alone
     // (so there's still an error).
     return if options.errors?
 
     // Run the JS code at compile time (now)
-    let output: unknown
+    let output: unknown, context: object
     try
-      prepareEval()
-      output = eval?.(`"use strict";${js}`)
+      context = vm.createContext?() ?? globalThis
+      filename := context.__filename = resolve getFilename() ?? ""
+      context.__dirname = dirname filename
+      context.require = createRequire filename
+      if vm.runInContext?
+        // Copy serializable globals over to vm context
+        for global of [
+          "RegExp", "Date", "Set", "Map", "URL"
+          "Int8Array", "Uint8Array", "Int16Array", "Uint16Array", "Int32Array"
+          "Uint32Array", "Float32Array", "Float64Array", "Uint8ClampedArray"
+          "BigInt64Array", "BigUint64Array", "Buffer"
+        ]
+          context[global] = globalThis[global]
+        // Exception: Array and Object literals will use different prototypes.
+        // Use isArray to detect all Array types.
+        // But require() will use Object from the main context.
+        context.Object2 = Object
+        output = vm.runInContext js, context, {
+          filename
+          importModuleDynamically:
+            vm.constants?.USE_MAIN_CONTEXT_DEFAULT_LOADER
+        }
+      else
+        // Indirect eval call (via ?.) causes evaluation in global scope,
+        // instead of the scope of this function.
+        // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/eval#direct_and_indirect_eval
+        output = eval?.(js)
     catch e
       exp.children = [
         type: "Error"
@@ -75,7 +99,14 @@ function runComptime(statements: StatementTuple[], prepareEval: => void): unknow
       finish := =>
         let string
         try
-          string = serialize output
+          if vm.runInContext?
+            // Run serializer within context, so Object is the correct object
+            context.output = output
+            string = vm.runInContext
+              `${serialize(serialize)}serialize(output)`
+              context
+          else
+            string = serialize output
         catch e
           exp.children = [
             type: "Error"
@@ -187,9 +218,7 @@ function serialize(value: ???): string
                 for [key, value] of val as Map<???, ???>
                   `[${recurse key},${recurse value}]`
               ).join(",") + "])"
-            when Array::
-              `[${(val as ???[]).map(recurse).join ","}]`
-            when Object::
+            when Object::, globalThis.Object2?::
               // The string representing the object's own enumerable, writable properties
               objStr .= '{'
               // The string representing other property descriptors, if applicable, not including the outermost braces
@@ -227,12 +256,15 @@ function serialize(value: ???): string
             when BigInt64Array::, BigUint64Array::
               `new ${val.constructor.name}([${Array.from(val as ArrayLike<bigint>, `${&}n`).join ','}])`
             // Spelled differently for browsers, where `Buffer` doesn't exist
-            when globalThis.Buffer?.prototype
+            when globalThis.Buffer?::
               `Buffer.from([${(val as Buffer).join ','}])`
             else
-              // One day we may handle other classes like so:
-              // str += `__proto__:${val.constructor.name}`
-              throw new TypeError `cannot serialize object with prototype ${Object.getPrototypeOf val}`
+              if Array.isArray val
+                `[${(val as ???[]).map(recurse).join ","}]`
+              else
+                // One day we may handle other classes like so:
+                // str += `__proto__:${val.constructor.name}`
+                throw new TypeError `cannot serialize object with prototype ${val.constructor?.name ?? Object.getPrototypeOf val}`
         stack.delete val
         str
       else
