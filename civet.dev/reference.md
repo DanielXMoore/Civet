@@ -1635,6 +1635,22 @@ and in the
 using the `comptime: true` option.
 If not enabled, `comptime` blocks will execute at runtime.
 
+<Playground>
+// comptime is disabled here
+value := comptime 1+2+3
+</Playground>
+
+Async `comptime` blocks executed at runtime are not `await`ed (to avoid forcing
+`async`), so they return a `Promise`, unlike when they're run at compile time.
+In cases like this, you can provide a fallback for when `comptime` is disabled:
+
+<Playground>
+html := comptime
+  fetch 'https://civet.dev' |> await |> .text()
+else // fallback for disabled comptime
+  '<html></html>'
+</Playground>
+
 ## Classes
 
 <Playground>
