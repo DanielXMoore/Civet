@@ -1584,7 +1584,7 @@ await Promise.allSettled for url of urls
 ### Comptime Blocks
 
 `comptime` blocks are similar to [`do` blocks](#do-blocks), but they execute
-*at Civet compilation time*.  The result of `eval`ing the block gets
+*at Civet compilation time*.  The result of executing the block gets
 embedded into the output JavaScript code.
 
 <Playground comptime>
@@ -1597,11 +1597,15 @@ console.log "3rd triangular number is", comptime
   triangle 3
 </Playground>
 
-Note that `comptime` blocks are executed as separate scripts, so they have no
-access to variables in outer scopes.  The block can be async,
-but `import`s are currently relative to Civet's codebase,
-so you should use `require` to load other modules.
-For serialization, the result must consist of built-in JavaScript types,
+Note that `comptime` blocks are executed as separate scripts
+(separate NodeJS contexts, or top-level `eval` on the browser),
+so they have no access to variables in outer scopes.
+You can use `require` to load other modules (or `import` on
+very recent NodeJS versions, but this generates a warning).
+The block can be async e.g. via use of `await`,
+and the resulting `Promise` will be awaited during compilation.
+For serialization into JavaScript code,
+the result must consist of built-in JavaScript types,
 including numbers, `BigInt`, strings, `Buffer`, `URL`, `RegExp`, `Date`,
 `Array`, `TypedArray`, `Set`, `Map`, objects (including getters, setters,
 property descriptors, `Object.create(null)`, `Object.preventExtensions`,
