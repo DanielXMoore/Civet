@@ -91,6 +91,18 @@ while number? := next()
   sum += number
 </Playground>
 
+The negated forms `unless` and `until` expose the declaration *after* the block
+instead of inside it.
+(Inside the block, it would be guaranteed falsey or null.)
+This is useful for guard checks:
+
+<Playground>
+unless item? := getItem() then return
+unless {x, y} := item.getCoords()
+  throw new Error "Item missing coordinates"
+console.log `(${x}, ${y})`
+</Playground>
+
 ## Objects
 
 ### Unbraced Literals
