@@ -1538,6 +1538,40 @@ $: document.title = title
 
 ## Other Blocks
 
+### Try Blocks
+
+Like JavaScript, `try` blocks can have `catch` and/or `finally` blocks:
+
+<Playground>
+try
+  compute()
+catch e
+  console.error e
+finally
+  cleanup()
+</Playground>
+
+Unlike JavaScript, you can omit both `catch` and `finally` for a default
+behavior of "ignore all exceptions":
+
+<Playground>
+try
+  compute()
+</Playground>
+
+In addition, you can add an `else` block between (optional) `catch` and
+(optional) `finally`, which executes whenever the `catch` block does not:
+
+<Playground>
+try
+  result = compute()
+catch e
+  callback "error", e
+else
+  // exceptions here will not trigger catch block
+  callback result
+</Playground>
+
 ### Do Blocks
 
 To put multiple lines in a scope and possibly an expression,
