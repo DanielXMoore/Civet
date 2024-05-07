@@ -91,9 +91,19 @@ while number? := next()
   sum += number
 </Playground>
 
-The negated forms `unless` and `until` expose the declaration *after* the block
-instead of inside it.
-(Inside the block, it would be guaranteed falsey or null.)
+The negated form `until` exposes the declaration *after* the block
+instead of inside it:
+
+<Playground>
+until {status: "OK", data} := attempt()
+console.log data
+</Playground>
+
+The negated form of `if`, `unless`,
+always exposes the declaration to an `else` block (if present).
+It also exposes the declaration to after the `unless` block
+*provided* the "then" block contains a guaranteed "exit" statement
+such as `return` or `throw`.
 This is useful for guard checks:
 
 <Playground>
