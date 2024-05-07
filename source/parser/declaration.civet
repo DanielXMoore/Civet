@@ -5,11 +5,11 @@ import type {
   ASTRef
   Binding
   BlockStatement
-  Children
   DeclarationStatement
   IfStatement
   Initializer
   IterationStatement
+  ParenthesizedExpression
   StatementTuple
   SwitchStatement
   TypeSuffix
@@ -18,22 +18,25 @@ import type {
 
 import {
   blockWithPrefix
+  braceBlock
   makeEmptyBlock
   replaceBlockExpression
 } from ./block.civet
 
 import {
+  findAncestor
+  findChildIndex
   gatherRecursiveAll
 } from ./traversal.civet
 
 import {
   getPatternBlockPrefix
   getPatternConditions
-  nonMatcherBindings
 } from ./pattern-matching.civet
 
 import {
   convertOptionalType
+  isExit
   makeNode
   updateParentPointers
 } from ./util.civet
@@ -264,10 +267,11 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
   { condition } := s
   return unless condition?.expression
   { expression } .= condition
+
   // Support for negated conditions built by unless/until
-  switch expression
-    {type: 'UnaryExpression', children: ['!', {type: 'ParenthesizedExpression', expression: expression2}]}
-      expression = expression2
+  if {type: 'UnaryExpression', children: ['!', {type: 'ParenthesizedExpression', expression: expression2}]} := expression
+    expression = expression2
+
   processDeclarationCondition expression, condition.expression, s
 
   { ref, pattern } := expression
@@ -286,40 +290,81 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
           true
 
     if conditions#
-      condition.children.unshift "("
-      conditions.forEach (c) =>
-        condition.children.push " && ", c
-      condition.children.push ")"
+      if s.negated
+        unless condition.expression is like {type: 'UnaryExpression', children: ['!', {type: 'ParenthesizedExpression'}]}
+          console.log condition.expression
+          throw new Error "Unsupported negated condition"
+        { children } := condition.expression.children[1] as ParenthesizedExpression
+        close := children.pop()
+        conditions.forEach (c) =>
+          children.push " && ", c
+        children.push close
+      else
+        condition.children.unshift "("
+        conditions.forEach (c) =>
+          condition.children.push " && ", c
+        condition.children.push ")"
+
+  // Move declaration to after the statement for until loops,
+  // and for unless conditions with a guaranteed exit in the then clause.
+  { blockPrefix } := condition.expression
+  if s.negated and blockPrefix and
+     (s.type is "IfStatement" and isExit(s.then) or
+      s.type is "IterationStatement")
+    { ancestor, child } := findAncestor s,
+      (a): a is BlockStatement => a.type is "BlockStatement"
+    unless ancestor?
+      throw new Error "Couldn't find block for postfix declaration"
+    index := findChildIndex ancestor.expressions, child
+    if index < 0
+      throw new Error "Couldn't find where in block to put postfix declaration"
+    ancestor.expressions.splice index + 1, 0, ...blockPrefix
+    updateParentPointers ancestor
+    braceBlock ancestor
+    switch s.type
+      when "IfStatement"
+        // If there's an else clause, and then clause has an exit,
+        // move else clause to after the declaration (so it also has access).
+        if elseBlock := s.else?.block
+          if elseBlock.bare and not elseBlock.semicolon
+            elseBlock.children.push elseBlock.semicolon = ";"
+          ancestor.expressions.splice index + 1 + blockPrefix#, 0, ['', elseBlock]
+          s.children = s.children.filter (is not s.else)
+          s.else = undefined
+        // Ensure semicolon after if before added declaration
+        block := s.then
+        if block.bare and not block.semicolon
+          block.children.push block.semicolon = ";"
+    return
 
   switch s.type
     when "IfStatement"
       { else: e } := s
-      block := blockWithPrefix(condition.expression.blockPrefix, s.then)
 
-      if block.bare and e and not block.semicolon
-        block.children.push block.semicolon = ";"
-
-      // Replace then block with prefixed block
-      s.children = s.children.map (c) =>
-        if c is s.then
-          block
-        else
-          c
-      s.then = block
-
-      // Update parent pointers since declaration conditions have expanded
-      updateParentPointers(block, s)
+      // Prefix then or else block depending on negation
+      if s.negated
+        if e?
+          block := blockWithPrefix blockPrefix, e.block
+          e.children = e.children.map & is e.block ? block : &
+          e.block = block
+          updateParentPointers e
+      else
+        block := blockWithPrefix blockPrefix, s.then
+        if block.bare and e and not block.semicolon
+          block.children.push block.semicolon = ";"
+        s.children = s.children.map & is s.then ? block : &
+        s.then = block
+        updateParentPointers s
 
     when "IterationStatement"
+      return unless blockPrefix
       { children, block } := s
-      newBlock := blockWithPrefix(condition.expression.blockPrefix, block)
-      s.children = children.map (c) => c?.type is "BlockStatement" ? newBlock : c
-
-      // Update parent pointers since declaration conditions have expanded
-      updateParentPointers(newBlock, s)
+      newBlock := blockWithPrefix blockPrefix, block
+      s.children = children.map & is block ? newBlock : &
+      updateParentPointers s
 
     when "SwitchStatement"
-      { blockPrefix, ref, statementDeclaration } := condition.expression as! { blockPrefix: StatementTuple[], ref: ASTRef, statementDeclaration: boolean}
+      { ref, statementDeclaration } := condition.expression as! { ref: ASTRef, statementDeclaration: boolean}
       return unless blockPrefix
 
       newCondition :=

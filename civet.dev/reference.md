@@ -91,6 +91,28 @@ while number? := next()
   sum += number
 </Playground>
 
+The negated form `until` exposes the declaration *after* the block
+instead of inside it:
+
+<Playground>
+until {status: "OK", data} := attempt()
+console.log data
+</Playground>
+
+The negated form of `if`, `unless`,
+always exposes the declaration to an `else` block (if present).
+It also exposes the declaration to after the `unless` block
+*provided* the "then" block contains a guaranteed "exit" statement
+such as `return` or `throw`.
+This is useful for guard checks:
+
+<Playground>
+unless item? := getItem() then return
+unless {x, y} := item.getCoords()
+  throw new Error "Item missing coordinates"
+console.log `(${x}, ${y})`
+</Playground>
+
 ## Objects
 
 ### Unbraced Literals
