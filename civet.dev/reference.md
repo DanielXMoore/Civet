@@ -54,6 +54,16 @@ for item of iterable
   sos += square
 </Playground>
 
+### `autoConst`
+
+<Playground>
+"civet autoConst"
+let sos = 0
+for item of iterable
+  square = item * item
+  sos += square
+</Playground>
+
 ### Declarations in Conditions and Loops
 
 <Playground>
@@ -2290,6 +2300,14 @@ return
 
 <Playground>
 "civet solid"
+link := <a href="https://civet.dev/">Civet
+</Playground>
+
+You can specify whether the code will run on the client (default)
+and/or the server:
+
+<Playground>
+"civet solid client server"
 link := <a href="https://civet.dev/">Civet
 </Playground>
 

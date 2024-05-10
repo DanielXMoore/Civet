@@ -35,8 +35,9 @@ and following ESM, require importing files with the correct extension.
 
 | Configuration       | What it enables |
 |---------------------|---------------------------------------|
-| [`autoVar`](reference#autovar) | automatically declare undeclared variables with `var` |
+| [`autoConst`](reference#autoconst) | automatically declare undeclared variables with `const` |
 | [`autoLet`](reference#autolet) | automatically declare undeclared variables with `let` |
+| [`autoVar`](reference#autovar) | automatically declare undeclared variables with `var` |
 | [`defaultElement=tag`](reference#implicit-element) | specify default JSX tag: `<.foo>` → `<tag class="foo">` |
 | [`objectIs`](reference#object-is) | implement the `is` operator via `Object.is` |
 
@@ -77,8 +78,10 @@ Running in a particular environment?  Try one of these options:
 
 | Configuration         | What it enables |
 |-----------------------|------------------------------------------|
+| `client`              | Code may run on client (default unless you specify `server`, currently just for [Solid](reference#solidjs)) |
 | `deno`                | `-rewrite-ts-imports` |
 | `react`               | Use `className` instead of `class` in [JSX class shorthand](reference#class) |
+| `server`              | Code may run on server (currently just for [Solid](reference#solidjs)) |
 | [`solid`](reference#solidjs) | Automatic type casting of JSX |
 ## Local Configuration via Directives
 
