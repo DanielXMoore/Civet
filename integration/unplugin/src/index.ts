@@ -1,5 +1,6 @@
 import { TransformResult, createUnplugin } from 'unplugin';
-import civet, { SourceMap, type ParseOptions } from '@danielx/civet';
+import civet, { SourceMap, type CompileOptions, type ParseOptions } from '@danielx/civet';
+import { findInDir, loadConfig } from '@danielx/civet/config';
 import {
   remapRange,
   flattenDiagnosticMessageText,
@@ -96,7 +97,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
 (options: PluginOptions = {}, meta) => {
   if (options.dts) options.emitDeclaration = options.dts;
   if (options.js) options.ts = 'civet';
-  const parseOptions = options.parseOptions ?? {};
+  let compileOptions: CompileOptions = {};
 
   const transformTS = options.emitDeclaration || options.typecheck;
   const outExt =
@@ -130,14 +131,24 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       if (transformTS || options.ts === 'tsc') {
         const ts = await tsPromise!;
 
-        const configPath = ts.findConfigFile(process.cwd(), ts.sys.fileExists);
+        const civetConfigPath = await findInDir(process.cwd())
+        if (civetConfigPath != null) {
+          compileOptions = await loadConfig(civetConfigPath)
+        }
+        // Merge parseOptions, with plugin options taking priority
+        compileOptions.parseOptions = {
+          ...compileOptions.parseOptions,
+          ...options.parseOptions,
+        }
 
-        if (!configPath) {
+        const tsConfigPath = ts.findConfigFile(process.cwd(), ts.sys.fileExists);
+
+        if (!tsConfigPath) {
           throw new Error("Could not find 'tsconfig.json'");
         }
 
         const { config, error } = ts.readConfigFile(
-          configPath,
+          tsConfigPath,
           ts.sys.readFile
         );
 
@@ -189,10 +200,10 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
             encoding: encoding as BufferEncoding
           })
           const compiledTS = civet.compile(rawCivetSource, {
+            ...compileOptions,
             filename,
             js: false,
             sync: true, // TS readFile API seems to need to be synchronous
-            parseOptions,
           });
           fsMap.set(filename, compiledTS)
           return compiledTS
@@ -356,9 +367,9 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         sourceMap: SourceMap | string | undefined;
       };
       const civetOptions = {
+        ...compileOptions,
         filename: id,
         sourceMap: true,
-        parseOptions,
       } as const;
 
       if (options.ts === 'civet' && !transformTS) {

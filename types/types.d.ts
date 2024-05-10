@@ -112,12 +112,14 @@ declare module "@danielx/civet/esbuild-plugin" {
 }
 
 declare module "@danielx/civet/config" {
-  const Config: {
-    findInDir(dirPath: string): Promise<string | undefined>
-    findConfig: (path: string) => Promise<string | null>
-    loadConfig: (
-      path: string
-    ) => Promise<import("@danielx/civet").CompileOptions>
+  export function findInDir(dirPath: string): Promise<string | undefined>
+  export function findConfig(path: string): Promise<string | null>
+  export function loadConfig(
+    path: string
+  ): Promise<import("@danielx/civet").CompileOptions>
+  export default {
+    findInDir: typeof findInDir,
+    findConfig: typeof findConfig,
+    loadConfig: typeof loadConfig,
   }
-  export default Config
 }
