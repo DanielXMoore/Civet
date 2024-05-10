@@ -39,6 +39,8 @@ export type PluginOptions = {
   js?: boolean;
   /** @deprecated Use "emitDeclaration" instead */
   dts?: boolean;
+  /** config filename, or null to not look for default config file */
+  config?: string | null | undefined;
   parseOptions?: ParseOptions;
 };
 
@@ -131,8 +133,10 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       if (transformTS || options.ts === 'tsc') {
         const ts = await tsPromise!;
 
-        const civetConfigPath = await findInDir(process.cwd())
-        if (civetConfigPath != null) {
+        const civetConfigPath = 'config' in options
+          ? options.config
+          : await findInDir(process.cwd())
+        if (civetConfigPath) {
           compileOptions = await loadConfig(civetConfigPath)
         }
         // Merge parseOptions, with plugin options taking priority
