@@ -113,6 +113,7 @@ declare module "@danielx/civet/esbuild-plugin" {
 
 declare module "@danielx/civet/config" {
   const Config: {
+    findInDir(dirPath: string): Promise<string | undefined>
     findConfig: (path: string) => Promise<string | null>
     loadConfig: (
       path: string
