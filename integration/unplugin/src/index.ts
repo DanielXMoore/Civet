@@ -1,5 +1,5 @@
 import { TransformResult, createUnplugin } from 'unplugin';
-import civet, { SourceMap } from '@danielx/civet';
+import civet, { SourceMap, type ParseOptions } from '@danielx/civet';
 import {
   remapRange,
   flattenDiagnosticMessageText,
@@ -38,7 +38,7 @@ export type PluginOptions = {
   js?: boolean;
   /** @deprecated Use "emitDeclaration" instead */
   dts?: boolean;
-  comptime?: boolean;
+  parseOptions?: ParseOptions;
 };
 
 const isCivetTranspiled = /(\.civet)(\.[jt]sx)([?#].*)?$/;
@@ -96,6 +96,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
 (options: PluginOptions = {}, meta) => {
   if (options.dts) options.emitDeclaration = options.dts;
   if (options.js) options.ts = 'civet';
+  const parseOptions = options.parseOptions ?? {};
 
   const transformTS = options.emitDeclaration || options.typecheck;
   const outExt =
@@ -190,8 +191,8 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           const compiledTS = civet.compile(rawCivetSource, {
             filename,
             js: false,
-            comptime: Boolean(options.comptime),
             sync: true, // TS readFile API seems to need to be synchronous
+            parseOptions,
           });
           fsMap.set(filename, compiledTS)
           return compiledTS
@@ -357,9 +358,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       const civetOptions = {
         filename: id,
         sourceMap: true,
-        parseOptions: {
-          comptime: Boolean(options.comptime)
-        },
+        parseOptions,
       } as const;
 
       if (options.ts === 'civet' && !transformTS) {

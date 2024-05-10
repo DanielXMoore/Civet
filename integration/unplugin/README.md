@@ -119,7 +119,10 @@ interface PluginOptions {
     Note that some bundlers require additional plugins to handle TS.
     For example, for Webpack, you would need to install `ts-loader` and add it to your webpack config.
     Unfortunately, Rollup's TypeScript plugin is incompatible with this plugin, so you need to set `ts` to another option.
-- `comptime`: Whether to evaluate
-  [`comptime` blocks](https://civet.dev/reference#comptime-blocks)
-  at compile time.  Default: `false`.
+- `parseOptions`: Options object to pass to the Civet parser,
+  like adding `"civet"` directives to all files.  Default: `{}`.
+  - `comptime`: Whether to evaluate
+    [`comptime` blocks](https://civet.dev/reference#comptime-blocks)
+    at compile time.  Default: `false`.
+  - See [reference](https://civet.dev/reference) for more.
 - `transformOutput(code, id)`: Adds a custom transformer over jsx/tsx code produced by `civet.compile`. It gets passed the jsx/tsx source (`code`) and filename (`id`), and should return valid jsx/tsx code.
