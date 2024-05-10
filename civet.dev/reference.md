@@ -54,6 +54,16 @@ for item of iterable
   sos += square
 </Playground>
 
+### `autoConst`
+
+<Playground>
+"civet autoConst"
+let sos = 0
+for item of iterable
+  square = item * item
+  sos += square
+</Playground>
+
 ### Declarations in Conditions and Loops
 
 <Playground>
@@ -2161,6 +2171,13 @@ and [jsx spec issues](https://github.com/facebook/jsx/issues)
 <div .button.{size()}>
 </Playground>
 
+Specify the `"civet react"` directive to use the `className` attribute instead:
+
+<Playground>
+"civet react"
+<div .foo>Civet
+</Playground>
+
 ### Implicit Element
 
 <Playground>
@@ -2286,6 +2303,14 @@ return
 link := <a href="https://civet.dev/">Civet
 </Playground>
 
+You can specify whether the code will run on the client (default)
+and/or the server:
+
+<Playground>
+"civet solid client server"
+link := <a href="https://civet.dev/">Civet
+</Playground>
+
 ## [CoffeeScript](https://coffeescript.org/) Compatibility
 
 Turn on full [CoffeeScript](https://coffeescript.org/) compatibility mode
@@ -2306,6 +2331,18 @@ for own key, value of object
   console.log key, value
 for item from iterable
   console.log item
+</Playground>
+
+### CoffeeScript Do Blocks
+
+This option disables [Civet `do` blocks](#do-blocks)
+and [`do...while` loops](#do-while-until-loop).
+
+<Playground>
+"civet coffeeDo"
+do foo
+do ->
+  await fetch url
 </Playground>
 
 ### Double-Quoted Strings

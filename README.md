@@ -219,60 +219,18 @@ could be a valid property `1.e10` → `1..e10`. The workaround is to add a trail
   console.log "hi"
   ```
 
-Comparison to CoffeeScript
----
+### Comparison to CoffeeScript
 
 Take a look at this [detailed Civet // CoffeeScript comparision](./notes/Comparison-to-CoffeeScript.md)
 
-ECMAScript Compatibility
----
+### Directives
 
-You can specify `"civet"` prologue directives to increase
-compatibility with ECMAScript/TypeScript:
+Civet is not just one language; it can be configured in a variety of ways
+via directives to add or remove language features, or improve behavior
+in certain environments.
+See [config documentation](https://civet.dev/config).
 
-| Configuration       | What it enables |
-|---------------------|---------------------------------------|
-| -implicit-returns   | turn off implicit return of last value in functions |
-
-Put them at the top of your file:
-
-```
-"civet -implicit-returns"
-```
-
-Your can separate multiple options with spaces.
-
-Deno Compatibility
----
-
-TypeScript only allows importing `.ts` files as `.js`. Deno follows ESM and requires importing files with the correct extension.
-
-Civet automatically rewrites imports to work around [this issue](https://github.com/microsoft/TypeScript/issues/42151) in TS.
-
-When Civet detects it is running in Deno rewriting imports is turned off. If for some reason Civet fails to detect running in Deno
-you can turn off rewriting imports manually with these configuration options:
-
-| Configuration         | What it enables |
-|-----------------------|------------------------------------------|
-| -rewrite-ts-imports   | disable rewriting .ts -> .js in imports  |
-| deno                  | currently just disables rewriting imports but could add more deno specific options in the future |
-
-Other Options
----
-
-The `"civet"` prologue directive can also specify the following options:
-
-| Configuration       | What it enables |
-|---------------------|---------------------------------------|
-| rewrite-civet-imports=.ext | Rewrite `import "file.civet"` to `import "file.ext"` |
-| tab=NNN             | treat tab like NNN spaces (default=1) |
-
-For example, `"civet tab=2"` or `"civet tab=4"` lets you mix tabs and spaces
-in a file and be treated like they'd render in VSCode with `editor.tabSize`
-set accordingly.
-
-Using Civet in your Node.js Environment
----
+### Using Civet in your Node.js Environment
 
 You have now been convinced that Civet is right for your current/next project. Here is how
 to set up your environment to get productive right away and have a Good Time℠.

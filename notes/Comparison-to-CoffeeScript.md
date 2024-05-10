@@ -154,16 +154,19 @@ Civet provides a compatibility prologue directive that aims to be 97+% compatibl
 | Configuration       | What it enables |
 |---------------------|---------------------------------------------------------------------|
 | autoVar             | declare implicit vars based on assignment to undeclared identifiers |
+| coffeeBinaryExistential | `x ? y` → `x ?? y` |
 | coffeeBooleans      | `yes`, `no`, `on`, `off` |
+| coffeeClasses       | CoffeeScript-style `class` methods via `->` functions |
 | coffeeComment       | `# single line comments` |
 | coffeeDo            | `do ->`, disables ES6 do/while |
 | coffeeEq            | `==` → `===`, `!=` → `!==` |
 | coffeeForLoops      | for in, of, from loops behave like they do in CoffeeScript |
 | coffeeInterpolation | `"a string with #{myVar}"` |
 | coffeeIsnt          | `isnt` → `!==` |
+| coffeeLineContinuation | `\` at end of line continues to next line |
 | coffeeNot           | `not` → `!`, disabling Civet extensions like `is not` |
 | coffeeOf            | `a of b` → `a in b`, `a not of b` → `!(a in b)`, `a in b` → `b.indexOf(a) >= 0`, `a not in b` → `b.indexOf(a) < 0` |
-| coffeePrototype     | enables `x::` -> `x.prototype` and `x::y` -> `x.prototype.y` shorthand.
+| coffeePrototype     | `x::` -> `x.prototype`, `x::y` -> `x.prototype.y` |
 
 You can use these with `"civet coffeeCompat"` to opt in to all or use them bit by bit with `"civet coffeeComment coffeeEq coffeeInterpolation"`.
 Another possibility is to slowly remove them to provide a way to migrate files a little at a time `"civet coffeeCompat -coffeeBooleans -coffeeComment -coffeeEq"`.
