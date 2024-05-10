@@ -2161,6 +2161,13 @@ and [jsx spec issues](https://github.com/facebook/jsx/issues)
 <div .button.{size()}>
 </Playground>
 
+Specify the `"civet react"` directive to use the `className` attribute instead:
+
+<Playground>
+"civet react"
+<div .foo>Civet
+</Playground>
+
 ### Implicit Element
 
 <Playground>
@@ -2306,6 +2313,18 @@ for own key, value of object
   console.log key, value
 for item from iterable
   console.log item
+</Playground>
+
+### CoffeeScript Do Blocks
+
+This option disables [Civet `do` blocks](#do-blocks)
+and [`do...while` loops](#do-while-until-loop).
+
+<Playground>
+"civet coffeeDo"
+do foo
+do ->
+  await fetch url
 </Playground>
 
 ### Double-Quoted Strings
