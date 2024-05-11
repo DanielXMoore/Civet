@@ -29,7 +29,6 @@ import {
   hasAwait,
   hasYield,
   insertTrimmingSpace,
-  isEmptyBareBlock,
   isWhitespaceOrEmpty,
   lastAccessInCallExpression,
   literalValue,
@@ -250,12 +249,15 @@ StatementExpression
   IfStatement ->
     // Forbid expressionizing `if condition` with no then or else clause,
     // because it might be a postfix `if`
-    if (!$1.else && isEmptyBareBlock($1.then)) return $skip
+    if (!$1.else && $1.then.implicit) return $skip
     return $1
   IterationExpression ->
     // Forbid expressionizing `while condition` with no block,
     // because it might be a postfix `while`
-    if (isEmptyBareBlock($1.block)) return $skip
+    // But allow empty `do` and `comptime` which can't be postfix
+    if ($1.block.implicit && $1.subtype !== "DoStatement" && $1.subtype !== "ComptimeStatement") {
+      return $skip
+    }
     return $1
   SwitchStatement
   ThrowStatement
@@ -335,7 +337,7 @@ ForbiddenImplicitCalls
   OmittedNegation _? Identifier:id ->
     if (state.operators.has(id.name)) return $0
     return $skip
-  PostfixStatement EmptyStatementBareBlock
+  PostfixStatement NoBlock
   # `x ... y` is reserved for a range, but `x ...y` is an implicit call
   "... "
 
@@ -2444,12 +2446,33 @@ EmptyBlock
       children: [$1, expressions, $2],
       bare: false,
       empty: true,
+      implicit: true,
     }
 
 # NOTE: We allow loop bodies to be empty, in which case they get a ; body
+BlockOrEmptyStatement
+  Block
+  NoBlock EmptyStatementBareBlock -> $2
+
+# NOTE: We allow if/else bodies to be empty, in which case they get a {} body
+# (`;` would also make sense, but TypeScript doesn't allow them.)
 BlockOrEmpty
   Block
-  EmptyStatementBareBlock
+  NoBlock EmptyBlock -> $2
+
+EmptyStatementBareBlock
+  # Implied empty block with empty statement (;). Used for empty loop bodies.
+  InsertEmptyStatement:s ->
+    const expressions = [["", s]]
+    return {
+      type: "BlockStatement",
+      expressions,
+      children: [expressions],
+      bare: true,
+      empty: true,
+      implicit: true,
+      semicolon: s.children[0],
+    }
 
 EmptyBareBlock
   # Implied empty block with no braces. Used in case statements.
@@ -2460,19 +2483,13 @@ EmptyBareBlock
       expressions,
       children: [expressions],
       bare: true,
+      empty: true,
+      implicit: true,
     }
 
-EmptyStatementBareBlock
-  # Implied empty block with empty statement (;). Used for empty loop bodies.
-  &EOS !IndentedFurther InsertEmptyStatement:s ->
-    const expressions = [["", s]]
-    return {
-      type: "BlockStatement",
-      expressions,
-      children: [expressions],
-      bare: true,
-      semicolon: s.children[0],
-    }
+NoBlock
+  # Check that there isn't a block here. Used for empty loop bodies.
+  &EOS !IndentedFurther
 
 # A nonempty block that must include braces
 # This version allows same-line postfixes like `while cond`.
@@ -4066,7 +4083,7 @@ IterationExpression
 
 # NOTE: Added from CoffeeScript
 LoopStatement
-  LoopClause:clause BlockOrEmpty:block ->
+  LoopClause:clause BlockOrEmptyStatement:block ->
     return {
       ...clause,
       type: "IterationStatement",
@@ -4131,7 +4148,7 @@ ComptimeStatement
 # https://262.ecma-international.org/#prod-WhileStatement
 WhileStatement
   # NOTE: Condition provides optional parens
-  WhileClause:clause BlockOrEmpty:block ->
+  WhileClause:clause BlockOrEmptyStatement:block ->
     return {
       ...clause,
       children: [...clause.children, block],
@@ -4157,7 +4174,7 @@ WhileClause
 # https://262.ecma-international.org/#prod-ForInOfStatement
 # NOTE: Merged into single rule
 ForStatement
-  ForClause:clause BlockOrEmpty:block ->
+  ForClause:clause BlockOrEmptyStatement:block ->
     block = blockWithPrefix(clause.blockPrefix, block)
 
     return {
