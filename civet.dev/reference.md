@@ -2341,7 +2341,7 @@ and [`do...while` loops](#do-while-until-loop).
 <Playground>
 "civet coffeeDo"
 do foo
-do ->
+do (url) ->
   await fetch url
 </Playground>
 
