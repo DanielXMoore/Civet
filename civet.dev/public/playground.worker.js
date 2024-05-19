@@ -1,5 +1,6 @@
-importScripts('https://cdn.jsdelivr.net/npm/prettier@2.8.1/standalone.js');
-importScripts('https://cdn.jsdelivr.net/npm/prettier@2.8.1/parser-typescript.js');
+importScripts('https://cdn.jsdelivr.net/npm/prettier@3.2.5/standalone.js');
+importScripts('https://cdn.jsdelivr.net/npm/prettier@3.2.5/plugins/estree.js');
+importScripts('https://cdn.jsdelivr.net/npm/prettier@3.2.5/plugins/typescript.js');
 importScripts('https://cdn.jsdelivr.net/npm/shiki@0.14.7');
 importScripts('/__civet.js');
 
@@ -93,7 +94,7 @@ onmessage = async (e) => {
 
   if (prettierOutput) {
     try {
-      tsCode = prettier.format(tsCode, {
+      tsCode = await prettier.format(tsCode, {
         parser: 'typescript',
         plugins: prettierPlugins,
         printWidth: 50,
