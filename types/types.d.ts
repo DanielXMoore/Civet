@@ -57,14 +57,19 @@ declare module "@danielx/civet" {
 
   // TODO: Import ParseError class from Hera
   export type ParseError = {
+    name: "ParseError"
     message: string
-    name: string
     filename: string
     line: number
     column: number
     offset: number
   }
-  export function isCompileError(err: any): err is ParseError
+  export type ParseErrors = {
+    name: "ParseErrors"
+    message: string
+    errors: ParseError[]
+  }
+  export function isCompileError(err: any): err is ParseError | ParseErrors
 
   type CompileOutput<T extends CompileOptions> =
     T extends { ast: true } ? CivetAST :
