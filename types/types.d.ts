@@ -87,7 +87,7 @@ declare module "@danielx/civet" {
     isCompileError: typeof isCompileError
     parse: typeof parse
     generate: typeof generate
-    util: {
+    sourcemap: {
       locationTable(input: string): number[]
       lookupLineColumn(table: number[], pos: number): [number, number]
       SourceMap(input: string): SourceMap
