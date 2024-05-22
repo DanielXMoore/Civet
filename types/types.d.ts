@@ -58,7 +58,9 @@ declare module "@danielx/civet" {
   // TODO: Import ParseError class from Hera
   export type ParseError = {
     name: "ParseError"
-    message: string
+    message: string // filename:line:column header\nbody
+    header: string
+    body: string
     filename: string
     line: number
     column: number
