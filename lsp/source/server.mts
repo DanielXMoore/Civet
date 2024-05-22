@@ -541,29 +541,17 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
   const diagnostics: Diagnostic[] = [];
 
   if (parseErrors?.length) {
-    diagnostics.push(...parseErrors.map((e: Error) => {
-      const { message } = e
-
+    diagnostics.push(...parseErrors.map((e: Error | ParseError) => {
       let start = { line: 0, character: 0 }, end = { line: 0, character: 10 }
-      try {
-        const match = errorRe.exec(message)
-        if (match) {
-          const
-            line = parseInt(match[1]) - 1,
-            column = parseInt(match[2]) - 1
-
-          start = {
-            line,
-            character: column
-          }
-
-          end = {
-            line,
-            character: column + 3
-          }
-        }
-
-      } catch { }
+      let message = e.message
+      if (e.line != null && e.column != null) { // ParseError
+        // Remove leading filename:line:column from message
+        message = message.replace(/^\S+ /, "")
+        // Convert 1-based to 0-based
+        start.line = end.line = e.line - 1
+        start.character = e.column - 1
+        end.character = e.column + 3
+      }
 
       return {
         severity: DiagnosticSeverity.Error,
@@ -572,7 +560,7 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
           start,
           end,
         },
-        message: message,
+        message,
         source: 'ts'
       }
     }).filter(x => !!x))
@@ -629,9 +617,6 @@ function scheduleUpdateDiagnostics(skipDocs: Set<TextDocument>) {
   }
   updatePendingDiagnostics(runningDiagnosticsUpdate, skipDocs)
 }
-
-// NOTE: this is a bit of a hack, Hera should provide enhanced error objects with line and column info
-const errorRe = /(\d+):(\d+)/
 
 connection.onDidChangeWatchedFiles(_change => {
   // Monitored files have change in VSCode

@@ -4,6 +4,7 @@ import path from "path"
 import type {
   SourceMap as CivetSourceMap,
   CompileOptions,
+  ParseError,
 } from "@danielx/civet"
 import BundledCivetModule from "@danielx/civet"
 import BundledCivetConfigModule from "@danielx/civet/config"
@@ -58,7 +59,7 @@ interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithF
 export interface FileMeta {
   sourcemapLines: SourceMap["data"]["lines"] | undefined
   transpiledDoc: TextDocument | undefined
-  parseErrors: Error[] | undefined
+  parseErrors: (Error | ParseError)[] | undefined
 }
 
 interface Host extends LanguageServiceHost {
@@ -382,7 +383,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
     return snapshot
   }
 
-  function createOrUpdateMeta(path: string, transpiledDoc: TextDocument, sourcemapLines?: SourceMap["data"]["lines"], parseErrors?: Error[]) {
+  function createOrUpdateMeta(path: string, transpiledDoc: TextDocument, sourcemapLines?: SourceMap["data"]["lines"], parseErrors?: (Error | ParseError)[]) {
     let meta = fileMetaData.get(path)
 
     if (!meta) {
