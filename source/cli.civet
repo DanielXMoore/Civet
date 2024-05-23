@@ -1,4 +1,4 @@
-{ compile, generate, parse, lib } from ./main.civet
+{ compile, generate, parse, lib, isCompileError, SourceMap } from ./main.civet
 { findConfig, loadConfig } from ./config.civet
 
 // unplugin ends up getting installed in the same dist directory
@@ -271,17 +271,34 @@ export function repl(options: Options)
       else if input in ['quit\n', 'exit\n', 'quit()\n', 'exit()\n']
         process.exit 0
       else if input.endsWith '\n\n'  // finished input with blank line
+        function showError(error)
+          console.error "Error while parsing Civet code:"
+          if isCompileError error
+            // Unwrap ParseErrors to first error
+            if (error as ParseErrors).errors?
+              error = (error as ParseErrors).errors[0]
+            console.log """
+              #{input.split('\n')[0...error.line].join '\n'}
+              #{' '.repeat error.column - 1}^ #{error.header}
+            """
+          else
+            console.error error
+
         let output: string
         if options.compile or options.ast
           try
             output = await compile input, {...options, filename}
           catch error
-            //console.error "Failed to transpile Civet:"
-            console.error error
+            showError error
             return callback null, undefined
           return callback null, output
 
-        ast .= await compile input, {...options, filename, ast: true}
+        let ast
+        try
+          ast = await compile input, {...options, filename, ast: true}
+        catch error
+          showError error
+          return callback null, undefined
 
         // Wrap in IIFE if there's a top-level await or import
         // Use Civet's async do, so Civet does implicit return of last value
@@ -307,16 +324,18 @@ export function repl(options: Options)
               ast = [ast] unless Array.isArray ast
               ast.unshift `var ${decl.names.join ','};`
 
-        errors: unknown[] := []
+        errors: unknown[] .= []
         try
           output = generate ast, { errors }
         catch error
           //console.error "Failed to transpile Civet:"
           console.error error
           return callback null, undefined
-        if errors.length
-          // TODO: Better error display; copied from main.civet
-          console.error `Parse errors: ${errors.map(.message).join("\n")}`
+        if errors#
+          // Rerun with sourceMap
+          errors = []
+          generate ast, { errors, sourceMap: SourceMap(input) }
+          showError errors[0]
           return callback null, undefined
 
         let result: string

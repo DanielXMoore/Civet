@@ -9,20 +9,28 @@ onmessage = async (e) => {
   const highlighter = await getHighlighter();
   const inputHtml = highlighter.codeToHtml(code, { lang: 'coffee' });
 
-  let tsCode, ast, errors = []
+  let tsCode, ast, error
   try {
+    let errors = []
     ast = await Civet.compile(code, { ast: true, parseOptions });
     tsCode = Civet.generate(ast, { errors });
     if (errors.length) {
-      // TODO: Better error display; copied from main.civet
-      throw new Error(`Parse errors: ${errors.map($ => $.message).join("\n")}`)
+      // Rerun with SourceMap to get error location
+      errors = []
+      tsCode = Civet.generate(ast, { errors, sourceMap: Civet.SourceMap(code) });
+      error = errors[0]
     }
-  } catch (error) {
+  } catch (e) {
+    error = e
+  }
+  if (error) return postError(error)
+
+  function postError(error) {
     if (Civet.isCompileError(error)) {
       console.info('Snippet compilation error!', error);
 
       const linesUntilError = code.split('\n').slice(0, error.line).join('\n');
-      const errorLine = `${' '.repeat(error.column - 1)}^ ${error.name}`;
+      const errorLine = `${' '.repeat(error.column - 1)}^ ${error.header}`;
       const errorCode = `${linesUntilError}\n${errorLine}`;
       const outputHtml = highlighter.codeToHtml(errorCode, { lang: 'coffee' });
 
@@ -31,7 +39,6 @@ onmessage = async (e) => {
       console.error(error)
       postMessage({ uid, inputHtml, outputHtml: error.message, error });
     }
-    return
   }
 
   let jsCode = '';
@@ -74,16 +81,18 @@ onmessage = async (e) => {
         node.children.token = "civetconsole"
       })
 
+      let errors = []
       jsCode = Civet.generate(ast, { js: true, errors })
+      if (errors.length) {
+        // Rerun with SourceMap to get error location
+        errors = []
+        tsCode = Civet.generate(ast, { js: true, errors, sourceMap: Civet.SourceMap(code) });
+        return postError(errors[0])
+      }
 
       if (topLevelAwait) {
         jsCode += `.catch((x)=>civetconsole.log("[THROWN] "+x))`
         jsCode += `.then((x)=>x!==undefined&&civetconsole.log("[EVAL] "+x))`
-      }
-
-      if (errors.length) {
-        // TODO: Better error display; copied from main.civet
-        throw new Error(`Parse errors: ${errors.map($ => $.message).join("\n")}`)
       }
     } catch (error) {
       // Parse errors specific to JS generation
