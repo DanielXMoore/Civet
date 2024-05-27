@@ -560,7 +560,7 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
           end,
         },
         message,
-        source: 'ts'
+        source: 'civet'
       }
     }).filter(x => !!x))
   }
