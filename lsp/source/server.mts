@@ -534,8 +534,7 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
     console.log("no meta for ", sourcePath)
     return
   }
-  const { sourcemapLines, transpiledDoc, parseErrors } = meta
-  if (!transpiledDoc) return
+  const { sourcemapLines, transpiledDoc, parseErrors, fatal } = meta
 
   const transpiledPath = documentToSourcePath(transpiledDoc)
   const diagnostics: Diagnostic[] = [];
@@ -564,7 +563,8 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
         source: 'ts'
       }
     }).filter(x => !!x))
-  } else {
+  }
+  if (!fatal) {
     [
       ...logTiming("service.getSyntacticDiagnostics", service.getSyntacticDiagnostics)(transpiledPath),
       ...logTiming("service.getSemanticDiagnostics", service.getSemanticDiagnostics)(transpiledPath),
