@@ -240,8 +240,6 @@ to set up your environment to get productive right away and have a Good Time℠.
 Code coverage with [c8](https://github.com/bcoe/c8) "just works" thanks to their source map
 integration and Civet's source maps.
 
-Currently Civet's ESM loader depends on [ts-node](https://www.npmjs.com/package/ts-node)
-
 #### c8 + Mocha
 
 `package.json`
@@ -260,13 +258,13 @@ Currently Civet's ESM loader depends on [ts-node](https://www.npmjs.com/package/
       "civet"
     ],
     "loader": [
-      "ts-node/esm",
       "@danielx/civet/esm"
     ],
     ...
   ...
 ```
 
+<!--
 `ts-node` must be configured with `transpileOnly` (it can't resolve alternative extensions). Also I think `module` needs to be at least `ES2020` for the Civet ESM loader to work.
 
 `tsconfig.json`
@@ -279,6 +277,7 @@ Currently Civet's ESM loader depends on [ts-node](https://www.npmjs.com/package/
     }
   }
 ```
+-->
 
 If you don't care for code coverage you can skip c8 (but it is so easy why not keep it?).
 

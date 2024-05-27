@@ -23,28 +23,56 @@ try {
   const { pathToFileURL } = require('node:url');
 
   register('./dist/esm.mjs', pathToFileURL(__filename));
-} catch (e) {}
+} catch (e) {
+  // older Node lacking module register
+}
 
-// CJS registration
+const fs = require("fs");
+const { compile } = require("./");
+
+// Old-style CJS registration
 if (require.extensions) {
-  const fs = require("fs");
-  const { compile } = require("./");
-
   require.extensions[".civet"] = function (module, filename) {
     const js = compile(fs.readFileSync(filename, 'utf8'), {
       filename,
       js: true,
       inlineMap: true,
+      sync: true,
     });
     module._compile(js, filename);
   };
+}
 
-  try {
-    require('@cspotcode/source-map-support').install({
-      environment: 'node',
-      hookRequire: true  // support inline source maps
-    })
-  } catch (e) {
-    // ignore missing dependency
+const outputCache = new Map
+
+function retrieveFile(path) {
+  if (!path.endsWith('.civet')) return
+
+  // If it's a file URL, convert to local path
+  // I could not find a way to handle non-URLs except to swallow an error
+  if (path.startsWith('file:')) {
+    try {
+      path = require('url').fileURLToPath(path)
+    } catch (e) {}
   }
+
+  if (!outputCache.has(path)) {
+    outputCache.set(path, compile(fs.readFileSync(path, 'utf8'), {
+      filename: path,
+      js: true,
+      inlineMap: true,
+      sync: true,
+    }));
+  }
+  return outputCache.get(path)
+}
+
+try {
+  require('@cspotcode/source-map-support').install({
+    environment: 'node',
+    hookRequire: true,
+    retrieveFile,
+  })
+} catch (e) {
+  // ignore missing dependency
 }
