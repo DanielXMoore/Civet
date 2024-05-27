@@ -43,6 +43,8 @@ if (require.extensions) {
   };
 }
 
+const outputCache = new Map
+
 function retrieveFile(path) {
   if (!path.endsWith('.civet')) return
 
@@ -54,12 +56,15 @@ function retrieveFile(path) {
     } catch (e) {}
   }
 
-  return compile(fs.readFileSync(path, 'utf8'), {
-    filename: path,
-    js: true,
-    inlineMap: true,
-    sync: true,
-  });
+  if (!outputCache.has(path)) {
+    outputCache.set(path, compile(fs.readFileSync(path, 'utf8'), {
+      filename: path,
+      js: true,
+      inlineMap: true,
+      sync: true,
+    }));
+  }
+  return outputCache.get(path)
 }
 
 try {
