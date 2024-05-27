@@ -35,12 +35,17 @@ import {
 import {
   assert
   convertOptionalType
+  hasAwait
+  hasYield
+  inplacePrepend
   insertTrimmingSpace
   isEmptyBareBlock
   isExit
   isFunction
+  isStatement
   isWhitespaceOrEmpty
   makeLeftHandSideExpression
+  makeNode
   updateParentPointers
   wrapIIFE
   wrapWithReturn
@@ -69,25 +74,23 @@ function isAsyncGeneratorVoidType(t?: TypeIdentifierNode): boolean
 
 // Add implicit block unless followed by a method/function of the same name,
 // or block is within an ExportDeclaration.
-function implicitFunctionBlock(f): void {
+function implicitFunctionBlock(f): void
   if (f.abstract or f.block or f.signature?.optional) return
 
-  const { name, parent } = f
+  { name, parent } := f
   if (parent?.type is "ExportDeclaration") return
-  const expressions = parent?.expressions ?? parent?.elements
-  const currentIndex = expressions?.findIndex(([, def]) => def is f)
-  const following = currentIndex >= 0 and expressions[currentIndex + 1]?.[1]
+  expressions := parent?.expressions ?? parent?.elements
+  currentIndex := expressions?.findIndex(([, def]) => def is f)
+  following := currentIndex >= 0 and expressions[currentIndex + 1]?.[1]
 
-  if (f.type is following?.type and name and name is following.name) {
+  if f.type is following?.type and name and name is following.name
     f.ts = true
-  } else {
-    const block = makeEmptyBlock()
+  else
+    block := makeEmptyBlock()
     block.parent = f
     f.block = block
     f.children.push(block)
     f.ts = false
-  }
-}
 
 function processReturn(f: FunctionNode, implicitReturns: boolean): void
   { returnType } .= f.signature
@@ -522,10 +525,32 @@ function processParams(f): void
       return
   expressions.unshift(...prefix)
 
+function processSignature(f: FunctionNode): void
+  {block, signature} := f
+
+  if hasAwait(block) and not f.async?#
+    f.async.push "async "
+    signature.modifier.async = true
+
+  if hasYield(block) and not f.generator?#
+    if f.type is "ArrowFunction"
+      gatherRecursiveWithinFunction block, .type is "YieldExpression"
+      .forEach (y) =>
+        i := y.children.findIndex .type is "Yield"
+        // i+1 because after "yield" we have a consistent location in sourcemap
+        y.children.splice i+1, 0,
+          type: "Error"
+          message: "Can't use yield inside of => arrow function"
+    else
+      f.generator.push "*"
+      signature.modifier.generator = true
+
 function processFunctions(statements, config): void
   gatherRecursiveAll(statements, ({ type }) => type is "FunctionExpression" or type is "ArrowFunction")
   .forEach (f) =>
-    if (f.type is "FunctionExpression") implicitFunctionBlock(f)
+    if f.type is "FunctionExpression"
+      implicitFunctionBlock(f)
+    processSignature(f)
     processParams(f)
     processReturn(f, config.implicitReturns)
 
@@ -626,10 +651,59 @@ function processCoffeeDo(ws: Whitespace, expression: ASTNode): ASTNode
     }
   ]
 
+function makeAmpersandFunction(rhs: AmpersandBlockBody): ASTNode
+  {ref, typeSuffix, body} .= rhs
+  unless ref?
+    ref = makeRef "$"
+    inplacePrepend ref, body
+  if body?.type is "ObjectExpression"
+    body = makeLeftHandSideExpression body
+
+  parameters := makeNode {
+    type: "Parameters"
+    children: typeSuffix ? ["(", ref, typeSuffix, ")"] : [ref]
+    names: []
+  } as ParametersNode
+  expressions := [[' ', body]] satisfies StatementTuple[]
+  block := makeNode {
+    type: "BlockStatement"
+    bare: true
+    expressions
+    children: [expressions]
+    implicitlyReturned: true
+  } as BlockStatement
+
+  async := []
+  children := [ async, parameters, " =>", block ]
+
+  fn := makeNode {
+    type: "ArrowFunction"
+    async
+    signature:
+      modifier: {
+        async: !!async
+      }
+    children
+    ref
+    block
+    parameters
+    ampersandBlock: true
+    body
+  } as ArrowFunction
+
+  if isStatement body
+    braceBlock block
+    // Prevent unrolling braced block
+    fn.ampersandBlock = false
+    delete fn.body
+
+  fn
+
 export {
   assignResults
   expressionizeIteration
   insertReturn
+  makeAmpersandFunction
   processCoffeeDo
   processFunctions
   processReturn
