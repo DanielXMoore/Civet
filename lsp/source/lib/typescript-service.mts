@@ -60,6 +60,7 @@ export interface FileMeta {
   sourcemapLines: SourceMap["data"]["lines"] | undefined
   transpiledDoc: TextDocument | undefined
   parseErrors: (Error | ParseError)[] | undefined
+  fatal: boolean // whether errors were fatal during compilation, so no doc
 }
 
 interface Host extends LanguageServiceHost {
@@ -383,7 +384,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
     return snapshot
   }
 
-  function createOrUpdateMeta(path: string, transpiledDoc: TextDocument, sourcemapLines?: SourceMap["data"]["lines"], parseErrors?: (Error | ParseError)[]) {
+  function createOrUpdateMeta(path: string, transpiledDoc: TextDocument, sourcemapLines?: SourceMap["data"]["lines"], parseErrors?: (Error | ParseError)[], fatal?: boolean) {
     let meta = fileMetaData.get(path)
 
     if (!meta) {
@@ -391,12 +392,14 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
         sourcemapLines,
         transpiledDoc,
         parseErrors,
+        fatal,
       }
 
       fileMetaData.set(path, meta)
     } else {
       meta.sourcemapLines = sourcemapLines
       meta.parseErrors = parseErrors
+      meta.fatal = fatal
     }
   }
 
@@ -406,13 +409,13 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
       var result = transpiler.compile(sourcePath, sourceCode)
     } catch (e: unknown) {
       // Add parse errors to meta
-      createOrUpdateMeta(sourcePath, transpiledDoc, undefined, [e as Error])
+      createOrUpdateMeta(sourcePath, transpiledDoc, undefined, [e as Error], true)
       return
     }
 
     if (result) {
       const { code: transpiledCode, sourceMap, errors } = result
-      createOrUpdateMeta(sourcePath, transpiledDoc, sourceMap?.data.lines, errors)
+      createOrUpdateMeta(sourcePath, transpiledDoc, sourceMap?.data.lines, errors, false)
       TextDocument.update(transpiledDoc, [{ text: transpiledCode }], version)
 
       return transpiledCode
