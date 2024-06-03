@@ -367,13 +367,17 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       const basename = id.slice(0, match.index + match[1].length);
 
       const filename = path.resolve(rootDir, basename);
-      const mtime = fs.statSync(filename).mtimeMs;
-      const cached = cache?.get(filename);
-      if (cached && cached.mtime === mtime) {
-        return cached.result;
+
+      let mtime;
+      if (cache) {
+        mtime = (await fs.promises.stat(filename)).mtimeMs;
+        const cached = cache?.get(filename);
+        if (cached && cached.mtime === mtime) {
+          return cached.result;
+        }
       }
 
-      const rawCivetSource = fs.readFileSync(filename, 'utf-8');
+      const rawCivetSource = await fs.promises.readFile(filename, 'utf-8');
       this.addWatchFile(filename);
 
       let compiled: {
@@ -477,7 +481,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       if (options.transformOutput)
         transformed = await options.transformOutput(transformed.code, id);
 
-      cache?.set(filename, {mtime, result: transformed});
+      cache?.set(filename, {mtime: mtime!, result: transformed});
 
       return transformed;
     },
