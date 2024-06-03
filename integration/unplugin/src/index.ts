@@ -39,6 +39,8 @@ export type PluginOptions = {
   js?: boolean;
   /** @deprecated Use "emitDeclaration" instead */
   dts?: boolean;
+  /** Cache compilation results based on file mtime (useful for serve or watch mode) */
+  cache?: boolean;
   /** config filename, or null to not look for default config file */
   config?: string | null | undefined;
   parseOptions?: ParseOptions;
@@ -125,6 +127,8 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         : f => f.toLowerCase(),
     };
   };
+
+  const cache = options.cache ? new Map<string, {mtime: number, result: TransformResult}>() : undefined;
 
   return {
     name: 'unplugin-civet',
@@ -363,6 +367,16 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       const basename = id.slice(0, match.index + match[1].length);
 
       const filename = path.resolve(rootDir, basename);
+
+      let mtime;
+      if (cache) {
+        mtime = (await fs.promises.stat(filename)).mtimeMs;
+        const cached = cache?.get(filename);
+        if (cached && cached.mtime === mtime) {
+          return cached.result;
+        }
+      }
+
       const rawCivetSource = await fs.promises.readFile(filename, 'utf-8');
       this.addWatchFile(filename);
 
@@ -466,6 +480,8 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
 
       if (options.transformOutput)
         transformed = await options.transformOutput(transformed.code, id);
+
+      cache?.set(filename, {mtime: mtime!, result: transformed});
 
       return transformed;
     },
