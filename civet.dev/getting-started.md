@@ -200,6 +200,7 @@ esbuild.build({
       // outputExtension: '.tsx',        // appended to .civet in output
       // ts: 'civet',                    // TS -> JS transpilation mode
       // typecheck: false,               // check types via tsc
+      // cache: false,                   // Cache compilation results based on mtime, useful for watch
       // config: null,                   // Civet config filename; null to skip
       // parseOptions: {                 // directives to apply globally
       //   comptime: false,              // evaluate comptime blocks
