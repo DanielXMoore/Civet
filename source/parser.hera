@@ -660,7 +660,7 @@ ActualAssignment
   # NOTE: Consolidated assignment ops
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
-  ( NotDedented UpdateExpression WAssignmentOp )+ ExtendedExpression ->
+  ( NotDedented UpdateExpression WAssignmentOp )+ MaybeNestedExtendedExpression ->
     $1 = $1.map(x => [x[0], x[1], ...x[2]])
     $0 = [$1, $2]
     return {
@@ -679,7 +679,7 @@ NonPipelineActualAssignment
   # NOTE: Consolidated assignment ops
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
-  ( NotDedented UpdateExpression WAssignmentOp )+ NonPipelineExtendedExpression ->
+  ( NotDedented UpdateExpression WAssignmentOp )+ MaybeNestedNonPipelineExtendedExpression ->
     $1 = $1.map((x) => [x[0], x[1], ...x[2]])
     $0 = [$1, $2]
     return {
@@ -695,7 +695,7 @@ NonPipelineActualAssignment
 
 # https://262.ecma-international.org/#prod-YieldExpression
 YieldExpression
-  Yield ( ( _? Star )? MaybeNestedExpression )? ->
+  Yield ( ( _? Star )? MaybeParenNestedExtendedExpression )? ->
     if ($2) {
       const [ star, expression ] = $2
       return {
@@ -780,11 +780,11 @@ ConditionalExpression
 TernaryRest
   NestedTernaryRest
   # NOTE: Ternary `a ? b : c` is disabled if CoffeeScript binary existential `a ? b` is enabled
-  !CoffeeBinaryExistentialEnabled &[ \t] _ QuestionMark ExtendedExpression __ Colon ExtendedExpression ->
+  !CoffeeBinaryExistentialEnabled &[ \t] _ QuestionMark MaybeNestedExtendedExpression __ Colon MaybeNestedExtendedExpression ->
     return $0.slice(2)
 
 NestedTernaryRest
-  PushIndent (Nested QuestionMark ExtendedExpression Nested Colon ExtendedExpression)? PopIndent ->
+  PushIndent (Nested QuestionMark MaybeNestedExtendedExpression Nested Colon MaybeNestedExtendedExpression)? PopIndent ->
     if ($2) return $2
     return $skip
 
@@ -1135,7 +1135,7 @@ FieldDefinition
 
   # NOTE: Added readonly semantic equivalent of const field assignment
   # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
-  InsertReadonly:r ClassElementName TypeSuffix? __ ConstAssignment:ca ExtendedExpression ->
+  InsertReadonly:r ClassElementName TypeSuffix? __ ConstAssignment:ca MaybeNestedExtendedExpression ->
     // Adjust position to space before assignment to make TypeScript remapping happier
     r.children[0].$loc = {
       pos: ca.$loc.pos - 1,
@@ -3244,7 +3244,7 @@ NamedProperty
 # used to distinguish between braceless inline objects and ternary expression conditions
 # Allow postfixed expression only if this first property isn't the last
 SnugNamedProperty
-  PropertyName:name Colon:colon ExtendedExpression:expression ( ( _? PostfixStatement ) &( Nested NamedProperty ) )?:post ->
+  PropertyName:name Colon:colon MaybeNestedExtendedExpression:expression ( ( _? PostfixStatement ) &( Nested NamedProperty ) )?:post ->
     if (post) {
       // post[0] drops the lookahead assertion
       expression = attachPostfixStatementAsExpression(expression, post[0])
@@ -4824,7 +4824,7 @@ KeywordStatement
 
   # https://262.ecma-international.org/#prod-ReturnStatement
   # NOTE: Modified to leave room for `return.value` and `return =`
-  Return !(":" / "." / AfterReturnShorthand) MaybeNestedExpression?:expression -> {
+  Return !(":" / "." / AfterReturnShorthand) MaybeParenNestedExtendedExpression?:expression -> {
     type: "ReturnStatement",
     expression,
     children: $0,
@@ -4841,7 +4841,7 @@ DebuggerStatement
 
 # https://262.ecma-international.org/#prod-ThrowStatement
 ThrowStatement
-  Throw ExtendedExpression -> {
+  Throw MaybeParenNestedExtendedExpression -> {
     type: "ThrowStatement",
     children: $0,
   }
@@ -4858,16 +4858,37 @@ Debugger
   "debugger" NonIdContinue ->
     return { $loc, token: $1 }
 
-MaybeNestedExpression
+MaybeNestedNonPipelineExtendedExpression
+  PushIndent ( Nested NonPipelineExtendedExpression )? PopIndent ->
+    if ($3) return $3
+    return $skip
+  NonPipelineExtendedExpression
+
+MaybeNestedPostfixedExpression
+  PushIndent ( Nested PostfixedExpression )? PopIndent ->
+    if ($3) return $3
+    return $skip
+  PostfixedExpression
+
+MaybeNestedExtendedExpression
+  PushIndent ( Nested ExtendedExpression )? PopIndent ->
+    if ($3) return $3
+    return $skip
+  ExtendedExpression
+
+# MaybeNestedExtendedExpression but where expression needs to be output with
+# parentheses if indented, so that the expression starts on the same line.
+# (e.g. for `return` or `yield`)
+MaybeParenNestedExtendedExpression
   # Not nested case
-  !EOS ExtendedExpression ->
-    return $2
+  !EOS ExtendedExpression -> $2
   # Avoid wrapping object return value in parentheses.
-  &EOS ObjectLiteral ->
-    return $2
+  &EOS ObjectLiteral -> $2
   # Value after `return` needs to be wrapped in parentheses
   # if it starts on another line.
-  &EOS InsertSpace InsertOpenParen PushIndent Nested ExtendedExpression PopIndent InsertNewline InsertIndent InsertCloseParen
+  &EOS InsertSpace InsertOpenParen PushIndent ( Nested ExtendedExpression ):exp PopIndent InsertNewline InsertIndent InsertCloseParen ->
+    if (!exp) return $skip
+    return $0.slice(1)
 
 # https://262.ecma-international.org/#prod-ImportDeclaration
 ImportDeclaration
@@ -5080,7 +5101,7 @@ ImportedBinding
 ExportDeclaration
   # NOTE: TypeScript's CommonJS export syntax
   # https://www.typescriptlang.org/docs/handbook/modules/reference.html#export--and-import--require
-  Export _? Equals ExtendedExpression ->
+  Export _? Equals MaybeNestedExtendedExpression ->
     // Replace `export` with `module.exports` in JS output
     const exp = [
       { ...$1, ts: true },
@@ -5116,7 +5137,7 @@ ExportDeclaration
     ]
   # NOTE: This covers all forms that can be directly export defaulted in TS.
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / ExtendedExpression ):declaration ->
+  Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedExtendedExpression ):declaration ->
     return { type: "ExportDeclaration", declaration, ts: declaration.ts, children: $0 }
   Export __ ExportFromClause __ FromClause ->
     return { type: "ExportDeclaration", ts: $3.ts, children: $0 }
@@ -5206,23 +5227,22 @@ LexicalDeclaration
       splices: bindings.flatMap(b => b.splices),
       thisAssignments: bindings.flatMap(b => b.thisAssignments),
     }
-  # NOTE: Added const shorthand
+  # NOTE: Added const/let shorthands
   # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
-  InsertConst ( BindingPattern / BindingIdentifier ) TypeSuffix? __ ConstAssignment PostfixedExpression ->
-    return processAssignmentDeclaration(...$0)
-
-  # NOTE: Added let shorthand
-  InsertLet ( BindingPattern / BindingIdentifier ) TypeSuffix? __ LetAssignment PostfixedExpression ->
-    return processAssignmentDeclaration(...$0)
+  # NOTE: Using PostfixExpression to allow postfix if/unless/for
+  Loc:loc ( BindingPattern / BindingIdentifier ) TypeSuffix? __ ( ConstAssignment / LetAssignment ):assign MaybeNestedPostfixedExpression ->
+    return processAssignmentDeclaration(
+      { $loc: loc, token: assign.decl }, // like InsertConst or InsertLet
+      ...$0.slice(1)
+    )
 
 ConstAssignment
   ":=" / "≔" ->
-    return { $loc, token: "=" }
+    return { $loc, token: "=", decl: "const " }
 
 LetAssignment
   ".=" ->
-    return { $loc, token: "=" }
-
+    return { $loc, token: "=", decl: "let " }
 
 TypeAssignment
   "::=" ->
@@ -5260,7 +5280,7 @@ LexicalBinding
 # https://262.ecma-international.org/#prod-Initializer
 Initializer
   # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  __ Equals ExtendedExpression:expression -> {
+  __ Equals MaybeNestedExtendedExpression:expression -> {
     type: "Initializer",
     expression,
     children: $0,
@@ -6776,7 +6796,7 @@ TypeDeclarationRest
 
 TypeAliasDeclaration
   # TODO: ( __ Type ) can be refined further to check for consistently nested binary ops, etc.
-  TypeKeyword _? IdentifierName:id TypeParameters? OptionalEquals ( MaybeIndentedType / ( __ Type ) ) ->
+  TypeKeyword _? IdentifierName:id TypeParameters? OptionalEquals ( MaybeNestedType / ( __ Type ) ) ->
     return {
       type: "TypeDeclaration",
       id,
@@ -6784,7 +6804,7 @@ TypeAliasDeclaration
       ts: true,
     }
 
-  InsertType IdentifierName:id TypeParameters? __ TypeAssignment ( MaybeIndentedType / ( __ Type ) ) ->
+  InsertType IdentifierName:id TypeParameters? __ TypeAssignment ( MaybeNestedType / ( __ Type ) ) ->
     return {
       type: "TypeDeclaration",
       id,
@@ -7008,7 +7028,7 @@ NestedEnumPropertyLine
     }))
 
 EnumProperty
-  Identifier:name ( __ Equals ExtendedExpression )?:initializer ObjectPropertyDelimiter ->
+  Identifier:name ( __ Equals MaybeNestedExtendedExpression )?:initializer ObjectPropertyDelimiter ->
     return {
       type: "EnumProperty",
       name,
@@ -7033,7 +7053,7 @@ TypeIndex
 # parse both (?!).  For simplicity, we allow either in all cases.
 # In some cases (e.g. let/const), we transpile them away later.
 TypeSuffix
-  _? QuestionMark?:optional _? Colon MaybeIndentedType:t -> {
+  _? QuestionMark?:optional _? Colon MaybeNestedType:t -> {
     type: "TypeSuffix",
     ts: true,
     optional,
@@ -7049,7 +7069,7 @@ TypeSuffix
   # TypeScript has a special error for ! without : ("Declarations with definite
   # assignment assertions must also have type annotations.") but we parse it
   # so that the user can get this more useful error message.
-  NonNullAssertion:nonnull _? (Colon MaybeIndentedType)?:ct ->
+  NonNullAssertion:nonnull _? (Colon MaybeNestedType)?:ct ->
     const [colon, t] = ct ?? []
     return {
       type: "TypeSuffix",
@@ -7059,7 +7079,7 @@ TypeSuffix
       children: [ $1, $2, colon, t ],
     }
 
-MaybeIndentedType
+MaybeNestedType
   # NOTE: Let InterfaceBlock take first crack at an indented block
   # But don't prevent parsing a braced type with unary suffix like {}[]
   !(__ OpenBrace) InterfaceBlock -> $2
