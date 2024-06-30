@@ -116,6 +116,7 @@ you can add one of the following files:
 * `civetconfig.civet`
 * `civet.config.json`
 * `civet.config.civet`
+* `package.json` with a `"civetConfig"` property
 
 A JSON file should consist of an object with a `"parseOptions"` property,
 which should be an object specifying one of more directives in the natural way.
