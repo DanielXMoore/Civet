@@ -202,7 +202,34 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           if (fsMap.has(filename)) return true
           return systemFileExists(filename.slice(0, -4))
         };
+
         system.readFile = (filename: string, encoding: string = 'utf-8'): string | undefined => {
+          // Mogrify package.json imports field to use .civet.tsx
+          if (path.basename(filename) === 'package.json') {
+            const json = systemReadFile(filename)
+            if (!json) return json
+            const parsed: Record<string, unknown> = JSON.parse(json)
+            let modified = false
+            function recurse(node: unknown) {
+              if (node && typeof node === 'object') {
+                for (const key in node) {
+                  const value = (node as Record<string, unknown>)[key]
+                  if (typeof value === 'string') {
+                    if (value.endsWith('.civet')) {
+                      (node as Record<string, unknown>)[key] = value + '.tsx'
+                      modified = true
+                    }
+                  } else if (value) {
+                    recurse(value)
+                  }
+                }
+              }
+            }
+            recurse(parsed.imports)
+            return modified ? JSON.stringify(parsed) : json
+          }
+
+          // Generate .civet.tsx files on the fly
           if (!filename.endsWith('.civet.tsx')) return systemReadFile(filename)
           if (fsMap.has(filename)) return fsMap.get(filename)
           const civetFilename = filename.slice(0, -4)
