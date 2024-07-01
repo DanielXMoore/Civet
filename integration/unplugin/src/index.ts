@@ -113,6 +113,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
   let compilerOptions: any, compilerOptionsWithSourceMap: any;
   let rootDir = process.cwd();
   let esbuildOptions: BuildOptions;
+  let configErrors: Diagnostic[] | undefined;
 
   const tsPromise =
     transformTS || options.ts === 'tsc'
@@ -170,6 +171,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           ts.sys,
           process.cwd()
         );
+        configErrors = configContents.errors;
 
         compilerOptions = {
           ...configContents.options,
@@ -254,8 +256,11 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
             };
           });
 
+        if (configErrors?.length) {
+          diagnostics.unshift(...configErrors);
+        }
+
         if (diagnostics.length > 0) {
-          // TODO: Map diagnostics to original file via sourcemap
           console.error(
             ts.formatDiagnosticsWithColorAndContext(
               diagnostics,
