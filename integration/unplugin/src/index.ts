@@ -178,7 +178,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         };
         // We use .tsx extensions when type checking, so need to enable
         // JSX mode even if the user doesn't request/use it.
-        compilerOptions.jsx ??= "preserve";
+        compilerOptions.jsx ??= ts.JsxEmit.Preserve;
         compilerOptionsWithSourceMap = {
           ...compilerOptions,
           sourceMap: true,
