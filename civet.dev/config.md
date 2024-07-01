@@ -116,6 +116,10 @@ you can add one of the following files:
 * `civetconfig.civet`
 * `civet.config.json`
 * `civet.config.civet`
+* `package.json` with a `"civetConfig"` property
+* [`package.yaml`](https://github.com/pnpm/pnpm/issues/1100) with a `"civetConfig"`
+property (and [yaml](https://eemeli.org/yaml) `install`ed as optional
+[`peerDependencies`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#peerdependencies))
 
 A JSON file should consist of an object with a `"parseOptions"` property,
 which should be an object specifying one of more directives in the natural way.
