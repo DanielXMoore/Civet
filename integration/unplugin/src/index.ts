@@ -251,6 +251,11 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           compilerOptions,
           ts
         );
+
+        // createVirtualCompilerHost doesn't preserve getDirectories
+        // from the system, so add it here.
+        host.compilerHost.getDirectories = system.getDirectories;
+
         const program = ts.createProgram({
           rootNames: [...fsMap.keys()],
           options: compilerOptions,
