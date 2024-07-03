@@ -157,12 +157,17 @@ You can ask Civet to run TypeScript to check for type errors in your Civet code
 (the analog of `tsc`):
 
 ```sh
-civet --typecheck src/**/*.civet
+civet --typecheck
 ```
 
-Be sure to specify all the files you want to check.
 This command returns an error code if there are any type errors,
 so you can use it in an NPM script and in CI.
+
+Alternatively, you can typecheck just specific files:
+
+```sh
+civet --typecheck new.civet
+```
 
 You can typecheck and generate JavaScript/TypeScript files at the same time.
 This could be a good NPM `build` script, for example.
@@ -177,6 +182,7 @@ You can also use TypeScript to generate `.d.ts` declaration files
 (if there are no type errors):
 
 ```sh
+civet --emit-declaration
 civet --emit-declaration src/**/*.civet
 ```
 

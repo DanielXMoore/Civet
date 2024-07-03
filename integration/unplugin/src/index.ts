@@ -114,6 +114,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
   let rootDir = process.cwd();
   let esbuildOptions: BuildOptions;
   let configErrors: Diagnostic[] | undefined;
+  let configFileNames: string[]
 
   const tsPromise =
     transformTS || options.ts === 'tsc'
@@ -193,6 +194,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           process.cwd()
         );
         configErrors = configContents.errors;
+        configFileNames = configContents.fileNames;
 
         compilerOptions = {
           ...configContents.options,
@@ -209,7 +211,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         fsMap = new Map();
       }
     },
-    async buildEnd() {
+    async buildEnd(useConfigFileNames = false) {
       if (transformTS) {
         const ts = await tsPromise!;
 
@@ -287,7 +289,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         host.compilerHost.getDirectories = system.getDirectories;
 
         const program = ts.createProgram({
-          rootNames: [...fsMap.keys()],
+          rootNames: useConfigFileNames ? configFileNames : [...fsMap.keys()],
           options: compilerOptions,
           host: host.compilerHost,
         });
