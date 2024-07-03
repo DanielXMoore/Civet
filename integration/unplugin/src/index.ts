@@ -166,9 +166,30 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           throw error;
         }
 
+        // Mogrify tsconfig.json "files" field to use .civet.tsx
+        function mogrify(key: string) {
+          if (key in config && Array.isArray(config[key])) {
+            config[key] = config[key].map((item: unknown) => {
+              if (typeof item !== 'string') return item
+              return item.replace(/\.civet\b(?!\.)/g, '.civet.tsx')
+            })
+          }
+        }
+        mogrify("files");
+
+        // Override readDirectory (used for include/exclude matching)
+        // to include .civet files, as .civet.tsx files
+        const system = {...ts.sys};
+        const {readDirectory: systemReadDirectory} = system;
+        system.readDirectory = (path: string, extensions?: readonly string[], excludes?: readonly string[], includes?: readonly string[], depth?: number): string[] => {
+          extensions = [ ...(extensions ?? []), ".civet" ];
+          return systemReadDirectory(path, extensions, excludes, includes, depth)
+          .map(name => name.endsWith(".civet") ? name + ".tsx" : name);
+        }
+
         const configContents = ts.parseJsonConfigFileContent(
           config,
-          ts.sys,
+          system,
           process.cwd()
         );
         configErrors = configContents.errors;
@@ -196,17 +217,26 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         // but which further resolves any Civet dependencies that are needed
         // just for typechecking (e.g. `import type` which get removed in JS).
         const system = tsvfs.createFSBackedSystem(fsMap, process.cwd(), ts)
-        const {fileExists: systemFileExists, readFile: systemReadFile} = system
+        const {
+          fileExists: systemFileExists,
+          readFile: systemReadFile,
+          readDirectory: systemReadDirectory,
+        } = system
+
         system.fileExists = (filename: string): boolean => {
           if (!filename.endsWith('.civet.tsx')) return systemFileExists(filename)
           if (fsMap.has(filename)) return true
           return systemFileExists(filename.slice(0, -4))
         };
 
+        system.readDirectory = (path: string): string[] =>
+          systemReadDirectory(path)
+          .map(name => name.endsWith('.civet') ? name + '.tsx' : name)
+
         system.readFile = (filename: string, encoding: string = 'utf-8'): string | undefined => {
           // Mogrify package.json imports field to use .civet.tsx
           if (path.basename(filename) === 'package.json') {
-            const json = systemReadFile(filename)
+            const json = systemReadFile(filename, encoding)
             if (!json) return json
             const parsed: Record<string, unknown> = JSON.parse(json)
             let modified = false
@@ -230,7 +260,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           }
 
           // Generate .civet.tsx files on the fly
-          if (!filename.endsWith('.civet.tsx')) return systemReadFile(filename)
+          if (!filename.endsWith('.civet.tsx')) return systemReadFile(filename, encoding)
           if (fsMap.has(filename)) return fsMap.get(filename)
           const civetFilename = filename.slice(0, -4)
           const rawCivetSource = fs.readFileSync(civetFilename, {
