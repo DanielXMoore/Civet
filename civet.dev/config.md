@@ -111,17 +111,17 @@ In the root directory of your project, or in a `.config` subdirectory,
 you can add one of the following files:
 
 * `🐈.json`
-* `🐈.civet`
 * `civetconfig.json`
-* `civetconfig.civet`
 * `civet.config.json`
-* `civet.config.civet`
 * `package.json` with a `"civetConfig"` property
-* [`package.yaml`](https://github.com/pnpm/pnpm/issues/1100) with a `"civetConfig"`
-property (and [yaml](https://eemeli.org/yaml) `install`ed as optional
-[`peerDependencies`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#peerdependencies))
+* Any of the above with `.yaml` or `.yml` extension
+  * Requires [yaml](https://eemeli.org/yaml) to be `install`ed as optional
+  [`peerDependencies`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#peerdependencies)
+  * In particular, supports [`package.yaml`](https://github.com/pnpm/pnpm/issues/1100) with a `"civetConfig"` property
+* Any of the above with a `.civet` or `.js` extension,
+  with code that `export default`s an object equivalent to a JSON file.
 
-A JSON file should consist of an object with a `"parseOptions"` property,
+The JSON data should consist of an object with a `"parseOptions"` property,
 which should be an object specifying one of more directives in the natural way.
 For example, the [directive](#local-configuration-via-directives)
 `"civet objectIs -implicit-returns tab=2"` is equivalent to:
@@ -175,11 +175,11 @@ module to look for and parse config files:
 ```js
 import { findInDir, findConfig, loadConfig } from "@danielx/civet/config"
 // Look for standard name for config file in specified directory
-const path1 = findInDir(process.cwd())
+const path1 = await findInDir(process.cwd())
 // Look for standard name for config file in specified directory or ancestors
-const path2 = findConfig(process.cwd())
+const path2 = await findConfig(process.cwd())
 // Load config file from specified path
-const config = loadConfig(path)
+const config = await loadConfig(path)
 // Pass config to compile
 const code = await compile(civetCode, config)
 ```
