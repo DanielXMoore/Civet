@@ -175,11 +175,11 @@ module to look for and parse config files:
 ```js
 import { findInDir, findConfig, loadConfig } from "@danielx/civet/config"
 // Look for standard name for config file in specified directory
-const path1 = findInDir(process.cwd())
+const path1 = await findInDir(process.cwd())
 // Look for standard name for config file in specified directory or ancestors
-const path2 = findConfig(process.cwd())
+const path2 = await findConfig(process.cwd())
 // Load config file from specified path
-const config = loadConfig(path)
+const config = await loadConfig(path)
 // Pass config to compile
 const code = await compile(civetCode, config)
 ```
