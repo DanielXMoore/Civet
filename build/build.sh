@@ -6,7 +6,7 @@ rm -rf dist
 mkdir dist
 
 # tree-shake needed constants from Vite
-node -e 'import("./node_modules/vite/dist/node/constants.js").then((c)=>console.log(`export const DEFAULT_EXTENSIONS = ${JSON.stringify(c.DEFAULT_EXTENSIONS)}`))' >./source/unplugin/constants.ts
+node -e 'import("./node_modules/vite/dist/node/constants.js").then((c)=>console.log(`export const DEFAULT_EXTENSIONS = ${JSON.stringify(c.DEFAULT_EXTENSIONS)}`))' >./source/unplugin/constants.mjs
 
 # types (these get used for type checking during esbuild, so must go first)
 cp types/types.d.ts types/config.d.ts dist/
@@ -24,6 +24,7 @@ rm -rf dist/unplugin/unplugin
 # cli
 BIN="dist/civet"
 echo "#!/usr/bin/env node" | cat - dist/cli.js > "$BIN"
+echo "cli()" >> "$BIN"
 chmod +x "$BIN"
 rm dist/cli.js
 
