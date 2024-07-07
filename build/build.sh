@@ -9,7 +9,8 @@ mkdir dist
 node -e 'import("./node_modules/vite/dist/node/constants.js").then((c)=>console.log(`export const DEFAULT_EXTENSIONS = ${JSON.stringify(c.DEFAULT_EXTENSIONS)}`))' >./source/unplugin/constants.ts
 
 # types (these get used for type checking during esbuild, so must go first)
-cp types/types.d.ts dist/types.d.ts
+cp types/types.d.ts types/config.d.ts dist/
+cp types/config.d.ts dist/config.d.mts
 
 # normal files
 civet --no-config build/esbuild.civet "$@"
