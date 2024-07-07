@@ -3,12 +3,22 @@ set -euo pipefail
 
 # clean build
 rm -rf dist
+mkdir dist
 
 # tree-shake needed constants from Vite
 node -e 'import("./node_modules/vite/dist/node/constants.js").then((c)=>console.log(`export const DEFAULT_EXTENSIONS = ${JSON.stringify(c.DEFAULT_EXTENSIONS)}`))' >./source/unplugin/constants.ts
 
+# types (these get used for type checking during esbuild, so must go first)
+cp types/types.d.ts dist/types.d.ts
+
 # normal files
 civet --no-config build/esbuild.civet "$@"
+
+# built types
+for name in astro esbuild rollup unplugin vite webpack; do
+  mv dist/unplugin/$name.civet.d.ts dist/$name.d.ts
+done
+rmdir dist/unplugin
 
 # cli
 BIN="dist/civet"
@@ -18,9 +28,6 @@ rm dist/cli.js
 
 # babel plugin
 cp source/babel-plugin.mjs dist/babel-plugin.mjs
-
-# types
-cp types/types.d.ts dist/types.d.ts
 
 # create browser build for docs
 terser dist/browser.js --compress --mangle --ecma 2015 --output civet.dev/public/__civet.js
