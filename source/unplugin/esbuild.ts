@@ -1,3 +1,3 @@
-import civetUnplugin from '.'
+import civetUnplugin from './unplugin'
 
 export default civetUnplugin.esbuild;

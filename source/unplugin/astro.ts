@@ -6,7 +6,7 @@ interface AstroIntegration {
   }
 }
 
-import civetUnplugin, { type PluginOptions } from '.'
+import civetUnplugin, { type PluginOptions } from './unplugin'
 
 export default function(opts: PluginOptions = {}): AstroIntegration {
   return {
