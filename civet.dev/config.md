@@ -138,8 +138,8 @@ For example, the [directive](#local-configuration-via-directives)
 
 ## Global Configuration within Build Tools
 
-The [unplugin](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin)
-offers [options](https://github.com/DanielXMoore/Civet/tree/main/integration/unplugin#options)
+The [unplugin](https://github.com/DanielXMoore/Civet/blob/main/source/unplugin)
+offers [options](https://github.com/DanielXMoore/Civet/tree/main/source/unplugin#options)
 to specify global config directives (overriding even config files) and
 to specify or disable a config file.  For example:
 

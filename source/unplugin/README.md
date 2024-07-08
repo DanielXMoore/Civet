@@ -133,3 +133,8 @@ interface PluginOptions {
     [`comptime` blocks](https://civet.dev/reference#comptime-blocks)
     at compile time.  Default: `false`.
 - `transformOutput(code, id)`: Adds a custom transformer over jsx/tsx code produced by `civet.compile`. It gets passed the jsx/tsx source (`code`) and filename (`id`), and should return valid jsx/tsx code.
+
+## Examples
+
+See also [full examples of unplugin](../../integration/unplugin-examples).
+in Astro, esbuild, NextJS, Rollup, Vite, and Webpack.

@@ -2,6 +2,7 @@ esbuild := require "esbuild"
 heraPlugin := require "@danielx/hera/esbuild-plugin"
 // Need to use the packaged version because we may not have built our own yet
 civetPlugin := require "../node_modules/@danielx/civet/dist/esbuild-plugin.js"
+civetUnplugin := require("../node_modules/@danielx/civet/dist/esbuild.js").default
 
 path := require "path"
 {access} := require "fs/promises"
@@ -22,11 +23,11 @@ exists := (p) ->
   .catch ->
     false
 
-extensionResolverPlugin := (extensions) ->
+extensionResolverPlugin := (extensions) => {
   name: "extension-resolve"
-  setup: (build) ->
+  setup(build)
     // For relative requires that don't contain a '.'
-    build.onResolve { filter: /\/[^.]*$/ }, (r) ->
+    build.onResolve { filter: /\/[^.]*$/ }, (r) =>
       for extension of extensions
         {path: resolvePath, resolveDir} = r
         p := path.join(resolveDir, resolvePath + `.${extension}`)
@@ -37,6 +38,7 @@ extensionResolverPlugin := (extensions) ->
           return path: p
 
       return undefined
+}
 
 resolveExtensions := extensionResolverPlugin(["civet", "hera"])
 
@@ -45,17 +47,18 @@ resolveExtensions := extensionResolverPlugin(["civet", "hera"])
 // set bundle: true, then rewrite .coffee -> .js and mark as external
 // Also marking everything else as external since we don't want to bundle anything
 rewriteCivetImports := {
-  name: 'rewrite-civet',
-  setup: (build) ->
-    build.onResolve { filter: /.*/ }, (args) ->
-      if (args.importer)
-        path: args.path.replace(/\.civet$/, ".js")
+  name: 'rewrite-civet'
+  setup(build)
+    ext := build.initialOptions.format is "esm" ? ".mjs" : ".js"
+    build.onResolve { filter: /.*/ }, (args) =>
+      if args.importer and /\.civet$/.test args.path
+        path: args.path.replace(/\.civet$/, ext)
         external: true
 }
 
 // Files that need civet imports re-written
 // since they aren't actually bundled
-["cli", "config", "esbuild-plugin"].forEach (name) ->
+for name of ["cli", "esbuild-plugin"]
   build({
     entryPoints: [`source/${name}.civet`]
     bundle: true
@@ -66,14 +69,37 @@ rewriteCivetImports := {
       rewriteCivetImports
       civetPlugin()
     ]
+    external: [
+      '../package.json'
+      '../register.js'
+    ]
     footer:
       // Rewrite default export as CJS exports object,
       // so require('esbuild-plugin') gives the plugin.
       js: name is 'esbuild-plugin' ? 'module.exports = module.exports.default;' : ''
   }).catch -> process.exit 1
 
+for name of ["config"]
+  for format of ["esm", "cjs"]
+    build({
+      entryPoints: [`source/${name}.civet`]
+      bundle: true
+      platform: 'node'
+      format
+      outdir: 'dist'
+      outExtension: ".js": if format == "esm" then ".mjs" else ".js"
+      plugins: [
+        rewriteCivetImports
+        civetPlugin()
+      ]
+      footer:
+        // Rewrite default export as CJS exports object,
+        // so require('esbuild-plugin') gives the plugin.
+        js: name is 'esbuild-plugin' ? 'module.exports = module.exports.default;' : ''
+    }).catch -> process.exit 1
+
 // esm needs to be a module for import.meta
-["esm"].forEach (name) ->
+for name of ["esm"]
   build({
     entryPoints: [`source/${name}.civet`]
     bundle: true
@@ -133,6 +159,34 @@ build({
   ]
 }).catch -> process.exit 1
 
+for format of ["esm", "cjs"]
+  build({
+    entryPoints:
+      for name of [ 'unplugin', 'webpack', 'vite', 'rollup', 'esbuild', 'astro' ]
+        `source/unplugin/${name}.civet`
+    bundle: true
+    sourcemap
+    minify
+    platform: 'node'
+    format
+    external: [
+      '@danielx/civet'
+      'typescript'
+      '@typescript/vfs'
+      'unplugin'
+      'esbuild'
+      './unplugin.civet'
+    ]
+    target: "esNext"
+    outdir: 'dist/unplugin'
+    outExtension: ".js": if format == "esm" then ".mjs" else ".js"
+    plugins: [
+      rewriteCivetImports
+      civetUnplugin
+        ts: 'civet'
+        emitDeclaration: format == "esm"  // only run TypeScript once
+    ]
+  }).catch -> process.exit 1
 
 for format of ["esm", "cjs"]
   build({
@@ -144,7 +198,7 @@ for format of ["esm", "cjs"]
     format
     target: "esNext"
     outdir: 'dist'
-    outExtension: { ".js": if format == "esm" then ".mjs" else ".js" }
+    outExtension: ".js": if format == "esm" then ".mjs" else ".js"
     plugins: [
       civetPlugin({ emitDeclaration: true })
     ]

@@ -1697,7 +1697,7 @@ is not enabled by default, nor can it be enabled via a directive or config file.
 In particular, the VSCode language server will not execute `comptime` blocks.
 You can enable `comptime` evaluation in the CLI using `civet --comptime`,
 and in the
-[unplugin](https://github.com/DanielXMoore/Civet/tree/main/integration/unplugin)
+[unplugin](https://github.com/DanielXMoore/Civet/tree/main/source/unplugin)
 using the `comptime: true` option.
 If not enabled, `comptime` blocks will execute at runtime.
 
