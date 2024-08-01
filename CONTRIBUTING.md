@@ -66,7 +66,8 @@ testCase.only """
 
 A useful trick is to add a `debugger` statement inside a rule handler in
 `source/parser.hera`, or use the `DebugHere` rule to an expansion,
-and then run Node in debug mode via `yarn test --inspect-brk`.
+and then run Node in debug mode via `yarn test --inspect-brk`. (Use Node 20.14
+until [this issue is fixed](https://github.com/nodejs/node/issues/53681))
 You can attach a debugger as follows:
 
 1. In Chrome, open up dev tools.
