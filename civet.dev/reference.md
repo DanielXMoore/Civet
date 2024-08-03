@@ -596,16 +596,35 @@ a !^= b
 a xnor= b
 </Playground>
 
-### Modulo Operator
+### Integer Division and Modulo Operator
+
+`%/` or `÷` is integer division (like `//` in some languages).
+
+<Playground>
+let a = -3
+let b = 5
+let frac = a / b // -0.6
+let div = a %/ b // -1
+console.log frac, div
+</Playground>
 
 `%` can return negative values, while `%%` is always between 0 and the divisor.
 
 <Playground>
 let a = -3
 let b = 5
-let rem = a % b
-let mod = a %% b
+let rem = a % b // -3
+let mod = a %% b // 2
 console.log rem, mod
+</Playground>
+
+Together, these operators implement the
+[division theorem](https://proofwiki.org/wiki/Division_Theorem):
+
+<Playground>
+let a = -3
+let b = 5
+console.assert a === (a %/ b) * b + a %% b
 </Playground>
 
 ### `Object.is`
