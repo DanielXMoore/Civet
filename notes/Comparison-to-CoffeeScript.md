@@ -93,6 +93,8 @@ Things Changed from CoffeeScript
   `a is not in b` → `b.indexOf(a) < 0` instead of `a in b` and `a not in b`;
   `a in b` remains `a in b` as in JS, and `a not in b` → `!(a in b)`
   (unless you specify `"civet coffeeCompat"` or `"civet coffeeOf"`)
+- `//` is a one-line comment; use `%/` for integer division
+  (or specify `"civet coffeeCompat"` or `"civet coffeeDiv"`)
 - `x?.y` now compiles to `x?.y` rather than the `if typeof x !== 'undefined' && x !== null` if check
 - Existential `x?` → `(x != null)` no longer checks for undeclared variables.
 - `x?()` → `x?.()` instead of `if (typeof x === 'function') { x() }`

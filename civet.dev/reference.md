@@ -2390,6 +2390,11 @@ not x == y
 </Playground>
 
 <Playground>
+"civet coffeeDiv"
+x // y
+</Playground>
+
+<Playground>
 "civet coffeeBinaryExistential"
 x ? y
 </Playground>

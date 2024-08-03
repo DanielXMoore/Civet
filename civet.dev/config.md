@@ -62,6 +62,7 @@ For now, we have the following related options:
 | [`coffeeBooleans`](reference#coffeescript-booleans) | `yes`, `no`, `on`, `off` |
 | [`coffeeClasses`](reference#coffeescript-classes) | CoffeeScript-style `class` methods via `->` functions |
 | [`coffeeComment`](reference#coffeescript-comments) | `# single line comments` |
+| [`coffeeDiv`](reference#coffeescript-comments) | `x // y` integer division |
 | [`coffeeDo`](reference#coffeescript-do) | `do ->`; disables [ES6 `do...while` loops](reference#do-while-until-loop) and [Civet `do` blocks](reference#do-blocks) |
 | [`coffeeEq`](reference#coffeescript-operators) | `==` → `===`, `!=` → `!==` |
 | [`coffeeForLoops`](reference#coffeescript-for-loops) | `for in`/`of`/`from` loops behave like they do in CoffeeScript (like Civet's `for each of`/`in`/`of` respectively) |
