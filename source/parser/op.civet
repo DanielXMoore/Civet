@@ -1,6 +1,7 @@
 import type {
   ASTNode
   BinaryOp
+  ChainOp
   Existence
 } from ./types.civet
 
@@ -23,6 +24,8 @@ precedenceOrder := [
   ['|']
   ['^']
   ['&']
+  // NOTE: Extra in-between level for &&ing together relational chains
+  ['chain']
   // NOTE: Equality and inequality merged because of relational chaining
   ['==', '!=', '===', '!==',
    '<', '<=', '>', '>=', 'in', 'instanceof']
@@ -40,6 +43,7 @@ for each ops, prec of precedenceOrder
     precedenceMap.set op, prec
 
 precedenceStep := 1/64
+precedenceAnd := precedenceMap.get("&&")!
 precedenceRelational := precedenceMap.get("==")!
 precedenceCustomDefault := precedenceMap.get("custom")!
 
@@ -136,7 +140,6 @@ function processBinaryOpExpression($0)
         else
           b = recurse b
 
-        // typeof shorthand: x instanceof "String" -> typeof x === "string"
         if op.token is "instanceof"
           // Ensure space around `instanceof`
           if wsOp.length is 0
@@ -144,6 +147,7 @@ function processBinaryOpExpression($0)
           if wsB.length is 0
             wsB = " "
 
+          // typeof shorthand: x instanceof "string" -> typeof x === "string"
           if b is like {
             type: "Literal"
             children: [ {type: "StringLiteral"}, ... ]
@@ -161,6 +165,18 @@ function processBinaryOpExpression($0)
         let children
         if op.type is "PatternTest"
           children = [processPatternTest a, b]
+        else if op.type is "ChainOp"
+          children = [a, wsOp, "&&", wsB, b]
+          // Parenthesize chain if it is surrounded by operator with precedence
+          // in between && (where this will end up being) and relational
+          // (which the chain should simulate).
+          if (start-2 >= 0 and
+              getPrecedence(expandedOps[start-2]) >= precedenceAnd and
+              expandedOps[start-2].token is not '&&') or
+             (end+2 < expandedOps.length and
+              getPrecedence(expandedOps[end+2]) >= precedenceAnd and
+              expandedOps[end+2].token is not '&&')
+            children = ["(", ...children, ")"]
         else if op.call
           wsOp = insertTrimmingSpace(wsOp, "")
 
@@ -230,6 +246,15 @@ function isExistence(exp: ASTNode): Existence?
 function isRelationalOp(op: BinaryOp)
   op.relational or getPrecedence(op) is precedenceRelational
 
+// chainOp is a special BinaryOp that is implemented by JavaScript's &&,
+// but has precedence 'chain' just below relational operators, so in some
+// situations needs to be wrapped in parentheses to simulate that precedence.
+chainOp: ChainOp :=
+  type: 'ChainOp'
+  special: true
+  prec: precedenceMap.get('chain')!
+  assoc: 'right'
+
 /**
 * first is an expression
 * binops is an array of [__, op, __, exp] tuples
@@ -264,7 +289,7 @@ function expandChainedComparisons([first, binops]: [ASTNode, [ASTNode, BinaryOp,
       for each index, k of chains
         if k > 0
           // NOTE: Inserting ws tokens to keep even operator spacing in the resulting array
-          results.push " ", "&&", " "
+          results.push " ", chainOp, " "
 
         binop := binops[index]
         exp := binop[3] = expandExistence binop[3]
@@ -287,7 +312,7 @@ function expandChainedComparisons([first, binops]: [ASTNode, [ASTNode, BinaryOp,
   function expandExistence(exp: ASTNode): ASTNode
     // Expand existence operator like x?
     if existence := isExistence(exp)
-      results.push existence, " ", "&&", " "
+      results.push existence, " ", chainOp, " "
       existence.expression
     else
       exp
