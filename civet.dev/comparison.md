@@ -103,6 +103,8 @@ symbol operators (`+`, `-`, etc.) need to be spaced consistently:
   `<<`, `>>`, `>>>`, `&`, `&&`, `|`, `||`, `??`)
   should either have spaces on both sides, or no space on either side.
   (Currently we also allow space after but not before the operator.)
+* Comma operator is forbidden in some contexts, e.g.,
+  array/object indexing.
 * Type parameters and arguments `<T>` cannot have spaces before them.
 * Regular expression literals cannot start with a space.
   (Use `\ ` or `[ ]`.)
