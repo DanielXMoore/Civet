@@ -105,6 +105,8 @@ symbol operators (`+`, `-`, etc.) need to be spaced consistently:
   (Currently we also allow space after but not before the operator.)
 * Comma operator is forbidden in some contexts, e.g.,
   array/object indexing.  If you run into this limitation, wrap in parentheses.
+* Ternary operator `x ?y :z` needs space before both `?` and `:`
+  (in particular to distinguish from unary postfix `x?`).
 * Type parameters and arguments `<T>` cannot have spaces before them.
 * Regular expression literals cannot start with a space.
   (Use `\ ` or `[ ]`.)
