@@ -1,3 +1,5 @@
+This changelog is generated automatically by `build/changelog.civet`.
+
 ## 0.7.21
 * Fix `..` slice operator precedence [#1332]
 * Fix `&&` chain precedence with bitwise `&`/`|`/`^` [#1334]
