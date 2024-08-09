@@ -6,6 +6,10 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 * add babel cjs [#1351]
 * Automatic changelog creation [#1350]
 
+## 0.7.22
+* add babel cjs [#1351]
+* Automatic changelog creation [#1350]
+
 ## 0.7.21
 * Fix `..` slice operator precedence [#1332]
 * Fix `&&` chain precedence with bitwise `&`/`|`/`^` [#1334]
