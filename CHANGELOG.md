@@ -2,11 +2,9 @@
 
 This changelog is generated automatically by [`build/changelog.civet`](build/changelog.civet).
 
-## Unreleased
-* Automatic changelog creation [#1350]
-
 ## 0.7.22
 * add babel cjs [#1351]
+* Automatic changelog creation [#1350]
 
 ## 0.7.21
 * Fix `..` slice operator precedence [#1332]
@@ -1091,3 +1089,4 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 ## 0.1.1
 
 ## 0.1.0
+
