@@ -502,7 +502,7 @@ obj.key ?= "civet"
 ### Optional Chaining
 
 <Playground>
-obj?.prop
+obj?prop
 obj?[key]
 fun?(arg)
 </Playground>
@@ -510,10 +510,10 @@ fun?(arg)
 ### Optional Chain Assignment
 
 <Playground>
-obj?.prop = value
+obj?prop = value
 obj?[key] = value
 fun?(arg).prop = value
-fun?(arg)?.prop?[key] = value
+fun?(arg)?prop?[key] = value
 </Playground>
 
 ### Existence Checking
@@ -2050,6 +2050,8 @@ type Age = Person::age
 ### Assertions
 
 <Playground>
+data!
+data!prop
 elt as HTMLInputElement
 elt as! HTMLInputElement
 </Playground>
