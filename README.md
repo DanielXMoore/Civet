@@ -11,6 +11,7 @@ Civet
 The modern way to write TypeScript.
 
 - [Documentation](https://civet.dev/)
+- [Changelog](CHANGELOG.md)
 - [Design Philosophy](https://civet.dev/philosophy)
 - [Civet Playground](https://civet.dev/playground)
 - [Civet VSCode Extension](https://marketplace.visualstudio.com/items?itemName=DanielX.civet)
