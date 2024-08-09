@@ -28,9 +28,6 @@ echo "cli()" >> "$BIN"
 chmod +x "$BIN"
 rm dist/cli.js
 
-# babel plugin
-cp source/babel-plugin.mjs dist/babel-plugin.mjs
-
 # create browser build for docs
 terser dist/browser.js --compress --mangle --ecma 2015 --output civet.dev/public/__civet.js
 
