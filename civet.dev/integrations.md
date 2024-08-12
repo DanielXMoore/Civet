@@ -15,6 +15,7 @@ title: Integrations
   - [Older Vite plugin](https://github.com/edemaine/vite-plugin-civet) (no longer recommended)
 - [ESM/CJS loader](https://github.com/DanielXMoore/Civet/blob/main/register.js) for `import`/`require` to support `.civet` files
 - [Babel plugin](https://github.com/DanielXMoore/Civet/blob/main/source/babel-plugin.civet)
+  - Including [React Native / Metro](https://github.com/DanielXMoore/Civet/blob/main/integration/metro)
 - [Jest plugin](https://github.com/DanielXMoore/Civet/blob/main/integration/jest)
 - [Gulp plugin](https://github.com/DanielXMoore/Civet/tree/main/integration/gulp)
 - [Bun plugin](https://github.com/DanielXMoore/Civet/blob/main/source/bun-civet.civet)
