@@ -23,7 +23,7 @@ The modern way to write TypeScript.
   [Vite](https://github.com/edemaine/vite-plugin-civet),
   -->
   [ESM/CJS loader](source/esm.civet),
-  [Babel](source/babel-plugin.mjs),
+  [Babel](source/babel-plugin.civet),
   [Jest](https://github.com/DanielXMoore/Civet/blob/main/integration/jest),
   [Gulp](integration/gulp),
   [Bun](source/bun-civet.civet)
