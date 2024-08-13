@@ -244,6 +244,8 @@ json's "long property"'s `${movie} name`
 
 ## Arrays
 
+### Bracketed
+
 Commas are optional at the ends of lines.
 
 <Playground>
@@ -268,6 +270,30 @@ people := [
   name: "Bob"
   id: 9
 ]
+</Playground>
+
+### Bulleted
+
+Instead of brackets, array items can be specified via `.` or `•` bullets:
+
+<Playground>
+rotate :=
+  . c, -s
+  . s, c
+</Playground>
+
+<Playground>
+func.apply @,
+  • arg1
+  • arg2
+</Playground>
+
+<Playground>
+people :=
+  . name: "Alice"
+    id: 7
+  . name: "Bob"
+    id: 9
 </Playground>
 
 ### Rest
