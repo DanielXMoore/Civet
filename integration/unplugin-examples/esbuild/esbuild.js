@@ -9,6 +9,7 @@ const options = {
     ts: 'esbuild',
     emitDeclaration: true,
   })],
+  sourcemap: true,
 }
 
 if (process.argv.includes('--watch')) {

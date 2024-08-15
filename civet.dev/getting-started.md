@@ -52,7 +52,7 @@ To use TypeScript for type checking, create a `tsconfig.json` file. For example:
     "strict": true,
     "jsx": "preserve",
     "lib": ["es2021"],
-    "moduleResolution": "nodenext",
+    "moduleResolution": "bundler",
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "esModuleInterop": true
@@ -60,7 +60,7 @@ To use TypeScript for type checking, create a `tsconfig.json` file. For example:
   "ts-node": {
     "transpileOnly": true,
     "compilerOptions": {
-      "module": "ES2020"
+      "module": "nodenext"
     }
   }
 }
