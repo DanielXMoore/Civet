@@ -2,9 +2,16 @@
 
 This changelog is generated automatically by [`build/changelog.civet`](build/changelog.civet).
 
-## Unreleased
+## 0.7.23 (2024-08-15, [diff](https://github.com/DanielXMoore/Civet/compare/2911264c014135f356955967f0085352ed569f64...b909f467e263c3a307bad7ee699ebdbf862f2e76), [commit](https://github.com/DanielXMoore/Civet/commit/b909f467e263c3a307bad7ee699ebdbf862f2e76))
 * Optional dot in `?.` and `!.` property access: `x?y` and `x!y` [[#1352](https://github.com/DanielXMoore/Civet/pull/1352)]
 * Changelog generation: fetch PRs mostly in parallel [[#1353](https://github.com/DanielXMoore/Civet/pull/1353)]
+* Allow empty `interface` and `namespace` blocks [[#1356](https://github.com/DanielXMoore/Civet/pull/1356)]
+* Add missing parens in ampersand functions starting with object literal [[#1357](https://github.com/DanielXMoore/Civet/pull/1357)]
+* Changelog: Add version dates and diff/commit links, add PR links [[#1358](https://github.com/DanielXMoore/Civet/pull/1358)]
+* Document how to use with React Native / Metro bundler [[#1359](https://github.com/DanielXMoore/Civet/pull/1359)]
+* Fix arrow being treated as assignment in tight arrow functions [[#1360](https://github.com/DanielXMoore/Civet/pull/1360)]
+* Fix esbuild unplugin sourcemap bug [[#1362](https://github.com/DanielXMoore/Civet/pull/1362)]
+* Bulleted arrays with `.` or `•` [[#1361](https://github.com/DanielXMoore/Civet/pull/1361)]
 
 ## 0.7.22 (2024-08-09, [diff](https://github.com/DanielXMoore/Civet/compare/ffa327c2488dfb20e06b70718afa4b78c4909cde...2911264c014135f356955967f0085352ed569f64), [commit](https://github.com/DanielXMoore/Civet/commit/2911264c014135f356955967f0085352ed569f64))
 * Add CommonJS build of Babel plugin, enabling React Native support [[#1351](https://github.com/DanielXMoore/Civet/pull/1351)]
