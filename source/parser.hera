@@ -389,7 +389,7 @@ CommaDelimiter
 # (like CommaDelimiter)
 ArgumentList
   # Check for same line arguments then nested arguments
-  ArgumentPart ( CommaDelimiter !EOS _? ArgumentPart )* ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+ ->
+  ArgumentPart ( CommaDelimiter !EOS _? ArgumentPart )* ( CommaDelimiter ( NestedBulletedArray / NestedImplicitObjectLiteral / NestedArgumentList ) )+ ->
     return [
       $1,
       ...$2.flatMap(([comma, eos, ws, arg]) => [comma, prepend(ws, arg)]),
@@ -398,8 +398,10 @@ ArgumentList
       ),
     ]
   # NOTE: Added nested arguments on separate new lines
+  NestedBulletedArray ->
+    return [ trimFirstSpace($1) ]
   NestedImplicitObjectLiteral ->
-    return [ insertTrimmingSpace($1, '') ]
+    return [ trimFirstSpace($1) ]
   NestedArgumentList
   # NOTE: Eliminated left recursion
   _? ArgumentPart ( CommaDelimiter _? ArgumentPart )* ->
@@ -411,7 +413,7 @@ ArgumentList
 # NOTE: ArgumentList variant that forbids top-level pipeline operators
 NonPipelineArgumentList
   # Check for same line arguments then nested arguments
-  !EOS NonPipelineArgumentPart ( CommaDelimiter !EOS _? NonPipelineArgumentPart )* ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )+ ->
+  !EOS NonPipelineArgumentPart ( CommaDelimiter !EOS _? NonPipelineArgumentPart )* ( CommaDelimiter ( NestedBulletedArray / NestedImplicitObjectLiteral / NestedArgumentList ) )+ ->
     return [
       $2,
       ...$3.flatMap(([comma, eos, ws, arg]) => [comma, prepend(ws, arg)]),
@@ -420,9 +422,9 @@ NonPipelineArgumentList
       ),
     ]
   # NOTE: Added nested arguments on separate new lines
-  NestedImplicitObjectLiteral ( CommaDelimiter ( NestedImplicitObjectLiteral / NestedArgumentList ) )* ->
+  ( NestedBulletedArray / NestedImplicitObjectLiteral ) ( CommaDelimiter ( NestedBulletedArray / NestedImplicitObjectLiteral / NestedArgumentList ) )* ->
     return [
-      insertTrimmingSpace($1, ''),
+      trimFirstSpace($1),
       ...$2.flatMap(([comma, args]) =>
         Array.isArray(args) ? [comma, ...args] : [comma, args]
       ),
@@ -841,12 +843,13 @@ PipelineTailItem
 # https://262.ecma-international.org/#prod-PrimaryExpression
 PrimaryExpression
   ObjectLiteral
+  # NOTE: ObjectLiteral needs to be before ArrayLiteral to support `[x]: y`
+  ArrayLiteral
   ThisLiteral
   TemplateLiteral
   # NOTE: TemplateLiteral must be before Literal, so that CoffeeScript
   # interpolated strings get checked first before StringLiteral.
   Literal
-  ArrayLiteral
   FunctionExpression # NOTE: Must be before IdentiferExpression so `async function ...` isn't parsed as `async(function ...)`
   IdentifierReference # NOTE: Must be below ObjectLiteral for inline objects `a: 1, b: 2` to not be shadowed by matching the first identifier
   ClassExpression
@@ -888,7 +891,7 @@ ParenthesizedExpression
 
 Placeholder
   # Partial function application: f(., x) -> $ => f($, x)
-  Dot:dot !/(?:\p{ID_Continue}|[\u200C\u200D$.#])/ PlaceholderTypeSuffix?:typeSuffix ->
+  Dot:dot !/\p{ID_Continue}|[\u200C\u200D$.#]/ PlaceholderTypeSuffix?:typeSuffix ->
     return {
       type: "Placeholder",
       subtype: ".",
@@ -1480,14 +1483,14 @@ SliceParameters
     }
 
 AccessStart
-  PropertyAccessModifier?:modifier Dot:dot !Dot ->
+  PropertyAccessModifier?:modifier Dot:dot ![.\s] ->
     return {
       type: "AccessStart",
       children: modifier ? [modifier, dot] : [dot],
       optional: modifier?.token === "?",
     }
   # NOTE: ?x -> ?.x, !x -> !.x shorthand
-  PropertyAccessModifier:modifier InsertDot:dot !Dot ->
+  PropertyAccessModifier:modifier InsertDot:dot ![.\s] ->
     return {
       type: "AccessStart",
       children: [modifier, dot],
@@ -1677,7 +1680,7 @@ NonEmptyParameters
             })
             append(param)
           } else {
-            tt = insertTrimmingSpace(param, "")
+            tt = trimFirstSpace(param)
             if (before.length || rest) { // moving ThisType to front
               let delim = tt.children.at(-1)
               if (Array.isArray(delim)) delim = delim.at(-1)
@@ -1714,7 +1717,7 @@ NonEmptyParameters
       let blockPrefix
       if (after.length) {
         blockPrefix = {
-          children: ["[", insertTrimmingSpace(after, ""), "] = ", restIdentifier, ".splice(-", after.length.toString(), ")"],
+          children: ["[", trimFirstSpace(after), "] = ", restIdentifier, ".splice(-", after.length.toString(), ")"],
           names: after.flatMap(p => p.names)
         }
       }
@@ -2264,7 +2267,7 @@ OperatorDeclaration
     decl.names.forEach((name) => state.operators.set(name, behavior))
     return {
       ...decl,
-      children: [ insertTrimmingSpace(w, ""), ...decl.children ]
+      children: [ trimFirstSpace(w), ...decl.children ]
     }
   # `operator id(a, b) {...}` defines a function
   OperatorSignature:signature BracedBlock:block ->
@@ -2296,7 +2299,7 @@ OperatorSignature
     if (!func) {
       func = { $loc: op.$loc, token: "function" }
     } else {
-      func = [ insertTrimmingSpace(func[0], ""), func[1] ]
+      func = [ trimFirstSpace(func[0]), func[1] ]
     }
     return {
       type: "FunctionSignature",
@@ -2588,8 +2591,8 @@ NonSingleBracedBlock
   # NOTE: Added indentation based implied braces
   ImplicitNestedBlock
 
-  # Immediate nested object literal
-  InsertOpenBrace:o NestedImplicitObjectLiteral:s InsertCloseBrace:c ->
+  # Immediate nested array/object literal
+  InsertOpenBrace:o ( NestedBulletedArray / NestedImplicitObjectLiteral ):s InsertCloseBrace:c ->
     const expressions = [s]
     return {
       type: "BlockStatement",
@@ -2758,7 +2761,7 @@ UpcomingAssignment
 # https://262.ecma-international.org/#prod-ArrayLiteral
 ArrayLiteral
   # perf: assertion to exit early
-  /(?=\[)/ _ArrayLiteral -> $2
+  /(?=\[|\s*[.•])/ _ArrayLiteral -> $2
 
 _ArrayLiteral
   # NOTE: Check ArrayBindingPattern case of lhs destructuring
@@ -2786,6 +2789,7 @@ _ArrayLiteral
       children,
       names,
     }
+  NestedBulletedArray
 
 RangeExpression
   ExtendedExpression:s __:ws ( DotDotDot / DotDot ):range ExtendedExpression:e ->
@@ -2901,21 +2905,20 @@ NestedElementList
 NestedElement
   Nested:indent ElementList:list ArrayElementDelimiter:delimiter ->
     const {length} = list
-    if (length) {
-      // Prepend indent to first element and append delimiter to last element
-      return list.map((e, i) => {
-        if (i === 0 && i === length - 1) {
-          return {...e, children: [indent, ...e.children, delimiter]}
-        }
-        if (i === 0) {
-          return {...e, children: [indent, ...e.children]}
-        }
-        if (i === length - 1) {
-          return {...e, children: [...e.children, delimiter]}
-        }
-        return e
-      })
-    }
+    if (!length) return $skip
+    // Prepend indent to first element and append delimiter to last element
+    return list.map((e, i) => {
+      if (i === 0 && i === length - 1) {
+        return {...e, children: [indent, ...e.children, delimiter]}
+      }
+      if (i === 0) {
+        return {...e, children: [indent, ...e.children]}
+      }
+      if (i === length - 1) {
+        return {...e, children: [...e.children, delimiter]}
+      }
+      return e
+    })
 
 # Delimiter after ElementList (not within ElementList which just uses Comma)
 ArrayElementDelimiter
@@ -2937,6 +2940,7 @@ ElementListWithIndentedApplicationForbidden
 # https://262.ecma-international.org/#prod-ElementList
 # NOTE: Modified and simplified from the spec
 ElementList
+  BulletedArray -> [$1]
   # NOTE: Forbid EOS to prevent eating indentation in Expression
   !EOS ArrayElementExpression:first ElementListRest*:rest ->
     if (rest.length) {
@@ -3001,6 +3005,93 @@ ArrayElementExpression
       type: "ElisionElement",
       children: [],
     }
+
+# NOTE: Nested bulleted array starts with an indentation.
+NestedBulletedArray
+  ( InsertSpace InsertOpenBracket ):open PushIndent NestedArrayBullet*:content InsertCloseBracket:close PopIndent ->
+    if (!content.length) return $skip
+    content = content.flat() // combine bullets into one array
+
+    // Remove implicit comma from last element
+    const { children } = content[content.length - 1]
+    if (children.at(-1).implicit) children.pop()
+
+    return {
+      type: "ArrayExpression",
+      children: [...open, ...content, close],
+    }
+
+# NOTE: Bulleted array intended for beginning of lines,
+# when leading indentation has already been consumed.
+BulletedArray
+  InsertOpenBracket:open ( ArrayBullet NestedArrayBullet* )?:content InsertCloseBracket:close ->
+    if (!content) return $skip
+    content = [
+      ...trimFirstSpace(content[0]), // replace first space with bracket
+      ...content[1].flat(),
+    ]
+
+    // Remove implicit comma from last element
+    const { children } = content[content.length - 1]
+    if (children.at(-1).implicit) children.pop()
+
+    return {
+      type: "ArrayExpression",
+      children: [open, ...content, close],
+    }
+
+NestedArrayBullet
+  Nested:indent ArrayBullet:list ->
+    // Prepend indent to first element
+    return list.map((e, i) =>
+      i === 0 ? { ...e, children: [indent, ...e.children] } : e)
+
+ArrayBullet
+  BulletIndent:bullet ( ElementList ArrayBulletDelimiter )?:content PopIndent ->
+    if (!content) return $skip
+    let [ list, delimiter ] = content
+    // Wrap BulletedArray in array for consistency
+    if (list.type === "ArrayExpression") list = [list]
+    if (!list.length) return $skip
+    // Prepend bullet to first element and append delimiter to last element
+    list = list.slice()
+    list[0] = { ...list[0], children: [bullet, ...list[0].children] }
+    if (delimiter) {
+      const last = list.length - 1
+      list[last] = { ...list[last], children: [...list[last].children, delimiter] }
+    }
+    return list
+
+# Like ArrayElementDelimiter but without `__ Comma` which eats unindented commas
+ArrayBulletDelimiter
+  _? Comma
+  &EOS InsertComma -> $2
+
+# NOTE: Unicode bullet doesn't need a space, but ASCII bullet does
+BulletIndent
+  ( "•" [ \t]* ) / ( "." [ \t]+ ) ->
+    const [ bullet, ws ] = $1
+    const indent = {
+      token: " " + ws,
+      $loc,
+      level: getIndentLevel(" ".repeat(state.currentIndent.level) + bullet + ws, config.tab)
+    }
+    if (config.verbose) console.log("pushing bullet indent", indent)
+    state.indentLevels.push(indent)
+    return indent
+
+BulletedArrayWithTrailing
+  BulletedArray:array AllowedTrailingCallExpressions?:trailing ( NotDedented Pipe __ PipelineTailItem )*:pipeline ->
+    if (trailing) {
+      array = [ array, trailing ]
+    }
+    if (pipeline.length) {
+      array = {
+        type: "PipelineExpression",
+        children: [ undefined, array, pipeline ],
+      }
+    }
+    return array
 
 # https://262.ecma-international.org/#prod-ObjectLiteral
 # NOTE: Slightly simplified from spec
@@ -3454,14 +3545,14 @@ MethodDefinition
             let v
             switch (type) {
               case "Identifier":
-                v = insertTrimmingSpace(p, "")
+                v = trimFirstSpace(p)
                 break
               case "Property":
                 const { value } = p
                 if (value.privateShorthand) {
                   v = value.privateId
                 } else {
-                  v = insertTrimmingSpace(value, "")
+                  v = trimFirstSpace(value)
                 }
                 break
             }
@@ -3978,6 +4069,8 @@ ModuleItem
 # https://262.ecma-international.org/#prod-StatementListItem
 StatementListItem
   Declaration
+  # NOTE: Allow bulleted array literals as top-level statements.
+  BulletedArrayWithTrailing:array
   # NOTE: Allow multi-line implicit object literals as top-level statements.
   # Leave $: for Svelte labels though.
   !"$:" ImplicitObjectLiteral ->
@@ -4201,7 +4294,7 @@ DoWhileStatement
 
 DoStatement
   Do NoPostfixBracedOrEmptyBlock:block ->
-    block = insertTrimmingSpace(block, "")
+    block = trimFirstSpace(block)
     return {
       type: "DoStatement",
       children: [block],
@@ -4212,7 +4305,7 @@ ComptimeStatement
   Comptime NoPostfixBracedOrEmptyBlock:t ElseClause?:e ->
     // Wrap the else block if present and comptime is off
     let block = !initialConfig.comptime && e?.block || t
-    block = insertTrimmingSpace(block, "")
+    block = trimFirstSpace(block)
     return {
       type: "ComptimeStatement",
       children: [block],
@@ -4285,7 +4378,7 @@ ForStatementControl
           ["", {
             type: "IfStatement",
             then: block,
-            children: ["if (!(", insertTrimmingSpace(condition, ""), ")) ", block],
+            children: ["if (!(", trimFirstSpace(condition), ")) ", block],
           }, ";"]
         ],
       }
@@ -4300,8 +4393,8 @@ CoffeeForStatementParameters
   # NOTE: Coffee for loops can't have parens
   ( Await __ )? InsertOpenParen:open CoffeeForDeclaration:declaration CoffeeForIndex?:index __ ( In / Of / From ):kind ExpressionWithObjectApplicationForbidden:exp ( _? By ExpressionWithObjectApplicationForbidden )?:step InsertCloseParen:close ->
     let blockPrefix = []
-    exp = insertTrimmingSpace(exp, "")
-    declaration = insertTrimmingSpace(declaration, "")
+    exp = trimFirstSpace(exp)
+    declaration = trimFirstSpace(declaration)
 
     if (kind.token === "from") {
       if (step) {
@@ -4348,14 +4441,14 @@ CoffeeForStatementParameters
         assignmentNames = [...varRef.names]
 
       if (index) {
-        index = insertTrimmingSpace(index, "")
+        index = trimFirstSpace(index)
         indexAssignment = [index, "="]
         assignmentNames./**/push(...index.names)
       }
 
       const expRefDec = (expRef !== exp)
         // Trim a single leading space if present
-        ? [expRef, " = ", insertTrimmingSpace(exp, ""), ", "]
+        ? [expRef, " = ", trimFirstSpace(exp), ", "]
         : []
 
       blockPrefix./**/push(["", {
@@ -4374,7 +4467,7 @@ CoffeeForStatementParameters
 
       if (step) {
         let [stepWs, , stepExp] = step
-        stepWs = insertTrimmingSpace(stepWs, "")
+        stepWs = trimFirstSpace(stepWs)
         if (stepExp.type === "Literal") {
           increment = [" +=", ...stepWs, stepExp]
           // Negative step loops are reversed
@@ -4413,7 +4506,7 @@ CoffeeForStatementParameters
 
 CoffeeForIndex
   _?:ws1 Comma _?:ws2 BindingIdentifier:id ->
-    ws2 = insertTrimmingSpace(ws1, "")
+    ws2 = trimFirstSpace(ws1)
 
     return {
       ...id,
@@ -4629,7 +4722,7 @@ CaseExpressionList
   ( _? CaseExpression InsertColon ):first ( __ Comma CaseExpression InsertColon )*:rest ->
     // Convert comma separated expression list to `case <exp>:`
     const result = rest.map(([ws, _comma, exp, col]) => {
-      exp = insertTrimmingSpace(exp, "")
+      exp = trimFirstSpace(exp)
 
       if (ws.length) return [insertTrimmingSpace("case ", ws), exp, col]
       return ["case ", exp, col]
@@ -4712,7 +4805,7 @@ Condition
   InsertOpenParen:open ExpressionWithObjectApplicationForbidden:expression InsertCloseParen:close ->
     // Don't double wrap parethesized expressions
     if (expression.type === "ParenthesizedExpression") return expression
-    expression = insertTrimmingSpace(expression, "")
+    expression = trimFirstSpace(expression)
     return {
       type: "ParenthesizedExpression",
       children: [open, expression, close],
@@ -4933,18 +5026,21 @@ Debugger
     return { $loc, token: $1 }
 
 MaybeNestedNonPipelineExtendedExpression
+  NestedBulletedArray
   PushIndent ( Nested NonPipelineExtendedExpression )? PopIndent ->
     if ($3) return $3
     return $skip
   NonPipelineExtendedExpression
 
 MaybeNestedPostfixedExpression
+  NestedBulletedArray
   PushIndent ( Nested PostfixedExpression )? PopIndent ->
     if ($3) return $3
     return $skip
   PostfixedExpression
 
 MaybeNestedExtendedExpression
+  NestedBulletedArray
   PushIndent ( Nested ExtendedExpression )? PopIndent ->
     if ($3) return $3
     return $skip
@@ -4956,8 +5052,8 @@ MaybeNestedExtendedExpression
 MaybeParenNestedExtendedExpression
   # Not nested case
   !EOS ExtendedExpression -> $2
-  # Avoid wrapping object return value in parentheses.
-  &EOS ObjectLiteral -> $2
+  # Avoid wrapping array/object return value in parentheses.
+  &EOS ( ArrayLiteral / ObjectLiteral ) -> $2
   # Value after `return` needs to be wrapped in parentheses
   # if it starts on another line.
   &EOS InsertSpace InsertOpenParen PushIndent ( Nested ExtendedExpression ):exp PopIndent InsertNewline InsertIndent InsertCloseParen ->
@@ -5077,7 +5173,7 @@ TypeAndImportSpecifier
     return {
       ...spec,
       children: [
-        ws, insertTrimmingSpace(spec[0], ""),
+        ws, trimFirstSpace(spec[0]),
         spec.children.slice(1),
       ],
     }
@@ -5720,7 +5816,7 @@ NonNewlineWhitespace
 # Whitespace / comments with a single leading space trimmed off if possible
 Trimmed_
   _:ws ->
-    return insertTrimmingSpace(ws, "")
+    return trimFirstSpace(ws)
 
 # Optional whitespace including newlines and comments
 __
@@ -7349,7 +7445,7 @@ TypeElement
     const [ space, dots ] = spaceDots
     const ws = getTrimmingSpace(type)
     if (!ws) return [ dots, space, type ]
-    return [ ws, dots, space, insertTrimmingSpace(type, '') ]
+    return [ ws, dots, space, trimFirstSpace(type) ]
 
 NestedTypeList
   PushIndent NestedType*:types PopIndent ->
@@ -7610,7 +7706,7 @@ InsertCloseBracket
 
 InsertComma
   "" ->
-    return { $loc, token: "," }
+    return { $loc, token: ",", implicit: true }
 
 InsertSpaceEquals
   "" ->
