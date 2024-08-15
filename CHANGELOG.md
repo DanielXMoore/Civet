@@ -2,7 +2,7 @@
 
 This changelog is generated automatically by [`build/changelog.civet`](build/changelog.civet).
 
-## 0.7.23 (2024-08-15, [diff](https://github.com/DanielXMoore/Civet/compare/2911264c014135f356955967f0085352ed569f64...b909f467e263c3a307bad7ee699ebdbf862f2e76), [commit](https://github.com/DanielXMoore/Civet/commit/b909f467e263c3a307bad7ee699ebdbf862f2e76))
+## 0.7.23 (2024-08-15, [diff](https://github.com/DanielXMoore/Civet/compare/2911264c014135f356955967f0085352ed569f64...a57ef22f8a53c53268afeacf570ab41a80711434), [commit](https://github.com/DanielXMoore/Civet/commit/a57ef22f8a53c53268afeacf570ab41a80711434))
 * Optional dot in `?.` and `!.` property access: `x?y` and `x!y` [[#1352](https://github.com/DanielXMoore/Civet/pull/1352)]
 * Changelog generation: fetch PRs mostly in parallel [[#1353](https://github.com/DanielXMoore/Civet/pull/1353)]
 * Allow empty `interface` and `namespace` blocks [[#1356](https://github.com/DanielXMoore/Civet/pull/1356)]
