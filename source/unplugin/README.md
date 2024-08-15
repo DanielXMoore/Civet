@@ -97,7 +97,11 @@ interface PluginOptions {
   ts?: 'civet' | 'esbuild' | 'tsc' | 'preserve';
   typecheck?: boolean | string;
   cache?: boolean;
-  comptime?: boolean;
+  parseOptions?: {
+    comptime?: boolean;
+    coffeeCompat?: boolean;
+    // ... any other Civet configuration option
+  }
   transformOutput?: (
     code: string,
     id: string
