@@ -1249,6 +1249,16 @@ unless tired
 civet.speed = 15 if civet.rested
 </Playground>
 
+For complex conditions that involve indented function application,
+the expression can be indented:
+
+<Playground>
+sleep() unless
+  (or)
+    coffee
+    relaxed
+</Playground>
+
 ### Switch
 
 <Playground>
