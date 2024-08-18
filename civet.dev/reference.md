@@ -1192,7 +1192,34 @@ else
   sleep()
 </Playground>
 
-### One-Line If/Else
+The condition can also be indented:
+
+<Playground>
+if
+  (or)
+    coffee
+    relaxed
+  code()
+else
+  sleep()
+</Playground>
+
+### If/Then/Else
+
+For complex conditions that involve indented function application,
+you can add an explicit `then`:
+
+<Playground>
+if (or)
+  coffee
+  relaxed
+then
+  code()
+else
+  sleep()
+</Playground>
+
+### One-Line If/Then/Else
 
 <Playground>
 if coffee or relaxed then code() else sleep()
