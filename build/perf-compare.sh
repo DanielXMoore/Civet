@@ -3,7 +3,7 @@
 # Simple performance comparison
 
 count=10
-testFile=source/lib.civet
+testFile=source/**/*.civet
 
 function get_times {
   cmd=$1
@@ -11,7 +11,7 @@ function get_times {
 
   times=()
   for ((i = 1; i <= count; i++)) {
-    time=$( (time $cmd < $testFile > /dev/null) 2>&1 | awk '/real/ {print $2}' | awk -Fm '{print $1*60+$2}' )
+    time=$( (time $cmd -c $testFile -o /dev/null) 2>&1 | awk '/real/ {print $2}' | awk -Fm '{print $1*60+$2}' )
     echo $time
     times+=($time)
   }
