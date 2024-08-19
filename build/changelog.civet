@@ -1,4 +1,5 @@
 // Usage: `npm run changelog` or `civet build/changelog.civet`
+// Or `yarn changelog --gh` to run authenticated via `gh` CLI tool
 
 { spawnSync } from child_process
 { readFileSync, writeFileSync } from fs
@@ -13,6 +14,7 @@ process.chdir join (dirname fileURLToPath import.meta.url), '..'
 function run(command: string, args: string[], options?: object): string
   sub := spawnSync command, args, {
     encoding: 'utf8'
+    maxBuffer: 32 * 1024 * 1024  // 32 MB
     ...options
   }
   if sub.error
@@ -139,26 +141,68 @@ interface PRRecord
   number: number
   title: string
 
-function ghPR(page: number): Promise<PRRecord[] & { numPages: number }>
-  response := fetch `https://api.github.com/repos/DanielXMoore/Civet/pulls?state=closed&per_page=100&page=${page}`,
-    headers:
-      Accept: 'application/vnd.github+json'
-      'X-GitHub-Api-Version': '2022-11-28'
-  |> await
-  json := response.json()
-  |> await
+function ghAPI(endpoint: string, fields: Record<string, string>, headers: Record<string, string>): object
+  let json: object?
 
+  if process.argv.includes '--gh'
+    args := [
+      'api'
+      endpoint
+      '--include'  // header output
+      '--method', 'GET'
+    ]
+    for key, value in fields
+      args.push '--raw-field', `${key}=${value}`
+    for key, value in headers
+      args.push '--header', `${key}: ${value}`
+
+    response := run 'gh', args
+    [header, body] := response.split /\r?\n\r?\n/, 2
+    json = body
+    |> .replace /^[^]*?\n\n/, ''  // remove headers
+    |> JSON.parse
+
+    if match := header.match /(?:^|\n)Link:.*?<([^>]+)>; rel="last"/
+      if [, numPages] := match.1.match /[?&]page=([0-9]+)/
+        json!.numPages = numPages
+
+  else
+    url .= 'https://api.github.com'
+    url += '/' unless endpoint.startsWith '/'
+    url += endpoint
+    url += '?'
+    url += (
+      for key, value in fields
+        `${key}=${value}`
+    ).join '&'
+    response := fetch url, headers
+    |> await
+    json = response.json()
+    |> await
+
+    if match := response.headers.get('link')?.match /<([^>]+)>; rel="last"/
+      if [, numPages] := match.1.match /&page=([0-9]+)/
+        json.numPages = numPages
+
+  json = json!
   if json.message?
     console.error `API error: ${json.message} ${
       if json.documentation_url then `[${json.documentation_url}]` else ''
     }`
+    unless process.argv.includes '--gh'
+      console.log `Try authenticating with 'gh' CLI tool and run with --gh flag`
     process.exit 1
 
-  if match := response.headers.get('link')?.match /<([^>]+)>; rel="last"/
-    if [, numPages] := match.1.match /&page=([0-9]+)/
-      json.numPages = numPages
-
   json
+
+function ghPR(page: number): Promise<PRRecord[] & { numPages: number }>
+  ghAPI '/repos/DanielXMoore/Civet/pulls',
+    state: 'closed'
+    per_page: '100'
+    page: page.toString()
+  ,
+    Accept: 'application/vnd.github+json'
+    'X-GitHub-Api-Version': '2022-11-28'
 
 prData := await ghPR 1
 if prData.numPages? > 1
