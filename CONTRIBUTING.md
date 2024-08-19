@@ -168,3 +168,13 @@ Feel free to ask us questions you have!
 The easiest way is to join our
 [Discord server](https://discord.gg/xkrW9GebBc) and send a message to the
 relevant channel (e.g. `#compiler` for questions about the parser).
+
+## Releasing to NPM
+
+1. Increment `version` in `package.json` (e.g. by running `yarn version`)
+2. Run `npm publish`, which will:
+   * `yarn build` to build for release
+   * `yarn test` to make sure nothing is broken
+   * `yarn changelog --release` to update `CHANGELOG.md`
+     and (ask to) create a release commit and tag it
+   * Submit files to NPM (usually requiring 2FA)
