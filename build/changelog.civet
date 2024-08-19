@@ -1,7 +1,7 @@
 // Usage: `npm run changelog` or `civet build/changelog.civet`
 
 { spawnSync } from child_process
-{ writeFileSync } from fs
+{ readFileSync, writeFileSync } from fs
 { dirname, join } from path
 { fileURLToPath } from url
 
@@ -62,6 +62,19 @@ commitToVersion: Record<string, Version> := {}
 for each version of versions
   commitToVersion[version.commit] = version if version.commit?
 
+// Check for uncommitted local changes
+
+let uncommitted: Version?
+
+if [, version] := readFileSync('package.json', encoding: 'utf8').match /^  "version": "([^"]+)"/m
+  unless versions.find .version is version
+    console.log `+ uncommitted version ${version}`
+    now := new Date
+    versions.push uncommitted = {
+      version
+      date: `${now.getFullYear()}-${(now.getMonth()+1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`
+    }
+
 // Tag version commits
 
 existingTag: Map<string, string> := new Map  // tag -> commit
@@ -109,7 +122,10 @@ for each line of prLogs.split '\n'
     pr = undefined
 
 if prs#
-  versions.push { prs, version: 'Unreleased' }
+  if uncommitted?
+    uncommitted.prs = prs
+  else
+    versions.push { prs, version: 'Unreleased' }
 
 // Look up current PR titles
 
@@ -146,11 +162,13 @@ changelog .= '''\
 # Civet Changelog
 
 This changelog is generated automatically by [`build/changelog.civet`](build/changelog.civet).
+For each version of Civet, it lists and links to all incorporated PRs,
+as well as a full diff and commit list.
 
 
 '''
 
-function tagOrCommit(version: Version?): string
+function tagOrCommit(version: Version?): string?
   return unless version?
   version.tag ?? version.commit ?? '???'
 
@@ -160,7 +178,7 @@ for each version, i of versions
   prevCommit := tagOrCommit versions[i+1]
   details := [
     version.date
-    if version.commit? and prevCommit?
+    if (version.tag? or version.commit?)? and prevCommit?
       `[diff](${repoUrl}/compare/${prevCommit}...${tagOrCommit version})`
     if version.tag?
       `[commits](${repoUrl}/commits/${version.tag})`
@@ -169,10 +187,13 @@ for each version, i of versions
   ].filter &?
   detail := if details# then ` (${details.join ', '})` else ''
   changelog += `## ${version.version}${detail}\n`
-  for each pr of version.prs!
+  for each pr of version.prs ?? []
     changelog += `* ${prTitle[pr] ?? ''} [[#${pr}](${repoUrl}/pull/${pr})]\n`
     total++
   changelog += '\n'
 
 writeFileSync 'CHANGELOG.md', changelog, encoding: 'utf8'
 console.log `Wrote ${total} changes to CHANGELOG.md`
+
+if uncommitted?
+  console.log `!! Don't forget to do a release commit with new package.json and CHANGELOG.md`
