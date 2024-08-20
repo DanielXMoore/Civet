@@ -1,6 +1,15 @@
 # Civet Changelog
 
 This changelog is generated automatically by [`build/changelog.civet`](build/changelog.civet).
+For each version of Civet, it lists and links to all incorporated PRs,
+as well as a full diff and commit list.
+
+## Unreleased ([diff](https://github.com/DanielXMoore/Civet/compare/v0.7.23...???))
+* Fix placeholder expressions at head of pipeline [[#1366](https://github.com/DanielXMoore/Civet/pull/1366)]
+* Support length shorthand `#` when defining objects [[#1367](https://github.com/DanielXMoore/Civet/pull/1367)]
+* Generate tags for Civet releases [[#1368](https://github.com/DanielXMoore/Civet/pull/1368)]
+* Indented if/unless conditions to enable indented function calls (e.g. `(and)`) [[#1364](https://github.com/DanielXMoore/Civet/pull/1364)]
+* Indented calls in `if` conditions with explicit `then` clause (#1090) [[#1369](https://github.com/DanielXMoore/Civet/pull/1369)]
 
 ## 0.7.23 (2024-08-15, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.22...v0.7.23), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.23))
 * Optional dot in `?.` and `!.` property access: `x?y` and `x!y` [[#1352](https://github.com/DanielXMoore/Civet/pull/1352)]
