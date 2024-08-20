@@ -1131,6 +1131,11 @@ export operator has(x, y)
   y contains x
 </Playground>
 
+<Playground>
+import operator { plus, minus } from ops
+a plus b minus c
+</Playground>
+
 By default, custom infix operators have a precedence between relational and
 arithmetic operators, and are left-associative:
 
@@ -1148,6 +1153,12 @@ operator dot looser (*) (p, q)
   p.x * q.x + p.y * q.y
 operator looser dot DOT := dot
 a + b * c dot d * e DOT f * g dot h * i + j
+</Playground>
+
+<Playground>
+operator { plus same (+), times same (*) }
+  from ops
+a times b plus c times d
 </Playground>
 
 You can specify a custom associativity with
