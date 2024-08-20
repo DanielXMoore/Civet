@@ -1261,16 +1261,45 @@ sleep() unless
 
 ### Switch
 
+`switch` can be used in three different forms:
+[`case`](#case), [`when`](#when), and [pattern matching](#pattern-matching).
+You can mix `case` and `when`, but not the other types.
+
+### Case
+
+Similar to JavaScript, but with optional punctuation and
+multiple matches in one line:
+
 <Playground>
 switch dir
-  when '>' then civet.x++
-  when '<'
-    civet.x--
-    civet.x = 0 if civet.x < 0
-  else civet.waiting += 5
+  case 'N'
+  case 'S'
+    console.log 'vertical'
+    break
+  case 'E', 'W'
+    console.log 'horizontal'
+  default
+    console.log 'horizontal or unknown'
 </Playground>
 
-With implicit `return`:
+### When
+
+`when` is a nicer version of `case`, with an automatic `break` at the end
+(cancelable with `continue switch`)
+and a braced block to keep variable declarations local to the branch:
+
+<Playground>
+switch dir
+  when 'N', 'S'
+    console.log 'vertical'
+  when 'E', 'W'
+    console.log 'horizontal'
+    continue switch
+  else
+    console.log 'horizontal or unknown'
+</Playground>
+
+An example with implicit `return` and same-line values using `then`:
 
 <Playground>
 getX := (civet: Civet, dir: Dir) =>
