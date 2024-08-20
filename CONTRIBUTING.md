@@ -178,3 +178,4 @@ relevant channel (e.g. `#compiler` for questions about the parser).
    * `yarn changelog --release` to update `CHANGELOG.md`
      and (ask to) create a release commit and tag it
    * Submit files to NPM (usually requiring 2FA)
+3. `git push --follow-tags` to push new commit and tag
