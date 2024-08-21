@@ -139,15 +139,6 @@ obj :=
     y: 'cool'
 </Playground>
 
-`$:` behaves specially for Svelte compatibility.  If you want a key of `$`,
-wrap it in quotes or use explicit braces.
-
-<Playground>
-$: document.title = title
-"$": "dollar"
-{$: "dollar"}
-</Playground>
-
 ### Braced Literals
 
 With braces, the `{x}` shorthand generalizes to any
@@ -1683,12 +1674,7 @@ while item?
 ::: info
 Labels have the colon on the left to avoid conflict with implicit object
 literals.  The colons are optional in `break` and `continue`.
-As a special case, Svelte's `$:` can be used with the colon on the right.
 :::
-
-<Playground>
-$: document.title = title
-</Playground>
 
 ## Other Blocks
 

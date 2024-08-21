@@ -206,14 +206,11 @@ e.g., by appending an underscore.
 ## Labels
 
 In Civet, labels are written `:label` instead of `label:`.
-(The one exception is `$:` which can be written as `$:`
-for Svelte compatibility.)
 
 <Playground>
 :label while (true) {
   break label
 }
-$: document.title = title
 </Playground>
 
 (This is to enable most object literals not needing braces.)
