@@ -233,6 +233,40 @@ mario?'s name
 json's "long property"'s `${movie} name`
 </Playground>
 
+### Length Shorthand
+
+The property access `.#` or just `#` is short for `.length`:
+
+<Playground>
+array.#
+array#
+"a string also".#
+</Playground>
+
+On its own, `#` is shorthand for `this.length`:
+
+<Playground>
+class List
+  push(item)
+    @[#] = item
+  wrap(index)
+    @[index %% #]
+</Playground>
+
+`# in` checks for the `"length"` property:
+
+<Playground>
+# in x
+</Playground>
+
+`#:` defines the `"length"` property in an object literal:
+
+<Playground>
+array := {0: 'a', #: 1}
+</Playground>
+
+Length shorthand looks and behaves similar to [private fields](#private-fields), with the exception that `.length` is not private.
+
 ## Arrays
 
 ### Bracketed
@@ -374,34 +408,6 @@ console.log ```
   </div>
 ```
 </Playground>
-
-## Length Shorthand
-
-The property access `.#` or just `#` is short for `.length`:
-
-<Playground>
-array.#
-array#
-"a string also".#
-</Playground>
-
-On its own, `#` is shorthand for `this.length`:
-
-<Playground>
-class List
-  push(item)
-    @[#] = item
-  wrap(index)
-    @[index %% #]
-</Playground>
-
-`# in` checks for the `"length"` property:
-
-<Playground>
-# in x
-</Playground>
-
-Length shorthand looks and behaves similar to [private fields](#private-fields), with the exception that `.length` is not private.
 
 ## Regular Expressions
 
