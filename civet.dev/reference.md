@@ -161,6 +161,9 @@ computed property names:
 negate := {-1: +1, +1: -1}
 templated :=
   `${prefix}${suffix}`: result
+headers :=
+  Content-Type: "text/html"
+  Content-Encoding: "gzip"
 </Playground>
 
 ### Object Globs
