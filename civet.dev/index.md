@@ -124,6 +124,22 @@ x = do
   tmp * tmp + 1
 </Playground>
 
+### Bulleted Lists and Unbraced Object Literals
+
+<Playground>
+projects:
+  . name: "Civet"
+    url: "https://civet.dev"
+  . name: "TypeScript"
+    url: "https://www.typescriptlang.org"
+colorPairs:
+  . . "red"
+    . "#f00"
+  . . "green"
+    . "#0f0"
+  . . "blue"
+    . "#00f"
+</Playground>
 
 ### Dedented Strings and Templates
 

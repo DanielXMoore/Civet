@@ -321,6 +321,22 @@ people :=
     id: 9
 </Playground>
 
+You can nest bulleted arrays, and list multiple items per line via `,`:
+
+<Playground>
+colorPairs :=
+  . . "red"
+    . "#f00"
+  . . "green"
+    . "#0f0"
+  . . "blue", "#00f"
+</Playground>
+
+:::info
+Bulleted arrays generally need to start on their own line with an indentation.
+The only current exception is for nested bulleted arrays.
+:::
+
 ### Rest
 
 Rest properties/parameters/elements are no longer limited to the final position.
@@ -1258,7 +1274,7 @@ civet.speed = 15 if civet.rested
 </Playground>
 
 For complex conditions that involve indented function application,
-the expression can be indented:
+the condition can be indented:
 
 <Playground>
 sleep() unless
