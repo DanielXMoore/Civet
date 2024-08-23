@@ -4,6 +4,13 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.7.25 (2024-08-23, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.24...v0.7.25), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.25))
+* `import operator` bulk import of operators [[#1372](https://github.com/DanielXMoore/Civet/pull/1372)]
+* `continue switch` to fall through at the end of `when` clause [[#1373](https://github.com/DanielXMoore/Civet/pull/1373)]
+* Remove Svelte label `$:` exception (use `:$` if needed) [[#1374](https://github.com/DanielXMoore/Civet/pull/1374)]
+* Expressionize statements followed by trailing member access/call or pipe [[#1375](https://github.com/DanielXMoore/Civet/pull/1375)]
+* Include changelog in NPM release [[#1376](https://github.com/DanielXMoore/Civet/pull/1376)]
+
 ## 0.7.24 (2024-08-19, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.23...v0.7.24), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.24))
 * Fix placeholder expressions at head of pipeline [[#1366](https://github.com/DanielXMoore/Civet/pull/1366)]
 * Support length shorthand `#` when defining objects [[#1367](https://github.com/DanielXMoore/Civet/pull/1367)]
