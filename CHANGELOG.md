@@ -4,6 +4,10 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.7.26 (2024-08-26, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.25...v0.7.26), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.26))
+* Hyphenated object keys like `Content-Type:` [[#1377](https://github.com/DanielXMoore/Civet/pull/1377)]
+* Fix unplugin `parseOptions`, fix eslint plugin for Node 22 [[#1378](https://github.com/DanielXMoore/Civet/pull/1378)]
+
 ## 0.7.25 (2024-08-23, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.24...v0.7.25), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.25))
 * `import operator` bulk import of operators [[#1372](https://github.com/DanielXMoore/Civet/pull/1372)]
 * `continue switch` to fall through at the end of `when` clause [[#1373](https://github.com/DanielXMoore/Civet/pull/1373)]
@@ -15,7 +19,7 @@ as well as a full diff and commit list.
 * Fix placeholder expressions at head of pipeline [[#1366](https://github.com/DanielXMoore/Civet/pull/1366)]
 * Support length shorthand `#` when defining objects [[#1367](https://github.com/DanielXMoore/Civet/pull/1367)]
 * Generate tags for Civet releases [[#1368](https://github.com/DanielXMoore/Civet/pull/1368)]
-* Indented if/unless conditions to enable indented function calls (e.g. `(and)`) [[#1364](https://github.com/DanielXMoore/Civet/pull/1364)]
+* Indented `if`/`unless` conditions to enable indented function calls (e.g. `(and)`) [[#1364](https://github.com/DanielXMoore/Civet/pull/1364)]
 * Indented calls in `if` conditions with explicit `then` clause (#1090) [[#1369](https://github.com/DanielXMoore/Civet/pull/1369)]
 * Improved release process and changelog generation [[#1370](https://github.com/DanielXMoore/Civet/pull/1370)]
 
