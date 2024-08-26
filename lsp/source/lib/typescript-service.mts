@@ -31,7 +31,7 @@ import { fileURLToPath, pathToFileURL } from "url"
 import { TextDocument } from "vscode-languageserver-textdocument"
 
 // Import version from package.json
-import * as pkg from "../../package.json" assert { type: 'json' }
+import * as pkg from "../../package.json" with { type: 'json' }
 const { version } = pkg
 
 // HACK to get __dirname working in tests with ts-node
