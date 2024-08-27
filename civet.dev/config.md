@@ -68,6 +68,7 @@ For now, we have the following related options:
 | [`coffeeForLoops`](reference#coffeescript-for-loops) | `for in`/`of`/`from` loops behave like they do in CoffeeScript (like Civet's `for each of`/`in`/`of` respectively) |
 | [`coffeeInterpolation`](reference#double-quoted-strings) | `"a string with #{myVar}"` |
 | [`coffeeIsnt`](reference#coffeescript-operators) | `isnt` → `!==` |
+| [`coffeeJSX`](reference#indentation) | JSX children ignore indentation; tags need to be explicitly closed |
 | [`coffeeLineContinuation`](reference#coffeescript-line-continuations) | `\` at end of line continues to next line |
 | [`coffeeNot`](reference#coffeescript-operators) | `not` → `!`, disabling Civet extensions like [`is not`](reference#humanized-operators) |
 | [`coffeeOf`](reference#coffeescript-operators) | `a of b` → `a in b`, `a not of b` → `!(a in b)`, `a in b` → `b.indexOf(a) >= 0`, `a not in b` → `b.indexOf(a) < 0` |

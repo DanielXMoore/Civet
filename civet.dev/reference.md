@@ -2403,6 +2403,12 @@ return
     {svg}
 </Playground>
 
+JSX children do need to be properly indented if they're on separate lines,
+which prevents pasting improperly indented XHTML/JSX code.
+(On the other hand, with proper indentation, this feature effectively makes
+tags like `<img>` self-closing, bringing JSX closer to HTML than XHTML.)
+You can turn off this feature using the `"civet coffeeJSX"` directive.
+
 ### Implicit Fragments
 
 Adjacent elements/fragments get implicitly combined into one fragment,
