@@ -43,6 +43,7 @@ import {
   maybeRefAssignment,
   modifyString,
   negateCondition,
+  objectBindingPatternTypeSuffix,
   prepend,
   processAssignmentDeclaration,
   processBinaryOpExpression,
@@ -1883,11 +1884,14 @@ BindingPattern
 # NOTE: Simplified from spec
 ObjectBindingPattern
   _?:ws1 OpenBrace:open ObjectBindingPatternContent:c __:ws2 CloseBrace:close ->
+    const properties = c.children
+    const typeSuffix = objectBindingPatternTypeSuffix(properties)
     return {
       type: "ObjectBindingPattern",
-      children: [ws1, open, c.children, ws2, close],
+      children: [ws1, open, c.children, ws2, close, typeSuffix],
+      typeSuffix,
       names: c.names,
-      properties: c.children,
+      properties,
     }
 
 ObjectBindingPatternContent
@@ -1975,23 +1979,28 @@ BindingProperty
   # NOTE: Must be checked first to pick up trailing "..." form
   BindingRestProperty
 
-  _? PropertyName:name _? Colon _? ( BindingIdentifier / BindingPattern ):value Initializer?:initializer ->
+  # NOTE: Allow ::T type suffix before value
+  _? PropertyName:name _? Colon _? ( BindingIdentifier / BindingPattern ):value BindingPropertyTypeSuffix?:typeSuffix Initializer?:initializer ->
     return {
       type: "BindingProperty",
-      children: $0,
+      children: [$1, name, $3, $4, $5, value, initializer],  // omit typeSuffix
       name,
       value,
+      typeSuffix,
       initializer,
       names: value.names,
     }
 
-  _?:ws Caret?:pin BindingIdentifier:binding Initializer?:initializer ->
+  _?:ws Caret?:pin BindingIdentifier:binding BindingPropertyTypeSuffix?:typeSuffix Initializer?:initializer ->
+    $0 = [ws, binding, initializer]  // omit pin and typeSuffix
+
     // TODO make this work with pin
     if (binding.type === "AtBinding") {
       return {
         type: "AtBindingProperty",
         children: $0,
         binding,
+        typeSuffix,
         ref: binding.ref,
         initializer,
         names: [],
@@ -1999,9 +2008,22 @@ BindingProperty
     }
 
     if (pin) {
+      const children = [ws, binding]
+      if (typeSuffix) {
+        children.push({
+          type: "Error",
+          message: "Pinned properties cannot have type annotations",
+        })
+      }
+      if (initializer) {
+        children.push({
+          type: "Error",
+          message: "Pinned properties cannot have initializers",
+        })
+      }
       return {
         type: "PinProperty",
-        children: [ws, binding],
+        children,
         name: binding,
         value: {
           type: "PinPattern",
@@ -2015,6 +2037,7 @@ BindingProperty
       children: $0,
       name: binding,
       value: undefined,
+      typeSuffix,
       initializer,
       names: binding.names,
       identifier: binding,
@@ -2022,10 +2045,11 @@ BindingProperty
 
 # https://262.ecma-international.org/#prod-BindingRestProperty
 BindingRestProperty
-  _?:ws DotDotDot:dots BindingIdentifier:id ->
+  _?:ws DotDotDot:dots BindingIdentifier:id BindingPropertyTypeSuffix?:typeSuffix ->
     return {
       ...id,
       type: "BindingRestProperty",
+      typeSuffix,
       children: [...(ws || []), dots, ...id.children],
     }
 
@@ -2033,7 +2057,18 @@ BindingRestProperty
     return {
       ...id,
       type: "BindingRestProperty",
+      typeSuffix: undefined,
       children: [...(ws || []), dots, ...id.children],
+    }
+
+BindingPropertyTypeSuffix
+  _? QuestionMark?:optional _? DoubleColonAsColon:colon MaybeNestedType:t ->
+    return {
+      type: "TypeSuffix",
+      ts: true,
+      optional,
+      t,
+      children: $0,
     }
 
 NestedBindingElements
@@ -6077,6 +6112,10 @@ DotDotDot
 DoubleColon
   "::" ->
     return { $loc, token: $1 }
+
+DoubleColonAsColon
+  "::" ->
+    return { $loc, token: ":" }
 
 DoubleQuote
   "\"" ->
