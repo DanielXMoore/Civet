@@ -1,6 +1,10 @@
 import type {
-  ASTNode,
-  AtBinding,
+  ArrayBindingPattern
+  ASTNode
+  ASTString
+  AtBinding
+  Children
+  ObjectBindingPattern
   ThisAssignments
 } from ./types.civet
 
@@ -8,14 +12,17 @@ import {
   gatherRecursiveAll
 } from ./traversal.civet
 
-import { insertTrimmingSpace } from ./util.civet
+import {
+  parenthesizeType
+  trimFirstSpace
+} from ./util.civet
 
 /**
  * Adjusts `@binding` inside object properties that need to be aliased
  * see test/function.civet binding pattern
  */
 function adjustAtBindings(statements: ASTNode, asThis = false): void
-  gatherRecursiveAll(statements, (n) => n.type is "AtBindingProperty")
+  gatherRecursiveAll(statements, .type is "AtBindingProperty")
     .forEach((binding) => {
       const { ref } = binding
 
@@ -37,68 +44,63 @@ function adjustAtBindings(statements: ASTNode, asThis = false): void
     })
 
 function adjustBindingElements(elements: ASTNodeBase[])
-  const names = elements.flatMap((p) => p.names or []),
-    { length } = elements
+  names := elements.flatMap .names or []
+  { length } := elements
 
   let blockPrefix,
     restIndex = -1,
     restCount = 0
 
-  elements.forEach(({ type }, i) => {
-    if (type is "BindingRestElement") {
-      if (restIndex < 0) restIndex = i
+  for each { type }, i of elements
+    if type is "BindingRestElement"
+      restIndex = i if restIndex < 0
       restCount++
-    }
-  })
 
-  if (restCount is 0) {
+  if restCount is 0
     return {
-      children: elements,
-      names,
-      blockPrefix,
-      length,
+      children: elements
+      names
+      blockPrefix
+      length
     }
-  } else if (restCount is 1) {
-    const rest = elements[restIndex]
-    const after = elements.slice(restIndex + 1)
+  else if restCount is 1
+    rest := elements[restIndex]
+    after := elements.slice(restIndex + 1)
 
-    const restIdentifier = rest.binding.ref or rest.binding
-    names.push(...rest.names or [])
+    restIdentifier := rest.binding.ref or rest.binding
+    names.push ...rest.names or []
 
-    let l = after.length
+    l .= after#
 
-    if (l) {
+    if l
       // increment l if trailing comma
       if (arrayElementHasTrailingComma(after[l - 1])) l++
 
       blockPrefix = {
-        type: "PostRestBindingElements",
-        children: ["[", insertTrimmingSpace(after, ""), "] = ", restIdentifier, ".splice(-", l.toString(), ")"],
-        names: after.flatMap((p) => p.names),
+        type: "PostRestBindingElements"
+        children: ["[", trimFirstSpace(after), "] = ", restIdentifier, ".splice(-", l.toString(), ")"]
+        names: after.flatMap((p) => p.names)
       }
-    }
 
     return {
-      names,
+      names
       children: [...elements.slice(0, restIndex), {
-        ...rest,
+        ...rest
         children: rest.children.slice(0, -1) // remove trailing comma
-      }],
-      blockPrefix,
-      length,
+      }]
+      blockPrefix
+      length
     }
-  }
 
-  const err = {
-    type: "Error",
-    children: ["Multiple rest elements in array pattern"],
-  }
+  err :=
+    type: "Error"
+    children: ["Multiple rest elements in array pattern"]
 
   return {
-    names,
-    children: [...elements, err],
-    blockPrefix,
-    length,
+    names
+    children: [...elements, err]
+    blockPrefix
+    length
   }
 
 function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: boolean })
@@ -140,9 +142,71 @@ function arrayElementHasTrailingComma(elementNode)
   const lastChild = elementNode.children.-1
   return lastChild and lastChild[lastChild.length - 1]?.token is ","
 
+// If an ObjectBindingPattern doesn't have a typeSuffix, this function
+// extracts one from typeSuffixes for the binding properties (if present).
+function gatherBindingPatternTypeSuffix(pattern: ArrayBindingPattern | ObjectBindingPattern): BindingPattern
+  return pattern if pattern.typeSuffix?
+  count .= 0
+  switch pattern.type
+    when "ArrayBindingPattern"
+      types: ASTNode[] :=
+        for each elem of pattern.elements
+          { typeSuffix } .= elem
+          typeSuffix ??= elem.binding?.typeSuffix
+          count++ if typeSuffix
+          typeElement .= [ typeSuffix?.t, elem.delim ]
+          if typeSuffix?.optional
+            typeElement[0] = parenthesizeType typeElement[0]
+            typeElement.unshift "undefined |"
+          if elem.type is "BindingRestElement"
+            typeElement[0] ??= "unknown[]"
+            typeElement.unshift elem.dots
+          else
+            typeElement[0] ??= "unknown"
+          typeElement
+      if count
+        t: ASTNode[] := [ ": [", types, "]" ]
+        pattern.typeSuffix = {
+          type: "TypeSuffix"
+          ts: true
+          t
+          children: [t]
+        }
+    when "ObjectBindingPattern"
+      let restType: ASTNode?
+      types: ASTNode[] :=
+        for each prop of pattern.properties
+          { typeSuffix } .= prop
+          typeSuffix ??= prop.value?.typeSuffix
+          count++ if typeSuffix
+          typeSuffix ??=
+            type: "TypeSuffix"
+            ts: true
+            children: [": unknown"]
+          switch prop.type
+            when "BindingProperty"
+              ws := prop.children[...prop.children.indexOf prop.name]
+              [ ...ws, prop.name, typeSuffix, prop.delim ] as Children
+            when "AtBindingProperty"
+              ws := prop.children[...prop.children.indexOf prop.binding]
+              [ ...ws, prop.ref.id, typeSuffix, prop.delim ] as Children
+            when "BindingRestProperty"
+              restType = prop.typeSuffix?.t
+              continue
+      if count
+        t: ASTNode[] := [ "{", types, "}" ]
+        t.push " & ", parenthesizeType(trimFirstSpace(restType)) if restType?
+        pattern.typeSuffix = {
+          type: "TypeSuffix"
+          ts: true
+          t
+          children: [": ", t]
+        }
+  pattern
 
 export {
   adjustAtBindings
   adjustBindingElements
   gatherBindingCode
+  gatherBindingPatternTypeSuffix
 }
