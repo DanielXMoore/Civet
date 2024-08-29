@@ -2003,22 +2003,6 @@ class Civet
 
 ## Types
 
-### Unknown
-
-`???` is shorthand for the type `unknown`.
-
-<Playground>
-declare function jsonParse(json: string): ???
-</Playground>
-
-### Signed Number Literals
-
-`+1` is invalid in TypeScript but valid in Civet.
-
-<Playground>
-declare function sign(n: number): -1 | 0 | +1
-</Playground>
-
 ### Optional Types
 
 Similar to function parameters and object properties,
@@ -2039,6 +2023,46 @@ More generally, `T?` allows for `undefined` and
 <Playground>
 let i: number?
 let x: string??
+</Playground>
+
+### Destructured Typing
+
+Destructured declarations or function arguments can be typed inline using `::`:
+
+<Playground>
+function Component({
+  name: [
+    first:: string
+    last:: string
+    ...rest:: string[]
+  ]
+  counter:: number
+  setCounter: sc:: (number) => void
+  ...otherProps:: ChildProps
+})
+</Playground>
+
+<Playground>
+{
+  type:: string
+  verb:: "hello" | "goodbye"
+} := input
+</Playground>
+
+### Unknown
+
+`???` is shorthand for the type `unknown`.
+
+<Playground>
+declare function jsonParse(json: string): ???
+</Playground>
+
+### Signed Number Literals
+
+`+1` is invalid in TypeScript but valid in Civet.
+
+<Playground>
+declare function sign(n: number): -1 | 0 | +1
 </Playground>
 
 ### Conditional Types
