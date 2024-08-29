@@ -4,6 +4,12 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.7.27 (2024-08-29, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.26...v0.7.27), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.27))
+* Add `repository` to `package.json`, fixing Dependabot changelog detection [[#1380](https://github.com/DanielXMoore/Civet/pull/1380)]
+* Fix glob accessor `.{a,b}` shorthand for `&.{a,b}` [[#1379](https://github.com/DanielXMoore/Civet/pull/1379)]
+* Typing of object/array pattern components via `::` [[#1383](https://github.com/DanielXMoore/Civet/pull/1383)]
+* JSX attributes with unbraced indented values, code children with `>` [[#1381](https://github.com/DanielXMoore/Civet/pull/1381)]
+
 ## 0.7.26 (2024-08-26, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.25...v0.7.26), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.26))
 * Hyphenated object keys like `Content-Type:` [[#1377](https://github.com/DanielXMoore/Civet/pull/1377)]
 * Fix unplugin `parseOptions`, fix eslint plugin for Node 22 [[#1378](https://github.com/DanielXMoore/Civet/pull/1378)]
