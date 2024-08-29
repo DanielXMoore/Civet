@@ -2477,8 +2477,7 @@ Arrow functions are automatically wrapped in braces:
 
 ### Code Children
 
-Code blocks can be prefixed with `>` instead of wrapping in braces.
-They automatically get wrapped in [`do` blocks](#do-blocks).
+Civet expressions can be prefixed with `>` instead of wrapping in braces.
 
 <Playground>
 <main>
@@ -2496,6 +2495,16 @@ They automatically get wrapped in [`do` blocks](#do-blocks).
     <LogoutButton>
   else
     <LoginButton>
+</Playground>
+
+To write an entire block of code, indent it inside `>`
+(or `>do` — a [`do` block](#do-blocks) is implicit).
+
+<Playground>
+<.user>
+  >
+    user := getUser()
+    `Logged in as ${user.first} ${user.last}`
 </Playground>
 
 ## [SolidJS](https://www.solidjs.com/)
