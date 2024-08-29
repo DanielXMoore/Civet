@@ -2314,6 +2314,107 @@ via a `"civet"` directive at the beginning of your file:
 Enhancements, inspired by [solid-dsl discussions](https://github.com/solidjs-community/solid-dsl/discussions)
 and [jsx spec issues](https://github.com/facebook/jsx/issues)
 
+### Indentation
+
+Closing tags are optional if JSX uses indentation.
+
+<Playground>
+return
+  <>
+    <div>
+      Hello {name}!
+    {svg}
+</Playground>
+
+JSX children do need to be properly indented if they're on separate lines,
+which prevents pasting improperly indented XHTML/JSX code.
+(On the other hand, with proper indentation, this feature effectively makes
+tags like `<img>` self-closing, bringing JSX closer to HTML than XHTML.)
+You can turn off this feature using the `"civet coffeeJSX"` directive.
+
+### Implicit Fragments
+
+Adjacent elements/fragments get implicitly combined into one fragment,
+unless they are items in an array.
+
+<Playground>
+return
+  <h1>Hello World!
+  <div>Body
+</Playground>
+
+<Playground>
+[
+  <h1>Hello World!
+  <div>Body
+]
+</Playground>
+
+### XML Comments
+
+<Playground>
+<div>
+  <!-- Comment -->
+  Civet
+</Playground>
+
+### Attributes
+
+Attribute values do not need braces if they have no whitespace, are indented, or are suitably wrapped (parenthesized expressions, strings and template strings, regular expressions, array literals, braced object literals):
+
+<Playground>
+<div
+  foo=bar
+  count=count()
+  sum=x+1
+  list=[1, 2, 3]
+  string=`hello ${name}`
+>
+  Civet
+</Playground>
+
+<Playground>
+<Show
+  when=
+    if testing
+      timer() > 10
+    else
+      loaded()
+  fallback =
+    <img src="loading.gif">
+    <div>Loading...</div>
+>
+</Playground>
+
+Arbitrary [braced literals](#braced-literals) convert to equivalent JSX:
+
+<Playground>
+<div {foo}>Civet
+<div {props.name}>Civet
+<div {data()}>Civet
+</Playground>
+
+Call/member/glob/spread expressions without unwrapped whitespace
+do not need braces
+(but note that simple identifiers remain empty attributes):
+
+<Playground>
+<div foo>Civet
+<div data()>Civet
+<div @name>Civet
+<div @@onClick>Civet
+<div modal@onClick>Civet
+<div props{name, value}>Civet
+<div ...foo>Civet
+</Playground>
+
+Computed property names:
+
+<Playground>
+<div [expr]={value}>Civet
+<div `data-${key}`={value}>Civet
+</Playground>
+
 ### Element id
 
 <Playground>
@@ -2364,99 +2465,37 @@ Implicit elements must start with `id` or `class` shorthand (`#` or `.`).
 
 :::
 
-### Attributes
-
-Attribute values without whitespace or suitably wrapped (parenthesized expressions, strings and template strings, regular expressions, array literals, braced object literals) do not need braces:
-
-<Playground>
-<div
-  foo=bar
-  count=count()
-  sum=x+1
-  list=[1, 2, 3]
->
-  Civet
-</Playground>
-
-Arbitrary [braced literals](#braced-literals) convert to equivalent JSX:
-
-<Playground>
-<div {foo}>Civet
-<div {props.name}>Civet
-<div {data()}>Civet
-</Playground>
-
-Call/member/glob/spread expressions without unwrapped whitespace
-do not need braces
-(but note that simple identifiers remain empty attributes):
-
-<Playground>
-<div foo>Civet
-<div data()>Civet
-<div @name>Civet
-<div @@onClick>Civet
-<div modal@onClick>Civet
-<div props{name, value}>Civet
-<div ...foo>Civet
-</Playground>
-
-Computed property names:
-
-<Playground>
-<div [expr]={value}>Civet
-<div `data-${key}`={value}>Civet
-</Playground>
-
-### Comments
-
-<Playground>
-<div>
-  <!-- Comment -->
-  Civet
-</Playground>
-
-### Indentation
-
-Closing tags are optional if JSX uses indentation.
-
-<Playground>
-return
-  <>
-    <div>
-      Hello {name}!
-    {svg}
-</Playground>
-
-JSX children do need to be properly indented if they're on separate lines,
-which prevents pasting improperly indented XHTML/JSX code.
-(On the other hand, with proper indentation, this feature effectively makes
-tags like `<img>` self-closing, bringing JSX closer to HTML than XHTML.)
-You can turn off this feature using the `"civet coffeeJSX"` directive.
-
-### Implicit Fragments
-
-Adjacent elements/fragments get implicitly combined into one fragment,
-unless they are items in an array.
-
-<Playground>
-return
-  <h1>Hello World!
-  <div>Body
-</Playground>
-
-<Playground>
-[
-  <h1>Hello World!
-  <div>Body
-]
-</Playground>
-
 ### Function Children
+
+Arrow functions are automatically wrapped in braces:
 
 <Playground>
 <For each=items()>
   (item) =>
     <li>{item}
+</Playground>
+
+### Code Children
+
+Code blocks can be prefixed with `>` instead of wrapping in braces.
+They automatically get wrapped in [`do` blocks](#do-blocks).
+
+<Playground>
+<main>
+  >for item of items
+    <li>{item}
+</Playground>
+
+<Playground>
+<.greeting>
+  >if user := getUser()
+    <span>
+      Welcome back,
+      >' '
+      > user |> .name |> formatName
+    <LogoutButton>
+  else
+    <LoginButton>
 </Playground>
 
 ## [SolidJS](https://www.solidjs.com/)
