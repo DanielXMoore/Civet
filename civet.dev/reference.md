@@ -2507,6 +2507,56 @@ To write an entire block of code, indent it inside `>`
     `Logged in as ${user.first} ${user.last}`
 </Playground>
 
+### Automatic Code Children
+
+If code is more common than text in your JSX, consider using the
+`"civet jsxCode" directive which treats JSX children as Civet expressions.
+
+<Playground>
+"civet jsxCode"
+function List({items})
+  <ul>
+    for item of items
+      <li>
+        if item.image
+          <img src=item.image>
+        if item.type is "link"
+          <a href=url>
+            'Link: '
+            item.title
+        else
+          <p> item.content
+</Playground>
+
+Note that each "line" is treated as its own child expression,
+which makes it easy to concatenate multiple expressions.
+If you need a multi-line block, use [`do`](#do-blocks):
+
+<Playground>
+"civet jsxCode"
+<div>
+  "Welcome, "
+  do
+    { first, last } := getName()
+    `${first} ${last.toUpperCase()}`
+</Playground>
+
+You can also individually control whether children get treated as code
+when on the same line as the tag (`"civet jsxCodeSameLine"`) or
+when indented (`"civet jsxCodeNested"`).
+(This distinction is only meaningful when `"civet coffeeJSX"` is disabled.)
+
+<Playground>
+"civet jsxCodeNested"
+<form>
+  <h2>Enter your name
+  for part of ["first", "last"]
+    <label>
+      part.toUpperCase() + ": "
+      <input id=part>
+  <button>Submit
+</Playground>
+
 ## [SolidJS](https://www.solidjs.com/)
 
 `link` automatically typed as `HTMLAnchorElement`
