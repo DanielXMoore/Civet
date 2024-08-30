@@ -21,6 +21,7 @@ declare module "@danielx/civet" {
     coffeePrototype: boolean
     defaultElement: string
     implicitReturns: boolean
+    jsxCode: boolean
     objectIs: boolean
     react: boolean
     solid: boolean
