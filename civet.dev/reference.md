@@ -2465,6 +2465,17 @@ Implicit elements must start with `id` or `class` shorthand (`#` or `.`).
 
 :::
 
+### Declaration Children
+
+Lexical declarations can appear in the middle of JSX, allowing you to
+effectively define variables in the middle of a long JSX block.
+
+<Playground>
+<div>
+  { {first, last} := getName() }
+  Welcome, {first} {last}!
+</Playground>
+
 ### Function Children
 
 Arrow functions are automatically wrapped in braces:
@@ -2539,6 +2550,17 @@ If you need a multi-line block, use [`do`](#do-blocks):
   do
     { first, last } := getName()
     `${first} ${last.toUpperCase()}`
+</Playground>
+
+[Declaration children](#declaration-children) work too,
+but note that they are exposed to the outer block:
+
+<Playground>
+"civet jsxCode"
+<div>
+  "Welcome, "
+  { first, last } := getName()
+  `${first} ${last.toUpperCase()}`
 </Playground>
 
 You can also individually control whether children get treated as code
