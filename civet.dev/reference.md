@@ -2521,7 +2521,7 @@ function List({items})
         if item.image
           <img src=item.image>
         if item.type is "link"
-          <a href=url>
+          <a href=item.url>
             'Link: '
             item.title
         else
