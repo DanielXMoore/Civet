@@ -4,6 +4,10 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.7.28 (2024-08-30, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.27...v0.7.28), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.28))
+* Fix pattern matching with indented object patterns [[#1384](https://github.com/DanielXMoore/Civet/pull/1384)]
+* `"civet jsxCode"` directive treats JSX children as Civet code [[#1386](https://github.com/DanielXMoore/Civet/pull/1386)]
+
 ## 0.7.27 (2024-08-29, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.26...v0.7.27), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.27))
 * Add `repository` to `package.json`, fixing Dependabot changelog detection [[#1380](https://github.com/DanielXMoore/Civet/pull/1380)]
 * Fix glob accessor `.{a,b}` shorthand for `&.{a,b}` [[#1379](https://github.com/DanielXMoore/Civet/pull/1379)]
