@@ -1,9 +1,10 @@
 # Civet eslint plugin changelog
 
 ## v0.0.5 (2024-08-26)
-* Support Node 22+ (switch to `import...with`)
-* Fix `typescipt-eslint` dependency to be truly optional
-* Upgrade build process to latest Civet and other deps
+* [[#1378](https://github.com/DanielXMoore/Civet/pull/1378)]:
+  * Support Node 22+ (switch to `import...with`)
+  * Fix `typescipt-eslint` dependency to be truly optional
+  * Upgrade build process to latest Civet and other deps
 
 ## v0.0.4 (2024-05-05)
 * Set engines requirement for `import...assert`
