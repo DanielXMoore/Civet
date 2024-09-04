@@ -2088,6 +2088,13 @@ let verb: Civet < Cat ? "meow" : string
 let breed: Civet !< Animal ? undefined : string
 </Playground>
 
+You can also use [postfix `if`/`unless`](#postfix-ifunless)
+if the `else` case is `never`:
+
+<Playground>
+let breed: string if Civet extends Animal
+</Playground>
+
 ### Import
 
 <Playground>
@@ -2126,6 +2133,42 @@ type ID
 type Point
   x: number
   y: number
+</Playground>
+
+### Tuples
+
+Tuple type elements can be named, preventing implicit object literals:
+
+<Playground>
+type Point = [number, number]
+type Point = [x: number, y: number]
+type PointContainer = [(x: number, y: number)]
+</Playground>
+
+Tuples can also be specified via [bullets](#bulleted):
+
+<Playground>
+type Point =
+  . x: number
+  . y: number
+type Segment =
+  • • x1: number
+    • y1: number
+  • • x2: number
+    • y2: number
+</Playground>
+
+### Implicit Type Arguments
+
+Like [implicit function calls](#function-calls),
+the angle brackets in type arguments are implicit,
+and can be replaced by a space or indentation.
+
+<Playground>
+let cats: Partial Record CatName, CatInfo
+type CatInfo = Partial
+  furry: boolean
+  fuzzy: boolean?
 </Playground>
 
 ### Interfaces
