@@ -4,6 +4,14 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.7.29 (2024-09-04, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.28...v0.7.29), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.29))
+* Lexical declarations as JSX code children [[#1387](https://github.com/DanielXMoore/Civet/pull/1387)]
+* Postfix `if`/`unless` in type declaration [[#1388](https://github.com/DanielXMoore/Civet/pull/1388)]
+* Add changelog to eslint plugin [[#1389](https://github.com/DanielXMoore/Civet/pull/1389)]
+* Improve indentation handling with union/intersection types [[#1390](https://github.com/DanielXMoore/Civet/pull/1390)]
+* Remove final implicit comma in nested arguments, better matching source [[#1392](https://github.com/DanielXMoore/Civet/pull/1392)]
+* Implicit type arguments, bulleted type tuples, multiple items in indented tuples [[#1391](https://github.com/DanielXMoore/Civet/pull/1391)]
+
 ## 0.7.28 (2024-08-30, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.27...v0.7.28), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.28))
 * Fix pattern matching with indented object patterns [[#1384](https://github.com/DanielXMoore/Civet/pull/1384)]
 * `"civet jsxCode"` directive treats JSX children as Civet code [[#1386](https://github.com/DanielXMoore/Civet/pull/1386)]
