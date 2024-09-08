@@ -227,6 +227,13 @@ matrix.0.0
 array.-1
 </Playground>
 
+You can omit the `.` in `?.` and `!.` property access:
+
+<Playground>
+json?data?value
+account!name?first
+</Playground>
+
 You can also write property access as an English possessive
 (inspired by [_hyperscript](https://hyperscript.org/expressions/possessive/)):
 
@@ -269,6 +276,24 @@ array := {0: 'a', #: 1}
 </Playground>
 
 Length shorthand looks and behaves similar to [private fields](#private-fields), with the exception that `.length` is not private.
+
+### Trailing Property Access
+
+A `.` or `?.` property access can trail on another line,
+at the same or deeper indentation:
+
+<Playground>
+getItems url
+.filter .match
+.sort()
+</Playground>
+
+<Playground>
+document
+  ?.querySelectorAll pattern
+  .forEach (element) =>
+    element.style.color = 'purple'
+</Playground>
 
 ## Arrays
 
