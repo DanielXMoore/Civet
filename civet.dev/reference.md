@@ -1726,6 +1726,24 @@ Labels have the colon on the left to avoid conflict with implicit object
 literals.  The colons are optional in `break` and `continue`.
 :::
 
+### Controlling Loop Value
+
+<Playground>
+function varVector(items, mean)
+  for item of items
+    continue with 0 unless item?
+    item -= mean
+    item * item
+</Playground>
+
+<Playground>
+found :=
+  loop
+    item := nextItem()
+    break with item if item.found
+    process item
+</Playground>
+
 ## Other Blocks
 
 ### Try Blocks
