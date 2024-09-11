@@ -1,11 +1,17 @@
 import type {
   ASTNode
   ASTNodeBase
+  ASTNodeObject
   BlockStatement
+  BreakStatement
   CallExpression
+  ContinueStatement
+  Declaration
+  ForStatement
   FunctionNode
   IterationExpression
   IterationFamily
+  IterationStatement
   LabeledStatement
   Parameter
   ParametersNode
@@ -29,6 +35,7 @@ import {
   findAncestor
   findChildIndex
   gatherNodes
+  gatherRecursive
   gatherRecursiveAll
   gatherRecursiveWithinFunction
   type Predicate
@@ -40,7 +47,6 @@ import {
   hasAwait
   hasYield
   inplacePrepend
-  insertTrimmingSpace
   isEmptyBareBlock
   isExit
   isFunction
@@ -49,6 +55,7 @@ import {
   makeLeftHandSideExpression
   makeNode
   startsWithPredicate
+  trimFirstSpace
   updateParentPointers
   wrapIIFE
   wrapWithReturn
@@ -264,7 +271,7 @@ function assignResults(node: StatementTuple[] | ASTNode, collect: (node: ASTNode
     exp = (exp as LabeledStatement).statement
     {type} = exp
 
-  switch exp.type
+  switch type
     when "BreakStatement", "ContinueStatement", "DebuggerStatement", "EmptyStatement", "ReturnStatement", "ThrowStatement"
       return
     when "Declaration"
@@ -439,6 +446,42 @@ function insertSwitchReturns(exp): void
   exp.caseBlock.clauses.forEach (clause) =>
     insertReturn clause
 
+// Process `break with` and `continue with` within a loop
+// that already has a resultsRef attribute.
+// Returns whether the resultsRef might be modified, so should use let.
+function processBreakContinueWith(statement: IterationStatement | ForStatement): boolean
+  changed .= false
+  for control of gatherRecursive(statement.block,
+    (s: ASTNodeObject): s is BreakStatement | ContinueStatement =>
+      s.type is like "BreakStatement", "ContinueStatement"
+    (s: ASTNodeObject) =>
+      isFunction(s) or s.type is "IterationStatement"
+  )
+    function controlName: string
+      switch control.type 
+        when "BreakStatement"
+          "break"
+        when "ContinueStatement"
+          "continue"
+
+    // break with <expr> overwrites the results of the loop
+    // continue with <expr> appends to the results of the loop
+    if control.with
+      control.children.unshift
+        if control.type is "BreakStatement"
+          changed = true
+          [statement.resultsRef, ' =', control.with, ';']
+        else // control.type is "ContinueStatement"
+          [statement.resultsRef, '.push(', trimFirstSpace(control.with), ');']
+      updateParentPointers control.with, control
+
+      // Brace containing block now that it has multiple statements
+      block := control.parent
+      unless block?.type is "BlockStatement"
+        throw new Error `Expected parent of ${controlName()} to be BlockStatement`
+      braceBlock block
+  changed
+
 function wrapIterationReturningResults(
   statement: IterationFamily,
   outer: { children: StatementTuple[] },
@@ -456,9 +499,18 @@ function wrapIterationReturningResults(
 
   resultsRef := statement.resultsRef = makeRef "results"
 
-  declaration :=
+  decl .= "const"
+  if statement.type is "IterationStatement" or statement.type is "ForStatement"
+    if processBreakContinueWith statement
+      decl = "let"
+
+  declaration: Declaration := {
     type: "Declaration"
-    children: ["const ", resultsRef, "=[]"]
+    children: [decl, " ", resultsRef, "=[]"]
+    decl
+    names: []
+    bindings: []
+  }
 
   outer.children.unshift(["", declaration, ";"])
 
@@ -567,9 +619,9 @@ function expressionizeIteration(exp: IterationExpression): void
   { async, subtype, block, children, statement } := exp
   i := children.indexOf statement
   if i < 0
-    throw new Error("Could not find iteration statement in iteration expression")
+    throw new Error "Could not find iteration statement in iteration expression"
 
-  if subtype is "DoStatement" or subtype is "ComptimeStatement"
+  if subtype is like "DoStatement", "ComptimeStatement"
     // Just wrap with IIFE; insertReturn will apply to the resulting function
     children.splice(i, 1, wrapIIFE([["", statement, undefined]], async))
     updateParentPointers exp
@@ -618,7 +670,7 @@ function skipImplicitArguments(args: unknown[]): boolean
 
 /** Transform */
 function processCoffeeDo(ws: Whitespace, expression: ASTNode): ASTNode
-  ws = insertTrimmingSpace(ws, "") as Whitespace
+  ws = trimFirstSpace(ws) as Whitespace
   args: ASTNode[] := []
   if expression is like {type: "ArrowFunction"}, {type: "FunctionExpression"}
     { parameters } := expression
