@@ -227,6 +227,13 @@ matrix.0.0
 array.-1
 </Playground>
 
+You can omit the `.` in `?.` and `!.` property access:
+
+<Playground>
+json?data?value
+account!name?first
+</Playground>
+
 You can also write property access as an English possessive
 (inspired by [_hyperscript](https://hyperscript.org/expressions/possessive/)):
 
@@ -269,6 +276,24 @@ array := {0: 'a', #: 1}
 </Playground>
 
 Length shorthand looks and behaves similar to [private fields](#private-fields), with the exception that `.length` is not private.
+
+### Trailing Property Access
+
+A `.` or `?.` property access can trail on another line,
+at the same or deeper indentation:
+
+<Playground>
+getItems url
+.filter .match
+.sort()
+</Playground>
+
+<Playground>
+document
+  ?.querySelectorAll pattern
+  .forEach (element) =>
+    element.style.color = 'purple'
+</Playground>
 
 ## Arrays
 
@@ -1700,6 +1725,24 @@ while item?
 Labels have the colon on the left to avoid conflict with implicit object
 literals.  The colons are optional in `break` and `continue`.
 :::
+
+### Controlling Loop Value
+
+<Playground>
+function varVector(items, mean)
+  for item of items
+    continue with 0 unless item?
+    item -= mean
+    item * item
+</Playground>
+
+<Playground>
+found :=
+  loop
+    item := nextItem()
+    break with item if item.found
+    process item
+</Playground>
 
 ## Other Blocks
 
