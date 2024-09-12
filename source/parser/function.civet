@@ -5,8 +5,6 @@ import type {
   BlockStatement
   BreakStatement
   CallExpression
-  ContinueStatement
-  Declaration
   ForStatement
   FunctionNode
   IterationExpression
@@ -16,6 +14,7 @@ import type {
   Parameter
   ParametersNode
   StatementTuple
+  SwitchStatement
   TypeIdentifierNode
   TypeNode
   Whitespace
@@ -447,16 +446,13 @@ function insertSwitchReturns(exp): void
   exp.caseBlock.clauses.forEach (clause) =>
     insertReturn clause
 
-// Process `break with` and `continue with` within a loop
+// Process `break with` and `continue with` within a loop statement
 // that already has a resultsRef attribute.
 // Returns whether the resultsRef might be modified, so should use let.
 function processBreakContinueWith(statement: IterationStatement | ForStatement): boolean
   changed .= false
-  for control of gatherRecursive(statement.block,
-    (s: ASTNodeObject): s is BreakStatement | ContinueStatement =>
-      s.type is like "BreakStatement", "ContinueStatement"
-    (s: ASTNodeObject) =>
-      isFunction(s) or s.type is "IterationStatement"
+  for control of gatherRecursiveWithinFunction(statement.block,
+    .type is "BreakStatement" or .type is "ContinueStatement"
   )
     function controlName: string
       switch control.type 
@@ -468,6 +464,15 @@ function processBreakContinueWith(statement: IterationStatement | ForStatement):
     // break with <expr> overwrites the results of the loop
     // continue with <expr> appends to the results of the loop
     if control.with
+      // Verify there wasn't another loop or switch in between
+      {ancestor} := findAncestor control,
+        (s: ASTNodeObject): s is IterationStatement | ForStatement | SwitchStatement => (or)
+          s is statement
+          s.type is "IterationStatement"
+          s.type is "ForStatement"
+          s.type is "SwitchStatement" and control.type is "BreakStatement"
+      continue unless ancestor is statement
+
       control.children.unshift
         if control.type is "BreakStatement"
           changed = true
@@ -475,6 +480,10 @@ function processBreakContinueWith(statement: IterationStatement | ForStatement):
         else // control.type is "ContinueStatement"
           [statement.resultsRef, '.push(', trimFirstSpace(control.with), ');']
       updateParentPointers control.with, control
+
+      // Remove warning associated with break/continue with
+      i := control.children.findIndex ?.type is "Error"
+      control.children.splice i, 1 if i >= 0
 
       // Brace containing block now that it has multiple statements
       block := control.parent
