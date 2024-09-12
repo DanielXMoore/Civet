@@ -1744,6 +1744,16 @@ found :=
     process item
 </Playground>
 
+<Playground>
+function process(lists)
+  :outer for list of lists
+    for item of list
+      if item is "abort"
+        break outer with item
+      if item is "length"
+        continue :outer with list.length
+</Playground>
+
 ## Other Blocks
 
 ### Try Blocks
