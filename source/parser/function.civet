@@ -5,12 +5,12 @@ import type {
   BlockStatement
   BreakStatement
   CallExpression
+  DeclarationStatement
   ForStatement
   FunctionNode
   IterationExpression
   IterationFamily
   IterationStatement
-  LabelledStatement
   Parameter
   ParametersNode
   StatementTuple
@@ -515,7 +515,7 @@ function wrapIterationReturningResults(
 
   resultsRef := statement.resultsRef = makeRef "results"
 
-  decl .= "const"
+  decl: "const" | "let" .= "const"
   if statement.type is "IterationStatement" or statement.type is "ForStatement"
     if processBreakContinueWith statement
       decl = "let"
@@ -528,7 +528,7 @@ function wrapIterationReturningResults(
       (s): s is BreakStatement => s.type is "BreakStatement" and not s.with,
       (s) => isFunction(s) or s.type is "IterationStatement")# is 0
 
-  declaration: Declaration := {
+  declaration: DeclarationStatement := {
     type: "Declaration"
     children: [decl, " ", resultsRef]
     decl
@@ -646,35 +646,56 @@ function processFunctions(statements, config): void
     processReturn(f, config.implicitReturns)
 
 function expressionizeIteration(exp: IterationExpression): void
-  { async, subtype, block, children, statement } := exp
+  { async, generator, subtype, block, children, statement } := exp
   i := children.indexOf statement
   if i < 0
     throw new Error "Could not find iteration statement in iteration expression"
 
   if subtype is like "DoStatement", "ComptimeStatement"
     // Just wrap with IIFE; insertReturn will apply to the resulting function
-    children.splice(i, 1, wrapIIFE([["", statement, undefined]], async))
+    children.splice(i, 1, wrapIIFE([["", statement, undefined]], async, generator))
     updateParentPointers exp
     return
 
-  exp.resultsRef ??= makeRef "results"
-  { resultsRef } := exp
+  if generator
+    assignResults block, (node) =>
+      type: "YieldExpression"
+      expression: node
+      children: [ "yield ", node ]
+    braceBlock(block)
 
-  // insert `results.push` to gather results array
-  assignResults block, (node) =>
-    // TODO: real node
-    [ resultsRef, ".push(", node, ")" ]
-  braceBlock(block)
+    children.splice(i,
+      1,
+      wrapIIFE([
+        ["", statement, undefined]
+        // Prevent implicit return in generator, by adding an explicit return
+        ["", {
+          type: "ReturnStatement"
+          expression: undefined
+          children: [ ";return" ]
+        }, undefined],
+      ], async, generator)
+    )
+  else
+    exp.resultsRef ??= makeRef "results"
+    { resultsRef } := exp
 
-  // Wrap with IIFE
-  children.splice(i,
-    1,
-    wrapIIFE([
-      ["", ["const ", resultsRef, "=[]"], ";"],
-      ...children.map((c) => ["", c, undefined]),
-      ["", wrapWithReturn(resultsRef)],
-    ], async)
-  )
+    // insert `results.push` to gather results array
+    assignResults block, (node) =>
+      // TODO: real node
+      [ resultsRef, ".push(", node, ")" ]
+    braceBlock(block)
+
+    // Wrap with IIFE
+    children.splice(i,
+      1,
+      wrapIIFE([
+        ["", ["const ", resultsRef, "=[]"], ";"]
+        ["", statement, undefined]
+        ["", wrapWithReturn(resultsRef)]
+      ], async)
+    )
+
   updateParentPointers exp
 
 /**
