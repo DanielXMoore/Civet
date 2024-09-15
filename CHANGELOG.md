@@ -4,6 +4,12 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.7.30 (2024-09-15, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.29...v0.7.30), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.30))
+* Fix `!` negated indented argument in function call [[#1393](https://github.com/DanielXMoore/Civet/pull/1393)]
+* `break with` and `continue with` for modifying results array in a loop [[#1396](https://github.com/DanielXMoore/Civet/pull/1396)]
+* `break/continue [label] with` and better error handling [[#1397](https://github.com/DanielXMoore/Civet/pull/1397)]
+* `for*`, `loop*`, `while*`, `do*` generator expressions [[#1398](https://github.com/DanielXMoore/Civet/pull/1398)]
+
 ## 0.7.29 (2024-09-04, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.28...v0.7.29), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.29))
 * Lexical declarations as JSX code children [[#1387](https://github.com/DanielXMoore/Civet/pull/1387)]
 * Postfix `if`/`unless` in type declaration [[#1388](https://github.com/DanielXMoore/Civet/pull/1388)]
