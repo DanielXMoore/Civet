@@ -1638,9 +1638,9 @@ function parities(list: number[]): string[]
 </Playground>
 
 ::: info
-Because loop expressions wrap in an
+When not at the top level, loop expressions wrap in an
 [IIFE](https://developer.mozilla.org/en-US/docs/Glossary/IIFE),
-you cannot use `return` inside such a loop,
+so you cannot use `return` inside such a loop,
 nor can you `break` or `continue` any outer loop.
 :::
 
@@ -1658,6 +1658,17 @@ results :=
 promise :=
   async for url of urls
     await fetch url
+</Playground>
+
+### Generator Expressions
+
+All loops have a starred form that makes a generator function,
+yielding items one at a time instead of building the entire array at once:
+
+<Playground>
+function mapIter(f, list)
+  for* item of list
+    f item
 </Playground>
 
 ### Postfix Loop
@@ -1811,7 +1822,7 @@ x := do
 </Playground>
 
 ::: info
-Because `do` expressions wrap in an
+When not at the top level, `do` expressions wrap in an
 [IIFE](https://developer.mozilla.org/en-US/docs/Glossary/IIFE),
 you cannot use `return`, `break`, or `continue` within them.
 :::
@@ -1831,6 +1842,19 @@ await Promise.allSettled for url of urls
   async do
     result := await fetch url
     await result.json()
+</Playground>
+
+### Generator Do Blocks
+
+You can create a generator using `yield` notation with `do*`:
+
+<Playground>
+neighbors := do*
+  yield [x-1, y]
+  yield [x+1, y]
+  yield [x, y-1]
+  yield [x, y+1]
+  return
 </Playground>
 
 ### Comptime Blocks
