@@ -26,7 +26,8 @@ The modern way to write TypeScript.
   [Babel](source/babel-plugin.civet),
   [Jest](https://github.com/DanielXMoore/Civet/blob/main/integration/jest),
   [Gulp](integration/gulp),
-  [Bun](source/bun-civet.civet)
+  [Bun](source/bun-civet.civet),
+  [`<script>` tag](https://github.com/DanielXMoore/Civet/tree/main/integration/script)
 - Starter templates for [Solid](https://github.com/orenelbaum/solid-civet-template) and [Solid Start](https://github.com/orenelbaum/solid-start-civet-template)
 
 Quickstart Guide
