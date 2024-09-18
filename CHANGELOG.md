@@ -4,6 +4,10 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.7.31 (2024-09-18, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.30...v0.7.31), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.31))
+* `--trace` fixes and documentation, cleanup of `getStateKey` [[#1399](https://github.com/DanielXMoore/Civet/pull/1399)]
+* Run `<script type="text/civet">` in browser build [[#1400](https://github.com/DanielXMoore/Civet/pull/1400)]
+
 ## 0.7.30 (2024-09-15, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.29...v0.7.30), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.30))
 * Fix `!` negated indented argument in function call [[#1393](https://github.com/DanielXMoore/Civet/pull/1393)]
 * `break with` and `continue with` for modifying results array in a loop [[#1396](https://github.com/DanielXMoore/Civet/pull/1396)]
