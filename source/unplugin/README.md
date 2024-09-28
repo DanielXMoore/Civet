@@ -1,10 +1,19 @@
 # unplugin-civet
 
-Use Civet in your projects with Vite, Webpack, Rspack, Rollup and esbuild, with `dts` generation supported.
+Use Civet in your projects bundled with Vite, Webpack, Rspack, Rollup, or esbuild, with `.d.ts` generation support.
 
 ## Usage
 
-The only setup required is adding it your bundler's config:
+The only setup required is adding the plugin to your bundler's config.
+Jump to:
+
+* [Vite](#vite)
+* [Astro](#astro)
+* [Rollup](#rollup)
+* [ESBuild](#esbuild)
+* [Webpack](#webpack)
+
+You probably also want to pass in [options](#options).
 
 ### Vite
 
@@ -23,6 +32,40 @@ export default defineConfig({
 });
 ```
 
+To use Civet files as Web Workers, use a variation on
+[Vite's constructor syntax](https://vitejs.dev/guide/features.html#import-with-constructors):
+(note the added `.tsx` extension)
+
+```ts
+worker = new Worker(new URL('./worker.civet.tsx', import.meta.url))
+```
+
+You'll also need to pass the 
+`civetVitePlugin` in the
+[`worker.plugins` option](https://vitejs.dev/config/worker-options#worker-plugins):
+
+```ts
+// vite.config.ts
+import { defineConfig } from 'vite';
+import civetVitePlugin from '@danielx/civet/vite';
+
+export default defineConfig({
+  // ...
+  plugins: [
+    civetVitePlugin({
+      // options
+    }),
+  ],
+  worker: {
+    plugins: () => [
+      civetVitePlugin({
+        // options
+      }),
+    ],
+  },
+});
+```
+
 ### Astro
 
 ```ts
@@ -38,6 +81,36 @@ export default defineConfig({
       // options
     }),
   ],
+});
+```
+
+To use Civet files as Web Workers, see the [Vite directions](#vite) above.
+You'll also need to import and pass the Civet Vite plugin via the
+[`vite.worker.plugins` option](https://vitejs.dev/config/worker-options#worker-plugins):
+
+```ts
+// astro.config.ts
+import { defineConfig } from 'astro/config';
+import civet from '@danielx/civet/astro';
+import civetVitePlugin from '@danielx/civet/vite';
+
+// https://astro.build/config
+export default defineConfig({
+  // ...
+  integrations: [
+    civet({
+      // options
+    }),
+  ],
+  vite: {
+    worker: {
+      plugins: () => [
+        civetVitePlugin({
+          // options
+        }),
+      ],
+    },
+  },
 });
 ```
 
@@ -140,5 +213,5 @@ interface PluginOptions {
 
 ## Examples
 
-See also [full examples of unplugin](../../integration/unplugin-examples).
+See also [full examples of unplugin](../../integration/unplugin-examples)
 in Astro, esbuild, NextJS, Rollup, Vite, and Webpack.
