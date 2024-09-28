@@ -38,10 +38,11 @@ To use Civet files as Web Workers, use a variation on
 
 ```ts
 worker = new Worker(new URL('./worker.civet.tsx', import.meta.url))
+//or
+worker = new Worker(new URL('./worker.civet.tsx', import.meta.url), { type: 'module' })
 ```
 
-You'll also need to pass the 
-`civetVitePlugin` in the
+You'll also need to pass the `civetVitePlugin` via the
 [`worker.plugins` option](https://vitejs.dev/config/worker-options#worker-plugins):
 
 ```ts
@@ -62,6 +63,7 @@ export default defineConfig({
         // options
       }),
     ],
+    // format: "es",  // if using { type: 'module' }
   },
 });
 ```
@@ -109,6 +111,7 @@ export default defineConfig({
           // options
         }),
       ],
+      // format: "es",  // if using { type: 'module' }
     },
   },
 });
