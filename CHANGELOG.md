@@ -4,6 +4,10 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.7.32 (2024-10-03, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.31...v0.7.32), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.32))
+* Document how to use Civet Web Workers in Vite [[#1403](https://github.com/DanielXMoore/Civet/pull/1403)]
+* change types order in package.json exports; default config exports [[#1405](https://github.com/DanielXMoore/Civet/pull/1405)]
+
 ## 0.7.31 (2024-09-18, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.30...v0.7.31), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.31))
 * `--trace` fixes and documentation, cleanup of `getStateKey` [[#1399](https://github.com/DanielXMoore/Civet/pull/1399)]
 * Run `<script type="text/civet">` in browser build [[#1400](https://github.com/DanielXMoore/Civet/pull/1400)]
