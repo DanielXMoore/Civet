@@ -127,8 +127,8 @@ declare module "@danielx/civet/config" {
     path: string
   ): Promise<import("@danielx/civet").CompileOptions>
   export default {
-    findInDir: typeof findInDir,
-    findConfig: typeof findConfig,
-    loadConfig: typeof loadConfig,
+    findInDir,
+    findConfig,
+    loadConfig,
   }
 }
