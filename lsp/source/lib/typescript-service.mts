@@ -507,7 +507,7 @@ function TSService(projectURL = "./") {
   }
 
   let civetConfig: CompileOptions = {}
-  CivetConfig.findConfig(projectPath).then(async (configPath: unknown) => {
+  CivetConfig.findConfig(projectPath).then(async (configPath) => {
     if (configPath) {
       console.info("Loading Civet config @", configPath)
       const config = await CivetConfig.loadConfig(configPath)
