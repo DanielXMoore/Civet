@@ -20,6 +20,7 @@ declare module "@danielx/civet" {
     coffeeOf: boolean
     coffeePrototype: boolean
     defaultElement: string
+    globals: string[]
     implicitReturns: boolean
     jsxCode: boolean
     objectIs: boolean

@@ -64,6 +64,19 @@ for item of iterable
   sos += square
 </Playground>
 
+### Globals
+
+You can prevent [`autoVar`](#autovar), [`autoLet`](#autolet), and
+[`autoConst`](#autoconst) from declaring certain variables
+by specifying a list of `globals` in the `"civet"` directive:
+
+<Playground>
+"civet autoVar globals=cache,version"
+cache = {}
+version = '1.2.3'
+size = 1024
+</Playground>
+
 ### Declarations in Conditions and Loops
 
 <Playground>
