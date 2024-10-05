@@ -4,6 +4,15 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.7.33 (2024-10-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.32...v0.7.33), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.33))
+* VSCode plugin ignores CoffeeScript files [[#1409](https://github.com/DanielXMoore/Civet/pull/1409)]
+* Add syntax highlighting support for /d, /s and /v RegExp flags [[#1413](https://github.com/DanielXMoore/Civet/pull/1413)]
+* Make `autoVar` skip `declare`d variables [[#1419](https://github.com/DanielXMoore/Civet/pull/1419)]
+* Add missing parens in `unless` declaration condition [[#1414](https://github.com/DanielXMoore/Civet/pull/1414)]
+* Type specification in `for..of/in` loops [[#1418](https://github.com/DanielXMoore/Civet/pull/1418)]
+* Fix implicit empty body for exported functions [[#1417](https://github.com/DanielXMoore/Civet/pull/1417)]
+* Fix typed patterns in arrow function with unparenthesized parameter [[#1416](https://github.com/DanielXMoore/Civet/pull/1416)]
+
 ## 0.7.32 (2024-10-03, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.31...v0.7.32), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.32))
 * Document how to use Civet Web Workers in Vite [[#1403](https://github.com/DanielXMoore/Civet/pull/1403)]
 * change types order in package.json exports; default config exports [[#1405](https://github.com/DanielXMoore/Civet/pull/1405)]
