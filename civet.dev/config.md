@@ -39,6 +39,7 @@ and following ESM, require importing files with the correct extension.
 | [`autoLet`](reference#autolet) | automatically declare undeclared variables with `let` |
 | [`autoVar`](reference#autovar) | automatically declare undeclared variables with `var` |
 | [`defaultElement=tag`](reference#implicit-element) | specify default JSX tag: `<.foo>` → `<tag class="foo">` |
+| [`globals`](reference#globals) | avoid automatically declaring listed global variables |
 | [`jsxCode`](reference#automatic-code-children) | treat all JSX children as Civet code |
 | [`jsxCodeNested`](reference#automatic-code-children) | treat indented JSX children as Civet code |
 | [`jsxCodeSameLine`](reference#automatic-code-children) | treat same-line JSX children as Civet code |
