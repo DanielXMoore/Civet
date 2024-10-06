@@ -100,6 +100,7 @@ Things Changed from CoffeeScript
 - `x?()` → `x?.()` instead of `if (typeof x === 'function') { x() }`
 - Functions don't implicitly return the last value if there's a semicolon
   at the end: `-> x` returns `x` but `-> x;` does not
+- Generators don't implicitly return the last value (as this is rarely useful)
 - Backtick embedded JS has been replaced with JS template literals.
 - No longer allowing multiple postfix `if/unless` on the same line (use `&&` or `and` to combine conditions).
 - `#{}` interpolation in `""` strings only when `"civet coffeeCompat"` or `"civet coffeeInterpolation"`
