@@ -32,9 +32,16 @@ export default defineConfig({
 });
 ```
 
-To use Civet files as Web Workers, use a variation on
-[Vite's constructor syntax](https://vitejs.dev/guide/features.html#import-with-constructors):
-(note the added `.tsx` extension)
+To use Civet files as Web Workers, you can use
+[Vite's `?worker` query suffix](https://vite.dev/guide/features.html#import-with-query-suffixes):
+
+```ts
+import MyWorker from './worker.civet?worker'
+```
+
+If you use
+[Vite's constructor syntax](https://vitejs.dev/guide/features.html#import-with-constructors),
+you need to add a `.tsx` extension like so:
 
 ```ts
 worker = new Worker(new URL('./worker.civet.tsx', import.meta.url))
