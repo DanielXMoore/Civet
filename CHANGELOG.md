@@ -4,6 +4,14 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.7.34 (2024-10-06, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.33...v0.7.34), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.34))
+* Use new Civet icon in VSCode extension [[#1420](https://github.com/DanielXMoore/Civet/pull/1420)]
+* `"civet globals"` directive to prevent some auto declarations [[#1423](https://github.com/DanielXMoore/Civet/pull/1423)]
+* Fix arrow type with `?` postfix [[#1425](https://github.com/DanielXMoore/Civet/pull/1425)]
+* Enable `worker.civet?worker` import in Vite [[#1426](https://github.com/DanielXMoore/Civet/pull/1426)]
+* Fix missing semicolon in if/unless followed by else [[#1428](https://github.com/DanielXMoore/Civet/pull/1428)]
+* Support `export default` in `declare` blocks [[#1427](https://github.com/DanielXMoore/Civet/pull/1427)]
+
 ## 0.7.33 (2024-10-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.32...v0.7.33), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.33))
 * VSCode plugin ignores CoffeeScript files [[#1409](https://github.com/DanielXMoore/Civet/pull/1409)]
 * Add syntax highlighting support for /d, /s and /v RegExp flags [[#1413](https://github.com/DanielXMoore/Civet/pull/1413)]
