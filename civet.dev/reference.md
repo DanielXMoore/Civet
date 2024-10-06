@@ -901,6 +901,8 @@ Implicit return of the last value in a function can be avoided by
 specifying a `void` return type (or `Promise<void>` for async functions),
 adding a final semicolon or explicit `return`,
 or globally using the directive `"civet -implicitReturns"`.
+Generators also don't implicitly `return`
+(use explicit `return` to return a special final value).
 :::
 
 <Playground>
@@ -916,6 +918,13 @@ function abort: void
 <Playground>
 function run(command: string): Promise<void>
   await exec command
+</Playground>
+
+<Playground>
+function count()
+  yield 1
+  yield 2
+  yield 3
 </Playground>
 
 ### One-Line Functions
@@ -1867,7 +1876,6 @@ neighbors := do*
   yield [x+1, y]
   yield [x, y-1]
   yield [x, y+1]
-  return
 </Playground>
 
 ### Comptime Blocks
