@@ -56,10 +56,12 @@ import {
   processProgramAsync,
   processTryBlock,
   processUnaryExpression,
+  processUnaryNestedExpression,
   quoteString,
   reorderBindingRestProperty,
   replaceNodes,
   skipImplicitArguments,
+  stripTrailingImplicitComma,
   trimFirstSpace,
   typeOfJSX,
 } from "./parser/lib.civet"
@@ -315,9 +317,7 @@ ImplicitArguments
     // Don't treat as call if this is a postfix for/while/until/if/unless
     if (skipImplicitArguments(args)) return $skip
 
-    // Remove implicit trailing comma
-    let last = args[args.length - 1]
-    if (last?.token === "," && last.implicit) args = args.slice(0, -1)
+    args = stripTrailingImplicitComma(args)
 
     return {
       type: "Call",
@@ -468,22 +468,34 @@ NestedArgument
   Nested:indent SingleLineArgumentExpressions:args ParameterElementDelimiter:comma ->
     // Attach indentation to first argument in SingleLineArgumentExpressions
     let [ arg0, ...rest ] = args
-    arg0 = [ indent, ...arg0 ]
+    arg0 = prepend(indent, arg0)
     return [ arg0, ...rest, comma ]
 
 SingleLineArgumentExpressions
-  ( _? ArgumentPart ) ( ( _? Comma ) ( _? ArgumentPart ) )* ->
+  WArgumentPart ( ( _? Comma ) WArgumentPart )* ->
     return [ $1, ...$2.flat() ]
+
+WArgumentPart
+  _? ArgumentPart ->
+    return prepend($1, $2)
 
 ArgumentPart
   # NOTE: Using ExtendedExpression to allow for If/Switch expressions
   # NOTE: Allow leading or trailing dots for argument splats like CoffeeScript
-  DotDotDot ExtendedExpression
-  ExtendedExpression DotDotDot? ->
-    if ($2) {
-      return [$2, $1]
+  DotDotDot:spread ExtendedExpression:expression ->
+    return {
+      type: "Argument",
+      children: $0,
+      expression,
+      spread,
     }
-    return $1
+  ExtendedExpression:expression DotDotDot?:spread ->
+    return {
+      type: "Argument",
+      children: spread ? [ spread, expression ] : [ expression ],
+      expression,
+      spread,
+    }
 
 # NOTE: ArgumentPart variant that forbids top-level pipeline operators
 NonPipelineArgumentPart
@@ -546,6 +558,10 @@ RHS
 
 # https://262.ecma-international.org/#prod-UnaryExpression
 UnaryExpression
+  # NOTE: Added nested case, for e.g. indented await argument
+  IndentedApplicationAllowed UnaryOp+:pre ( NestedBulletedArray / NestedArgumentList ):args UnaryPostfix?:post ->
+    return processUnaryNestedExpression(pre, args, post) ?? $skip
+
   # NOTE: Merged AwaitExpression with UnaryOp
   # https://262.ecma-international.org/#prod-AwaitExpression
   # NOTE: Eliminated left recursion
@@ -3031,6 +3047,7 @@ ArrayElementExpression
     return {
       type: "SpreadElement",
       children: [ws, dots, exp],
+      expression: exp,
       names: exp.names,
     }
 
@@ -3044,12 +3061,14 @@ ArrayElementExpression
         return {
           type: "ArrayElement",
           children: [exp],
+          expression: exp,
           names: exp.names,
         }
       } else {
         return {
           type: "SpreadElement",
           children: [...spread, exp],
+          expression: exp,
           names: exp.names,
         }
       }
@@ -3088,9 +3107,10 @@ BulletedArray
     ]
 
     // Remove implicit comma from last element
-    const last = content[content.length - 1]
+    let last = content[content.length - 1]
     if (last.children?.at(-1)?.implicit) {
-      last.children = last.children.slice(0, -1)
+      content[content.length - 1] = last =
+        { ...last, children: last.children.slice(0, -1) }
     }
 
     return {
@@ -5203,6 +5223,12 @@ MaybeNestedExtendedExpression
     return $skip
   ExtendedExpression
 
+NestedExtendedExpression
+  NestedBulletedArray
+  PushIndent ( Nested ExtendedExpression )? PopIndent ->
+    if ($3) return $3
+    return $skip
+
 # MaybeNestedExtendedExpression but where expression needs to be output with
 # parentheses if indented, so that the expression starts on the same line.
 # (e.g. for `return` or `yield`)
@@ -6076,11 +6102,11 @@ AtAt
 
 Async
   "async" NonIdContinue ->
-    return { $loc, token: $1, type: 'Async' }
+    return { $loc, token: $1, type: "Async" }
 
 Await
   "await" NonIdContinue ->
-    return { $loc, token: $1, type: 'Await' }
+    return { $loc, token: $1, type: "Await" }
 
 Backtick
   "`" ->

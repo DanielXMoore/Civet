@@ -1,14 +1,19 @@
 import type {
+  ArrayExpression
+  ASTNode
   Existence
+  Literal
 } from ./types.civet
 
 import {
   firstNonSpace
   makeLeftHandSideExpression
   parenthesizeExpression
+  stripTrailingImplicitComma
+  trimFirstSpace
 } from ./util.civet
 
-function processUnaryExpression(pre, exp, post)
+function processUnaryExpression(pre: ASTNode[], exp: ASTNode, post?: ASTNode[]): ASTNode
   if (!(pre.length or post)) return exp
   // Handle "?" postfix
   if post?.token is "?"
@@ -45,9 +50,9 @@ function processUnaryExpression(pre, exp, post)
       {token} := pre[0]
       if token is "-" or token is "+"
         children := [pre[0], ...exp.children]
-        literal := {
-          type: "Literal",
-          children,
+        literal: Literal := {
+          type: "Literal"
+          children
           raw: `${token}${exp.raw}`
         }
         if (post)
@@ -67,24 +72,78 @@ function processUnaryExpression(pre, exp, post)
           exp = ["(", exp, ")"]
 
         exp =
-          type: "CallExpression",
+          type: "CallExpression"
           children: [...last.children, "Promise", last.op, exp]
         pre = pre.slice(0, -1)
       else
         if firstNonSpace(exp) is like /^[ \t]*\n/, {token: /^[ \t]*\n/}
           exp = parenthesizeExpression exp
         exp =
-          type: "AwaitExpression",
-          children: [...last.children, exp],
+          type: "AwaitExpression"
+          children: [...last.children, exp]
         pre = pre.slice(0, -1)
     else
       break
 
   return {
-    type: "UnaryExpression",
+    type: "UnaryExpression"
     children: [...pre, exp, post]
   }
 
+function processUnaryNestedExpression(pre: ASTNode[], args: ArrayExpression | ASTNode[], post: ASTNode[])
+  isArray := args.type is "ArrayExpression"
+  unless isArray
+    args = stripTrailingImplicitComma args
+  // Special handling of multiple nested arguments, or any array argument
+  if isArray or args# > 2 // 2 = 1 argument + 1 delimiter
+    // Multiple arguments only defined for await and await operators
+    last := pre.-1
+    return unless last is like {type: "Await"}
+    if last.op // await ops take array argument
+      unless isArray
+        args =
+          type: "ArrayExpression"
+          children: [ "[", args, "]" ]
+    else // regular await turns into an array
+      pre.pop()
+      unless isArray
+        args = args as ASTNode[]
+        args =
+          type: "ArrayExpression"
+          children: [
+            "["
+            ...for each arg of args
+              if arg is like {type: "Argument"}
+                expression := processUnaryExpression [last], arg.expression
+                {
+                  ...arg
+                  expression
+                  children: arg.children.map & is arg.expression ? expression : &
+                }
+              else
+                arg
+            "]"
+          ]
+      else
+        args = trimFirstSpace(args) as ArrayExpression
+        args = {
+          ...args,
+          children: (args as ArrayExpression).children.map
+            (arg) =>
+              switch arg
+                {type: "ArrayElement", expression: exp, children}
+                  expression := processUnaryExpression [last], exp
+                  {
+                    ...arg
+                    expression
+                    children: children.map & is exp ? expression : &
+                  }
+                else
+                  arg
+        }
+  processUnaryExpression pre, args, post
+
 export {
   processUnaryExpression
+  processUnaryNestedExpression
 }
