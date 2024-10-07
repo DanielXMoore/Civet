@@ -31,6 +31,7 @@ import type {
   Placeholder
   StatementExpression
   StatementTuple
+  TypeArguments
   TypeSuffix
   WSNode
 } from ./types.civet
@@ -1058,42 +1059,70 @@ function attachPostfixStatementAsExpression(exp, post: [WSNode, IfStatement | It
       throw new Error("Unknown postfix statement")
 
 function processTypes(node: ASTNode)
-  // T? -> T | undefined; T?? -> T | undefined | null
+  // T? -> T | undefined; T?? -> T | undefined | null; T! -> NonNullable<T>
   gatherRecursiveAll node, (n) => n.type is "TypeUnary"
   // @ts-ignore
   .forEach (unary): void =>
-    let last: ASTNode
-    count .= 0
-    while unary.suffix# and unary.suffix.-1?.token is "?"
-      last = unary.suffix.pop()
-      count++
-    return unless count
-    // Remove UnaryType wrapper if no prefix or suffix,
-    // so we can correctly decide whether to parenthesize
-    t := if unary.suffix# or unary.prefix# then unary else unary.t
-    if unary.parent?.type is "TypeTuple"
-      // Leave one ? inside a type tuple
-      if count is 1
-        unary.suffix.push last
-        return
-      replaceNode unary, [
-        getTrimmingSpace unary
-        "("
-        parenthesizeType trimFirstSpace t
-        " | null)"
-        last
-      ]
-    else
-      replaceNode unary,
-        type: "TypeParenthesized"
-        ts: true
-        children: [
-          getTrimmingSpace unary
-          "("
-          parenthesizeType trimFirstSpace t
-          count is 1 ? " | undefined" : " | undefined | null"
-          ")"
-        ]
+    return unless unary.suffix#
+    switch unary.suffix.-1
+      {token: "?"}
+        let last: ASTNode
+        count .= 0
+        while unary.suffix# and unary.suffix.-1?.token is "?"
+          last = unary.suffix.pop()
+          count++
+        // Remove pointless non-null assertions before question marks
+        while unary.suffix# and unary.suffix.-1?.type is "NonNullAssertion"
+          unary.suffix.pop()
+        // Remove UnaryType wrapper if no prefix or suffix,
+        // so we can correctly decide whether to parenthesize
+        t := if unary.suffix# or unary.prefix# then unary else unary.t
+        if unary.parent?.type is "TypeTuple"
+          // Leave one ? inside a type tuple
+          if count is 1
+            unary.suffix.push last
+            return
+          replaceNode unary, [
+            getTrimmingSpace unary
+            "("
+            parenthesizeType trimFirstSpace t
+            " | null)"
+            last
+          ]
+        else
+          replaceNode unary,
+            type: "TypeParenthesized"
+            ts: true
+            children: [
+              getTrimmingSpace unary
+              "("
+              parenthesizeType trimFirstSpace t
+              count is 1 ? " | undefined" : " | undefined | null"
+              ")"
+            ]
+      {type: "NonNullAssertion"}
+        while unary.suffix# and unary.suffix.-1?.type is "NonNullAssertion"
+          unary.suffix.pop()
+        // Remove pointless non-null assertions before question marks
+        while unary.suffix# and unary.suffix.-1?.token is "?"
+          unary.suffix.pop()
+        t := trimFirstSpace
+          if unary.suffix# or unary.prefix# then unary else unary.t
+        args: TypeArguments :=
+          type: "TypeArguments"
+          ts: true
+          types: [t]
+          children: ["<", t, ">"]
+        replaceNode unary, {
+          type: "TypeIdentifier"
+          raw: "NonNullable"
+          args
+          children: [
+            getTrimmingSpace unary
+            "NonNullable"
+            args
+          ]
+        }
 
 /**
 Wrap any remaining statement expressions in IIFE.
