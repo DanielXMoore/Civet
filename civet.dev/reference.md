@@ -106,7 +106,7 @@ while {data, next} := node
   node = next
 </Playground>
 
-You can check for nonnull instead of truthy values with a `?`:
+You can check for non-null instead of truthy values with a `?`:
 
 <Playground>
 sum .= 0
@@ -2121,6 +2121,14 @@ More generally, `T?` allows for `undefined` and
 <Playground>
 let i: number?
 let x: string??
+</Playground>
+
+### Non-Null Types
+
+`T!` removes `undefined` and `null` from the type:
+
+<Playground>
+let x: unknown!
 </Playground>
 
 ### Destructured Typing
