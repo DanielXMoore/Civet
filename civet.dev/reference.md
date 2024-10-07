@@ -835,6 +835,20 @@ await.all
       fetch url |> await |> .json() |> await
 </Playground>
 
+Both `await` and `await` operators support an indented application form.
+Multiple arguments automatically get bundled into an array:
+
+<Playground>
+// Sequential
+await
+  first()
+  second()
+// Parallel
+await.all
+  first()
+  second()
+</Playground>
+
 ### Custom Infix Operators
 
 You can also define your own infix operators;
