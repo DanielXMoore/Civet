@@ -4,6 +4,15 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.7.35 (2024-10-08, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.34...v0.7.35), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.35))
+* Stop implicitly returning final value from generators [[#1430](https://github.com/DanielXMoore/Civet/pull/1430)]
+* Prevent stray `await` on one line from pipeline expansion [[#1431](https://github.com/DanielXMoore/Civet/pull/1431)]
+* `T!` type shorthand for `NonNullable<T>` [[#1434](https://github.com/DanielXMoore/Civet/pull/1434)]
+* `await` with indented argument, or multiple arguments as array [[#1433](https://github.com/DanielXMoore/Civet/pull/1433)]
+* Typed `for` loops generate valid TypeScript [[#1435](https://github.com/DanielXMoore/Civet/pull/1435)]
+* `await` with array literal awaits the items [[#1437](https://github.com/DanielXMoore/Civet/pull/1437)]
+* CoffeeScript `do` allows unary operators beforehand, and handles nested body better [[#1436](https://github.com/DanielXMoore/Civet/pull/1436)]
+
 ## 0.7.34 (2024-10-06, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.33...v0.7.34), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.34))
 * Use new Civet icon in VSCode extension [[#1420](https://github.com/DanielXMoore/Civet/pull/1420)]
 * `"civet globals"` directive to prevent some auto declarations [[#1423](https://github.com/DanielXMoore/Civet/pull/1423)]
