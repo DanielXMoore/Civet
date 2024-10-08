@@ -849,6 +849,21 @@ await.all
   second()
 </Playground>
 
+Alternatively, you can use array literals:
+
+<Playground>
+// Sequential
+await [ first(), second() ]
+await
+  . first()
+  . second()
+// Parallel
+await.all [ first(), second() ]
+await.all
+  . first()
+  . second()
+</Playground>
+
 ### Custom Infix Operators
 
 You can also define your own infix operators;
