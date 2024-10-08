@@ -1590,9 +1590,20 @@ for item, index of list
   console.log `${index}th item is ${item}`
 </Playground>
 
+You can add types to the declarations (unlike TypeScript):
+
+<Playground>
+for var item: Item? of list
+  console.log item
+if item?
+  console.log "Last item:", item
+else
+  console.log "No items"
+</Playground>
+
 ### for each..of
 
-For Arrays and other objects implementing `.length` and `[i]` indexing,
+For `Array`s and other objects implementing `.length` and `[i]` indexing,
 you can use `for each..of` as an optimized form of `for..of`
 (without building an iterator):
 
@@ -1644,6 +1655,14 @@ you can skip them with `own`:
 <Playground>
 for own key in object
   console.log key
+</Playground>
+
+You can add types to the declarations (unlike TypeScript):
+
+<Playground>
+for var key: string, value: unknown in object
+  console.log key, JSON.stringify value
+key ?= "no last key"
 </Playground>
 
 ### Loop Expressions

@@ -123,7 +123,7 @@ function processForInOf($0: [
   else if step
     throw new Error("for..of/in cannot use 'by' except with range literals")
 
-  let eachOwnError: ASTError | undefined
+  let eachOwnError: ASTError?
   let hoistDec, blockPrefix: ASTNode[] = []
 
   // for each item[, index] of array
@@ -168,27 +168,55 @@ function processForInOf($0: [
         message: "'each' is only meaningful in for..of loops",
 
   // for own..in
-  let own = eachOwn and eachOwn[0].token is "own";
-  let expRef: ASTNode | undefined
+  own .= eachOwn and eachOwn[0].token is "own"
+  let expRef: ASTNode?
   if own and inOf.token is not "in"
     own = false
     eachOwnError =
       type: "Error"
       message: "'own' is only meaningful in for..in loops"
 
-  if !declaration2 and !own
+  // TypeScript doesn't support typed declarations in for loops,
+  // so pull such declarations inside the loop:
+  //   for var x: T of y -> for (const x1 of y) {var x: T = x1;
+  // for..in loops need a similar ref-based declaration
+  // for dereferencing to get the associated value.
+  { binding } := declaration
+  pattern .= binding?.pattern
+  if binding?.typeSuffix or (
+    inOf.token is "in" and declaration2 and pattern.type is not "Identifier"
+  )
+    itemRef := makeRef if inOf.token is "in" then "key" else "item"
+    blockPrefix.push ["", {
+      type: "Declaration"
+      children: [declaration, " = ", itemRef]
+      names: declaration.names
+    }, ";"]
+    pattern = itemRef
+    declaration =
+      type: "ForDeclaration"
+      binding: {
+        type: "Binding"
+        pattern
+        children: [ pattern ]
+        names: []
+      }
+      children: ["const ", itemRef]
+      names: []
+
+  unless declaration2 or own
     return {
       declaration
       blockPrefix
       children: [awaits, eachOwnError, open, declaration, ws, inOf, expRef ?? exp, step, close] // omit declaration2, replace eachOwn with eachOwnError, replace exp with expRef
     }
 
-  let ws2: ASTNode | undefined, decl2: ASTNode | undefined
+  let ws2: ASTNode?, decl2: ASTNode?
   if (declaration2) [, , ws2, decl2] = declaration2  // strip __ Comma __
 
   switch inOf.token
     when "of" // for item, index of iter
-      const counterRef = makeRef("i")
+      counterRef := makeRef "i"
       hoistDec = {
         type: "Declaration"
         children: ["let ", counterRef, " = 0"]
@@ -211,27 +239,6 @@ function processForInOf($0: [
         exp =
           type: "AssignmentExpression"
           children: [" ", expRef, " =", exp]
-      // Replace key with single identifier if it's a pattern,
-      // so that we can use it to dereference value.
-      { binding } := declaration
-      { pattern } .= binding
-      unless pattern.type is "Identifier"
-        const keyRef = makeRef("key")
-        blockPrefix.push ["", [
-          declaration, " = ", keyRef
-        ], ";"]
-        pattern = keyRef
-        declaration =
-          type: "ForDeclaration"
-          binding: {
-            type: "Binding"
-            pattern
-            children: [ pattern ]
-            names: []
-            binding.suffix
-          }
-          children: ["const ", keyRef]
-          names: []
       // for own..in
       if own
         const hasPropRef = getRef("hasProp")
