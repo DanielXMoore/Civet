@@ -230,31 +230,17 @@ TopLevelStatement
     statement = prepend(ws, statement)
     return [statement, delimiter]
 
-# Expressions with comma operator, or expressions with If and Switch
-ExtendedCommaExpression
-  NonAssignmentExtendedExpression
-  CommaExpression
-
 # Expressions with If and Switch, but no comma operator
-ExtendedExpression
-  NonAssignmentExtendedExpression
+Expression
   AssignmentExpression
 
-SingleLineExtendedExpression
-  NonAssignmentExtendedExpression
+SingleLineExpression
   SingleLineAssignmentExpression
 
-NonPipelineExtendedExpression
-  NonAssignmentExtendedExpression
+NonPipelineExpression
   NonPipelineAssignmentExpression
 
-NonAssignmentExtendedExpression
-  # Check for nested expressionized statements first
-  NestedNonAssignmentExtendedExpression
-  _? ExpressionizedStatementWithTrailingCallExpressions ->
-    return prepend($1, $2)
-
-NestedNonAssignmentExtendedExpression
+NestedExpressionizedStatement
   &EOS PushIndent ( Nested ExpressionizedStatementWithTrailingCallExpressions )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
     if (!expression) return $skip
     if (!trailing) return expression
@@ -470,16 +456,15 @@ WArgumentPart
     return prepend($1, $2)
 
 ArgumentPart
-  # NOTE: Using ExtendedExpression to allow for If/Switch expressions
   # NOTE: Allow leading or trailing dots for argument splats like CoffeeScript
-  DotDotDot:spread ExtendedExpression:expression ->
+  DotDotDot:spread Expression:expression ->
     return {
       type: "Argument",
       children: $0,
       expression,
       spread,
     }
-  ExtendedExpression:expression DotDotDot?:spread ->
+  Expression:expression DotDotDot?:spread ->
     return {
       type: "Argument",
       children: spread ? [ spread, expression ] : [ expression ],
@@ -565,7 +550,7 @@ UnaryBody
   # NOTE: ExpressionizedStatement needs to come before UpdateExpression
   # to prevent `async do ...` from being parsed as a function call `async(...)`
   UpdateExpression
-  NestedNonAssignmentExtendedExpression
+  NestedExpressionizedStatement
 
 MaybeNestedCoffeeDoBody
   PushIndent ( Nested CoffeeDoBody )? PopIndent ->
@@ -576,12 +561,12 @@ MaybeNestedCoffeeDoBody
 CoffeeDoBody
   # NOTE: This is a little hacky to match CoffeeScript's behavior
   # https://coffeescript.org/#try:do%20x%20%2B%20y%0Ado%20x%20%3D%20y%0Ado%20-%3E%20x%20%3D%201
-  ArrowFunction / ( LeftHandSideExpression !( __ AssignmentOpSymbol ) ) / ExtendedExpression
+  ArrowFunction / ( LeftHandSideExpression !( __ AssignmentOpSymbol ) ) / Expression
 
 UnaryWithoutParenthesizedAssignmentBody
   UpdateExpression
   ExpressionizedStatementWithTrailingCallExpressions
-  NestedNonAssignmentExtendedExpression
+  NestedExpressionizedStatement
 
 # NOTE: Parts of AssignmentExpression (specifically AssignmentExpressionTail)
 # that make sense as a UnaryBody, e.g. as the RHS of a binary op like `??`
@@ -697,7 +682,7 @@ ActualAssignment
   # NOTE: Consolidated assignment ops
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
-  ( NotDedented UpdateExpression WAssignmentOp )+ MaybeNestedExtendedExpression ->
+  ( NotDedented UpdateExpression WAssignmentOp )+ MaybeNestedExpression ->
     $1 = $1.map(x => [x[0], x[1], ...x[2]])
     $0 = [$1, $2]
     return {
@@ -716,7 +701,7 @@ NonPipelineActualAssignment
   # NOTE: Consolidated assignment ops
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
-  ( NotDedented UpdateExpression WAssignmentOp )+ MaybeNestedNonPipelineExtendedExpression ->
+  ( NotDedented UpdateExpression WAssignmentOp )+ MaybeNestedNonPipelineExpression ->
     $1 = $1.map((x) => [x[0], x[1], ...x[2]])
     $0 = [$1, $2]
     return {
@@ -732,7 +717,7 @@ NonPipelineActualAssignment
 
 # https://262.ecma-international.org/#prod-YieldExpression
 YieldExpression
-  Yield ( ( _? Star )? MaybeParenNestedExtendedExpression )? ->
+  Yield ( ( _? Star )? MaybeParenNestedExpression )? ->
     if ($2) {
       const [ star, expression ] = $2
       return {
@@ -792,7 +777,7 @@ TrailingPostfix
 FatArrowBody
   # If same-line single expression, avoid wrapping in braces
   # NOTE: Skip expressionized statements, so they get braced instead
-  !EOS !( _? ExpressionizedStatement ) NonPipelineExtendedExpression:exp !TrailingDeclaration !TrailingPipe !TrailingPostfix !SemicolonDelimiter ->
+  !EOS !( _? ExpressionizedStatement ) NonPipelineExpression:exp !TrailingDeclaration !TrailingPipe !TrailingPostfix !SemicolonDelimiter ->
     // Ensure object literal is wrapped in parens
     if (exp.type === "ObjectExpression") {
       exp = makeLeftHandSideExpression(exp)
@@ -810,7 +795,6 @@ FatArrowBody
 
 # https://262.ecma-international.org/#prod-ConditionalExpression
 ConditionalExpression
-  # NOTE: Using ExtendedExpression to allow for If/Switch expressions
   ShortCircuitExpression TernaryRest? ->
     if ($2) {
       return [$1, ...$2]
@@ -820,14 +804,14 @@ ConditionalExpression
 TernaryRest
   NestedTernaryRest
   # NOTE: Ternary `a ? b : c` is disabled if CoffeeScript binary existential `a ? b` is enabled
-  !CoffeeBinaryExistentialEnabled &[ \t] _ QuestionMark MaybeNestedExtendedExpression __ Colon MaybeNestedExtendedExpression ->
+  !CoffeeBinaryExistentialEnabled &[ \t] _ QuestionMark MaybeNestedExpression __ Colon MaybeNestedExpression ->
     return $0.slice(2)
 
 NestedTernaryRest
   # ?/: on following line at same indentation level
-  Nested QuestionMark MaybeNestedExtendedExpression Nested Colon MaybeNestedExtendedExpression
+  Nested QuestionMark MaybeNestedExpression Nested Colon MaybeNestedExpression
   # Indented ?/:
-  PushIndent (Nested QuestionMark MaybeNestedExtendedExpression Nested Colon MaybeNestedExtendedExpression)? PopIndent ->
+  PushIndent (Nested QuestionMark MaybeNestedExpression Nested Colon MaybeNestedExpression)? PopIndent ->
     if ($2) return $2
     return $skip
 
@@ -875,7 +859,7 @@ PipelineExpressionBodySameLine
 
 PipelineHeadItem
   # Needed to avoid left recursion
-  NonPipelineExtendedExpression
+  NonPipelineExpression
   # Allow a pipeline to be part of first step if within parenthesis
   ParenthesizedExpression
 
@@ -1213,8 +1197,7 @@ FieldDefinition
     }
 
   # NOTE: Added readonly semantic equivalent of const field assignment
-  # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
-  InsertReadonly:r ClassElementName TypeSuffix? __ ConstAssignment:ca MaybeNestedExtendedExpression ->
+  InsertReadonly:r ClassElementName TypeSuffix? __ ConstAssignment:ca MaybeNestedExpression ->
     // Adjust position to space before assignment to make TypeScript remapping happier
     r.children[0].$loc = {
       pos: ca.$loc.pos - 1,
@@ -1335,7 +1318,6 @@ CallExpression
     return dynamizeImportDeclarationExpression($0)
   # Dynamic import(), with optional parentheses when not used at top level.
   # (At top level, ImportDeclaration will match first.)
-  # NOTE: Using ExtendedExpression to allow for If/Switch expressions
   "import" ArgumentsWithTrailingMemberExpressions CallExpressionRest*:rest ->
     return processCallMemberExpression({
       type: "CallExpression",
@@ -1478,7 +1460,7 @@ MemberBracketContent
     }
 
 SliceParameters
-  ExtendedExpression:start __:ws ( DotDotDot / DotDot ):sep ExtendedExpression?:end ->
+  Expression:start __:ws ( DotDotDot / DotDot ):sep Expression?:end ->
     const inclusive = sep.token === ".."
 
     let children
@@ -1500,7 +1482,7 @@ SliceParameters
       children,
     }
 
-  Loc:l __:ws ( DotDotDot / DotDot ):sep ExtendedExpression:end ->
+  Loc:l __:ws ( DotDotDot / DotDot ):sep Expression:end ->
     const inclusive = sep.token === ".."
 
     const inc = []
@@ -2889,7 +2871,7 @@ _ArrayLiteral
   NestedBulletedArray
 
 RangeExpression
-  ExtendedExpression:s __:ws ( DotDotDot / DotDot ):range ExtendedExpression:e ->
+  Expression:s __:ws ( DotDotDot / DotDot ):range Expression:e ->
     const inclusive = range.token === ".."
     range.token = ","
 
@@ -2959,7 +2941,7 @@ RangeExpression
     }
 
   # NOTE: [x..] range to infinity, valid only in for loops
-  ExtendedExpression:s __:ws DotDot &( __ CloseBracket ) ->
+  Expression:s __:ws DotDot &( __ CloseBracket ) ->
     return {
       type: "RangeExpression",
       children: ["[]", {
@@ -3051,7 +3033,7 @@ ArrayElementExpression
   JSXTag
   ImplicitObjectLiteral &ArrayElementDelimiter -> $1
   # NOTE: Allow for postfix splat like CoffeeScript
-  ExtendedExpression:exp _?:ws DotDotDot:dots &ArrayElementDelimiter ->
+  Expression:exp _?:ws DotDotDot:dots &ArrayElementDelimiter ->
     if (!exp) {
       exp = { ...makeRef(), names: [] }
     }
@@ -3063,7 +3045,7 @@ ArrayElementExpression
       names: exp.names,
     }
 
-  # NOTE: Using PostfixedExpression, a superset of ExtendedExpression to allow If/Switch expressions
+  # NOTE: Using PostfixedExpression, a superset of Expression to allow If/Switch expressions
   # and also allow for postfix if/for/while
   ( ( __ DotDotDot __ )? PostfixedExpression )?:expMaybeSpread &ArrayElementDelimiter ->
     if (expMaybeSpread) {
@@ -3363,7 +3345,7 @@ PropertyDefinition
     // shorthand for `foo: foo()`
     if (!def.block || def.block.empty) return $skip
     return prepend(ws, def)
-  _?:ws DotDotDot:dots ExtendedExpression:exp ->
+  _?:ws DotDotDot:dots Expression:exp ->
     return {
       type: "SpreadProperty",
       children: [ws, dots, exp],
@@ -3461,7 +3443,7 @@ NamedProperty
 # used to distinguish between braceless inline objects and ternary expression conditions
 # Allow postfixed expression only if this first property isn't the last
 SnugNamedProperty
-  PropertyName:name Colon:colon MaybeNestedExtendedExpression:expression ( ( _? PostfixStatement ) &( Nested NamedProperty ) )?:post ->
+  PropertyName:name Colon:colon MaybeNestedExpression:expression ( ( _? PostfixStatement ) &( Nested NamedProperty ) )?:post ->
     if (post) {
       // post[0] drops the lookahead assertion
       expression = attachPostfixStatementAsExpression(expression, post[0])
@@ -4187,7 +4169,7 @@ PostfixedNoCommaStatement
     return statement
 
 PostfixedExpression
-  ExtendedExpression:expression ( _? PostfixStatement )?:post ->
+  Expression:expression ( _? PostfixStatement )?:post ->
     if (post) return attachPostfixStatementAsExpression(expression, post)
     return expression
 
@@ -4943,7 +4925,7 @@ Condition
     }
 
   # NOTE: Indented condition allows for further nested function application
-  PushIndent InsertOpenParen:open ( Nested ExtendedExpression )?:expression InsertCloseParen:close PopIndent ->
+  PushIndent InsertOpenParen:open ( Nested Expression )?:expression InsertCloseParen:close PopIndent ->
     if (!expression) return $skip
     return {
       type: "ParenthesizedExpression",
@@ -4966,7 +4948,7 @@ Condition
 # Variation of Condition where there's a trailing token (e.g. `then`)
 # that is guaranteed afterward, so we can use indented application.
 BoundedCondition
-  InsertOpenParen:open ExtendedExpression:expression InsertCloseParen:close ->
+  InsertOpenParen:open Expression:expression InsertCloseParen:close ->
     // Don't double wrap parethesized expressions
     if (expression.type === "ParenthesizedExpression") return expression
     expression = trimFirstSpace(expression)
@@ -4987,7 +4969,7 @@ DeclarationCondition
     }
 
 ExpressionWithIndentedApplicationForbidden
-  ForbidIndentedApplication ForbidNewlineBinaryOp ExtendedExpression?:exp RestoreNewlineBinaryOp RestoreIndentedApplication ->
+  ForbidIndentedApplication ForbidNewlineBinaryOp Expression?:exp RestoreNewlineBinaryOp RestoreIndentedApplication ->
     if (exp) return exp
     return $skip
 
@@ -5000,7 +4982,7 @@ SingleLineExpressionWithIndentedApplicationForbidden
 # as arguments to implicit function calls.  This is useful in the context of
 # an `if` or `class` line where we don't want to treat the body as an object.
 ExpressionWithObjectApplicationForbidden
-  ForbidBracedApplication ForbidIndentedApplication ForbidNewlineBinaryOp ExtendedExpression?:exp RestoreNewlineBinaryOp RestoreBracedApplication RestoreIndentedApplication ->
+  ForbidBracedApplication ForbidIndentedApplication ForbidNewlineBinaryOp Expression?:exp RestoreNewlineBinaryOp RestoreBracedApplication RestoreIndentedApplication ->
     if (exp) return exp
     return $skip
 
@@ -5169,7 +5151,7 @@ ExpressionStatement
 KeywordStatement
   # https://262.ecma-international.org/#prod-BreakStatement
   # NOTE: Also allow `break :label` for symmetry
-  Break ( _ LabelIdentifier )? ( _ With MaybeNestedExtendedExpression )? ->
+  Break ( _ LabelIdentifier )? ( _ With MaybeNestedExpression )? ->
     const children = [ $1 ]
     if ($2) children.push($2)
     if ($3) children.push({
@@ -5194,7 +5176,7 @@ KeywordStatement
 
   # https://262.ecma-international.org/#prod-ContinueStatement
   # NOTE: Also allow `continue :label` for symmetry
-  Continue ( _ LabelIdentifier )? ( _ With MaybeNestedExtendedExpression )? ->
+  Continue ( _ LabelIdentifier )? ( _ With MaybeNestedExpression )? ->
     const children = [ $1 ]
     if ($2) children.push($2)
     if ($3) children.push({
@@ -5213,7 +5195,7 @@ KeywordStatement
 
   # https://262.ecma-international.org/#prod-ReturnStatement
   # NOTE: Modified to leave room for `return.value` and `return =`
-  Return !(":" / "." / AfterReturnShorthand) MaybeParenNestedExtendedExpression?:expression -> {
+  Return !(":" / "." / AfterReturnShorthand) MaybeParenNestedExpression?:expression -> {
     type: "ReturnStatement",
     expression,
     children: $0,
@@ -5230,7 +5212,7 @@ DebuggerStatement
 
 # https://262.ecma-international.org/#prod-ThrowStatement
 ThrowStatement
-  Throw MaybeParenNestedExtendedExpression -> {
+  Throw MaybeParenNestedExpression -> {
     type: "ThrowStatement",
     children: $0,
   }
@@ -5247,12 +5229,12 @@ Debugger
   "debugger" NonIdContinue ->
     return { $loc, token: $1 }
 
-MaybeNestedNonPipelineExtendedExpression
+MaybeNestedNonPipelineExpression
   NestedBulletedArray
-  PushIndent ( Nested NonPipelineExtendedExpression )? PopIndent ->
+  PushIndent ( Nested NonPipelineExpression )? PopIndent ->
     if ($3) return $3
     return $skip
-  NonPipelineExtendedExpression
+  NonPipelineExpression
 
 MaybeNestedPostfixedExpression
   NestedBulletedArray
@@ -5261,30 +5243,30 @@ MaybeNestedPostfixedExpression
     return $skip
   PostfixedExpression
 
-MaybeNestedExtendedExpression
+MaybeNestedExpression
   NestedBulletedArray
-  PushIndent ( Nested ExtendedExpression )? PopIndent ->
+  PushIndent ( Nested Expression )? PopIndent ->
     if ($3) return $3
     return $skip
-  ExtendedExpression
+  Expression
 
-NestedExtendedExpression
+NestedExpression
   NestedBulletedArray
-  PushIndent ( Nested ExtendedExpression )? PopIndent ->
+  PushIndent ( Nested Expression )? PopIndent ->
     if ($3) return $3
     return $skip
 
-# MaybeNestedExtendedExpression but where expression needs to be output with
+# MaybeNestedExpression but where expression needs to be output with
 # parentheses if indented, so that the expression starts on the same line.
 # (e.g. for `return` or `yield`)
-MaybeParenNestedExtendedExpression
+MaybeParenNestedExpression
   # Not nested case
-  !EOS ExtendedExpression -> $2
+  !EOS Expression -> $2
   # Avoid wrapping array/object return value in parentheses.
   &EOS ( ArrayLiteral / ObjectLiteral ) -> $2
   # Value after `return` needs to be wrapped in parentheses
   # if it starts on another line.
-  &EOS InsertSpace InsertOpenParen PushIndent ( Nested ExtendedExpression ):exp PopIndent InsertNewline InsertIndent InsertCloseParen ->
+  &EOS InsertSpace InsertOpenParen PushIndent ( Nested Expression ):exp PopIndent InsertNewline InsertIndent InsertCloseParen ->
     if (!exp) return $skip
     return $0.slice(1)
 
@@ -5532,7 +5514,7 @@ ImportedBinding
 ExportDeclaration
   # NOTE: TypeScript's CommonJS export syntax
   # https://www.typescriptlang.org/docs/handbook/modules/reference.html#export--and-import--require
-  Export _? Equals MaybeNestedExtendedExpression ->
+  Export _? Equals MaybeNestedExpression ->
     // Replace `export` with `module.exports` in JS output
     const exp = [
       { ...$1, ts: true },
@@ -5567,8 +5549,8 @@ ExportDeclaration
         children: [ ...$0.slice(0, -2), id ] }
     ]
   # NOTE: This covers all forms that can be directly export defaulted in TS.
-  # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedExtendedExpression ):declaration ->
+  # NOTE: Using Expression to allow If/Switch expressions
+  Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedExpression ):declaration ->
     return { type: "ExportDeclaration", declaration, ts: declaration.ts, children: $0 }
   Export __ ExportFromClause __ FromClause ->
     return { type: "ExportDeclaration", ts: $3.ts, children: $0 }
@@ -5659,7 +5641,7 @@ LexicalDeclaration
       thisAssignments: bindings.flatMap(b => b.thisAssignments),
     }
   # NOTE: Added const/let shorthands
-  # NOTE: Using ExtendedExpression to allow for If/SwitchExpressions
+  # NOTE: Using Expression to allow for If/SwitchExpressions
   # NOTE: Using PostfixExpression to allow postfix if/unless/for
   Loc:loc ( BindingPattern / BindingIdentifier ) TypeSuffix? __ ( ConstAssignment / LetAssignment ):assign MaybeNestedPostfixedExpression ->
     return processAssignmentDeclaration(
@@ -5711,8 +5693,7 @@ LexicalBinding
 
 # https://262.ecma-international.org/#prod-Initializer
 Initializer
-  # NOTE: Using ExtendedExpression to allow If/Switch expressions
-  __ Equals MaybeNestedExtendedExpression:expression -> {
+  __ Equals MaybeNestedExpression:expression -> {
     type: "Initializer",
     expression,
     children: $0,
@@ -6803,8 +6784,8 @@ JSXAttributes
 JSXAttribute
   # https://facebook.github.io/jsx/#prod-JSXSpreadAttribute
   # allows something like
-  #   OpenBrace __ DotDotDot ExtendedExpression __ CloseBrace
-  # (where ExtendedExpression additionally allows If/Switch expressions).
+  #   OpenBrace __ DotDotDot Expression __ CloseBrace
+  # (where Expression additionally allows If/Switch expressions).
   # More generally, we allow any braced object literal:
   # {foo} is equivalent to foo={foo}, and
   # {foo, bar: baz} is equivalent to foo={foo} and bar={baz}.
@@ -7587,7 +7568,7 @@ NestedEnumPropertyLine
     }))
 
 EnumProperty
-  Identifier:name ( __ Equals MaybeNestedExtendedExpression )?:initializer ObjectPropertyDelimiter ->
+  Identifier:name ( __ Equals MaybeNestedExpression )?:initializer ObjectPropertyDelimiter ->
     return {
       type: "EnumProperty",
       name,
