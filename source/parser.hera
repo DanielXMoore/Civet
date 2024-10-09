@@ -124,6 +124,12 @@ Object.defineProperties(state, {
       return s[s.length-1]
     },
   },
+  pipelineForbidden: {
+    get() {
+      const {forbidPipeline: s} = state
+      return s[s.length-1]
+    },
+  },
   currentJSXTag: {
     get() {
       const {JSXTagStack: s} = state
@@ -141,12 +147,13 @@ export function getStateKey() {
     (state.trailingMemberPropertyForbidden << 4) |
     (state.nestedBinaryOpForbidden << 3) |
     (state.newlineBinaryOpForbidden << 2) |
+    (state.pipelineForbidden << 1) |
     // This is slightly different than the rest of the state,
     // since it is affected by the directive prologue and may be hit
     // by the EOL rule early in the parse. Later if we wanted to
     // allow block scoping of the compat directives we would need to
     // add them all here.
-    (config.coffeeComment << 1)
+    (config.coffeeComment << 0)
 
   return [stateInt, state.currentJSXTag]
 }
@@ -320,7 +327,7 @@ Arguments
     return $skip
 
 ImplicitArguments
-  ApplicationStart InsertOpenParen:open Trimmed_?:ws ForbidNestedBinaryOp NonPipelineArgumentList?:args RestoreNestedBinaryOp InsertCloseParen:close ->
+  ApplicationStart InsertOpenParen:open Trimmed_?:ws ForbidNestedBinaryOp ForbidPipeline NonPipelineArgumentList?:args RestorePipeline RestoreNestedBinaryOp InsertCloseParen:close ->
     if (!args) return $skip
     // Don't treat as call if this is a postfix for/while/until/if/unless
     if (skipImplicitArguments(args)) return $skip
@@ -468,7 +475,7 @@ NonPipelineArgumentList
     ]
 
 NestedArgumentList
-  PushIndent NestedArgument*:args PopIndent ->
+  PushIndent AllowPipeline NestedArgument*:args RestorePipeline PopIndent ->
     if (!args.length) return $skip
     return args.flat()
 
@@ -519,8 +526,11 @@ BinaryOpExpression
     if (!$2.length) return $1
     return processBinaryOpExpression($0)
 
+BinaryOpNotDedented
+  ( NestedBinaryOpAllowed / !Nested ) NotDedented -> $2
+
 BinaryOpRHS
-  ( NestedBinaryOpAllowed / !Nested ) NotDedented:ws1 IsLike:op _?:ws2 PatternExpressionList:patterns ->
+  BinaryOpNotDedented:ws1 IsLike:op _?:ws2 PatternExpressionList:patterns ->
     return [ ws1, op, ws2, patterns ]
   # Snug binary ops a+b
   BinaryOp:op RHS:rhs ->
@@ -858,7 +868,7 @@ ShortCircuitExpression
   BinaryOpExpression
 
 PipelineExpression
-  _?:ws PipelineHeadItem:head ( NotDedented Pipe __ PipelineTailItem )+:body ->
+  PipelineAllowed _?:ws PipelineHeadItem:head PipelineExpressionBody:body ->
     if (head.type === "ArrowFunction" && head.ampersandBlock) {
       const expressions = [ {
         type: "PipelineExpression",
@@ -877,6 +887,22 @@ PipelineExpression
       type: "PipelineExpression",
       children: [ws, head, body]
     }
+
+PipelineExpressionBody
+  # First check for properly indented chain of |>s,
+  # in which case we use PushIndent to track this indentation level.
+  PipelineExpressionBodySameLine:first PushIndent ( ( Nested Pipe __ PipelineTailItem ) PipelineExpressionBodySameLine )*:rest PopIndent ->
+    if (!rest.length) return $skip
+    return [
+      ...first,
+      ...rest.map(([nested, line]) => [nested, ...line]).flat()
+    ]
+
+  # Otherwise allow for any not-dedented chain
+  ( NotDedented Pipe __ PipelineTailItem )+
+
+PipelineExpressionBodySameLine
+  ( _? Pipe __ PipelineTailItem )*
 
 PipelineHeadItem
   # Needed to avoid left recursion
@@ -5133,11 +5159,30 @@ NewlineBinaryOpAllowed
     }
     if (state.newlineBinaryOpForbidden) return $skip
 
+AllowPipeline
+  "" ->
+    state.forbidPipeline.push(false)
+
+ForbidPipeline
+  "" ->
+    state.forbidPipeline.push(true)
+
+RestorePipeline
+  "" ->
+    state.forbidPipeline.pop()
+
+PipelineAllowed
+  "" ->
+    if (config.verbose) {
+      console.log("forbidPipeline:", state.forbidPipeline)
+    }
+    if (state.pipelineForbidden) return $skip
+
 AllowAll
-  AllowTrailingMemberProperty AllowBracedApplication AllowIndentedApplication AllowClassImplicitCall AllowNestedBinaryOp AllowNewlineBinaryOp
+  AllowTrailingMemberProperty AllowBracedApplication AllowIndentedApplication AllowClassImplicitCall AllowNestedBinaryOp AllowNewlineBinaryOp AllowPipeline
 
 RestoreAll
-  RestoreTrailingMemberProperty RestoreBracedApplication RestoreIndentedApplication RestoreClassImplicitCall RestoreNestedBinaryOp RestoreNewlineBinaryOp
+  RestoreTrailingMemberProperty RestoreBracedApplication RestoreIndentedApplication RestoreClassImplicitCall RestoreNestedBinaryOp RestoreNewlineBinaryOp RestorePipeline
 
 # https://262.ecma-international.org/#prod-ExpressionStatement
 CommaExpressionStatement
@@ -8444,6 +8489,7 @@ Reset
     state.forbidTrailingMemberProperty = [false]
     state.forbidNestedBinaryOp = [false]
     state.forbidNewlineBinaryOp = [false]
+    state.forbidPipeline = [false]
     state.JSXTagStack = [undefined]
 
     state.operators = new Map
