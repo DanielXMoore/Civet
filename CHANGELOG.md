@@ -4,6 +4,10 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.7.36 (2024-10-09, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.35...v0.7.36), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.36))
+* Binary operators continue arguments only if strictly indented [[#1438](https://github.com/DanielXMoore/Civet/pull/1438)]
+* Forbid pipes in non-nested implicit arguments [[#1441](https://github.com/DanielXMoore/Civet/pull/1441)]
+
 ## 0.7.35 (2024-10-08, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.34...v0.7.35), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.35))
 * Stop implicitly returning final value from generators [[#1430](https://github.com/DanielXMoore/Civet/pull/1430)]
 * Prevent stray `await` on one line from pipeline expansion [[#1431](https://github.com/DanielXMoore/Civet/pull/1431)]
