@@ -1088,11 +1088,13 @@ You can also assign properties:
 x.map .name = "Civet" + i++
 </Playground>
 
-You can also type the argument:
+You can also type the argument (but if you use type operators,
+the type needs to be wrapped in parentheses):
 
 <Playground>
 increment := &: number + 1
 show := &: ??? |> JSON.stringify |> console.log
+identity := &?: (number | string)
 </Playground>
 
 ::: info
