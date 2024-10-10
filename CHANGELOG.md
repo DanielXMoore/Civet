@@ -4,6 +4,12 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## Unreleased ([diff](https://github.com/DanielXMoore/Civet/compare/v0.7.36...???))
+* Assigned expressionized statement followed by pipe, grammar cleanup [[#1442](https://github.com/DanielXMoore/Civet/pull/1442)]
+* `yield` in `do` yields in parent in all cases [[#1443](https://github.com/DanielXMoore/Civet/pull/1443)]
+* Nested function arguments support trailing member access/call [[#1444](https://github.com/DanielXMoore/Civet/pull/1444)]
+  * BREAKING CHANGE: Nested argument using `.` function shorthand should now use `&.` to avoid being treated as a trailing member access
+
 ## 0.7.36 (2024-10-09, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.35...v0.7.36), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.36))
 * Binary operators continue arguments only if strictly indented [[#1438](https://github.com/DanielXMoore/Civet/pull/1438)]
 * Forbid pipes in non-nested implicit arguments [[#1441](https://github.com/DanielXMoore/Civet/pull/1441)]
@@ -245,6 +251,7 @@ as well as a full diff and commit list.
 
 ## 0.7.0 (2024-04-20, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.93...v0.7.0), [commits](https://github.com/DanielXMoore/Civet/commits/v0.7.0))
 * New ampersand proposal (#1070) [[#1159](https://github.com/DanielXMoore/Civet/pull/1159)]
+  * BREAKING CHANGE: `&` now represents the identity function, while `(&)` is a two-argument function computing Boolean AND. `&` functions also get wrapped higher than before, allowing for growth on the left instead of just the right.
 
 ## 0.6.93 (2024-04-19, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.92...v0.6.93), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.93))
 * Fix #1155 by consolidating trailing member access [[#1163](https://github.com/DanielXMoore/Civet/pull/1163)]
@@ -679,6 +686,7 @@ as well as a full diff and commit list.
 
 ## 0.6.19 (2023-08-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.18...v0.6.19), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.19))
 * Implicit returns of (last) declaration [[#606](https://github.com/DanielXMoore/Civet/pull/606)]
+  * BREAKING CHANGE: `x := 5` now implicitly returns `x`
 
 ## 0.6.18 (2023-08-02, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.17...v0.6.18), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.18))
 * TypeScript named tuples [[#604](https://github.com/DanielXMoore/Civet/pull/604)]
