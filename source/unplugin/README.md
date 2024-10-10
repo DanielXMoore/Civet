@@ -174,30 +174,32 @@ module.exports = {
 
 ```ts
 interface PluginOptions {
-  emitDeclaration?: boolean;
-  implicitExtension?: boolean;
-  outputExtension?: string;
-  ts?: 'civet' | 'esbuild' | 'tsc' | 'preserve';
-  typecheck?: boolean | string;
-  cache?: boolean;
+  emitDeclaration?: boolean
+  declarationExtesion?: string
+  implicitExtension?: boolean
+  outputExtension?: string
+  ts?: 'civet' | 'esbuild' | 'tsc' | 'preserve'
+  typecheck?: boolean | string
+  cache?: boolean
   parseOptions?: {
-    comptime?: boolean;
-    coffeeCompat?: boolean;
+    comptime?: boolean
+    coffeeCompat?: boolean
     // ... any other Civet configuration option
   }
   transformOutput?: (
     code: string,
     id: string
-  ) => TransformResult | Promise<TransformResult>;
+  ) => TransformResult | Promise<TransformResult>
 }
 ```
 
 - `emitDeclaration`: Whether to generate `.d.ts` type definition files from the Civet source, which is useful for building libraries. Default: `false`. (Requires installing `typescript`.)
+- `declarationExtension`: Output filename extension for `.d.ts` files. Default: `".civet.d.ts"`.
 - `typecheck`: Whether to run type checking on the generated code. (Requires installing `typescript`.) Default: `false`.
   - Specifying `true` aborts the build (with an error code) on TypeScript errors.
   - Alternatively, you can specify a string with any combination of `error`, `warning`, `suggestion`, or `message` to specify which diagnostics abort the build. For example, `"none"` ignores all diagnostics, `"error+warning"` aborts on errors and warnings, and `"all"` aborts on all diagnostics.
 - `implicitExtension`: Whether to allow importing `filename.civet` via `import "filename"`. Default: `true`.
-- `outputExtension`: Output filename extension to append to `.civet`. Default: `".jsx"`, or `".tsx"` if `ts` is `"preserve"`.
+- `outputExtension`: JavaScript or TypeScript extension to append to `.civet` for internal purposes. Default: `".jsx"`, or `".tsx"` if `ts` is `"preserve"`.
 - `ts`: Mode for transpiling TypeScript features into JavaScript. Default: `"civet"`. Options:
   - `"civet"`: Use Civet's JS mode. (Not all TS features supported.)
   - `"esbuild"`: Use esbuild's transpiler. (Fast and more complete. Requires installing `esbuild`.)

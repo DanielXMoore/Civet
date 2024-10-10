@@ -202,8 +202,9 @@ esbuild.build({
     civetPlugin({
       // Options and their defaults:
       // emitDeclaration: false,         // generate .d.ts files?
+      // declarationExtension: '.civet.d.ts', // extension for .d.ts files
       // implicitExtension: true,        // import "./x" checks for x.civet
-      // outputExtension: '.tsx',        // appended to .civet in output
+      // outputExtension: '.tsx',        // appended to .civet internally
       // ts: 'civet',                    // TS -> JS transpilation mode
       // typecheck: false,               // check types via tsc
       // cache: false,                   // Cache compilation results based on mtime, useful for watch

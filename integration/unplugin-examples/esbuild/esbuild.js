@@ -8,6 +8,7 @@ const options = {
   plugins: [civetEsbuildPlugin({
     ts: 'esbuild',
     emitDeclaration: true,
+    declarationExtension: '.d.ts',
   })],
   sourcemap: true,
 }
