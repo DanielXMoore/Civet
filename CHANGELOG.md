@@ -4,7 +4,7 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
-## Unreleased ([diff](https://github.com/DanielXMoore/Civet/compare/v0.7.36...???))
+## 0.8.0 (2024-10-10, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.36...v0.8.0), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.0))
 * Assigned expressionized statement followed by pipe, grammar cleanup [[#1442](https://github.com/DanielXMoore/Civet/pull/1442)]
 * `yield` in `do` yields in parent in all cases [[#1443](https://github.com/DanielXMoore/Civet/pull/1443)]
 * Nested function arguments support trailing member access/call [[#1444](https://github.com/DanielXMoore/Civet/pull/1444)]
