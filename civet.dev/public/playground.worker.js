@@ -62,15 +62,15 @@ onmessage = async (e) => {
           { ast: true, parseOptions }
         );
         // Hoist top-level declarations outside the IIFE wrapper
-        Civet.lib.gatherRecursive(ast, (p) => p.type === 'BlockStatement')
-        .forEach((topBlock) => {
-          Civet.lib.gatherRecursiveWithinFunction(topBlock,
-            (p) => p.type === 'Declaration'
-          ).forEach((decl) => {
-            const type = decl.children.shift() // const/let/var
+        const topBlock = coffee
+          ? Civet.lib.gatherRecursive(ast.children, (p) => p.type === 'BlockStatement')[0]
+          : Civet.lib.gatherRecursive(ast.children, (p) => p.type === 'DoStatement')[0].block
+        topBlock.expressions.forEach(([, statement]) => {
+          if (statement?.type === "Declaration") {
+            statement.children.shift() // const/let/var
             if (!Array.isArray(ast)) ast = [ast]
-            ast.unshift(`var ${decl.names.join(',')};`)
-          })
+            ast.unshift(`var ${statement.names.join(',')};`)
+          }
         })
       }
 
