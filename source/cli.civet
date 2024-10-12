@@ -486,8 +486,16 @@ You can override this behavior via: --civet rewriteCivetImports=.ext
 
   return repl args, options if options.repl
 
+  // Ignore EPIPE errors, e.g. when piping to `head`
+  process.stdout.on "error", (e) =>
+    if e.code is in ['EPIPE', 'EOF']
+      process.exit 0
+    else
+      console.error e
+      process.exit 1
+
   errors .= 0
-  for await {filename, error, content, stdin} of readFiles filenames, options.eval
+  for await let {filename, error, content, stdin} of readFiles filenames, options.eval
     if error
       console.error `${filename} failed to load:`
       console.error error
@@ -510,14 +518,6 @@ You can override this behavior via: --civet rewriteCivetImports=.ext
       console.error error
       errors++
       continue
-
-    // Ignore EPIPE errors, e.g. when piping to `head`
-    process.stdout.on "error", (e) =>
-      if e.code is in ['EPIPE', 'EOF']
-        process.exit 0
-      else
-        console.error e
-        process.exit 1
 
     if options.ast
       process.stdout.write JSON.stringify(output, null, 2)
@@ -546,13 +546,19 @@ You can override this behavior via: --civet rewriteCivetImports=.ext
           console.error error
           errors++
     else if options.run
-      esm := /^\s*(import|export)\b/m.test output
+      esm := do
+        if output is like /\b(await|import|export)\b/  // potentially ESM
+          ast := await compile content!, {...options, ast: true, filename}
+          (or)
+            lib.hasAwait ast
+            lib.hasImportDeclaration ast
+            lib.hasExportDeclaration ast
       if esm
         // Run ESM code via `node --import @danielx/civet/register` subprocess
         if stdin
           // If code was read on stdin via command-line argument "-", try to
           // save it in a temporary file in same directory so paths are correct.
-          filename := `.stdin-${process.pid}.civet`
+          filename = `.stdin-${process.pid}.civet`
           try
             await fs.writeFile filename, content!, {encoding}
           catch e
