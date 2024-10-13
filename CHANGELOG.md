@@ -4,6 +4,19 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.1 (2024-10-13, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.0...v0.8.1), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.1))
+* Fix `catch` type annotation by forbidding indented type arguments in `catch` [[#1446](https://github.com/DanielXMoore/Civet/pull/1446)]
+* Require parentheses in complex `&` type annotation [[#1447](https://github.com/DanielXMoore/Civet/pull/1447)]
+  * BREAKING CHANGE: `&: number | string` is now treated as `(&: number) | string`, and `&: T ? a : b` is consistently treated as `(&: T) ? a : b`
+* CLI exposes top-level declarations with top-level `await` [[#1448](https://github.com/DanielXMoore/Civet/pull/1448)]
+* `.d.ts` matches output extension in CLI; `declarationExtension` option in unplugin [[#1451](https://github.com/DanielXMoore/Civet/pull/1451)]
+* Fix CLI executing ESM code from stdin or `-e` [[#1454](https://github.com/DanielXMoore/Civet/pull/1454)]
+* CLI REPL supports (strips) TypeScript [[#1453](https://github.com/DanielXMoore/Civet/pull/1453)]
+* Variance annotations (`in`/`out`) in type parameters [[#1459](https://github.com/DanielXMoore/Civet/pull/1459)]
+* Allow pipes etc. in explicit function arguments [[#1460](https://github.com/DanielXMoore/Civet/pull/1460)]
+* Pipeline doesn't unwrap in multi-`&` function shorthand [[#1462](https://github.com/DanielXMoore/Civet/pull/1462)]
+* Add missing parentheses with `++` concat operator [[#1461](https://github.com/DanielXMoore/Civet/pull/1461)]
+
 ## 0.8.0 (2024-10-10, [diff](https://github.com/DanielXMoore/Civet/compare/v0.7.36...v0.8.0), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.0))
 * Assigned expressionized statement followed by pipe, grammar cleanup [[#1442](https://github.com/DanielXMoore/Civet/pull/1442)]
 * `yield` in `do` yields in parent in all cases [[#1443](https://github.com/DanielXMoore/Civet/pull/1443)]
