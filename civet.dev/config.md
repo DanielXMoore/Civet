@@ -40,10 +40,12 @@ and following ESM, require importing files with the correct extension.
 | [`autoVar`](reference#autovar) | automatically declare undeclared variables with `var` |
 | [`defaultElement=tag`](reference#implicit-element) | specify default JSX tag: `<.foo>` → `<tag class="foo">` |
 | [`globals`](reference#globals) | avoid automatically declaring listed global variables |
+| [`iife`](reference#iife-wrapper) | wrap the program in an IIFE to shield globals |
 | [`jsxCode`](reference#automatic-code-children) | treat all JSX children as Civet code |
 | [`jsxCodeNested`](reference#automatic-code-children) | treat indented JSX children as Civet code |
 | [`jsxCodeSameLine`](reference#automatic-code-children) | treat same-line JSX children as Civet code |
 | [`objectIs`](reference#object-is) | implement the `is` operator via `Object.is` |
+| [`repl`](reference#iife-wrapper) | wrap the program in an IIFE that exposes globals |
 
 ## ECMAScript Compatibility
 
