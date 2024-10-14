@@ -1896,7 +1896,7 @@ x := do
 ::: info
 When not at the top level, `do` expressions wrap in an
 [IIFE](https://developer.mozilla.org/en-US/docs/Glossary/IIFE),
-you cannot use `return`, `break`, or `continue` within them.
+so you cannot use `return`, `break`, or `continue` within them.
 :::
 
 ### Async Do Blocks
@@ -2916,3 +2916,57 @@ class X
   constructor: (@x) ->
   get: -> @x
 </Playground>
+
+### IIFE Wrapper
+
+In some CommonJS contexts
+(e.g., browser scripts or concatenating files together),
+it is helpful to wrap the entire program in an
+[IIFE](https://developer.mozilla.org/en-US/docs/Glossary/IIFE)
+so that `var` declarations do not become globals.
+(CoffeeScript [does so](https://coffeescript.org/#lexical-scope)
+by default unless you request `bare` mode or use ESM features.)
+In Civet, you can request such a wrapper via the `"civet iife"` directive:
+
+<Playground>
+"civet iife"
+var x = 5 // not global thanks to wrapper
+x += x * x
+</Playground>
+
+In this mode, you cannot use `export`, but you can use `import`
+thanks to [dynamic import declarations](#dynamic-import-declarations).
+Top-level `await` turns into a CommonJS-compatible `async` function call:
+
+<Playground>
+"civet iife"
+fetch 'https://civet.dev'
+|> await
+|> .status
+|> console.log
+</Playground>
+
+One context where IIFE wrapping is helpful is when building Civet REPLs,
+such as Civet's CLI or Playground, where we want to display the last computed
+value; the IIFE wrapper returns this value automatically
+(wrapped in a `Promise` in the case of top-level `await`).
+In the REPL context, we want to expose (not hide) top-level declarations
+to the global scope for future REPL inputs.
+Civet offers a special directive for this behavior:
+
+<Playground>
+"civet repl"
+x .= 5 // outer block => exposed
+if x++
+  y .= x * x // inner block => not exposed
+  x += y
+</Playground>
+
+::: info
+Exposed declarations become `var` regardless of their original declaration
+type (`var`, `const`, `let`).
+In particular, `const` semantics is not preserved.
+This behavior is usually helpful in a REPL context: it lets you attempt to
+correct a previous declaration.
+It also matches Chrome's console behavior (but not NodeJS's CLI behavior).
+:::
