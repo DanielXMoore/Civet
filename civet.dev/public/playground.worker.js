@@ -43,36 +43,11 @@ onmessage = async (e) => {
 
   let jsCode = '';
   if (jsOutput) {
-    // Wrap in IIFE if there's a top-level await or import
-    // Use Civet's async do, so Civet does implicit return of last value
     try {
-      const topLevelAwait = Civet.lib.hasAwait(ast) ||
-        Civet.lib.hasImportDeclaration(ast)
-      if (topLevelAwait) {
-        const [prologue, rest] = Civet.parse(code,
-          {startRule: 'ProloguePrefix'})
-        const prefix = code.slice(0, -rest.length)
-        const coffee = prologue.some((p) => p.type === "CivetPrologue" &&
-          (p.config.coffeeCompat || p.config.coffeeDo))
-        ast = await Civet.compile(
-          prefix +
-          (coffee ? '(do ->\n' : 'async do\n') +
-          rest.replace(/^/gm, ' ') +
-          (coffee ? ')' : ''),
-          { ast: true, parseOptions }
-        );
-        // Hoist top-level declarations outside the IIFE wrapper
-        const topBlock = coffee
-          ? Civet.lib.gatherRecursive(ast.children, (p) => p.type === 'BlockStatement')[0]
-          : Civet.lib.gatherRecursive(ast.children, (p) => p.type === 'DoStatement')[0].block
-        topBlock.expressions.forEach(([, statement]) => {
-          if (statement?.type === "Declaration") {
-            statement.children.shift() // const/let/var
-            if (!Array.isArray(ast)) ast = [ast]
-            ast.unshift(`var ${statement.names.join(',')};`)
-          }
-        })
-      }
+      ast = await Civet.compile(code, {
+        ast: true,
+        parseOptions: { ...parseOptions, repl: true }
+      });
 
       // Convert console to civetconsole for Playground execution
       Civet.lib.gatherRecursive(ast,
@@ -90,7 +65,7 @@ onmessage = async (e) => {
         return postError(errors[0])
       }
 
-      if (topLevelAwait) {
+      if (ast.topLevelAwait) {
         jsCode += `.catch((x)=>civetconsole.log("[THROWN] "+x))`
         jsCode += `.then((x)=>x!==undefined&&civetconsole.log("[EVAL] "+x))`
       }

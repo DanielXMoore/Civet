@@ -33,6 +33,8 @@ declare module "@danielx/civet" {
     tab: number
     verbose: boolean
     comptime: boolean
+    iife: boolean
+    repl: boolean
   }>
   export type CompileOptions = {
     filename?: string
