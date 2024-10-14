@@ -168,6 +168,22 @@ if (condition)
 By contrast, in JavaScript, the last indented line would have been
 treated as if it were at the top level.
 
+## Braced Blocks
+
+Civet allows you to wrap your blocks in braces (or not),
+but to avoid conflicts with braced object literals,
+there are some restrictions.
+In particular, a one-line braced block must be on the same line
+as the `if` etc. it's part of:
+
+<Playground>
+// block
+if (x) { y }
+// not a block
+if (x)
+{ y }
+</Playground>
+
 ## Automatic Semicolon Insertion
 
 JavaScript has [complicated rules](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Lexical_grammar#automatic_semicolon_insertion)
