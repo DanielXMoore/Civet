@@ -764,6 +764,11 @@ FatArrowToken
   "=>" / "⇒" ->
     return { $loc, token: "=>" }
 
+TrailingOperator
+  _? ( BinaryOp / AssignmentOp / Dot / QuestionMark )
+  _ OperatorAssignmentOp
+  TrailingDeclaration
+
 TrailingDeclaration
   _? ( ConstAssignment / LetAssignment )
 
@@ -1093,12 +1098,12 @@ ImplementsTarget
 # https://262.ecma-international.org/#prod-ClassBody
 # NOTE: Nesting and indentation sensitive
 ClassBody
-  __ OpenBrace NestedClassElements?:expressions __ CloseBrace  ->
-    if (!expressions) expressions = $0[2] = []
+  __:ws1 OpenBrace:open AllowAll ClassBracedContent?:expressions RestoreAll __:ws2 CloseBrace:close  ->
+    if (!expressions) expressions = []
     return {
       type: "BlockStatement",
       subtype: "ClassBody",
-      children: $0,
+      children: [ws1, open, expressions, ws2, close],
       expressions,
     }
   InsertOpenBrace NestedClassElements?:expressions InsertNewline InsertIndent InsertCloseBrace ->
@@ -1109,6 +1114,14 @@ ClassBody
       children: $0,
       expressions,
     }
+
+# based on BracedContent
+ClassBracedContent
+  NestedClassElements
+  # based on SingleLineStatements
+  ForbidNewlineBinaryOp ( ( _? !EOS ) ClassElement StatementDelimiter )*:stmts RestoreNewlineBinaryOp ->
+    if (!stmts) return $skip
+    return stmts
 
 NestedClassElements
   PushIndent NestedClassElement*:elements PopIndent ->
@@ -2473,20 +2486,32 @@ Arrow
     return { $loc, token: "->" }
 
 ExplicitBlock
-  __ OpenBrace __ CloseBrace ->
+  # Allow single-line block only when the block starts on the same line
+  _?:ws1 OpenBrace:open AllowAll ( NestedBlockStatements / SingleLineStatements / EmptyBracedContent )?:block RestoreAll __:ws2 CloseBrace:close ->
+    if (!block) return $skip
+    return {
+      ...block,
+      children: [ws1, open, ...block.children, ws2, close],
+      bare: false,
+    }
+  # For backward compatibility with JavaScript, allow open brace to start on
+  # the next line, as long as it's followed by a newline or close brace
+  IndentedAtLeast:ws1 OpenBrace:open AllowAll ( NestedBlockStatements / EmptyBracedContent )?:block RestoreAll __:ws2 CloseBrace:close ->
+    if (!block) return $skip
+    return {
+      ...block,
+      children: [ws1, open, ...block.children, ws2, close],
+      bare: false,
+    }
+
+EmptyBracedContent
+  &( __ "}" ) ->
     const expressions = []
     return {
       type: "BlockStatement",
       expressions,
-      children: [$1, $2, expressions, $3, $4],
-      bare: false,
+      children: [expressions],
       empty: true,
-    }
-  __ OpenBrace NestedBlockStatements:block __ CloseBrace ->
-    return {
-      ...block,
-      children: [$1, $2, ...block.children, $4, $5],
-      bare: false,
     }
 
 ImplicitNestedBlock
@@ -2668,16 +2693,7 @@ NoCommaBracedBlock
     }
 
 NonSingleBracedBlock
-  _?:ws1 OpenBrace:open AllowAll ( BracedContent __ CloseBrace )? RestoreAll ->
-    if (!$4) return $skip
-    const [block, ws2, close] = $4
-    return {
-      type: "BlockStatement",
-      expressions: block.expressions,
-      children: [ws1, open, ...block.children, ws2, close],
-      bare: false,
-    }
-    return block
+  !EOS ExplicitBlock !TrailingOperator -> $2
 
   # NOTE: Added indentation based implied braces
   ImplicitNestedBlock
@@ -2711,10 +2727,7 @@ SingleLineStatements
     }
 
     const children = [expressions]
-
-    if (hasTrailingComment) {
-      children.push("\n")
-    }
+    if (hasTrailingComment) children.push("\n")
 
     return {
       type: "BlockStatement",
@@ -2745,18 +2758,6 @@ PostfixedSingleLineNoCommaStatements
       expressions: children,
       children,
       bare: true,
-    }
-
-BracedContent
-  NestedBlockStatements
-  SingleLineStatements
-  # Empty content
-  &( __ "}" ) ->
-    const expressions = []
-    return {
-      type: "BlockStatement",
-      expressions,
-      children: [expressions],
     }
 
 NestedBlockStatements
@@ -4928,7 +4929,7 @@ Condition
       children: [open, ws, expression, close],
       expression,
     }
-  ParenthesizedExpression !( _? ( BinaryOp / AssignmentOp / Dot / QuestionMark ) ) !( _ OperatorAssignmentOp ) -> $1
+  ParenthesizedExpression !TrailingOperator -> $1
   # NOTE: DeclarationCondition must come before the ExpressionCondition because we need to look ahead to potentially match `:=` or `.=`
   InsertOpenParen:open DeclarationCondition:expression InsertCloseParen:close ->
     return {
@@ -7963,7 +7964,7 @@ TypeBullet
     return list
 
 TypeWithPostfix
-  TypeConditional:t ( ( _ / IndentedFurther )? TypeIfClause )?:postfix ->
+  TypeConditional:t ( SameLineOrIndentedFurther TypeIfClause )?:postfix ->
     if (!postfix) return t
     return prepend(postfix[0],
       expressionizeTypeIf([ ...postfix[1], $1, undefined ]))
@@ -8044,7 +8045,7 @@ TypeLiteral
     return { $loc, token: "[]" }
 
 InlineInterfaceLiteral
-  InsertInlineOpenBrace InlineBasicInterfaceProperty ( ( IndentedFurther / _? ) InlineBasicInterfaceProperty )* InsertCloseBrace
+  InsertInlineOpenBrace InlineBasicInterfaceProperty ( SameLineOrIndentedFurther InlineBasicInterfaceProperty )* InsertCloseBrace
 
 InlineBasicInterfaceProperty
   # NOTE: Not using TypeSuffix here to require a Colon, and to forbid spaces
@@ -8053,7 +8054,7 @@ InlineBasicInterfaceProperty
 
 InlineInterfacePropertyDelimiter
   ( _? Semicolon ) / CommaDelimiter
-  &( ( IndentedFurther / _? ) InlineBasicInterfaceProperty ) InsertComma -> $2
+  &( SameLineOrIndentedFurther InlineBasicInterfaceProperty ) InsertComma -> $2
   &( __  ( ":" / ")" / "]" / "}" ) )
   &EOS
 
@@ -8646,6 +8647,13 @@ IndentedAtLeast
 
 NotDedented
   IndentedAtLeast? _? ->
+    const ws = []
+    if ($1) ws.push(...$1)
+    if ($2) ws.push(...$2)
+    return ws.flat(Infinity).filter(Boolean)
+
+SameLineOrIndentedFurther
+  IndentedFurther? _? ->
     const ws = []
     if ($1) ws.push(...$1)
     if ($2) ws.push(...$2)
