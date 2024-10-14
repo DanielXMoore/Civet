@@ -4,6 +4,12 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.2 (2024-10-14, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.1...v0.8.2), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.2))
+* Compiler directives `iife` and `repl` for wrapping program, fix `comptime` implicitly returned from function [[#1463](https://github.com/DanielXMoore/Civet/pull/1463)]
+* `repl` directive hoists function and class declarations too, fix one-line declarations in `if` [[#1466](https://github.com/DanielXMoore/Civet/pull/1466)]
+* One-line braced blocks with single-line statements [[#1467](https://github.com/DanielXMoore/Civet/pull/1467)]
+* Forbid next-line braced blocks after `return if` and `yield if` [[#1468](https://github.com/DanielXMoore/Civet/pull/1468)]
+
 ## 0.8.1 (2024-10-13, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.0...v0.8.1), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.1))
 * Fix `catch` type annotation by forbidding indented type arguments in `catch` [[#1446](https://github.com/DanielXMoore/Civet/pull/1446)]
 * Require parentheses in complex `&` type annotation [[#1447](https://github.com/DanielXMoore/Civet/pull/1447)]
