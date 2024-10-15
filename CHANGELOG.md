@@ -4,6 +4,9 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.3 (2024-10-15, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.2...v0.8.3), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.3))
+* Automatically type fields using `@arg` in constructor [[#1469](https://github.com/DanielXMoore/Civet/pull/1469)]
+
 ## 0.8.2 (2024-10-14, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.1...v0.8.2), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.2))
 * Compiler directives `iife` and `repl` for wrapping program, fix `comptime` implicitly returned from function [[#1463](https://github.com/DanielXMoore/Civet/pull/1463)]
 * `repl` directive hoists function and class declarations too, fix one-line declarations in `if` [[#1466](https://github.com/DanielXMoore/Civet/pull/1466)]
