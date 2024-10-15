@@ -2017,6 +2017,13 @@ id := @id
 obj := { @id }
 </Playground>
 
+<Playground>
+class Person
+  getName()
+    @name
+  setName(@name)
+</Playground>
+
 ### Bind
 
 Shorthand for [bind](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_objects/Function/bind)ing methods to their object:
@@ -2108,6 +2115,9 @@ function makeCounter
 </Playground>
 
 ### Constructor
+
+`@` is also shorthand for `constructor`.
+`@arg` arguments create typed fields if the fields are not already declared.
 
 <Playground>
 class Rectangle
