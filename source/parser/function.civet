@@ -579,37 +579,68 @@ function wrapIterationReturningResults(
     statement.children.push(";return ", resultsRef, ";")
 
 function processParams(f): void
-  const { type, parameters, block } = f
-  const isConstructor = f.name is 'constructor'
+  { type, parameters, block } := f
+  isConstructor := f.name is 'constructor'
 
   // Check for singleton TypeParameters <Foo> before arrow function,
   // which TypeScript (in tsx mode) treats like JSX; replace with <Foo,>
-  if (type is "ArrowFunction" and parameters and parameters.tp and parameters.tp.parameters.length is 1) {
+  if type is "ArrowFunction" and parameters and parameters.tp and parameters.tp.parameters# is 1
     parameters.tp.parameters.push(",")
-  }
 
-  if (!block) return
-  const { expressions } = block
-  if (!expressions) return
-  const { blockPrefix } = parameters
+  return unless block
+  { expressions } := block
+  return unless expressions
 
   let indent: string
-  if (!expressions.length) {
+  unless expressions#
     indent = ""
-  } else {
+  else
     indent = expressions[0][0]
-  }
 
-  const [splices, thisAssignments] = gatherBindingCode(parameters, {
+  [splices, thisAssignments] := gatherBindingCode parameters,
     injectParamProps: isConstructor
-  })
 
-  const delimiter = {
-    type: "SemicolonDelimiter",
-    children: [";"],
-  }
+  // `@(@x: number)` adds `x: number` declaration to class body
+  if isConstructor
+    {ancestor} := findAncestor f, .type is "ClassExpression"
+    if ancestor?
+      fields := gatherRecursiveWithinFunction ancestor, .type is "FieldDefinition"
+      .map .id
+      .filter (is like {type: "Identifier"})
+      .map .name
+      |> new Set
+      classExpressions := ancestor!.body.expressions
+      index .= findChildIndex classExpressions, f
+      assert.notEqual index, -1, "Could not find constructor in class"
+      // Put fields before all constructor overloads so they remain consecutive
+      index-- while classExpressions[index-1]?[1] is like {type: "MethodDefinition", name: "constructor"}
+      fStatement := classExpressions[index]
+      for each parameter of gatherRecursive parameters, .type is "Parameter"
+        continue unless parameter.typeSuffix
+        for each binding of gatherRecursive parameter, .type is "AtBinding"
+          // TODO: Handle typeSuffix of entire complex parameter pattern
+          // (Currently just handle `@prop ::` individual typing,
+          // where parent is AtBindingProperty or BindingElement,
+          // or when the parent is the whole Parameter.)
+          typeSuffix := binding.parent?.typeSuffix
+          continue unless typeSuffix
+          id := binding.ref.id
+          continue if fields.has id
+          classExpressions.splice index++, 0, [fStatement[0], {
+            type: "FieldDefinition"
+            ts: true
+            id
+            typeSuffix
+            children: [id, typeSuffix]
+          }, ";"]
+          // Only the first definition gets an indent, stolen from fStatement
+          fStatement[0] = ""
 
-  const prefix = splices
+  delimiter :=
+    type: "SemicolonDelimiter"
+    children: [";"]
+
+  prefix := splices
     .map (s) => ["let ", s]
     .concat(thisAssignments)
     .map((s) => s.type
@@ -621,7 +652,7 @@ function processParams(f): void
       : [indent, s, delimiter]
     )
 
-  if (!prefix.length) return
+  return unless prefix#
   // In constructor definition, insert prefix after first super() call
   if isConstructor
     superCalls := gatherNodes expressions,
