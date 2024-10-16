@@ -61,11 +61,34 @@ const getProjectPathFromSourcePath = (sourcePath: string) => {
   let projPath = sourcePathToProjectPathMap.get(sourcePath)
   if (projPath) return projPath
 
-  const tsConfigPath = findConfigFile(sourcePath, tsSys.fileExists, 'tsconfig.json')
-  if (tsConfigPath) {
-    projPath = pathToFileURL(path.dirname(tsConfigPath) + "/").toString()
+  // If we're in a node_modules/foo directory, use that as the project path
+  let dirname = sourcePath
+  while (dirname.includes("node_modules")) {
+    if (path.basename(path.dirname(dirname)) === "node_modules") {
+      projPath = pathToFileURL(dirname + "/").toString()
+      break
+    } else {
+      dirname = path.dirname(dirname) // go up one level
+    }
   }
-  if (!projPath) projPath = rootUri // Fallback
+
+  // Otherwise, check for ancestor tsconfig
+  if (!projPath) {
+    const tsConfigPath = findConfigFile(sourcePath, tsSys.fileExists, 'tsconfig.json')
+    if (tsConfigPath) {
+      projPath = pathToFileURL(path.dirname(tsConfigPath) + "/").toString()
+    }
+  }
+
+  // Otherwise, check whether we're inside the root
+  if (!projPath) {
+    if (sourcePath.startsWith(rootDir)) {
+      projPath = rootUri
+    } else {
+      projPath = pathToFileURL(path.dirname(sourcePath) + "/").toString()
+    }
+  }
+
   sourcePathToProjectPathMap.set(sourcePath, projPath)
   return projPath
 }
