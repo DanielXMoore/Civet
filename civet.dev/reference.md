@@ -2415,6 +2415,20 @@ You can use `as tuple` to give an array literal a
 // type readonly [1, "hello"]
 </Playground>
 
+Unlike TypeScript, assertions can start later lines:
+
+<Playground>
+"Hello, world!"
+.split /\s+/
+as [string, string]
+</Playground>
+
+<Playground>
+for value of [1, 2, 3]
+  value ** 2
+as [number, number, number]
+</Playground>
+
 ## Modules
 
 ### `from` Shorthand
