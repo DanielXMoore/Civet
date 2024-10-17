@@ -1,6 +1,7 @@
 import type {
   ASTNode
   ASTNodeObject
+  ASTRef
   BlockStatement
   BreakStatement
   CallExpression
@@ -540,6 +541,22 @@ function wrapIterationReturningResults(
 
   resultsRef := statement.resultsRef = makeRef "results"
 
+  { declaration, breakWithOnly } := iterationDeclaration statement
+  outer.children.unshift(["", declaration, ";"])
+
+  unless breakWithOnly
+    assignResults statement.block, (node) =>
+      // TODO: real ast node
+      [ resultsRef, ".push(", node, ")" ]
+
+  if collect
+    statement.children.push collect(resultsRef)
+  else
+    statement.children.push(";return ", resultsRef, ";")
+
+function iterationDeclaration(statement: IterationStatement | ForStatement)
+  { resultsRef } := statement
+
   decl: "const" | "let" .= "const"
   if statement.type is "IterationStatement" or statement.type is "ForStatement"
     if processBreakContinueWith statement
@@ -566,17 +583,7 @@ function wrapIterationReturningResults(
   else // decl is "let"
     declaration.children.push ";", resultsRef, "=[]" unless breakWithOnly
 
-  outer.children.unshift(["", declaration, ";"])
-
-  unless breakWithOnly
-    assignResults statement.block, (node) =>
-      // TODO: real ast node
-      [ resultsRef, ".push(", node, ")" ]
-
-  if collect
-    statement.children.push collect(resultsRef)
-  else
-    statement.children.push(";return ", resultsRef, ";")
+  { declaration, breakWithOnly }
 
 function processParams(f): void
   { type, parameters, block } := f
@@ -702,12 +709,12 @@ function processFunctions(statements, config): void
     processReturn(f, config.implicitReturns)
 
 function expressionizeIteration(exp: IterationExpression): void
-  { async, generator, subtype, block, children, statement } := exp
+  { async, generator, block, children, statement } .= exp
   i := children.indexOf statement
   if i < 0
     throw new Error "Could not find iteration statement in iteration expression"
 
-  if subtype is like "DoStatement", "ComptimeStatement"
+  if statement.type is "DoStatement" or statement.type is "ComptimeStatement"
     // Just wrap with IIFE; insertReturn will apply to the resulting function
     children.splice(i, 1, wrapIIFE([["", statement, undefined]], async, generator))
     updateParentPointers exp
@@ -733,20 +740,22 @@ function expressionizeIteration(exp: IterationExpression): void
       ], async, generator)
     )
   else
-    exp.resultsRef ??= makeRef "results"
-    { resultsRef } := exp
+    resultsRef := statement.resultsRef ??= makeRef "results"
+
+    { declaration, breakWithOnly } := iterationDeclaration statement
 
     // insert `results.push` to gather results array
-    assignResults block, (node) =>
-      // TODO: real node
-      [ resultsRef, ".push(", node, ")" ]
-    braceBlock(block)
+    unless breakWithOnly
+      assignResults block, (node) =>
+        // TODO: real node
+        [ resultsRef, ".push(", node, ")" ]
+      braceBlock(block)
 
     // Wrap with IIFE
     children.splice(i,
       1,
       wrapIIFE([
-        ["", ["const ", resultsRef, "=[]"], ";"]
+        ["", declaration, ";"]
         ["", statement, undefined]
         ["", wrapWithReturn(resultsRef)]
       ], async)
