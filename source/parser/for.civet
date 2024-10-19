@@ -3,12 +3,15 @@ import type {
   ASTNodeBase
   ASTLeaf
   ASTError
-  ExpressionNode
+  Children
+  RangeDots
+  RangeExpression
 } from ./types.civet
 
 import {
   insertTrimmingSpace
   literalValue
+  makeLeftHandSideExpression
 } from ./util.civet
 
 import {
@@ -16,35 +19,139 @@ import {
   maybeRef
 } from ./ref.civet
 
+function processRangeExpression(start: ASTNode, ws1: ASTNode, range: RangeDots, end: ASTNode)
+  ws1 = [ws1, range.children[0]] // whitespace before ..
+  ws2 := range.children[1]       // whitespace after ..
+  comma := { $loc: range.$loc, token: "," }
+  // Length of range is abs(start - end) + lengthAdjust
+  abs :=
+    switch range.increasing
+      when true
+        &: number
+      when false
+        -&: number
+      else
+        Math.abs
+  lengthAdjust :=
+    1 - Number(not range.left.inclusive) - Number(not range.right.inclusive)
+  lengthAdjustExpression :=
+    if lengthAdjust > 0 then ` + ${lengthAdjust}`
+    else if lengthAdjust < 0 then ` - ${-lengthAdjust}`
+
+  let children: Children?
+  if start is like {type: "Literal"} and end is like {type: "Literal"}
+    startValue .= literalValue start
+    endValue .= literalValue end
+
+    if startValue <? "string" and endValue <? "string"
+      unless startValue# is 1 is endValue#
+        throw new Error "String range start and end must be a single character"
+
+      startCode .= startValue.charCodeAt(0)
+      endCode .= endValue.charCodeAt(0)
+      step := startCode <= endCode ? 1 : -1
+
+      length := abs(endCode - startCode) + lengthAdjust
+      startCode += step unless range.left.inclusive
+
+      if length <= 26
+        children =
+          . "["
+          . Array.from { length }, (_, i) =>
+              JSON.stringify String.fromCharCode startCode + i * step
+            .join ", "
+          . "]"
+      else
+        children =
+          . `Array.from({length: ${length.toString()}}, `
+          . "(_, i) => String.fromCharCode(", startCode.toString()
+          . step > 0 ? " + " : " - ", "i))"
+      children.unshift range.error if range.error?
+    else if startValue <? "number" and endValue <? "number"
+      step := startValue <= endValue ? 1 : -1
+      length := abs(endValue - startValue) + lengthAdjust
+      startValue += step unless range.left.inclusive
+      if length <= 20
+        // Use array of literal values
+        children =
+          . "["
+          . Array.from({ length }, (_, i) => startValue as number + i * step)
+            .join ", "
+          . "]"
+        children.unshift range.error if range.error?
+
+  unless children?
+    if range.increasing?
+      sign := range.increasing ? "+" : "-"
+      children =
+        . "((s, e) => Array.from({length: "
+        . range.increasing ? "e - s" : "s - e"
+        . lengthAdjustExpression
+        . "}, (_, i) => s ", sign, " i))"
+        . "("
+        . if range.left.inclusive
+            start
+          else
+            [makeLeftHandSideExpression(start), ` ${sign} 1`]
+        . ...ws1, comma, ws2, end, ")"
+    else
+      children =
+        . "((s, e) => {let step = e > s ? 1 : -1; return Array.from({length: Math.abs(e - s)"
+        . lengthAdjustExpression
+        . "}, (_, i) => s + i * step)})"
+        . "(", start, ...ws1, comma, ws2, end, ")"
+
+  {
+    type: "RangeExpression"
+    children, start, end
+    error: range.error
+    left: range.left
+    right: range.right
+    increasing: range.increasing
+  }
+
 // Construct for loop from RangeLiteral
 function forRange(
-  open: ASTLeaf,
-  forDeclaration,
-  range: { start: ExpressionNode, end: ExpressionNode, inclusive: boolean },
-  stepExp,
+  open: ASTLeaf
+  forDeclaration: ASTNode
+  range: RangeExpression
+  stepExp: ASTNode
   close: ASTLeaf
 )
-  { start, end, inclusive } := range
+  { start, end, left, right, increasing } := range
 
   counterRef := makeRef("i")
 
-  //infinite := if {type: "Identifier", name: "Infinity"} := end then true
-  infinite := end.type is "Identifier" and end.name is "Infinity"
+  infinite := end is like {type: "Identifier", name: "Infinity"}
 
-  let stepRef
+  let stepRef, asc: boolean?
   if stepExp
     stepExp = insertTrimmingSpace(stepExp, "")
     stepRef = maybeRef(stepExp, "step")
   else if infinite
     stepExp = stepRef = "1"
+  else if increasing?
+    if increasing
+      stepExp = stepRef = "1"
+      asc = true
+    else
+      stepExp = stepRef = "-1"
+      asc = false
 
-  startRef .= maybeRef(start, "start")
+  // start needs to be ref'd to compute start <= end, unless we know direction
+  startRef .= if stepRef then start else maybeRef(start, "start")
   endRef .= maybeRef(end, "end")
 
   startRefDec := (startRef !== start) ? [startRef, " = ", start, ", "] : []
   endRefDec := (endRef !== end) ? [endRef, " = ", end, ", "] : []
 
-  let ascDec: ASTNode[] = [], ascRef, asc
+  unless left.inclusive
+    startRef =
+      . makeLeftHandSideExpression(start)
+      . " + "
+      . stepRef
+
+  let ascDec: ASTNode[] = [], ascRef
   if stepRef
     unless stepRef is stepExp
       ascDec = [", ", stepRef, " = ", stepExp]
@@ -75,32 +182,33 @@ function forRange(
     varAssign = varLetAssign = [forDeclaration, " = "]
 
   declaration :=
-    type: "Declaration",
-    children: ["let ", ...startRefDec, ...endRefDec, counterRef, " = ", ...varLetAssign, startRef, ...varLet, ...ascDec],
-    names: forDeclaration?.names,
+    type: "Declaration"
+    children: ["let ", ...startRefDec, ...endRefDec, counterRef, " = ", ...varLetAssign, startRef, ...varLet, ...ascDec]
+    names: forDeclaration?.names
 
-  counterPart := inclusive
+  counterPart := right.inclusive
     ? [counterRef, " <= ", endRef, " : ", counterRef, " >= ", endRef]
     : [counterRef, " < ", endRef, " : ", counterRef, " > ", endRef]
 
-  condition := infinite ? [] : stepRef
-    ? [stepRef, " !== 0 && (", stepRef, " > 0 ? ", ...counterPart, ")"]
-    : ascRef
-      ? [ascRef, " ? ", ...counterPart]
-      : asc ? counterPart.slice(0, 3) : counterPart.slice(4)
+  condition :=
+    infinite ? [] :
+    asc? ? (asc ? counterPart[0...3] : counterPart[4..]) :
+    stepRef ? [stepRef, " !== 0 && (", stepRef, " > 0 ? ", ...counterPart, ")"] :
+    [ascRef, " ? ", ...counterPart]
 
-  increment := infinite
-    ? [...varAssign, "++", counterRef]
-    : stepRef
+  increment :=
+    stepRef === "1" ? [...varAssign, "++", counterRef] :
+    stepRef === "-1" ? [...varAssign, "--", counterRef] :
+    stepRef
       ? [...varAssign, counterRef, " += ", stepRef]
       : ascRef
         ? [...varAssign, ascRef, " ? ++", counterRef, " : --", counterRef]
         : [...varAssign, asc ? "++" : "--", counterRef]
 
   return {
-    declaration,
-    children: [open, declaration, "; ", ...condition, "; ", ...increment, close],
-    blockPrefix,
+    declaration
+    children: [range.error, open, declaration, "; ", ...condition, "; ", ...increment, close]
+    blockPrefix
   }
 
 function processForInOf($0: [
@@ -263,4 +371,5 @@ function processForInOf($0: [
 export {
   forRange
   processForInOf
+  processRangeExpression
 }

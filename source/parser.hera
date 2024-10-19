@@ -54,6 +54,7 @@ import {
   processForInOf,
   processProgram,
   processProgramAsync,
+  processRangeExpression,
   processTryBlock,
   processUnaryExpression,
   processUnaryNestedExpression,
@@ -2891,75 +2892,55 @@ _ArrayLiteral
     }
   NestedBulletedArray
 
-RangeExpression
-  Expression:s __:ws ( DotDotDot / DotDot ):range Expression:e ->
-    const inclusive = range.token === ".."
-    range.token = ","
-
-    if (s.type === "Literal" && e.type === "Literal") {
-      const start = literalValue(s)
-      const end = literalValue(e)
-
-      if (typeof start !== typeof end) {
-        throw new Error("Range start and end must be of the same type")
+RangeDots
+  DotDotDot ->
+    return { ...$1,
+      type: "RangeDots",
+      left: { inclusive: true, raw: "" },
+      right: { inclusive: false, raw: "." },
+      increasing: undefined,
+      children: [],
+    }
+  RangeEnd:left _?:ws1 DotDot:dots _?:ws2 RangeEnd:right ->
+    // Inherit increasing flag from either side
+    const increasing = left.increasing ?? right.increasing
+    if (left.increasing != null && right.increasing != null &&
+        left.increasing !== right.increasing) {
+      const error = {
+        type: "Error",
+        message: `${left.raw}..${right.raw} uses inconsistent < vs. >`,
       }
-
-      if (typeof start === "string") {
-        if (start.length !== 1 || end.length !== 1) {
-          throw new Error("String range start and end must be a single character")
-        }
-
-        const startCode = start.charCodeAt(0)
-        const endCode = end.charCodeAt(0)
-        const step = startCode < endCode ? 1 : -1
-
-        const length = Math.abs(endCode - startCode) + (inclusive ? 1 : 0)
-        if (length <= 26) {
-          return {
-            type: "RangeExpression",
-            children: ["[", Array.from({ length }, (_, i) => JSON.stringify(String.fromCharCode(startCode + i * step))).join(", "), "]"],
-            inclusive,
-            start: s,
-            end: e
-          }
-        } else {
-          const inclusiveAdjust = inclusive ? " + 1" : ""
-          const children = ["((s, e) => {let step = e > s ? 1 : -1; return Array.from({length: Math.abs(e - s)", inclusiveAdjust, "}, (_, i) => String.fromCharCode(s + i * step))})(", startCode.toString(), ws, range, endCode.toString(), ")"]
-          return {
-            type: "RangeExpression",
-            children,
-            inclusive,
-            start: s,
-            end: e,
-          }
-        }
-      } else if (typeof start === "number") {
-        const step = end > start ? 1 : -1
-
-        const length = Math.abs(end - start) + (inclusive ? 1 : 0)
-        if (length <= 20) {
-          // Use array of literal values
-          return {
-            type: "RangeExpression",
-            children: ["[", Array.from({ length }, (_, i) => start + i * step).join(", "), "]"],
-            inclusive,
-            start: s,
-            end: e,
-          }
-        }
+      return {
+        ...dots, left, right, increasing, error, type: "RangeDots",
+        children: [error]
       }
     }
-
-    const inclusiveAdjust = inclusive ? " + 1" : ""
-    const children = ["((s, e) => {let step = e > s ? 1 : -1; return Array.from({length: Math.abs(e - s)", inclusiveAdjust, "}, (_, i) => s + i * step)})(", s, ws, range, e, ")"]
-
     return {
-      type: "RangeExpression",
-      children,
-      inclusive,
-      start: s,
-      end: e,
+      ...dots, left, right, increasing, type: "RangeDots",
+      children: [ws1, ws2]
     }
+
+RangeEnd
+  /([<>])(=?)|([≤≥])/ ->
+    let dir = $1, equal = $2, unicode = $3
+    if (unicode) {
+      equal = "="
+      if (unicode === "≤") {
+        dir = "<"
+      } else if (unicode === "≥") {
+        dir = ">"
+      }
+    }
+    return {
+      increasing: dir === "<",
+      inclusive: equal === "=",
+      raw: $0,
+    }
+  "" -> { increasing: undefined, inclusive: true, raw: "" }
+
+RangeExpression
+  Expression:start __:ws RangeDots:range Expression:end ->
+    return processRangeExpression(start, ws, range, end)
 
   # NOTE: [x..] range to infinity, valid only in for loops
   Expression:s __:ws DotDot &( __ CloseBracket ) ->
@@ -2975,6 +2956,9 @@ RangeExpression
         name: "Infinity",
         children: ["Infinity"],
       },
+      left: { inclusive: true, raw: "" },
+      right: { inclusive: true, raw: "" },
+      increasing: true,
     }
 
 ArrayLiteralContent
