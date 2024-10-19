@@ -405,7 +405,8 @@ You can also omit the name of the rest component:
 
 ### Range Literals
 
-`[x..y]` includes `x` and `y`, while `[x...y]` includes `x` but not `y`.
+`[x..y]` includes `x` and `y`, while `[x...y]` includes `x` but not `y`
+(as in Ruby and CoffeeScript).
 
 <Playground>
 letters := ['a'..'f']
@@ -415,6 +416,22 @@ indices := [0...array.length]
 </Playground>
 
 An infinite range `[x..]` is supported when [looping](#range-loop).
+
+Alternatively, you can explicitly exclude endpoints with `<` or `>`,
+or include endpoints with `<=` or `>=`. These also control loop direction,
+whereas `[a..b]` determines direction based on whether `a <= b`.
+
+<Playground>
+indices := [0..<array.length]
+</Playground>
+
+<Playground>
+reversed := [array.length>..0]
+</Playground>
+
+<Playground>
+increasing := [a..<=b]
+</Playground>
 
 ### Array/String Slicing
 
@@ -1773,6 +1790,19 @@ for [1..5]
 <Playground>
 for i of [1..]
   attempt i
+</Playground>
+
+You can control loop direction and include/exclude endpoints using
+`<=` or `<`:
+
+<Playground>
+for i of [first..<=last]
+  console.log array[i]
+</Playground>
+
+<Playground>
+for i of [left<..<right]
+  console.log array[i]
 </Playground>
 
 ### Until Loop
