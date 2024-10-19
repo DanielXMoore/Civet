@@ -417,7 +417,7 @@ indices := [0...array.length]
 
 An infinite range `[x..]` is supported when [looping](#range-loop).
 
-Alternatively, you can explicitly exclude endpoints with `<` or `>`,
+Alternatively, `..` can explicitly exclude endpoints with `<` or `>`,
 or include endpoints with `<=` or `>=`. These also control loop direction,
 whereas `[a..b]` determines direction based on whether `a <= b`.
 
@@ -445,6 +445,12 @@ end := numbers[-2..]
 numbers[1...-1] = []
 </Playground>
 
+Alternatively, you can exclude or include endpoints using `..` with `<` or `<=`:
+
+<Playground>
+strict := numbers[first<..<last]
+</Playground>
+
 ## Strings
 
 Strings can span multiple lines:
@@ -453,7 +459,6 @@ Strings can span multiple lines:
 console.log "Hello,
 world!"
 </Playground>
-
 
 ### Triple-Quoted Strings
 
@@ -1792,8 +1797,8 @@ for i of [1..]
   attempt i
 </Playground>
 
-You can control loop direction and include/exclude endpoints using
-`<=` or `<`:
+You can control loop direction and include or exclude endpoints using
+`..` with `<=`/`>=` or `<`/`>`:
 
 <Playground>
 for i of [first..<=last]
@@ -1804,6 +1809,8 @@ for i of [first..<=last]
 for i of [left<..<right]
   console.log array[i]
 </Playground>
+
+See also [range literals](#range-literals).
 
 ### Until Loop
 
