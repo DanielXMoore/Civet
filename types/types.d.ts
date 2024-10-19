@@ -67,8 +67,8 @@ declare module "@danielx/civet" {
     header: string
     body: string
     filename: string
-    line: number
-    column: number
+    line: number | string
+    column: number | string
     offset: number
   }
   export type ParseErrors = {
