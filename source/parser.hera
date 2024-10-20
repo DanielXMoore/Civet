@@ -1473,12 +1473,13 @@ MemberBracketContent
   OpenBracket:open ( SliceParameters / PostfixedExpression ):expression __:ws CloseBracket:close ->
     // Some kind of slice
     if (expression.type === "SliceParameters") {
-      const {start, end, children} = expression
+      const {start, end, reversed, children} = expression
 
       return {
         type: "SliceExpression",
         start,
         end,
+        reversed,
         children: [
           {...open, token: ".slice("},
           ...children,
@@ -1495,68 +1496,47 @@ MemberBracketContent
     }
 
 SliceParameters
-  Expression:start __:ws RangeDots:dots Expression?:end ->
+  Loc:ls Expression?:start __:ws RangeDots:dots Loc:le Expression?:end ->
+    const reversed = dots.increasing === false
+    const sign = reversed ? "-" : "+"
     let children
+    start ??= {
+      $loc: ls.$loc,
+      token: reversed ? "-1" : "0",
+    }
+    if (!end) {
+      if (reversed) {
+        end = {
+          $loc: le.$loc,
+          token: "0",
+        }
+      } else if (!dots.right.inclusive && !dots.triple) {
+        end = {
+          $loc: le.$loc,
+          token: "-1",
+        }
+      }
+    }
     if (!dots.left.inclusive) {
-      start = ["1 + ", makeLeftHandSideExpression(start)]
+      start = [makeLeftHandSideExpression(start), ` ${sign} 1`]
     }
     if (end) {
       const inc = []
       if (dots.right.inclusive) {
-        end = ["1 + ", makeLeftHandSideExpression(end)]
-        inc./**/push(" || 1/0")
+        end = [makeLeftHandSideExpression(end), ` ${sign} 1`]
+        if (!reversed) inc./**/push(" || 1/0")
       }
       children = [start, [...ws, dots.children[0], {token: ", ", $loc: dots.$loc}], [dots.children[1], end, ...inc]]
     } else {
       children = [start, ws]
     }
-    if (dots.increasing === false) {
-      children.push({
-        type: "Error",
-        message: "Slice range cannot be decreasing",
-        $loc: dots.$loc,
-      })
-    }
 
     return {
       type: "SliceParameters",
       start,
       end,
+      reversed,
       children,
-    }
-
-  Loc:l __:ws ( DotDotDot / DotDot ):sep Expression:end ->
-    const inclusive = sep.token === ".."
-
-    const inc = []
-    if (inclusive) {
-      end = ["1 + ", end]
-      inc./**/push(" || 1/0")
-    }
-
-    const start = {
-      $loc: l.$loc,
-      token: "0",
-    }
-
-    return {
-      type: "SliceParameters",
-      start,
-      end,
-      children: [start, [...ws, {...sep, token: ", "}], [end, ...inc]]
-    }
-
-  Loc:l __:ws ( DotDot / DotDotDot ) &( __ CloseBracket ) ->
-    const start = {
-      $loc: l.$loc,
-      token: "0",
-    }
-
-    return {
-      type: "SliceParameters",
-      start,
-      end: undefined,
-      children: [start, ws],
     }
 
 AccessStart
@@ -2907,6 +2887,7 @@ RangeDots
       left: { inclusive: true, raw: "" },
       right: { inclusive: false, raw: "." },
       increasing: undefined,
+      triple: true,
       children: [],
     }
   RangeEnd:left _?:ws1 DotDot:dots _?:ws2 RangeEnd:right ->
