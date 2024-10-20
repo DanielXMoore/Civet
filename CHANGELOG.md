@@ -4,6 +4,13 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.4 (2024-10-20, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.3...v0.8.4), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.4))
+* Improve project root detection in LSP [[#1470](https://github.com/DanielXMoore/Civet/pull/1470)]
+* Loops followed by binary operators, `as` on next line [[#1472](https://github.com/DanielXMoore/Civet/pull/1472)]
+* Fix bracing in implicitly returned one-line for loops [[#1474](https://github.com/DanielXMoore/Civet/pull/1474)]
+* Fix automatic private fields from constructor `@args` [[#1475](https://github.com/DanielXMoore/Civet/pull/1475)]
+* Ranges and slices with inequalities such as `[a<..<b]` [[#1476](https://github.com/DanielXMoore/Civet/pull/1476)]
+
 ## 0.8.3 (2024-10-15, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.2...v0.8.3), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.3))
 * Automatically type fields using `@arg` in constructor [[#1469](https://github.com/DanielXMoore/Civet/pull/1469)]
 
