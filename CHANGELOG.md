@@ -4,6 +4,11 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.5 (2024-10-21, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.4...v0.8.5), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.5))
+* Reverse slices and inequality slices with implicit parts [[#1478](https://github.com/DanielXMoore/Civet/pull/1478)]
+* Indented types after binary type operators [[#1479](https://github.com/DanielXMoore/Civet/pull/1479)]
+* Pattern matching `catch` [[#1477](https://github.com/DanielXMoore/Civet/pull/1477)]
+
 ## 0.8.4 (2024-10-20, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.3...v0.8.4), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.4))
 * Improve project root detection in LSP [[#1470](https://github.com/DanielXMoore/Civet/pull/1470)]
 * Loops followed by binary operators, `as` on next line [[#1472](https://github.com/DanielXMoore/Civet/pull/1472)]
