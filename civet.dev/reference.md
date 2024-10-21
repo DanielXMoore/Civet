@@ -451,6 +451,12 @@ Alternatively, you can exclude or include endpoints using `..` with `<` or `<=`:
 strict := numbers[first<..<last]
 </Playground>
 
+Slices are increasing by default, but you can reverse them with `>` or `>=`:
+
+<Playground>
+reversed := x[..>=]
+</Playground>
+
 ## Strings
 
 Strings can span multiple lines:

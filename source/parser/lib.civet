@@ -132,7 +132,7 @@ import {
 } from ./unary.civet
 import { createConstLetDecs, createVarDecs } from ./auto-dec.civet
 import { expressionizeComptime, processComptime } from ./comptime.civet
-import { getHelperRef } from ./helper.civet
+import { getHelperRef, peekHelperRef } from ./helper.civet
 
 import {
   dedentBlockString
@@ -398,7 +398,7 @@ function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause?, 
 /**
  * Process globs, bind shorthand, and call shortcuts, in Call/MemberExpression
  */
-function processCallMemberExpression(node: ASTNodeParent): ASTNode
+function processCallMemberExpression(node: CallExpression | MemberExpression): ASTNode
   { children } := node
 
   // Parenthesized operator like (+), immediately called, expands to
@@ -428,7 +428,7 @@ function processCallMemberExpression(node: ASTNodeParent): ASTNode
     if args.length
       children.splice 0, 2,
         commaCount ?
-          type: "ParenthesizedExpression",
+          type: "ParenthesizedExpression"
           children: ["(", ...call.children, ")"]
         : { ...call, type: "ParenthesizedExpression" }
       // If nothing left to this CallExpression, remove the wrapper
@@ -436,11 +436,10 @@ function processCallMemberExpression(node: ASTNodeParent): ASTNode
         return children[0]
 
   // Process globs and bind shorthand
-  for (let i = 0; i < children.length; i++) {
-    const glob = children[i]
-    if (glob?.type is "PropertyGlob") {
-      let prefix = children.slice(0, i)
-      const parts = []
+  for each glob, i of children
+    if glob?.type is "PropertyGlob"
+      prefix .= children[...i]
+      parts := []
       let hoistDec, refAssignmentComma
       // add ref to ensure object base evaluated only once
       if prefix.length > 1
@@ -524,7 +523,7 @@ function processCallMemberExpression(node: ASTNodeParent): ASTNode
         ...node,
         children: [object, ...children.slice(i + 1)]
       })
-    } else if (glob?.type is "PropertyBind") {
+    else if glob?.type is "PropertyBind"
       // TODO: add ref to ensure object base evaluated only once
       const prefix = children.slice(0, i)
       return processCallMemberExpression({  // in case there are more
@@ -546,8 +545,29 @@ function processCallMemberExpression(node: ASTNodeParent): ASTNode
           ...children.slice(i + 1)
         ]
       })
-    }
-  }
+    else if glob is like {type: "SliceExpression", reversed: true}
+      args := [
+        { ...node, children: node.children[...i] }
+        { ...glob.children[0] as ASTLeaf, token: ", " }
+        ...glob.children[1...-1]
+      ]
+      return makeNode {...node,
+        children: [
+          type: "CallExpression" as const
+          children: [
+            getHelperRef "rslice"
+            makeNode {
+              type: "Call"
+              args
+              children: [
+                "("
+                args
+                glob.children.-1
+              ]
+            }
+          ]
+        ]
+      }
   return node
 
 /**
@@ -902,6 +922,12 @@ function processAssignments(statements): void {
           if lhs.type is "MemberExpression"
             members := lhs.children
             lastMember := members[members.length - 1]
+
+            if lastMember is like {type: "CallExpression", children: [^peekHelperRef("rslice"), ...]}
+              lastMember.children.push
+                type: "Error"
+                message: "Slice range cannot be decreasing in assignment"
+              break
 
             // TODO: this is kind of bonkers
             if lastMember.type is "SliceExpression"
