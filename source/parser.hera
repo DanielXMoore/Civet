@@ -1351,6 +1351,8 @@ CallExpression
   # Import declaration as an expression
   Import _ NamedImports __ FromClause ->
     return dynamizeImportDeclarationExpression($0)
+  FromClause:from __:fws Import:i _:iws NamedImports:imports ->
+    return dynamizeImportDeclarationExpression([i, iws, imports, fws, from])
   # Dynamic import(), with optional parentheses when not used at top level.
   # (At top level, ImportDeclaration will match first.)
   "import" ArgumentsWithTrailingMemberExpressions CallExpressionRest*:rest ->
@@ -5315,19 +5317,25 @@ ImportDeclaration
       type: "ImportDeclaration",
       children: [imp, $0.slice(1)],
     }
-  Import __ TypeKeyword __ ImportClause:imports __ FromClause:from -> { type: "ImportDeclaration", ts: true, children: $0, imports, from }
-  Import __ Operator OperatorBehavior?:behavior __ OperatorNamedImports:imports __ FromClause:from ->
+  ( ( Import __ ) / ImpliedImport ):i Operator OperatorBehavior?:behavior __:ws1 OperatorNamedImports:imports __:ws2 FromClause:from ->
     imports.specifiers.forEach((spec) => {
       state.operators.set(spec.binding.name, spec.behavior ?? behavior)
     })
     return {
       type: "ImportDeclaration",
-      children: [$1, $2, trimFirstSpace($5), imports, $7, from],
-        // omit $3 = Operator and $4 = OperatorBehavior
+      children: [i, trimFirstSpace(ws1), imports, ws2, from],
+        // omit $2 = Operator and $3 = OperatorBehavior
       imports,
       from,
     }
-  Import __ ImportClause:imports __ FromClause:from -> { type: "ImportDeclaration", children: $0, imports, from }
+  Import __ ( TypeKeyword __ )?:t ImportClause:imports __ FromClause:from ->
+    return {
+      type: "ImportDeclaration",
+      children: $0,
+      imports,
+      from,
+      ts: !!t,
+    }
   Import __ ModuleSpecifier:module -> { type: "ImportDeclaration", children: $0, module }
   # NOTE: Added import shorthand
   # NOTE: Not adding $loc to source map here yet because it will point to the start of the identifier
@@ -5341,16 +5349,25 @@ ImportDeclaration
     }
     const children = [i, t, imports, w, from]
     return { type: "ImportDeclaration", ts: !!t, children, imports, from }
-  ImpliedImport:i Operator OperatorBehavior?:behavior __ OperatorNamedImports:imports __ FromClause:from ->
+  # NOTE: [from] ... import ... reverse syntax
+  ImpliedFromClause:from __:fws Import:i __:iws Operator OperatorBehavior?:behavior __:ows OperatorNamedImports:imports ->
     imports.specifiers.forEach((spec) => {
       state.operators.set(spec.binding.name, spec.behavior ?? behavior)
     })
     return {
       type: "ImportDeclaration",
-      children: [$1, trimFirstSpace($4), imports, $6, from],
-        // omit $2 = Operator and $3 = OperatorBehavior
+      children: [i, iws, trimFirstSpace(ows), imports, fws, from],
+        // omit Operator and OperatorBehavior
       imports,
       from,
+    }
+  ImpliedFromClause:from __:fws Import:i __:iws ( TypeKeyword __ )?:t ImportClause:imports ->
+    return {
+      type: "ImportDeclaration",
+      children: [ i, iws, t, imports, fws, from ],
+      imports,
+      from,
+      ts: !!t,
     }
 
 ImpliedImport
@@ -5418,6 +5435,15 @@ FromClause
   From __ ModuleSpecifier:module ->
     if (!Array.isArray(module)) return $0
     return [ $1, $2, ...module ]
+
+ImpliedFromClause
+  ( ( From __ ) / ImpliedFrom ) ModuleSpecifier:module ->
+    if (!Array.isArray(module)) return $0
+    return [ $1, ...module ]
+
+ImpliedFrom
+  "" ->
+    return { $loc, token: "from " }
 
 # https://github.com/tc39/proposal-import-assertions
 # https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-5.html#import-assertions
@@ -5531,10 +5557,11 @@ UnprocessedModuleSpecifier
   UnquotedSpecifier
 
 UnquotedSpecifier
-  # Currently allowing all characters except for whitespace, double quotes, and semi-colon
+  # Currently allowing most non-whitespace characters
+  # Forbidding ; (statement separator), = (assignment), > (function arrow)
   # It may make sense to restrict this to only allow characters that are valid in a module specifier
   # Also consider URLs
-  /[^;"\s]+/:spec ->
+  /[^;"\s=>]+/:spec ->
     return { $loc, token: `"${spec}"` }
 
 # https://262.ecma-international.org/#prod-ImportedBinding
@@ -5583,8 +5610,15 @@ ExportDeclaration
   # NOTE: Using Expression to allow If/Switch expressions
   Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedExpression ):declaration ->
     return { type: "ExportDeclaration", declaration, ts: declaration.ts, children: $0 }
-  Export __ ExportFromClause __ FromClause ->
-    return { type: "ExportDeclaration", ts: $3.ts, children: $0 }
+  Export __ ExportFromClause:exports __ FromClause ->
+    return { type: "ExportDeclaration", ts: exports.ts, children: $0 }
+  # NOTE: [from] ... export ... reverse syntax
+  ImpliedFromClause:from __:fws Export:e __:ews ExportFromClause:exports ->
+    return {
+      type: "ExportDeclaration",
+      ts: exports.ts,
+      children: [ e, ews, exports, " ", from, trimFirstSpace(fws) ],
+    }
   # NOTE: Declaration and VariableStatement should come before NamedExports
   # so that NamedExports doesn't grab function, async, type, var, etc.
   # NOTE: TS decorators come before `export` keyword but TC39 stage 3 decorators proposal come after

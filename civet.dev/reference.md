@@ -2219,6 +2219,8 @@ class Civet <: Animal, Named
 
 ### Decorators
 
+Civet uses [`@` for `this](#this), so decorators need to use `@@`:
+
 <Playground>
 @@Object.seal
 class Civet
@@ -2503,12 +2505,12 @@ If you have `from` in your `import`, you can omit `import`.
 You can also omit quotes around most filenames.
 
 <Playground>
-fs from fs
+fs from fs/promises
 {basename, dirname} from path
 metadata from ./package.json with type: 'json'
 </Playground>
 
-### Import Like Object Destructuring
+### Import-Like Object Destructuring
 
 <Playground>
 import {X: LocalX, Y: LocalY} from "./util"
@@ -2564,6 +2566,18 @@ Most declarations can also be `export default`:
 
 <Playground>
 export default x := 5
+</Playground>
+
+### Backward Import/Export
+
+Similar to Python, you can put `from` before `import`/`export`.
+Furthermore, `from` is optional.
+This can improve autocompletion behavior.
+
+<Playground>
+from fs/promises import { readFile, writeFile }
+./util import * as util
+./package.json with {type: 'json'} export { version }
 </Playground>
 
 ## Comments
