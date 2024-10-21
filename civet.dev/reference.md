@@ -1916,6 +1916,29 @@ else
   callback result
 </Playground>
 
+You can also specify multiple `catch` blocks using
+[pattern matching](#pattern-matching):
+
+<Playground>
+try
+  foo()
+catch <? RangeError, <? ReferenceError
+  console.log "R...Error"
+catch {message: /bad/}
+  console.log "bad"
+catch e
+  console.log "other", e
+</Playground>
+
+If you omit a catch-all at the end,
+the default behavior is to re-`throw` the error:
+
+<Playground>
+try
+  foo()
+catch {message: /^EPIPE:/}
+</Playground>
+
 ### Do Blocks
 
 To put multiple lines in a scope and possibly an expression,

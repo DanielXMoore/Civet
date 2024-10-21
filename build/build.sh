@@ -17,7 +17,7 @@ civet --no-config build/esbuild.civet "$@"
 
 # built types
 for name in astro esbuild rollup unplugin vite webpack; do
-  sed 's/\.civet"/\.js"/' dist/unplugin/source/unplugin/$name.civet.d.ts >dist/unplugin/$name.d.ts
+  sed 's/\.civet"/\.js"/' dist/unplugin/source/unplugin/$name.d.ts >dist/unplugin/$name.d.ts
 done
 rm -rf dist/unplugin/source
 

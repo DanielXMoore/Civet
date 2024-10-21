@@ -14,8 +14,11 @@ import type {
   ASTNodeParent
   ASTRef
   AssignmentExpression
+  Bindings
   BlockStatement
   CallExpression
+  CaseBlock
+  CatchBinding
   CatchClause
   ComptimeStatement
   Condition
@@ -25,14 +28,17 @@ import type {
   ExpressionNode
   FinallyClause
   ForStatement
-  FunctionExpression
   IfStatement
+  Initializer
   IterationStatement
   MemberExpression
   MethodDefinition
+  NormalCatchParameter
+  ParenthesizedExpression
   Placeholder
   StatementExpression
   StatementTuple
+  SwitchStatement
   TypeArguments
   TypeSuffix
   WSNode
@@ -335,8 +341,112 @@ function handleThisPrivateShorthands(value)
 
   return [value, value.thisShorthand]
 
-function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause?, ElseClause?, FinallyClause?])
-  [t, , b, c, e, f] .= $0
+function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause[], ElseClause?, FinallyClause?])
+  [t, , b, cs, e, f] .= $0
+
+  // Pattern matching catch clauses: transform into pattern matching switch
+  let c: CatchClause?
+  if cs.some .binding?.parameter is like {type: "CatchPattern"}
+    ref := makeRef("e")
+    binding: CatchBinding :=
+      type: "CatchBinding"
+      children: [ "(", ref, ")" ]
+      parameter: ref
+    condition: ParenthesizedExpression :=
+      type: "ParenthesizedExpression"
+      children: [ "(", ref, ")" ]
+      expression: ref
+    defaultClause .= false
+    clauses: CaseBlock["clauses"] := cs.map (clause) =>
+      if {type: "CatchPattern", patterns} := clause.binding?.parameter
+        {
+          type: "PatternClause"
+          patterns
+          block: clause.block
+          children: [ patterns, clause.block ]
+        }
+      else
+        defaultClause = true
+        parameter := clause.binding?.parameter
+        if parameter?
+          assert.equal parameter.type, "CatchParameter",
+            `Invalid catch parameter ${parameter.type}`
+          { binding: pattern, typeSuffix } := parameter as NormalCatchParameter
+          initializer: Initializer :=
+            type: "Initializer"
+            expression: ref
+            children: [ "", " = ", ref ]
+          bindings: Bindings[] := [{
+            type: "Binding"
+            names: pattern.names
+            pattern
+            typeSuffix
+            initializer
+            children: [ pattern, typeSuffix, initializer ]
+            splices: []
+            thisAssignments: []
+          }]
+          clause.block.expressions.unshift ["", {
+            type: "Declaration"
+            children: ["let", " ", bindings]
+            bindings
+            names: bindings[0].names
+            decl: "let"
+          }, ";"]
+
+        type: "DefaultClause"
+        block: clause.block
+        children: [ "default: ", clause.block ]
+
+    // If no default clause specified, add one that rethrows exception
+    unless defaultClause
+      expressions: StatementTuple[] := [["",
+        type: "ThrowStatement"
+        children: [ "throw", " ", ref ]
+      ]]
+      block: BlockStatement := {
+        type: "BlockStatement"
+        expressions
+        children: [ " {", expressions, "}" ]
+        bare: false
+      }
+      clauses.push {
+        type: "DefaultClause"
+        block
+        children: [ "default: ", block ]
+      }
+    caseBlock: CaseBlock := {
+      type: "CaseBlock"
+      clauses
+      children: [ " {", clauses, "}" ]
+    }
+    patternSwitch: SwitchStatement := {
+      type: "SwitchStatement"
+      condition
+      caseBlock
+      children: [ "switch", condition, caseBlock ]
+    }
+    block: BlockStatement :=
+      type: "BlockStatement"
+      bare: false
+      expressions: [["", patternSwitch]]
+      children: [" {", patternSwitch, "}"]
+    c = makeNode {
+      type: "CatchClause"
+      children:
+        . cs[0].children[0] // whitespace
+        . cs[0].children[1] // catch token
+        . binding, block
+      binding
+      block
+    }
+  else
+    c = cs[0]
+    if cs# > 1
+      c = append c,
+        type: "Error"
+        message: "Only one catch clause allowed unless using pattern matching"
+      as CatchClause
 
   // Default behavior catches all exceptions
   if !c and (e or !f)
