@@ -22,7 +22,8 @@ making it easy to transition existing code bases.
 Then it adds many features and syntactic sugar,
 with some highlights below and more comprehensive examples
 in the [reference](/reference).
-See also Civet's [design philosophy](/philosophy).
+See also Civet's [design philosophy](/philosophy)
+and [changelog](https://github.com/DanielXMoore/Civet/blob/main/CHANGELOG.md).
 
 ## Highlights: Beyond TC39
 
