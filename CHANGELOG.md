@@ -4,6 +4,11 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.6 (2024-10-21, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.5...v0.8.6), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.6))
+* Fix CLI with complex `NODE_OPTIONS`, LSP cleanup [[#1482](https://github.com/DanielXMoore/Civet/pull/1482)]
+* `if` conditions continued by binary op on next line [[#1483](https://github.com/DanielXMoore/Civet/pull/1483)]
+* `from ... import/export` (reversed `import`/`export`) [[#1484](https://github.com/DanielXMoore/Civet/pull/1484)]
+
 ## 0.8.5 (2024-10-21, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.4...v0.8.5), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.5))
 * Reverse slices and inequality slices with implicit parts [[#1478](https://github.com/DanielXMoore/Civet/pull/1478)]
 * Indented types after binary type operators [[#1479](https://github.com/DanielXMoore/Civet/pull/1479)]
