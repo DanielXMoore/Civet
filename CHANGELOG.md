@@ -4,6 +4,11 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.7 (2024-10-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.6...v0.8.7), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.7))
+* Fix one-line arrow functions with `@` arguments [[#1490](https://github.com/DanielXMoore/Civet/pull/1490)]
+* Fix `Promise<void>` detection with implicit type arguments [[#1491](https://github.com/DanielXMoore/Civet/pull/1491)]
+* Fix await with array member expression [[#1492](https://github.com/DanielXMoore/Civet/pull/1492)]
+
 ## 0.8.6 (2024-10-21, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.5...v0.8.6), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.6))
 * Fix CLI with complex `NODE_OPTIONS`, LSP cleanup [[#1482](https://github.com/DanielXMoore/Civet/pull/1482)]
 * `if` conditions continued by binary op on next line [[#1483](https://github.com/DanielXMoore/Civet/pull/1483)]
