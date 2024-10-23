@@ -535,6 +535,7 @@ iterable = {
     yield 3
   :isConcatSpreadable: true
 }
+iterable.:iterator()
 </Playground>
 
 In case you're building for a special environment, you can set the list of
