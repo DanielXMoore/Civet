@@ -520,6 +520,33 @@ to support [TypeScript triple-slash directives](https://www.typescriptlang.org/d
 Keep this in mind when trying examples in the Playground.
 :::
 
+## Symbols
+
+`:symbol` represents either a well-known symbol (static member of `Symbol`)
+or a consistently generated symbol in the global symbol registry via
+[`Symbol.for`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/for):
+
+<Playground>
+magicSymbol := :magic
+iterable = {
+  :iterator()
+    yield 1
+    yield 2
+    yield 3
+  :isConcatSpreadable: true
+}
+iterable.:iterator()
+</Playground>
+
+In case you're building for a special environment, you can set the list of
+well-known symbols via a compiler directive:
+
+<Playground>
+"civet symbols=magic"
+magicSymbol := :magic
+iteratorSymbol := :iterator
+</Playground>
+
 ## Operators
 
 ### All JavaScript/TypeScript Operators
