@@ -525,6 +525,13 @@ documents.onDidChangeContent(async ({ document }) => {
   console.log("onDidChangeContent", document.uri)
   changeQueue.add(document)
   scheduleExecuteQueue()
+
+  const sourcePath = documentToSourcePath(document)
+  assert(sourcePath)
+  const service = await ensureServiceForSourcePath(sourcePath)
+  if (!service) return
+
+  service.host.addOrUpdateDocument(document)
 });
 
 async function updateDiagnosticsForDoc(document: TextDocument) {
