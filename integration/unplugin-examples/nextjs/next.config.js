@@ -5,8 +5,7 @@ const nextConfig = {
   reactStrictMode: true,
   pageExtensions: ['ts', 'tsx', 'js', 'jsx', 'civet'],
   webpack(config) {
-    config.plugins.push(civetWebpackPlugin({}));
-
+    config.plugins.push(civetWebpackPlugin({ts: 'preserve'}));
     return config;
   },
 };
