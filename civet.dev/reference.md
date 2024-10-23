@@ -1804,6 +1804,17 @@ function mapIter(f, list)
 console.log item for item of array
 </Playground>
 
+### When Condition
+
+`for` loops can have a `when` condition to filter iterations.
+This makes for a nice one-line form to filter and map an array:
+
+<Playground>
+squared := v * v for v of list when v?
+// or
+squared := for v of list when v? then v * v
+</Playground>
+
 ### Infinite Loop
 
 <Playground>
