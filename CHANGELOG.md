@@ -4,6 +4,12 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.8 (2024-10-24, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.7...v0.8.8), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.8))
+* `:symbol` shorthand for `Symbol.symbol` or `Symbol.for("symbol")` [[#1498](https://github.com/DanielXMoore/Civet/pull/1498)]
+* preventExtensions on comptime functions [[#1494](https://github.com/DanielXMoore/Civet/pull/1494)]
+* Fix unplugin's webpack mode: `resolve.alias`, virtual modules [[#1501](https://github.com/DanielXMoore/Civet/pull/1501)]
+* `for` loops can filter via `when` conditions (not just in CoffeeScript mode) [[#1502](https://github.com/DanielXMoore/Civet/pull/1502)]
+
 ## 0.8.7 (2024-10-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.6...v0.8.7), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.7))
 * Fix one-line arrow functions with `@` arguments [[#1490](https://github.com/DanielXMoore/Civet/pull/1490)]
 * Fix `Promise<void>` detection with implicit type arguments [[#1491](https://github.com/DanielXMoore/Civet/pull/1491)]
