@@ -1836,6 +1836,11 @@ for i of [0...array.length]
 </Playground>
 
 <Playground>
+for i of [0...n] by 2
+  console.log i, "is even"
+</Playground>
+
+<Playground>
 for [1..5]
   attempt()
 </Playground>
