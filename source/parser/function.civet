@@ -557,7 +557,7 @@ function wrapIterationReturningResults(
 
   resultsRef := statement.resultsRef = makeRef "results"
 
-  { declaration, breakWithOnly } := iterationDeclaration statement
+  declaration := iterationDeclaration statement
   { ancestor, child } := findAncestor statement, .type is "BlockStatement"
   assert.notNull ancestor, `Could not find block containing ${statement.type}`
   index := findChildIndex ancestor.expressions, child
@@ -566,20 +566,19 @@ function wrapIterationReturningResults(
   iterationTuple[0] = '' // steal indentation from loop
   braceBlock ancestor
 
-  unless breakWithOnly
-    assignResults statement.block, (node) =>
-      // TODO: real ast node
-      [ resultsRef, ".push(", node, ")" ]
-
   if collect
     statement.children.push collect(resultsRef)
   else
     statement.children.push(";return ", resultsRef, ";")
 
+// Creates and returns a declaration for the results of a loop,
+// so that the caller can add it to the containing block.
+// Also wraps the body to collect the loop results.
 function iterationDeclaration(statement: IterationStatement | ForStatement)
   { resultsRef } := statement
 
-  decl: "const" | "let" .= "const"
+  reduction := statement.type is "ForStatement" and statement.reduction
+  decl: "const" | "let" .= reduction ? "let" : "const"
   if statement.type is "IterationStatement" or statement.type is "ForStatement"
     if processBreakContinueWith statement
       decl = "let"
@@ -599,13 +598,69 @@ function iterationDeclaration(statement: IterationStatement | ForStatement)
     names: []
     bindings: []
   }
-  // Assign [] directly only in const case, so TypeScript can better infer
-  if decl is "const"
-    declaration.children.push "=[]"
-  else // decl is "let"
-    declaration.children.push ";", resultsRef, "=[]" unless breakWithOnly
 
-  { declaration, breakWithOnly }
+  if reduction
+    declaration.children.push "=" +
+      switch reduction.subtype
+        when "some" then "false"
+        when "every" then "true"
+        when "min" then "Infinity"
+        when "max" then "-Infinity"
+        when "product" then "1"
+        else "0"
+  else
+    // Assign [] directly only in const case, so TypeScript can better infer
+    if decl is "const"
+      declaration.children.push "=[]"
+    else // decl is "let"
+      declaration.children.push ";", resultsRef, "=[]" unless breakWithOnly
+
+  // insert `results.push` to gather results array
+  // TODO: real ast nodes
+  unless breakWithOnly
+    if statement.block.empty and reduction
+      switch reduction.subtype
+        when "some"
+          statement.block.expressions[..] = [[ "",
+            [ resultsRef, " = true; break" ]
+          ] as StatementTuple]
+          statement.block.empty = false
+          braceBlock statement.block
+        when "every"
+          statement.block.expressions[..] = [[ "",
+            [ resultsRef, " = false; break" ]
+          ] as StatementTuple]
+          statement.block.empty = false
+          braceBlock statement.block
+        when "count"
+          statement.block.expressions[..] = [[ "",
+            [ "++", resultsRef ]
+          ] as StatementTuple]
+          statement.block.empty = false
+      return declaration unless statement.block.empty
+    if statement.block.empty and statement.type is "ForStatement" and
+       statement.declaration?.type is "ForDeclaration"
+      statement.block.expressions[..] = [[ "",
+        patternAsValue statement.declaration.binding
+      ] as StatementTuple]
+      statement.block.empty = false
+    unless statement.block.empty
+      assignResults statement.block, (node) =>
+        return [ resultsRef, ".push(", node, ")" ] unless reduction
+        switch reduction.subtype
+          when "some"
+            [ "if (", node, ") {", resultsRef, " = true; break}" ]
+          when "every"
+            [ "if (!", makeLeftHandSideExpression(node), ") {",
+              resultsRef, " = false; break}" ]
+          when "count"
+            [ "if (", node, ") ++", resultsRef ]
+          when "sum" then [ resultsRef, " += ", node ]
+          when "product" then [ resultsRef, " *= ", node ]
+          when "min" then [ resultsRef, " = Math.min(", resultsRef, ", ", node, ")" ]
+          when "max" then [ resultsRef, " = Math.max(", resultsRef, ", ", node, ")" ]
+
+  declaration
 
 function processParams(f): void
   { type, parameters, block } := f
@@ -761,21 +816,14 @@ function expressionizeIteration(exp: IterationExpression): void
   else
     resultsRef := statement.resultsRef ??= makeRef "results"
 
-    { declaration, breakWithOnly } := iterationDeclaration statement
-
-    // insert `results.push` to gather results array
-    unless breakWithOnly
-      assignResults block, (node) =>
-        // TODO: real node
-        [ resultsRef, ".push(", node, ")" ]
-      braceBlock(block)
+    declaration := iterationDeclaration statement
 
     // Wrap with IIFE
     children.splice(i,
       1,
       wrapIIFE([
         ["", declaration, ";"]
-        ["", statement, undefined]
+        ["", statement, ";" if statement.block.bare]
         ["", wrapWithReturn(resultsRef)]
       ], async)
     )
