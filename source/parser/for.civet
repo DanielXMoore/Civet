@@ -6,18 +6,25 @@ import type {
   Children
   RangeDots
   RangeExpression
+  Whitespace
 } from ./types.civet
 
 import {
-  insertTrimmingSpace
   literalValue
   makeLeftHandSideExpression
+  makeNumericLiteral
+  prepend
+  trimFirstSpace
 } from ./util.civet
 
 import {
   makeRef
   maybeRef
 } from ./ref.civet
+
+import {
+  getHelperRef
+} from ./helper.civet
 
 function processRangeExpression(start: ASTNode, ws1: ASTNode, range: RangeDots, end: ASTNode)
   ws1 = [ws1, range.children[0]] // whitespace before ..
@@ -127,17 +134,21 @@ function forRange(
 
   let stepRef, asc: boolean?
   if stepExp
-    stepExp = insertTrimmingSpace(stepExp, "")
+    stepExp = trimFirstSpace(stepExp)
     stepRef = maybeRef(stepExp, "step")
   else if infinite
-    stepExp = stepRef = "1"
+    stepExp = stepRef = makeNumericLiteral 1
   else if increasing?
     if increasing
-      stepExp = stepRef = "1"
+      stepExp = stepRef = makeNumericLiteral 1
       asc = true
     else
-      stepExp = stepRef = "-1"
+      stepExp = stepRef = makeNumericLiteral -1
       asc = false
+  stepValue := if stepExp?.type is "Literal"
+    try literalValue stepExp // ignore invalid literals
+  if stepValue <? "number"
+    asc = stepValue > 0
 
   // start needs to be ref'd to compute start <= end, unless we know direction
   startRef .= if stepRef then start else maybeRef(start, "start")
@@ -153,15 +164,16 @@ function forRange(
       . stepRef
 
   let ascDec: ASTNode[] = [], ascRef
-  if stepRef
+  if stepExp
     unless stepRef is stepExp
       ascDec = [", ", stepRef, " = ", stepExp]
 
-  else if "Literal" is start.type is end.type
+  else if start?.type is "Literal" is end?.type
+    // @ts-ignore Allow comparison of any literal values, as in JS
     asc = literalValue(start) <= literalValue(end)
     if "StringLiteral" is start.subtype is end.subtype
-      startRef = literalValue(start).charCodeAt(0).toString()
-      endRef = literalValue(end).charCodeAt(0).toString()
+      startRef = (literalValue(start) as string).charCodeAt(0).toString()
+      endRef = (literalValue(end) as string).charCodeAt(0).toString()
 
   else
     ascRef = makeRef("asc")
@@ -171,7 +183,7 @@ function forRange(
   if forDeclaration?.declare // var/let/const declaration of variable
     if forDeclaration.declare.token is "let"
       varName := forDeclaration.children.splice(1)  // strip let
-      varAssign = [...insertTrimmingSpace(varName, ""), " = "]
+      varAssign = [...trimFirstSpace(varName), " = "]
       varLet = [",", ...varName, " = ", counterRef]
     else // const or var: put inside loop
       // TODO: missing indentation
@@ -192,14 +204,14 @@ function forRange(
     : [counterRef, " < ", endRef, " : ", counterRef, " > ", endRef]
 
   condition :=
-    infinite ? [] :
+    infinite or stepValue is 0 ? [] :
     asc? ? (asc ? counterPart[0...3] : counterPart[4..]) :
     stepRef ? [stepRef, " !== 0 && (", stepRef, " > 0 ? ", ...counterPart, ")"] :
     [ascRef, " ? ", ...counterPart]
 
   increment :=
-    stepRef === "1" ? [...varAssign, "++", counterRef] :
-    stepRef === "-1" ? [...varAssign, "--", counterRef] :
+    stepValue is +1 ? [...varAssign, "++", counterRef] :
+    stepValue is -1 ? [...varAssign, "--", counterRef] :
     stepRef
       ? [...varAssign, counterRef, " += ", stepRef]
       : ascRef
@@ -213,22 +225,25 @@ function forRange(
   }
 
 function processForInOf($0: [
-  awaits: ASTNode,
-  eachOwn: undefined | [ASTLeaf, ASTNode],
-  open: ASTNode,
-  declaration: ASTNode,
-  declaration2: [ws1: ASTNode, comma: ASTLeaf, ws2: ASTNode, decl2: ASTNode],
-  ws: ASTNode,
-  inOf: ASTLeaf,
-  exp: ASTNodeBase,
-  step: ASTNode,
-  close: ASTNode
-], getRef)
+  awaits: ASTNode
+  eachOwn: [ASTLeaf, ASTNode] | undefined
+  open: ASTLeaf
+  declaration: ASTNode
+  declaration2: [ws1: ASTNode, comma: ASTLeaf, ws2: ASTNode, decl2: ASTNode]
+  ws: ASTNode
+  inOf: ASTLeaf
+  exp: ASTNodeBase
+  step: [Whitespace, ASTLeaf, ASTNode]
+  close: ASTLeaf
+])
   [awaits, eachOwn, open, declaration, declaration2, ws, inOf, exp, step, close] .= $0
 
   if exp.type is "RangeExpression" and inOf.token is "of" and !declaration2
     // TODO: add support for `declaration2` to efficient `forRange`
-    return forRange(open, declaration, exp, step, close)
+    return forRange
+      open, declaration, exp
+      step and prepend(trimFirstSpace(step[0]), trimFirstSpace(step[2])) // omit "by" token
+      close
   else if step
     throw new Error("for..of/in cannot use 'by' except with range literals")
 
@@ -248,24 +263,24 @@ function processForInOf($0: [
       if declaration2
         const [, , ws2, decl2] = declaration2  // strip __ Comma __
         blockPrefix.push(["", [
-          insertTrimmingSpace(ws2, ""), decl2, " = ", counterRef
+          trimFirstSpace(ws2), decl2, " = ", counterRef
         ], ";"])
         assignmentNames.push(...decl2.names)
 
       expRefDec := (expRef !== exp)
         // Trim a single leading space if present
-        ? [insertTrimmingSpace(expRef, " "), " = ", insertTrimmingSpace(exp, ""), ", "]
+        ? [trimFirstSpace(expRef), " = ", trimFirstSpace(exp), ", "]
         : []
 
       blockPrefix.push ["", {
         type: "Declaration"
-        children: [declaration, " = ", insertTrimmingSpace(expRef, ""), "[", counterRef, "]"]
+        children: [declaration, " = ", trimFirstSpace(expRef), "[", counterRef, "]"]
         names: assignmentNames
       }, ";"]
 
       declaration =
         type: "Declaration"
-        children: ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", insertTrimmingSpace(expRef, ""), ".length"]
+        children: ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", trimFirstSpace(expRef), ".length"]
         names: []
 
       condition := [counterRef, " < ", lenRef, "; "]
@@ -317,7 +332,7 @@ function processForInOf($0: [
     return {
       declaration
       blockPrefix
-      children: [awaits, eachOwnError, open, declaration, ws, inOf, expRef ?? exp, step, close] // omit declaration2, replace eachOwn with eachOwnError, replace exp with expRef
+      children: [awaits, eachOwnError, open, declaration, ws, inOf, expRef ?? exp, close] // omit declaration2, replace eachOwn with eachOwnError, replace exp with expRef
     }
 
   let ws2: ASTNode?, decl2: ASTNode?
@@ -333,7 +348,7 @@ function processForInOf($0: [
       }
       blockPrefix.push ["", {
         type: "Declaration"
-        children: [insertTrimmingSpace(ws2, ""), decl2, " = ", counterRef, "++"]
+        children: [trimFirstSpace(ws2), decl2, " = ", counterRef, "++"]
         names: decl2.names
       }, ";"]
 
@@ -350,12 +365,12 @@ function processForInOf($0: [
           children: [" ", expRef, " =", exp]
       // for own..in
       if own
-        const hasPropRef = getRef("hasProp")
-        blockPrefix.push ["", ["if (!", hasPropRef, "(", insertTrimmingSpace(expRef, ""), ", ", insertTrimmingSpace(pattern, ""), ")) continue"], ";"]
+        hasPropRef := getHelperRef("hasProp")
+        blockPrefix.push ["", ["if (!", hasPropRef, "(", trimFirstSpace(expRef), ", ", trimFirstSpace(pattern), ")) continue"], ";"]
       if decl2
         blockPrefix.push ["", {
           type: "Declaration"
-          children: [insertTrimmingSpace(ws2, ""), decl2, " = ", insertTrimmingSpace(expRef, ""), "[", insertTrimmingSpace(pattern, ""), "]"]
+          children: [trimFirstSpace(ws2), decl2, " = ", trimFirstSpace(expRef), "[", trimFirstSpace(pattern), "]"]
           names: decl2.names
         }, ";"]
 
@@ -364,7 +379,7 @@ function processForInOf($0: [
 
   return {
     declaration,
-    children: [awaits, eachOwnError, open, declaration, ws, inOf, exp, step, close], // omit declaration2, replace each with eachOwnError
+    children: [awaits, eachOwnError, open, declaration, ws, inOf, exp, close], // omit declaration2, replace each with eachOwnError
     blockPrefix,
     hoistDec,
   }
