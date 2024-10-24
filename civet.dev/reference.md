@@ -1804,6 +1804,21 @@ function mapIter(f, list)
 console.log item for item of array
 </Playground>
 
+### When Condition
+
+`for` loops can have a `when` condition to filter iterations.
+This makes for a nice one-line form to filter and map an array
+(similar to [Python list comprehensions](https://docs.python.org/3/tutorial/datastructures.html#list-comprehensions)):
+
+<Playground>
+squared := v * v for v of list when v?
+// or
+squared := for v of list when v? then v * v
+</Playground>
+
+To make a generator instead of an array, use
+[`for*`](#generator-expressions) instead of `for`.
+
 ### Infinite Loop
 
 <Playground>
