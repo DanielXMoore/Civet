@@ -134,7 +134,8 @@ connection.onInitialize(async (params: InitializeParams) => {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       // Tell the client that this server supports code completion.
       completionProvider: {
-        resolveProvider: true
+        resolveProvider: true,
+        triggerCharacters: [".", " "]
       },
       // documentLinkProvider: {
       //   resolveProvider: true
@@ -200,11 +201,11 @@ connection.onHover(async ({ textDocument, position }) => {
   assert(doc)
 
   let info
+  await updating(textDocument)
   if (sourcePath.match(tsSuffix)) { // non-transpiled
     const p = doc.offsetAt(position)
     info = service.getQuickInfoAtPosition(sourcePath, p)
   } else { // Transpiled
-    await updating(textDocument)
     // need to sourcemap the line/columns
     const meta = service.host.getMeta(sourcePath)
     if (!meta) return
@@ -273,6 +274,7 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
 
   console.log("completion", sourcePath, position)
 
+  await updating(textDocument)
   if (sourcePath.match(tsSuffix)) { // non-transpiled
     const document = documents.get(textDocument.uri)
     assert(document)
@@ -282,7 +284,6 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
     return convertCompletions(completions, document)
   }
 
-  await updating(textDocument)
   // need to sourcemap the line/columns
   const meta = service.host.getMeta(sourcePath)
   if (!meta) return
@@ -318,6 +319,7 @@ connection.onDefinition(async ({ textDocument, position }) => {
 
   let definitions
 
+  await updating(textDocument)
   // Non-transpiled
   if (sourcePath.match(tsSuffix)) {
     const document = documents.get(textDocument.uri)
@@ -325,7 +327,6 @@ connection.onDefinition(async ({ textDocument, position }) => {
     const p = document.offsetAt(position)
     definitions = service.getDefinitionAtPosition(sourcePath, p)
   } else {
-    await updating(textDocument)
     // need to sourcemap the line/columns
     const meta = service.host.getMeta(sourcePath)
     if (!meta) return
@@ -389,13 +390,13 @@ connection.onReferences(async ({ textDocument, position }) => {
 
   let references
 
+  await updating(textDocument)
   if (sourcePath.match(tsSuffix)) { // non-transpiled
     const document = documents.get(textDocument.uri)
     assert(document)
     const p = document.offsetAt(position)
     references = service.getReferencesAtPosition(sourcePath, p)
   } else {
-    await updating(textDocument)
     // need to sourcemap the line/columns
     const meta = service.host.getMeta(sourcePath)
     if (!meta) return
@@ -458,12 +459,12 @@ connection.onDocumentSymbol(async ({ textDocument }) => {
 
   let document, navTree, sourcemapLines
 
+  await updating(textDocument)
   if (sourcePath.match(tsSuffix)) { // non-transpiled
     document = documents.get(textDocument.uri)
     assert(document)
     navTree = service.getNavigationTree(sourcePath)
   } else {
-    await updating(textDocument)
     // Transpiled
     const meta = service.host.getMeta(sourcePath)
     assert(meta)
