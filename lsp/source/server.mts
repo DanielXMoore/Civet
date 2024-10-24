@@ -179,6 +179,13 @@ connection.onInitialized(() => {
   }
 });
 
+const updating = async (document: { uri: string }) => {
+  const resolver = documentUpdateStatus.get(document.uri)
+  if (resolver) {
+    await resolver.promise
+  }
+}
+
 const tsSuffix = /\.[cm]?[jt]s$|\.json|\.[jt]sx/
 
 connection.onHover(async ({ textDocument, position }) => {
@@ -197,6 +204,7 @@ connection.onHover(async ({ textDocument, position }) => {
     const p = doc.offsetAt(position)
     info = service.getQuickInfoAtPosition(sourcePath, p)
   } else { // Transpiled
+    await updating(textDocument)
     // need to sourcemap the line/columns
     const meta = service.host.getMeta(sourcePath)
     if (!meta) return
@@ -274,10 +282,7 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
     return convertCompletions(completions, document)
   }
 
-  const resolver = documentUpdateStatus.get(textDocument.uri)
-  if (resolver) {
-    await resolver.promise
-  }
+  await updating(textDocument)
   // need to sourcemap the line/columns
   const meta = service.host.getMeta(sourcePath)
   if (!meta) return
@@ -320,7 +325,7 @@ connection.onDefinition(async ({ textDocument, position }) => {
     const p = document.offsetAt(position)
     definitions = service.getDefinitionAtPosition(sourcePath, p)
   } else {
-
+    await updating(textDocument)
     // need to sourcemap the line/columns
     const meta = service.host.getMeta(sourcePath)
     if (!meta) return
@@ -390,6 +395,7 @@ connection.onReferences(async ({ textDocument, position }) => {
     const p = document.offsetAt(position)
     references = service.getReferencesAtPosition(sourcePath, p)
   } else {
+    await updating(textDocument)
     // need to sourcemap the line/columns
     const meta = service.host.getMeta(sourcePath)
     if (!meta) return
@@ -457,6 +463,7 @@ connection.onDocumentSymbol(async ({ textDocument }) => {
     assert(document)
     navTree = service.getNavigationTree(sourcePath)
   } else {
+    await updating(textDocument)
     // Transpiled
     const meta = service.host.getMeta(sourcePath)
     assert(meta)
