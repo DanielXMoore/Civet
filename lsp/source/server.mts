@@ -21,7 +21,7 @@ import {
 } from 'vscode-languageserver-textdocument';
 import TSService from './lib/typescript-service.mjs';
 import * as Previewer from "./lib/previewer.mjs";
-import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier, logTiming } from './lib/util.mjs';
+import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier, logTiming, WithResolvers, withResolvers } from './lib/util.mjs';
 import assert from "assert"
 import path from "node:path"
 import ts, {
@@ -274,6 +274,10 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
     return convertCompletions(completions, document)
   }
 
+  const resolver = documentUpdateStatus.get(textDocument.uri)
+  if (resolver) {
+    await resolver.promise
+  }
   // need to sourcemap the line/columns
   const meta = service.host.getMeta(sourcePath)
   if (!meta) return
@@ -489,6 +493,7 @@ documents.onDidOpen(async ({ document }) => {
 // Buffer up changes to documents so we don't stack transpilations and become unresponsive
 let changeQueue = new Set<TextDocument>()
 let executeTimeout: Promise<void> | undefined
+const documentUpdateStatus = new Map<string, WithResolvers<boolean>>()
 async function executeQueue() {
   // Cancel updating any other documents while running queue of primary changes
   if (runningDiagnosticsUpdate) {
@@ -501,6 +506,11 @@ async function executeQueue() {
   // Run all jobs in queue (preventing livelock).
   for (const document of changed) {
     await updateDiagnosticsForDoc(document)
+    documentUpdateStatus.get(document.uri)?.resolve(true)
+    Promise
+      .resolve()
+      // Wait for the document to be updated before removing it from the status map
+      .then(() => documentUpdateStatus.delete(document.uri))
   }
   // Allow executeQueue() again, and run again if there are new jobs now.
   // Otherwise, schedule update of all other documents.
@@ -523,15 +533,9 @@ async function scheduleExecuteQueue() {
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent(async ({ document }) => {
   console.log("onDidChangeContent", document.uri)
+  documentUpdateStatus.set(document.uri, withResolvers())
   changeQueue.add(document)
   scheduleExecuteQueue()
-
-  const sourcePath = documentToSourcePath(document)
-  assert(sourcePath)
-  const service = await ensureServiceForSourcePath(sourcePath)
-  if (!service) return
-
-  service.host.addOrUpdateDocument(document)
 });
 
 async function updateDiagnosticsForDoc(document: TextDocument) {
