@@ -508,11 +508,10 @@ async function executeQueue() {
   // Run all jobs in queue (preventing livelock).
   for (const document of changed) {
     await updateDiagnosticsForDoc(document)
-    documentUpdateStatus.get(document.uri)?.resolve(true)
-    Promise
-      .resolve()
+    documentUpdateStatus.get(document.uri)
+      ?.resolve(true)
       // Wait for the document to be updated before removing it from the status map
-      .then(() => documentUpdateStatus.delete(document.uri))
+      ?.then(() => documentUpdateStatus.delete(document.uri))
   }
   // Allow executeQueue() again, and run again if there are new jobs now.
   // Otherwise, schedule update of all other documents.
