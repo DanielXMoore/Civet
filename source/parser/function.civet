@@ -12,6 +12,7 @@ import type {
   IterationStatement
   Parameter
   ParametersNode
+  ReturnStatement
   StatementTuple
   SwitchStatement
   TypeArgument
@@ -561,6 +562,7 @@ function wrapIterationReturningResults(
   { ancestor, child } := findAncestor statement, .type is "BlockStatement"
   assert.notNull ancestor, `Could not find block containing ${statement.type}`
   index := findChildIndex ancestor.expressions, child
+  assert.notEqual index, -1, `Could not find ${statement.type} in containing block`
   iterationTuple := ancestor.expressions[index]
   ancestor.expressions.splice index, 0, [iterationTuple[0], declaration, ";"]
   iterationTuple[0] = '' // steal indentation from loop
@@ -794,40 +796,50 @@ function expressionizeIteration(exp: IterationExpression): void
     updateParentPointers exp
     return
 
+  let statements: StatementTuple[]
   if generator
     assignResults block, (node) =>
       type: "YieldExpression"
       expression: node
-      children: [ "yield ", node ]
+      children:
+        . type: "Yield"
+          token: "yield "
+        . node
 
-    children.splice(i,
-      1,
-      wrapIIFE([
-        ["", statement, undefined]
-        // Prevent implicit return in generator, by adding an explicit return
-        ["", {
-          type: "ReturnStatement"
-          expression: undefined
-          children: [ ";return" ]
-        }, undefined],
-      ], async, generator)
-    )
+    statements =
+      . ["", statement]
   else
     resultsRef := statement.resultsRef ??= makeRef "results"
 
     declaration := iterationDeclaration statement
 
-    // Wrap with IIFE
-    children.splice(i,
-      1,
-      wrapIIFE([
-        ["", declaration, ";"]
-        ["", statement, ";" if statement.block.bare]
-        ["", wrapWithReturn(resultsRef)]
-      ], async)
-    )
+    statements =
+      . ["", declaration, ";"]
+      . ["", statement, ";" if statement.block.bare]
+      . ["", resultsRef]
 
-  updateParentPointers exp
+  // Don't need IIFE if iteration expression is at the top level of a block
+  let done
+  if not async and exp.parent?.type is "StatementExpression" and
+     exp?.parent?.parent?.type is "BlockStatement"
+    parentBlock := exp.parent.parent
+    index := findChildIndex parentBlock.expressions, exp.parent
+    assert.notEqual index, -1, "Could not find iteration expression in parent block"
+    if parentBlock.expressions[index][1] is exp.parent
+      statements[0][0] = parentBlock.expressions[index][0] // inherit indentation
+      parentBlock.expressions[index..index] = statements
+      updateParentPointers parentBlock
+      braceBlock parentBlock
+      done = true
+  unless done
+    // Wrap with IIFE
+    statements.-1.1 = wrapWithReturn(statements.-1.1) unless generator
+    children.splice i, 1, wrapIIFE(statements, async, generator)
+    updateParentPointers exp
+
+function processIterationExpressions(statements: ASTNode): void
+  for each s of gatherRecursiveAll statements, .type is "IterationExpression"
+    expressionizeIteration s
 
 /**
 Utility function to check if an implicit function application should be skipped
@@ -948,11 +960,11 @@ function makeAmpersandFunction(rhs: AmpersandBlockBody): ASTNode
 
 export {
   assignResults
-  expressionizeIteration
   insertReturn
   makeAmpersandFunction
   processCoffeeDo
   processFunctions
+  processIterationExpressions
   processReturn
   skipImplicitArguments
   wrapIterationReturningResults
