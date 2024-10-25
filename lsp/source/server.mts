@@ -180,13 +180,7 @@ connection.onInitialized(() => {
   }
 });
 
-const updating = async (document: { uri: string }) => {
-  const resolver = documentUpdateStatus.get(document.uri)
-  if (resolver) {
-    await resolver.promise
-  }
-}
-
+const updating = (document: { uri: string }) => documentUpdateStatus.get(document.uri)?.promise
 const tsSuffix = /\.[cm]?[jt]s$|\.json|\.[jt]sx/
 
 connection.onHover(async ({ textDocument, position }) => {
