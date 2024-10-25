@@ -919,214 +919,208 @@ function processBindingPatternLHS(lhs, tail): void
   // TODO: This isn't quite right for compound assignments, may need to wrap with parens and use comma to return the complete value
   tail.push(...splices.map((s) => [", ", s]), ...thisAssignments.map((a) => [", ", a]))
 
-function processAssignments(statements): void {
+function processAssignments(statements): void
   // Move assignments/updates within LHS of assignments/updates
   // to run earlier via comma operator
-  gatherRecursiveAll(statements, (n) => n.type is "AssignmentExpression" or n.type is "UpdateExpression")
-    .forEach (exp) =>
-      function extractAssignment(lhs)
-        expr .= lhs
-        while expr.type is "ParenthesizedExpression"
-          expr = expr.expression
-        if expr.type is like "AssignmentExpression", "UpdateExpression"
-          if expr.type is "UpdateExpression" and
-             expr.children[0] is expr.assigned  // postfix update
-            pre.push("(")
-            post.push([", ", lhs, ")"])
-          else
-            pre.push(["(", lhs, ", "])
-            post.push(")")
-          // TODO: use ref to avoid duplicating function calls
-          return expr.assigned
-
-      const pre = [], post = []
-      switch exp.type
-        when "AssignmentExpression"
-          if (!exp.lhs) return
-          exp.lhs.forEach (lhsPart, i) =>
-            if newLhs := extractAssignment(lhsPart[1])
-              lhsPart[1] = newLhs
-        when "UpdateExpression"
-          if newLhs := extractAssignment(exp.assigned)
-            i := exp.children.indexOf(exp.assigned)
-            exp.assigned = exp.children[i] = newLhs
-      if (pre.length) exp.children.unshift(...pre)
-      if (post.length) exp.children.push(...post)
-      // TODO: need to make this a parenthesized expression when when we add parens
-
-      if exp.type is "UpdateExpression"
-        { assigned } := exp
-        ref := makeRef()
-        newMemberExp := unchainOptionalMemberExpression assigned, ref, (children) =>
-          exp.children.map & is assigned ? children : &
-
-        if newMemberExp !== assigned
-          if newMemberExp.usesRef
-            newMemberExp.hoistDec = {
-              type: "Declaration"
-              children: ["let ", ref]
-              names: []
-            }
-          replaceNode exp, newMemberExp
-
-  replaceNodesRecursive statements,
-    (n) => n.type is "AssignmentExpression" and n.names is null,
-    (exp: AssignmentExpression): AssignmentExpression | BlockStatement | ExpressionNode => {
-      let { lhs: $1, expression: $2 } = exp, tail = [], len = $1.length
-
-      let block?: BlockStatement
-      // Extract StatementExpression as block
-      if exp.parent?.type is "BlockStatement" and !$1.-1?.-1?.special// can only prepend to assignments that are children of blocks
-        block = makeBlockFragment()
-        if ref := prependStatementExpressionBlock(
-          {type: "Initializer", expression: $2, children: [undefined, undefined, $2]}
-          block
-        )
-          exp.children = exp.children.map & is $2 ? ref : &
-          // @ts-ignore
-          $2 = ref
+  for each exp of gatherRecursiveAll statements, .type is "AssignmentExpression" or .type is "UpdateExpression"
+    function extractAssignment(lhs)
+      expr .= lhs
+      while expr.type is "ParenthesizedExpression"
+        expr = expr.expression
+      if expr.type is like "AssignmentExpression", "UpdateExpression"
+        if expr.type is "UpdateExpression" and
+            expr.children[0] is expr.assigned  // postfix update
+          pre.push("(")
+          post.push([", ", lhs, ")"])
         else
-          block = undefined
+          pre.push(["(", lhs, ", "])
+          post.push(")")
+        // TODO: use ref to avoid duplicating function calls
+        return expr.assigned
 
-      // identifier=, xor=, ++=
-      if $1.some &.-1.special
-        if ($1.length !== 1) throw new Error("Only one assignment with id= is allowed")
-        [, lhs, , op] := $1[0]
-        { call, omitLhs } := op
-        // Wrap right-hand side with call
-        index := exp.children.indexOf($2)
-        if (index < 0) throw new Error("Assertion error: exp not in AssignmentExpression")
-        exp.children.splice index, 1,
-          exp.expression = $2 = [call, "(", lhs, ", ", $2, ")"]
-        if omitLhs
-          return $2
+    const pre = [], post = []
+    switch exp.type
+      when "AssignmentExpression"
+        continue unless exp.lhs
+        exp.lhs.forEach (lhsPart, i) =>
+          if newLhs := extractAssignment(lhsPart[1])
+            lhsPart[1] = newLhs
+      when "UpdateExpression"
+        if newLhs := extractAssignment(exp.assigned)
+          i := exp.children.indexOf(exp.assigned)
+          exp.assigned = exp.children[i] = newLhs
+    exp.children.unshift(...pre) if pre#
+    exp.children.push(...post) if post#
+    // TODO: need to make this a parenthesized expression when when we add parens
 
-      // Force parens around destructuring object assignments
-      // Walk from left to right the minimal number of parens are added and enclose all destructured assignments
-      // TODO: Could validate some lhs ecmascript rules here if we wanted to
-      wrapped .= false
-      i .= 0
-      while i < len
-        lastAssignment := $1[i++]
-        [, lhs, , op] := lastAssignment
-        continue unless op.token is "="
+    if exp.type is "UpdateExpression"
+      { assigned } := exp
+      ref := makeRef()
+      newMemberExp := unchainOptionalMemberExpression assigned, ref, (children) =>
+        exp.children.map & is assigned ? children : &
 
-        if lhs.type is like "ObjectExpression", "ObjectBindingPattern"
-          // Wrap with parens to distinguish from braced blocks
-          unless wrapped
-            wrapped = true
-            lhs.children.splice(0, 0, "(")
-            tail.push(")")
-
-      refsToDeclare := new Set<ASTRef>
-
-      // Walk from right to left to handle splices
-      i = len - 1
-      while i >= 0
-        lastAssignment := $1[i]
-
-        if lastAssignment[3].token is "="
-          lhs := lastAssignment[1]
-
-          // Splice assignment
-          if lhs.type is "MemberExpression"
-            members := lhs.children
-            lastMember := members[members.length - 1]
-
-            if lastMember is like {type: "CallExpression", children: [^peekHelperRef("rslice"), ...]}
-              lastMember.children.push
-                type: "Error"
-                message: "Slice range cannot be decreasing in assignment"
-              break
-
-            // TODO: this is kind of bonkers
-            if lastMember.type is "SliceExpression"
-              const { start, end, children: c } = lastMember
-              // TODO: don't lose as many source mappings
-              c[0].token = ".splice("
-              c[1] = start
-              c[2] = ", "
-              if (end)
-                c[3] = [end, " - ", start]
-              else
-                c[3] = ["1/0"]
-              c[4] = [", ...", $2]
-              c[5] = ")"
-
-              // Remove assignment token
-              lastAssignment.pop()
-              if (isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment.pop()
-              // TODO: this only works for the last assignment, not multiple splice assignments, or splice assignments earlier in the chain
-              if $1.length > 1
-                throw new Error("Not implemented yet! TODO: Handle multiple splice assignments")
-
-              exp.children = [$1]
-              exp.names = []
-              break
-          else if lhs.type is like "ObjectBindingPattern", "ArrayBindingPattern"
-            processBindingPatternLHS(lhs, tail)
-            // Extract temp refs that need to be declared from lhs
-            gatherRecursiveAll(lhs, .type is "Ref").forEach refsToDeclare@add
-
-          // NOTE: currently not processing any non-binding pattern ObjectExpression or ArrayExpressions
-          // This might not be correct in all situations, esp BindingPatterns nested inside ObjectExpressions
-        i--
-
-      // Handle optional chain ?. in lhs of assignments
-      i = len - 1
-      optionalChainRef := makeRef()
-      while i >= 0
-        assignment := $1[i]
-        [ws1, lhs, ws2, op] := assignment
-
-        if lhs.type is "MemberExpression" or lhs.type is "CallExpression"
-          newMemberExp := unchainOptionalMemberExpression lhs, optionalChainRef, (children) =>
-            // NOTE: This only executes when lhs contains chains
-            // this mutates the assignments array to account for the parts moved into the conditionals
-            assigns := $1.splice(i + 1, len - 1 - i)
-            $1.pop()
-            [ws1, ...children, ws2, op, ...assigns, $2]
-
-          if newMemberExp !== lhs
-            if newMemberExp.usesRef
-              exp.hoistDec =
-                type: "Declaration"
-                children: ["let ", optionalChainRef]
-                names: []
-
-            replaceNode $2, newMemberExp
-            newMemberExp.parent = exp
-            $2 = newMemberExp
-
-        i--
-
-      // Add any additional binding refs that need to be declared to our hoisted declarations
-      if refsToDeclare.size
-        if exp.hoistDec
-          exp.hoistDec.children.push [...refsToDeclare].map [",", &]
-        else
-          exp.hoistDec =
+      if newMemberExp !== assigned
+        if newMemberExp.usesRef
+          newMemberExp.hoistDec = {
             type: "Declaration"
-            children: ["let ", [...refsToDeclare].map (r, i) => i ? [",", r] : r]
+            children: ["let ", ref]
             names: []
+          }
+        replaceNode exp, newMemberExp
 
-      // Gather all identifier names from the lhs array
-      exp.names = $1.flatMap(([, l]) => l.names or [])
+  for each exp of gatherRecursiveAll statements, .type is "AssignmentExpression"
+    continue unless exp.names is null
+    let { lhs: $1, expression: $2 } = exp, tail = [], len = $1.length
 
-      if tail#
-        index := exp.children.indexOf($2)
-        if (index < 0) throw new Error("Assertion error: exp not in AssignmentExpression")
-        exp.children.splice(index + 1, 0, ...tail)
+    let block?: BlockStatement
+    // Extract StatementExpression as block
+    if exp.parent?.type is "BlockStatement" and !$1.-1?.-1?.special// can only prepend to assignments that are children of blocks
+      block = makeBlockFragment()
+      if ref := prependStatementExpressionBlock(
+        {type: "Initializer", expression: $2, children: [undefined, undefined, $2]}
+        block
+      )
+        exp.children = exp.children.map & is $2 ? ref : &
+        // @ts-ignore
+        $2 = ref
+      else
+        block = undefined
 
-      if block
-        block.parent = exp.parent
-        block.expressions.push(["", exp])
-        exp.parent = block
-        return block
+    // identifier=, xor=, ++=
+    if $1.some &.-1.special
+      if ($1.length !== 1) throw new Error("Only one assignment with id= is allowed")
+      [, lhs, , op] := $1[0]
+      { call, omitLhs } := op
+      // Wrap right-hand side with call
+      index := exp.children.indexOf($2)
+      if (index < 0) throw new Error("Assertion error: exp not in AssignmentExpression")
+      exp.children.splice index, 1,
+        exp.expression = $2 = [call, "(", lhs, ", ", $2, ")"]
+      if omitLhs
+        replaceNode exp, $2
+        continue
 
-      return exp
-    }
-}
+    // Force parens around destructuring object assignments
+    // Walk from left to right the minimal number of parens are added and enclose all destructured assignments
+    // TODO: Could validate some lhs ecmascript rules here if we wanted to
+    wrapped .= false
+    i .= 0
+    while i < len
+      lastAssignment := $1[i++]
+      [, lhs, , op] := lastAssignment
+      continue unless op.token is "="
+
+      if lhs.type is like "ObjectExpression", "ObjectBindingPattern"
+        // Wrap with parens to distinguish from braced blocks
+        unless wrapped
+          wrapped = true
+          lhs.children.splice(0, 0, "(")
+          tail.push(")")
+
+    refsToDeclare := new Set<ASTRef>
+
+    // Walk from right to left to handle splices
+    i = len - 1
+    while i >= 0
+      lastAssignment := $1[i]
+
+      if lastAssignment[3].token is "="
+        lhs := lastAssignment[1]
+
+        // Splice assignment
+        if lhs.type is "MemberExpression"
+          members := lhs.children
+          lastMember := members[members.length - 1]
+
+          if lastMember is like {type: "CallExpression", children: [^peekHelperRef("rslice"), ...]}
+            lastMember.children.push
+              type: "Error"
+              message: "Slice range cannot be decreasing in assignment"
+            break
+
+          // TODO: this is kind of bonkers
+          if lastMember.type is "SliceExpression"
+            const { start, end, children: c } = lastMember
+            // TODO: don't lose as many source mappings
+            c[0].token = ".splice("
+            c[1] = start
+            c[2] = ", "
+            if (end)
+              c[3] = [end, " - ", start]
+            else
+              c[3] = ["1/0"]
+            c[4] = [", ...", $2]
+            c[5] = ")"
+
+            // Remove assignment token
+            lastAssignment.pop()
+            if (isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment.pop()
+            // TODO: this only works for the last assignment, not multiple splice assignments, or splice assignments earlier in the chain
+            if $1.length > 1
+              throw new Error("Not implemented yet! TODO: Handle multiple splice assignments")
+
+            exp.children = [$1]
+            exp.names = []
+            break
+        else if lhs.type is like "ObjectBindingPattern", "ArrayBindingPattern"
+          processBindingPatternLHS(lhs, tail)
+          // Extract temp refs that need to be declared from lhs
+          gatherRecursiveAll(lhs, .type is "Ref").forEach refsToDeclare@add
+
+        // NOTE: currently not processing any non-binding pattern ObjectExpression or ArrayExpressions
+        // This might not be correct in all situations, esp BindingPatterns nested inside ObjectExpressions
+      i--
+
+    // Handle optional chain ?. in lhs of assignments
+    i = len - 1
+    optionalChainRef := makeRef()
+    while i >= 0
+      assignment := $1[i]
+      [ws1, lhs, ws2, op] := assignment
+
+      if lhs.type is "MemberExpression" or lhs.type is "CallExpression"
+        newMemberExp := unchainOptionalMemberExpression lhs, optionalChainRef, (children) =>
+          // NOTE: This only executes when lhs contains chains
+          // this mutates the assignments array to account for the parts moved into the conditionals
+          assigns := $1.splice(i + 1, len - 1 - i)
+          $1.pop()
+          [ws1, ...children, ws2, op, ...assigns, $2]
+
+        if newMemberExp !== lhs
+          if newMemberExp.usesRef
+            exp.hoistDec =
+              type: "Declaration"
+              children: ["let ", optionalChainRef]
+              names: []
+
+          replaceNode $2, newMemberExp
+          newMemberExp.parent = exp
+          $2 = newMemberExp
+
+      i--
+
+    // Add any additional binding refs that need to be declared to our hoisted declarations
+    if refsToDeclare.size
+      if exp.hoistDec
+        exp.hoistDec.children.push [...refsToDeclare].map [",", &]
+      else
+        exp.hoistDec =
+          type: "Declaration"
+          children: ["let ", [...refsToDeclare].map (r, i) => i ? [",", r] : r]
+          names: []
+
+    // Gather all identifier names from the lhs array
+    exp.names = $1.flatMap(([, l]) => l.names or [])
+
+    if tail#
+      index := exp.children.indexOf($2)
+      if (index < 0) throw new Error("Assertion error: exp not in AssignmentExpression")
+      exp.children.splice(index + 1, 0, ...tail)
+
+    if block
+      replaceNode exp, block
+      block.expressions.push(["", exp])
+      exp.parent = block
 
 function unchainOptionalMemberExpression(exp: MemberExpression | CallExpression, ref: ASTRef, innerExp: (exp) => ASTNode)
   j .= 0
@@ -1670,28 +1664,6 @@ function replaceNodes(root, predicate, replacer)
       array[i] = replacer node, root
     else
       replaceNodes node, predicate, replacer
-
-  return root
-
-function replaceNodesRecursive(root, predicate, replacer)
-  return root unless root?
-
-  array := Array.isArray(root) ? root : root.children
-
-  unless array
-    if predicate root
-      return replacer root, root
-    else
-      return root
-
-  for each node, i of array
-    continue unless node?
-    if predicate node
-      ret := replacer node, root
-      replaceNodesRecursive ret, predicate, replacer
-      array[i] = ret
-    else
-      replaceNodesRecursive node, predicate, replacer
 
   return root
 
