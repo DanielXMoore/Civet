@@ -21,7 +21,7 @@ import {
 } from 'vscode-languageserver-textdocument';
 import TSService from './lib/typescript-service.mjs';
 import * as Previewer from "./lib/previewer.mjs";
-import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier, logTiming } from './lib/util.mjs';
+import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier, logTiming, WithResolvers, withResolvers } from './lib/util.mjs';
 import assert from "assert"
 import path from "node:path"
 import ts, {
@@ -134,7 +134,8 @@ connection.onInitialize(async (params: InitializeParams) => {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       // Tell the client that this server supports code completion.
       completionProvider: {
-        resolveProvider: true
+        resolveProvider: true,
+        triggerCharacters: [".", " "]
       },
       // documentLinkProvider: {
       //   resolveProvider: true
@@ -179,6 +180,7 @@ connection.onInitialized(() => {
   }
 });
 
+const updating = (document: { uri: string }) => documentUpdateStatus.get(document.uri)?.promise
 const tsSuffix = /\.[cm]?[jt]s$|\.json|\.[jt]sx/
 
 connection.onHover(async ({ textDocument, position }) => {
@@ -193,6 +195,7 @@ connection.onHover(async ({ textDocument, position }) => {
   assert(doc)
 
   let info
+  await updating(textDocument)
   if (sourcePath.match(tsSuffix)) { // non-transpiled
     const p = doc.offsetAt(position)
     info = service.getQuickInfoAtPosition(sourcePath, p)
@@ -265,6 +268,7 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
 
   console.log("completion", sourcePath, position)
 
+  await updating(textDocument)
   if (sourcePath.match(tsSuffix)) { // non-transpiled
     const document = documents.get(textDocument.uri)
     assert(document)
@@ -309,6 +313,7 @@ connection.onDefinition(async ({ textDocument, position }) => {
 
   let definitions
 
+  await updating(textDocument)
   // Non-transpiled
   if (sourcePath.match(tsSuffix)) {
     const document = documents.get(textDocument.uri)
@@ -316,7 +321,6 @@ connection.onDefinition(async ({ textDocument, position }) => {
     const p = document.offsetAt(position)
     definitions = service.getDefinitionAtPosition(sourcePath, p)
   } else {
-
     // need to sourcemap the line/columns
     const meta = service.host.getMeta(sourcePath)
     if (!meta) return
@@ -380,6 +384,7 @@ connection.onReferences(async ({ textDocument, position }) => {
 
   let references
 
+  await updating(textDocument)
   if (sourcePath.match(tsSuffix)) { // non-transpiled
     const document = documents.get(textDocument.uri)
     assert(document)
@@ -448,6 +453,7 @@ connection.onDocumentSymbol(async ({ textDocument }) => {
 
   let document, navTree, sourcemapLines
 
+  await updating(textDocument)
   if (sourcePath.match(tsSuffix)) { // non-transpiled
     document = documents.get(textDocument.uri)
     assert(document)
@@ -489,6 +495,7 @@ documents.onDidOpen(async ({ document }) => {
 // Buffer up changes to documents so we don't stack transpilations and become unresponsive
 let changeQueue = new Set<TextDocument>()
 let executeTimeout: Promise<void> | undefined
+const documentUpdateStatus = new Map<string, WithResolvers<boolean>>()
 async function executeQueue() {
   // Cancel updating any other documents while running queue of primary changes
   if (runningDiagnosticsUpdate) {
@@ -501,6 +508,10 @@ async function executeQueue() {
   // Run all jobs in queue (preventing livelock).
   for (const document of changed) {
     await updateDiagnosticsForDoc(document)
+    documentUpdateStatus.get(document.uri)
+      ?.resolve(true)
+      // Wait for the document to be updated before removing it from the status map
+      ?.then(() => documentUpdateStatus.delete(document.uri))
   }
   // Allow executeQueue() again, and run again if there are new jobs now.
   // Otherwise, schedule update of all other documents.
@@ -523,6 +534,7 @@ async function scheduleExecuteQueue() {
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent(async ({ document }) => {
   console.log("onDidChangeContent", document.uri)
+  documentUpdateStatus.set(document.uri, withResolvers())
   changeQueue.add(document)
   scheduleExecuteQueue()
 });
