@@ -1841,7 +1841,8 @@ the body values according to one of the following reductions.
 `for some` returns whether any body value is truthy,
 shortcutting once one is found (like
 [`Array.prototype.some`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/some)).
-If there is no body, any iteration counts as truthy.
+If there is no body, any iteration counts as truthy,
+so it measures whether the iteration is nonempty.
 
 <Playground>
 anyEven := for some item of array
@@ -1852,12 +1853,16 @@ nonEmpty := for some key in object
 `for every` returns whether every body value is truthy,
 shortcutting if a falsey value is found (like
 [`Array.prototype.every`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/every)).
-If there is no body, any iteration counts as truthy.
+If there is no body, any iteration counts as falsey,
+so it measures whether the iteration is empty.
 
 <Playground>
 allEven := for every item of array
   item % 2 === 0
-empty := for every key in object
+</Playground>
+
+<Playground>
+emptyOwn := for every own key in object
 </Playground>
 
 `for count` counts how many body values are truthy.
