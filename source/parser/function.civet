@@ -12,7 +12,6 @@ import type {
   IterationStatement
   Parameter
   ParametersNode
-  ReturnStatement
   StatementTuple
   SwitchStatement
   TypeArgument
@@ -620,31 +619,8 @@ function iterationDeclaration(statement: IterationStatement | ForStatement)
   // insert `results.push` to gather results array
   // TODO: real ast nodes
   unless breakWithOnly
-    function fillBlock(expression: StatementTuple)
-      if block.expressions.-1 is like [, {type: "EmptyStatement", implicit: true}, ...]
-        block.expressions.pop()
-      block.expressions.push expression
-      block.empty = false
-      braceBlock block
-    if block.empty and reduction
-      switch reduction.subtype
-        when "some"
-          fillBlock [ "", [ resultsRef, " = true; break" ] ]
-          block.empty = false
-          braceBlock block
-        when "every"
-          fillBlock [ "", [ resultsRef, " = false; break" ] ]
-          block.empty = false
-          braceBlock block
-        when "count"
-          fillBlock [ "", [ "++", resultsRef ] ]
-          block.empty = false
-          braceBlock block
-      return declaration unless block.empty
-    if block.empty and statement.type is "ForStatement" and
-       statement.declaration?.type is "ForDeclaration"
-      fillBlock [ "", patternAsValue statement.declaration.binding ]
-      block.empty = false
+    if iterationDefaultBody statement
+      return declaration
     unless block.empty
       assignResults block, (node) =>
         return [ resultsRef, ".push(", node, ")" ] unless reduction
@@ -662,6 +638,47 @@ function iterationDeclaration(statement: IterationStatement | ForStatement)
           when "max" then [ resultsRef, " = Math.max(", resultsRef, ", ", node, ")" ]
 
   declaration
+
+/**
+Add default body to iteration statement with empty body.
+Returns true if the block was filled with a reduction-specific body.
+*/
+function iterationDefaultBody(statement: IterationStatement | ForStatement): boolean
+  { block, resultsRef } := statement
+  return false unless block.empty
+  reduction := statement.type is "ForStatement" and statement.reduction
+
+  function fillBlock(expression: StatementTuple)
+    if block.expressions.-1 is like [, {type: "EmptyStatement", implicit: true}, ...]
+      block.expressions.pop()
+    block.expressions.push expression
+    block.empty = false
+    braceBlock block
+
+  if reduction
+    switch reduction.subtype
+      when "some"
+        fillBlock [ "", [ resultsRef, " = true; break" ] ]
+        block.empty = false
+        braceBlock block
+        return true
+      when "every"
+        fillBlock [ "", [ resultsRef, " = false; break" ] ]
+        block.empty = false
+        braceBlock block
+        return true
+      when "count"
+        fillBlock [ "", [ "++", resultsRef ] ]
+        block.empty = false
+        braceBlock block
+        return true
+
+  if statement.type is "ForStatement" and
+     statement.declaration?.type is "ForDeclaration"
+    fillBlock [ "", patternAsValue statement.declaration.binding ]
+    block.empty = false
+
+  return false
 
 function processParams(f): void
   { type, parameters, block } := f
@@ -798,6 +815,13 @@ function expressionizeIteration(exp: IterationExpression): void
 
   let statements: StatementTuple[]
   if generator
+    if (statement as ForStatement).reduction
+      children.unshift
+        type: "Error"
+        message: `Cannot use reduction (${(statement as ForStatement).reduction!.subtype}) with generators`
+
+    iterationDefaultBody statement
+
     assignResults block, (node) =>
       type: "YieldExpression"
       expression: node
