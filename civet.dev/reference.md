@@ -1771,6 +1771,14 @@ so you cannot use `return` inside such a loop,
 nor can you `break` or `continue` any outer loop.
 :::
 
+If you don't specify a body, `for` loops list the item being iterated over:
+
+<Playground>
+array := for item of iterable
+coordinates := for {x, y} of objects
+keys := for key in object
+</Playground>
+
 Loops that use `await` automatically get `await`ed.
 If you'd rather obtain the promise for the results so you can `await` them
 yourself, use `async for`.
@@ -1816,8 +1824,81 @@ squared := v * v for v of list when v?
 squared := for v of list when v? then v * v
 </Playground>
 
+If you don't specify a loop body, you get a filter:
+
+<Playground>
+evens := for v of list when v % 2 === 0
+</Playground>
+
 To make a generator instead of an array, use
 [`for*`](#generator-expressions) instead of `for`.
+
+### Reductions
+
+Instead of accumulating the results in an array, `for` loops can combine
+the body values according to one of the following reductions.
+
+`for some` returns whether any body value is truthy,
+shortcutting once one is found (like
+[`Array.prototype.some`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/some)).
+If there is no body, any iteration counts as truthy,
+so it measures whether the iteration is nonempty.
+
+<Playground>
+anyEven := for some item of array
+  item % 2 === 0
+nonEmpty := for some key in object
+</Playground>
+
+`for every` returns whether every body value is truthy,
+shortcutting if a falsey value is found (like
+[`Array.prototype.every`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/every)).
+If there is no body, any iteration counts as falsey,
+so it measures whether the iteration is empty.
+
+<Playground>
+allEven := for every item of array
+  item % 2 === 0
+</Playground>
+
+<Playground>
+emptyOwn := for every own key in object
+</Playground>
+
+`for count` counts how many body values are truthy.
+If there is no body, any iteration counts as truthy.
+
+<Playground>
+numEven := for count item of array
+  item % 2 === 0
+numKeys := for count key in object
+</Playground>
+
+`for sum` adds up the body values with `+`.
+If there is no body, it adds the item being looped over.
+
+<Playground>
+sumOfSquares := for sum item of array
+  item * item
+sum := for sum item of array
+</Playground>
+
+`for product` multiples the body values with `*`.
+If there is no body, it multiplies the item being looped over.
+
+<Playground>
+prod := for product item of array
+nonZeroProd := for product item of array when item
+</Playground>
+
+`for min/max` finds the minimum/maximum body value,
+or `+Infinity`/`-Infinity` if there are none.
+If there is no body, it uses the item being looped over.
+
+<Playground>
+min := for min item of array
+max := for max item of array
+</Playground>
 
 ### Infinite Loop
 
