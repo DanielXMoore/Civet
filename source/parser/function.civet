@@ -1,4 +1,5 @@
 import type {
+  ASTLeaf
   ASTNode
   ASTNodeObject
   BlockStatement
@@ -12,11 +13,13 @@ import type {
   IterationStatement
   Parameter
   ParametersNode
+  ReturnTypeAnnotation
   StatementTuple
   SwitchStatement
   TypeArgument
   TypeArguments
   TypeIdentifier
+  TypeLiteral
   TypeNode
   Whitespace
 } from ./types.civet
@@ -55,8 +58,10 @@ import {
 } from ./traversal.civet
 
 import {
+  addParentPointers
   assert
   convertOptionalType
+  deepCopy
   getTrimmingSpace
   hasAwait
   hasYield
@@ -119,6 +124,10 @@ function isAsyncGeneratorVoidType(t?: TypeNode): boolean
 
 function wrapTypeInPromise(t: TypeNode): TypeNode
   return t if isPromiseType t
+  // Use raw = "Promise" so that Civet thinks this is a Promise wrapper
+  wrapTypeInApplication t, getHelperRef("AutoPromise"), "Promise"
+
+function wrapTypeInApplication(t: TypeNode, id: ASTNode, raw?: string): TypeNode
   ws := getTrimmingSpace t
   t = trimFirstSpace(t) as TypeNode
   innerArgs: TypeArgument[] := [{
@@ -133,11 +142,15 @@ function wrapTypeInPromise(t: TypeNode): TypeNode
     args: innerArgs
     children: ["<", innerArgs, ">"]
   }
+  unless raw?
+    unless id <? "string"
+      throw new Error "wrapTypeInApplication requires string id or raw argument"
+    raw = id
   {
     type: "TypeIdentifier"
-    raw: "Promise" // so Civet thinks this is a Promise wrapper
+    raw
     args
-    children: [ws, getHelperRef("AutoPromise"), args]
+    children: [ws, id, args]
   }
 
 // Add implicit block unless followed by a method/function of the same name.
@@ -203,7 +216,7 @@ function processReturnValue(func: FunctionNode)
   ref := makeRef "ret"
 
   let declaration
-  values.forEach (value) =>
+  for each value of values
     value.children = [ref]
 
     // Check whether return.value already declared within this function
@@ -214,14 +227,31 @@ function processReturnValue(func: FunctionNode)
     declaration ??= child if ancestor  // remember binding
 
   // Compute default return type
-  returnType .= func.returnType ?? func.signature?.returnType
+  returnType: ReturnTypeAnnotation? .= func.returnType ?? func.signature?.returnType
   if returnType
     { t } := returnType
     switch t.type
       "TypePredicate"
-        returnType = ": boolean"
-      "AssertsType"
+        token := {token: "boolean"} as ASTLeaf
+        literal: TypeLiteral :=
+          type: "TypeLiteral"
+          t: token
+          children: [token]
+        returnType =
+          type: "ReturnTypeAnnotation"
+          ts: true
+          t: literal
+          children: [": ", literal]
+      "TypeAsserts"
         returnType = undefined
+  if returnType
+    returnType = deepCopy returnType
+    addParentPointers returnType
+    if func.signature.modifier.async
+      replaceNode
+        returnType.t
+        makeNode wrapTypeInApplication returnType.t, "Awaited"
+        returnType
 
   // Modify existing declaration, or add declaration of return.value after {
   if declaration
@@ -230,11 +260,10 @@ function processReturnValue(func: FunctionNode)
   else
     block.expressions.unshift [
       getIndent block.expressions[0]
-    ,
-      type: "Declaration"
-      children: ["let ", ref, returnType]
-      names: []
-    ,
+      makeNode
+        type: "Declaration"
+        children: ["let ", ref, returnType]
+        names: []
       ";"
     ]
 
