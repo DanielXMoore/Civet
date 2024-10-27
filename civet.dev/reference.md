@@ -817,7 +817,7 @@ Use `as T` to cast types in your pipeline:
 data |> JSON.parse |> as MyRecord |> addRecord
 </Playground>
 
-Use `await`, `yield`, or `return` in your pipeline:
+Use `await`, `throw`, `yield`, or `return` in your pipeline:
 
 <Playground>
 fetch url |> await
@@ -1169,6 +1169,7 @@ console.log "result:", .
 
 More generally, if you use `.` within a function call, that call gets wrapped
 in a one-argument function and `.` gets replaced by that argument.
+The wrapper also lifts above unary operations (including `await`) and `throw`.
 You can use `.` multiple times in the same function:
 
 <Playground>
