@@ -547,6 +547,12 @@ magicSymbol := :magic
 iteratorSymbol := :iterator
 </Playground>
 
+Symbol names that aren't valid identifiers can be wrapped in quotes:
+
+<Playground>
+magicSymbol := :"magic-symbol"
+</Playground>
+
 ## Operators
 
 ### All JavaScript/TypeScript Operators
