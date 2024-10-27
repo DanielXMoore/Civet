@@ -14,8 +14,6 @@ import {
   CompletionItemTag,
   Location,
   DiagnosticSeverity,
-  MessageType,
-  LogMessageNotification,
 } from 'vscode-languageserver/node';
 
 import {
