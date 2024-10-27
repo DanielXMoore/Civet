@@ -1801,8 +1801,19 @@ All loops have a starred form that makes a generator function,
 yielding items one at a time instead of building the entire array at once:
 
 <Playground>
-function mapIter(f, list)
-  for* item of list
+numbers := for* n of [0..]
+squares := for* n of numbers
+  n * n
+</Playground>
+
+As statements in a function, the starred forms `yield` directly,
+allowing you to do multiple such loops in the same function:
+
+<Playground>
+function mapConcatIter(f, a, b)
+  for* item of a
+    f item
+  for* item of b
     f item
 </Playground>
 

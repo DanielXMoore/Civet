@@ -22,6 +22,7 @@ import type {
 import {
   braceBlock
   getIndent
+  blockContainingStatement
   makeEmptyBlock
 } from ./block.civet
 
@@ -561,6 +562,7 @@ function wrapIterationReturningResults(
   { ancestor, child } := findAncestor statement, .type is "BlockStatement"
   assert.notNull ancestor, `Could not find block containing ${statement.type}`
   index := findChildIndex ancestor.expressions, child
+  assert.notEqual index, -1, `Could not find ${statement.type} in containing block`
   iterationTuple := ancestor.expressions[index]
   ancestor.expressions.splice index, 0, [iterationTuple[0], declaration, ";"]
   iterationTuple[0] = '' // steal indentation from loop
@@ -618,31 +620,8 @@ function iterationDeclaration(statement: IterationStatement | ForStatement)
   // insert `results.push` to gather results array
   // TODO: real ast nodes
   unless breakWithOnly
-    function fillBlock(expression: StatementTuple)
-      if block.expressions.-1 is like [, {type: "EmptyStatement", implicit: true}, ...]
-        block.expressions.pop()
-      block.expressions.push expression
-      block.empty = false
-      braceBlock block
-    if block.empty and reduction
-      switch reduction.subtype
-        when "some"
-          fillBlock [ "", [ resultsRef, " = true; break" ] ]
-          block.empty = false
-          braceBlock block
-        when "every"
-          fillBlock [ "", [ resultsRef, " = false; break" ] ]
-          block.empty = false
-          braceBlock block
-        when "count"
-          fillBlock [ "", [ "++", resultsRef ] ]
-          block.empty = false
-          braceBlock block
-      return declaration unless block.empty
-    if block.empty and statement.type is "ForStatement" and
-       statement.declaration?.type is "ForDeclaration"
-      fillBlock [ "", patternAsValue statement.declaration.binding ]
-      block.empty = false
+    if iterationDefaultBody statement
+      return declaration
     unless block.empty
       assignResults block, (node) =>
         return [ resultsRef, ".push(", node, ")" ] unless reduction
@@ -660,6 +639,47 @@ function iterationDeclaration(statement: IterationStatement | ForStatement)
           when "max" then [ resultsRef, " = Math.max(", resultsRef, ", ", node, ")" ]
 
   declaration
+
+/**
+Add default body to iteration statement with empty body.
+Returns true if the block was filled with a reduction-specific body.
+*/
+function iterationDefaultBody(statement: IterationStatement | ForStatement): boolean
+  { block, resultsRef } := statement
+  return false unless block.empty
+  reduction := statement.type is "ForStatement" and statement.reduction
+
+  function fillBlock(expression: StatementTuple)
+    if block.expressions.-1 is like [, {type: "EmptyStatement", implicit: true}, ...]
+      block.expressions.pop()
+    block.expressions.push expression
+    block.empty = false
+    braceBlock block
+
+  if reduction
+    switch reduction.subtype
+      when "some"
+        fillBlock [ "", [ resultsRef, " = true; break" ] ]
+        block.empty = false
+        braceBlock block
+        return true
+      when "every"
+        fillBlock [ "", [ resultsRef, " = false; break" ] ]
+        block.empty = false
+        braceBlock block
+        return true
+      when "count"
+        fillBlock [ "", [ "++", resultsRef ] ]
+        block.empty = false
+        braceBlock block
+        return true
+
+  if statement.type is "ForStatement" and
+     statement.declaration?.type is "ForDeclaration"
+    fillBlock [ "", patternAsValue statement.declaration.binding ]
+    block.empty = false
+
+  return false
 
 function processParams(f): void
   { type, parameters, block } := f
@@ -794,40 +814,53 @@ function expressionizeIteration(exp: IterationExpression): void
     updateParentPointers exp
     return
 
+  let statements: StatementTuple[]
   if generator
+    if (statement as ForStatement).reduction
+      children.unshift
+        type: "Error"
+        message: `Cannot use reduction (${(statement as ForStatement).reduction!.subtype}) with generators`
+
+    iterationDefaultBody statement
+
     assignResults block, (node) =>
       type: "YieldExpression"
       expression: node
-      children: [ "yield ", node ]
+      children:
+        . type: "Yield"
+          token: "yield "
+        . node
 
-    children.splice(i,
-      1,
-      wrapIIFE([
-        ["", statement, undefined]
-        // Prevent implicit return in generator, by adding an explicit return
-        ["", {
-          type: "ReturnStatement"
-          expression: undefined
-          children: [ ";return" ]
-        }, undefined],
-      ], async, generator)
-    )
+    statements =
+      . ["", statement]
   else
     resultsRef := statement.resultsRef ??= makeRef "results"
 
     declaration := iterationDeclaration statement
 
-    // Wrap with IIFE
-    children.splice(i,
-      1,
-      wrapIIFE([
-        ["", declaration, ";"]
-        ["", statement, ";" if statement.block.bare]
-        ["", wrapWithReturn(resultsRef)]
-      ], async)
-    )
+    statements =
+      . ["", declaration, ";"]
+      . ["", statement, ";" if statement.block.bare]
+      . ["", resultsRef]
 
-  updateParentPointers exp
+  // Don't need IIFE if iteration expression is at the top level of a block
+  let done
+  if not async
+    if { block: parentBlock, index } := blockContainingStatement exp
+      statements[0][0] = parentBlock.expressions[index][0] // inherit indentation
+      parentBlock.expressions[index..index] = statements
+      updateParentPointers parentBlock
+      braceBlock parentBlock
+      done = true
+  unless done
+    // Wrap with IIFE
+    statements.-1.1 = wrapWithReturn(statements.-1.1) unless generator
+    children.splice i, 1, wrapIIFE(statements, async, generator)
+    updateParentPointers exp
+
+function processIterationExpressions(statements: ASTNode): void
+  for each s of gatherRecursiveAll statements, .type is "IterationExpression"
+    expressionizeIteration s
 
 /**
 Utility function to check if an implicit function application should be skipped
@@ -948,11 +981,11 @@ function makeAmpersandFunction(rhs: AmpersandBlockBody): ASTNode
 
 export {
   assignResults
-  expressionizeIteration
   insertReturn
   makeAmpersandFunction
   processCoffeeDo
   processFunctions
+  processIterationExpressions
   processReturn
   skipImplicitArguments
   wrapIterationReturningResults
