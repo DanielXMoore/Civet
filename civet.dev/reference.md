@@ -2445,7 +2445,7 @@ declare function jsonParse(json: string): ???
 declare function sign(n: number): -1 | 0 | +1
 </Playground>
 
-### Arrow Types
+### Function Types
 
 Like [arrow functions](#arrow-functions),
 arrow types can use `=>` or `->` (with equivalent meanings)
@@ -2463,6 +2463,21 @@ return types:
 function f(callback: async =>)
   callback()
 </Playground>
+
+Similarly, `async` functions (except generators) get their return type
+automatically wrapped in `Promise`:
+
+<Playground>
+function f(): number
+  await fetch 'https://civet.dev'
+  .status
+</Playground>
+
+::: info
+You can still include explicit `Promise` wrappers in your return types.
+If the wrapper is hidden behind a `type` declaration, the output will include
+an extra `Promise` wrapper, but this does not affect typechecking.
+:::
 
 ### Conditional Types
 
