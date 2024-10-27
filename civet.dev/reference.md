@@ -2445,6 +2445,25 @@ declare function jsonParse(json: string): ???
 declare function sign(n: number): -1 | 0 | +1
 </Playground>
 
+### Arrow Types
+
+Like [arrow functions](#arrow-functions),
+arrow types can use `=>` or `->` (with equivalent meanings)
+and can omit parameters and/or return type:
+
+<Playground>
+function f(callback: ->)
+  callback()
+</Playground>
+
+Arrow types can use an `async` prefix as shorthand for `Promise`
+return types:
+
+<Playground>
+function f(callback: async =>)
+  callback()
+</Playground>
+
 ### Conditional Types
 
 TypeScript's ternary types can be written using `if`/`unless` expressions,
