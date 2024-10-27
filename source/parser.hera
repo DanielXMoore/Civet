@@ -66,6 +66,7 @@ import {
   stripTrailingImplicitComma,
   trimFirstSpace,
   typeOfJSX,
+  wrapTypeInPromise,
 } from "./parser/lib.civet"
 
 /**
@@ -8220,22 +8221,44 @@ TypeBinaryOp
     return { $loc, token: "&" }
 
 TypeFunction
-  ( Abstract _? )? ( New _? )? Parameters __ TypeArrowFunction ReturnType?:type ->
-    const children = [ ...$0 ]
-    if ($1 && !$2) {
+  ( Abstract _? )?:abstract ( Async _? )?:async ( New _? )?:new_ Parameters __ TypeFunctionArrow ( ReturnType / Loc ):returnType ->
+    const children = [ abstract, ...$0.slice(2) ] // omit async
+    if (abstract && !new_) {
       children[1] = {
         type: "Error",
         message: "abstract function types must be constructors (abstract new)",
       }
     }
-    if (!type) children.push ("void")
+    // Implicit void return type
+    if (returnType.$loc && returnType.token === "") {
+      const t = {
+        type: "VoidType",
+        $loc: returnType.$loc,
+        token: "void",
+      }
+      children[children.length - 1] = returnType = {
+        type: "ReturnTypeAnnotation",
+        ts: true,
+        t,
+        children: [t],
+      }
+    }
+    // async wraps return type in Promise<...>
+    if (async) {
+      const t = wrapTypeInPromise(returnType.t)
+      children[children.length - 1] = returnType = {
+        ...returnType, t,
+        children: returnType.children.map($ => $ === returnType.t ? t : $),
+      }
+    }
     return {
       type: "TypeFunction",
       children,
       ts: true,
+      returnType,
     }
 
-TypeArrowFunction
+TypeFunctionArrow
   "=>" / "⇒" / "->" / "→" ->
     return { $loc, token: "=>" }
 
@@ -8268,7 +8291,7 @@ TypeApplicationStart
 
 ForbiddenImplicitTypeCalls
   ReservedBinary
-  # TypeBinaryOp, ExtendsToken, NotExtendsToken, TypeArrowFunction
+  # TypeBinaryOp, ExtendsToken, NotExtendsToken, TypeFunctionArrow
   /[|&<!=\-⇒→]/
   # Abstract, Readonly, ExtendsToken, NotExtendsToken, Is
   /(extends|not|is)(?!\p{ID_Continue}|[\u200C\u200D$])/

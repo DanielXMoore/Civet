@@ -15,6 +15,8 @@ import type {
   StatementTuple
   SwitchStatement
   TypeArgument
+  TypeArguments
+  TypeIdentifier
   TypeNode
   Whitespace
 } from ./types.civet
@@ -35,6 +37,10 @@ import {
 } from ./comptime.civet
 
 import {
+  getHelperRef
+} from ./helper.civet
+
+import {
   replaceNode
 } from ./lib.civet
 
@@ -51,6 +57,7 @@ import {
 import {
   assert
   convertOptionalType
+  getTrimmingSpace
   hasAwait
   hasYield
   inplacePrepend
@@ -84,11 +91,14 @@ function getTypeArguments(args: ASTNode): TypeArgument[]
 function isVoidType(t?: TypeNode): boolean
   t is like { type: "TypeLiteral", t: { type: "VoidType" } }
 
+function isPromiseType(t?: TypeNode): t is TypeIdentifier
+  t is like { type: "TypeIdentifier", raw: "Promise" }
+
 function isPromiseVoidType(t?: TypeNode): boolean
-  let args: TypeArgument[]
+  return false unless isPromiseType t
+  args := getTypeArguments t.args?.args
   (and)
-    t is like { type: "TypeIdentifier", raw: "Promise" }
-    (args = getTypeArguments t.args?.args)# is 1
+    args# is 1
     isVoidType args[0].t
 
 function isGeneratorVoidType(t?: TypeNode): boolean
@@ -106,6 +116,29 @@ function isAsyncGeneratorVoidType(t?: TypeNode): boolean
     t.raw is "AsyncIterator" or t.raw is "AsyncGenerator"
     (args = getTypeArguments t.args?.args)# >= 2
     isVoidType args[1].t
+
+function wrapTypeInPromise(t: TypeNode): TypeNode
+  return t if isPromiseType t
+  ws := getTrimmingSpace t
+  t = trimFirstSpace(t) as TypeNode
+  innerArgs: TypeArgument[] := [{
+    type: "TypeArgument"
+    ts: true
+    t
+    children: [t]
+  }]
+  args: TypeArguments := {
+    type: "TypeArguments"
+    ts: true
+    args: innerArgs
+    children: ["<", innerArgs, ">"]
+  }
+  {
+    type: "TypeIdentifier"
+    raw: "Promise" // so Civet thinks this is a Promise wrapper
+    args
+    children: [ws, getHelperRef("AutoPromise"), args]
+  }
 
 // Add implicit block unless followed by a method/function of the same name.
 function implicitFunctionBlock(f): void
@@ -772,11 +805,11 @@ function processParams(f): void
 function processSignature(f: FunctionNode): void
   {block, signature} := f
 
-  if hasAwait(block) and not f.async?#
+  if not f.async?# and hasAwait(block)
     f.async.push "async "
     signature.modifier.async = true
 
-  if hasYield(block) and not f.generator?#
+  if not f.generator?# and hasYield(block)
     if f.type is "ArrowFunction"
       gatherRecursiveWithinFunction block, .type is "YieldExpression"
       .forEach (y) =>
@@ -788,6 +821,10 @@ function processSignature(f: FunctionNode): void
     else
       f.generator.push "*"
       signature.modifier.generator = true
+
+  if signature.modifier.async and not signature.modifier.generator and
+     signature.returnType and not isPromiseType signature.returnType.t
+    replaceNode signature.returnType.t, wrapTypeInPromise signature.returnType.t
 
 function processFunctions(statements, config): void
   for each f of gatherRecursiveAll statements, .type is "FunctionExpression" or .type is "ArrowFunction"
@@ -989,4 +1026,5 @@ export {
   processReturn
   skipImplicitArguments
   wrapIterationReturningResults
+  wrapTypeInPromise
 }
