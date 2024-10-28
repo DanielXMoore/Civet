@@ -2475,8 +2475,7 @@ function f(): number
 
 ::: info
 You can still include explicit `Promise` wrappers in your return types.
-If the wrapper is hidden behind a `type` declaration, the output will include
-an extra `Promise` wrapper, but this does not affect typechecking.
+The `AutoPromise` helper avoids adding an extra `Promise` wrapper.
 :::
 
 ### Conditional Types
