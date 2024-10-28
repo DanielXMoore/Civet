@@ -4,12 +4,20 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.10 (2024-10-28, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.9...v0.8.10), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.10))
+* Fix `sum`/`count`/`each`/`own`/etc. as loop iteration variables [[#1531](https://github.com/DanielXMoore/Civet/pull/1531)]
+* Fix parenthesized `for` expression without body [[#1532](https://github.com/DanielXMoore/Civet/pull/1532)]
+* Ensure space after `for..of/in` [[#1533](https://github.com/DanielXMoore/Civet/pull/1533)]
+* Fix `await` step vs. expression detection in pipeline [[#1535](https://github.com/DanielXMoore/Civet/pull/1535)]
+* Fix `for` loops over `&` placeholder [[#1534](https://github.com/DanielXMoore/Civet/pull/1534)]
+* Check for valid left-hand sides, forbidding lone placeholder [[#1536](https://github.com/DanielXMoore/Civet/pull/1536)]
+
 ## 0.8.9 (2024-10-27, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.8...v0.8.9), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.9))
 * Range loops can provide custom skip via `by` (not just in CoffeeScript) [[#1505](https://github.com/DanielXMoore/Civet/pull/1505)]
 * LSP completions and hover info up-to-date instead of lagging [[#1500](https://github.com/DanielXMoore/Civet/pull/1500)]
 * Fix LSP by dropping `triggerCharacters` which requires fault-tolerant compile [[#1512](https://github.com/DanielXMoore/Civet/pull/1512)]
 * Fix LSP: `resolve` of `WithResolver` doesn't return a `Promise` [[#1514](https://github.com/DanielXMoore/Civet/pull/1514)]
-* `for some/every/count/sum/product/min/max` reduction loops, empty for loop default behavior, fix unwrapping multiple loops ina  row [[#1509](https://github.com/DanielXMoore/Civet/pull/1509)]
+* `for some/every/count/sum/product/min/max` reduction loops, empty for loop default behavior, fix unwrapping multiple loops in a row [[#1509](https://github.com/DanielXMoore/Civet/pull/1509)]
 * Allow `|> throw` [[#1517](https://github.com/DanielXMoore/Civet/pull/1517)]
 * Multiple generator loops at top level, unwrap top-level iterations, fix implicit loop bodies [[#1518](https://github.com/DanielXMoore/Civet/pull/1518)]
 * `T?` type shorthand in named tuple elements [[#1521](https://github.com/DanielXMoore/Civet/pull/1521)]
