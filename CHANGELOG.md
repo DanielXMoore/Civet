@@ -4,6 +4,20 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.9 (2024-10-27, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.8...v0.8.9), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.9))
+* Range loops can provide custom skip via `by` (not just in CoffeeScript) [[#1505](https://github.com/DanielXMoore/Civet/pull/1505)]
+* LSP completions and hover info up-to-date instead of lagging [[#1500](https://github.com/DanielXMoore/Civet/pull/1500)]
+* Fix LSP by dropping `triggerCharacters` which requires fault-tolerant compile [[#1512](https://github.com/DanielXMoore/Civet/pull/1512)]
+* Fix LSP: `resolve` of `WithResolver` doesn't return a `Promise` [[#1514](https://github.com/DanielXMoore/Civet/pull/1514)]
+* `for some/every/count/sum/product/min/max` reduction loops, empty for loop default behavior, fix unwrapping multiple loops ina  row [[#1509](https://github.com/DanielXMoore/Civet/pull/1509)]
+* Allow `|> throw` [[#1517](https://github.com/DanielXMoore/Civet/pull/1517)]
+* Multiple generator loops at top level, unwrap top-level iterations, fix implicit loop bodies [[#1518](https://github.com/DanielXMoore/Civet/pull/1518)]
+* `T?` type shorthand in named tuple elements [[#1521](https://github.com/DanielXMoore/Civet/pull/1521)]
+* `:"symbol name"` symbol shorthand with quotes [[#1522](https://github.com/DanielXMoore/Civet/pull/1522)]
+* `await`/`throw` with placeholders in pipeline, trailing `|> throw` makes statement without IIFE [[#1520](https://github.com/DanielXMoore/Civet/pull/1520)]
+* `async` functions and arrow types auto-wrap return type in `Promise` [[#1523](https://github.com/DanielXMoore/Civet/pull/1523)]
+* Fix typing of `return.value` in `async` function [[#1524](https://github.com/DanielXMoore/Civet/pull/1524)]
+
 ## 0.8.8 (2024-10-24, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.7...v0.8.8), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.8))
 * `:symbol` shorthand for `Symbol.symbol` or `Symbol.for("symbol")` [[#1498](https://github.com/DanielXMoore/Civet/pull/1498)]
 * preventExtensions on comptime functions [[#1494](https://github.com/DanielXMoore/Civet/pull/1494)]
@@ -682,18 +696,18 @@ as well as a full diff and commit list.
 * Add nextjs unplugin example [[#676](https://github.com/DanielXMoore/Civet/pull/676)]
 * New try at indented application [[#677](https://github.com/DanielXMoore/Civet/pull/677)]
 * Convert to more Civet-y style [[#683](https://github.com/DanielXMoore/Civet/pull/683)]
-* Fixes #664 [[#679](https://github.com/DanielXMoore/Civet/pull/679)]
-* fix #655 [[#680](https://github.com/DanielXMoore/Civet/pull/680)]
+* Fix `/*...*/` after dot in access [[#679](https://github.com/DanielXMoore/Civet/pull/679)]
+* Fix objects immediately inside braced blocks [[#680](https://github.com/DanielXMoore/Civet/pull/680)]
 * Fixes #682; Fixes #653; Improved arrow function const assignment [[#687](https://github.com/DanielXMoore/Civet/pull/687)]
-* Fix #635: Identity function shorthand [[#688](https://github.com/DanielXMoore/Civet/pull/688)]
+* `(&)` identity function shorthand [[#688](https://github.com/DanielXMoore/Civet/pull/688)]
 
 ## 0.6.27 (2023-08-31, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.26...v0.6.27), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.27))
 * 🐈🐈🐈 [[#657](https://github.com/DanielXMoore/Civet/pull/657)]
 * Added void to improve types and opt out of implicit returns [[#672](https://github.com/DanielXMoore/Civet/pull/672)]
-* Fix #666 [[#671](https://github.com/DanielXMoore/Civet/pull/671)]
-* Fixes #669 [[#673](https://github.com/DanielXMoore/Civet/pull/673)]
-* Fixes #662 [[#674](https://github.com/DanielXMoore/Civet/pull/674)]
-* Fix #663 [[#670](https://github.com/DanielXMoore/Civet/pull/670)]
+* Add missing semicolon after one-line `if` branch [[#671](https://github.com/DanielXMoore/Civet/pull/671)]
+* Fix hoisting of implicitly returned `function` [[#673](https://github.com/DanielXMoore/Civet/pull/673)]
+* Fix implicit function calls with spread on following line [[#674](https://github.com/DanielXMoore/Civet/pull/674)]
+* Fix arrow function body closed by closing parenthesis [[#670](https://github.com/DanielXMoore/Civet/pull/670)]
 * Add civet unplugin [[#632](https://github.com/DanielXMoore/Civet/pull/632)]
 
 ## 0.6.26 (2023-08-26, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.25...v0.6.26), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.26))
