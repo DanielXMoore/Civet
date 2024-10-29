@@ -46,6 +46,7 @@ and following ESM, require importing files with the correct extension.
 | [`jsxCodeSameLine`](reference#automatic-code-children) | treat same-line JSX children as Civet code |
 | [`objectIs`](reference#object-is) | implement the `is` operator via `Object.is` |
 | [`repl`](reference#iife-wrapper) | wrap the program in an IIFE that exposes globals |
+| [`strict`](reference#strict) | enable JavaScript strict mode (equivalent to `"use strict"`) |
 
 ## ECMAScript Compatibility
 
@@ -56,7 +57,7 @@ For now, we have the following related options:
 
 | Configuration       | What it enables |
 |---------------------|---------------------------------------|
-| `-implicit-returns` | turn off implicit return of last value in functions |
+| [`-implicit-returns`](reference#no-implicit-returns) | turn off implicit return of last value in functions |
 
 ## CoffeeScript Compatibility
 

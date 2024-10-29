@@ -989,8 +989,8 @@ function circle(degrees: number): {x: number, y: number}
 ::: info
 Implicit return of the last value in a function can be avoided by
 specifying a `void` return type (or `Promise<void>` for async functions),
-adding a final semicolon or explicit `return`,
-or globally using the directive `"civet -implicitReturns"`.
+adding a final semicolon or explicit `return`, or globally using
+[the directive `"civet -implicitReturns"`](#no-implicit-returns).
 Generators also don't implicitly `return`
 (use explicit `return` to return a special final value).
 :::
@@ -3253,3 +3253,37 @@ This behavior is usually helpful in a REPL context: it lets you attempt to
 correct a previous declaration.
 It also matches Chrome's console behavior (but not NodeJS's CLI behavior).
 :::
+
+## JavaScript Compatibility
+
+Civet aims to be mostly compatible with JavaScript and TypeScript,
+so that most JavaScript/TypeScript code is valid Civet code.
+See [comparison](comparison) for the few exceptions.
+You can increase JavaScript compatibility with the following options:
+
+### No Implicit Returns
+
+To disable [implicit returns from functions](#function),
+use the directive `"civet -implicitReturns"`:
+
+<Playground>
+"civet -implicitReturns"
+function processAll(array)
+  for item of array
+    process item
+</Playground>
+
+### Strict Mode
+
+Output from Civet runs by default in JavaScript's sloppy mode,
+unless it is loaded as an ECMAScript module.
+To turn on
+[JavaScript's strict mode](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Strict_mode),
+add the directive `"use strict"` as usual, or the Civet directive
+`"civet strict"`. The latter is useful because it can be specified in
+[Civet configuration files](config).
+
+<Playground>
+"civet strict"
+x = 5 // invalid
+</Playground>
