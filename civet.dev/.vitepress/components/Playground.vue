@@ -26,7 +26,7 @@ const textareaEl = ref<HTMLTextAreaElement>();
 
 // Compile on input
 onMounted(fixTextareaSize);
-watch(userCode, compile);
+watch(userCode, codeChanged);
 
 // Clear
 watch(
@@ -55,14 +55,17 @@ const comptime = ref(false);
 watch(comptime, compile);
 const hasComptime = ref(false);
 
+async function codeChanged() {
+  if (showComptime && comptime.value) {
+    comptime.value = false; // this triggers compile()
+  } else {
+    await compile();
+  }
+}
+
 async function compile() {
   if (showComptime) {
     hasComptime.value = /\bcomptime\b/.test(userCode.value);
-    if (comptime.value && !hasComptime.value) {
-      // If we remove comptime code, reset the checkbox to off
-      // to avoid accidental comptime in the future
-      comptime.value = userCode.value.includes('comptime');
-    }
   }
 
   const snippet = await compileCivetToHtml({
