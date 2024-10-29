@@ -30,6 +30,7 @@ declare module "@danielx/civet" {
     rewriteCivetImports: string
     rewriteTsImports: boolean
     server: boolean
+    strict: boolean
     symbols: string[]
     tab: number
     verbose: boolean
