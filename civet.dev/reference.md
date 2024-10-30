@@ -457,6 +457,14 @@ Slices are increasing by default, but you can reverse them with `>` or `>=`:
 reversed := x[..>=]
 </Playground>
 
+If you just want to specify one endpoint of an increasing slice,
+you can avoid `..` altogether:
+
+<Playground>
+[left, right] = [x[<=i], x[>i]]
+[left, right] = [x[<i], x[>=i]]
+</Playground>
+
 ## Strings
 
 Strings can span multiple lines:
