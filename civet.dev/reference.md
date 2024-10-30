@@ -461,8 +461,8 @@ If you just want to specify one endpoint of an increasing slice,
 you can avoid `..` altogether:
 
 <Playground>
-x is x[<=i] + x[>i]
-x is x[<i] + x[>=i]
+[left, right] = [x[<=i], x[>i]]
+[left, right] = [x[<i], x[>=i]]
 </Playground>
 
 ## Strings
