@@ -331,8 +331,6 @@ ImplicitArguments
     // Don't treat as call if this is a postfix for/while/until/if/unless
     if (skipImplicitArguments(args)) return $skip
 
-    args = stripTrailingImplicitComma(args)
-
     return {
       type: "Call",
       args,
@@ -419,29 +417,34 @@ AllowedTrailingCallExpressions
 CommaDelimiter
   NotDedented Comma
 
+OptionalCommaDelimiter
+  CommaDelimiter
+  &EOS InsertComma -> $2
+
 # https://262.ecma-international.org/#prod-ArgumentList
 # NOTE: Return value should always be an array alternating
 #   argument, comma, argument, comma, ..., argument, [comma],
 # where each comma is a Comma token or an array [whitespace, commaToken]
 # (like CommaDelimiter)
 ArgumentList
-  !EOS ArgumentPart ( CommaDelimiter !EOS _? ArgumentPart )* ( CommaDelimiter ( NestedBulletedArray / NestedImplicitObjectLiteral / NestedArgumentList ) )+ ->
+  !EOS ArgumentPart ( CommaDelimiter !EOS _? ArgumentPart )* ( CommaDelimiter NestedArguments ) ( OptionalCommaDelimiter NestedArguments )* ->
     return [
       $2,
       ...$3.flatMap(([comma, eos, ws, arg]) => [comma, prepend(ws, arg)]),
-      ...$4.flatMap(([comma, args]) =>
+      ...(Array.isArray($4[1]) ? [$4[0], ...$4[1]] : $4),
+      ...$5.flatMap(([comma, args]) =>
         Array.isArray(args) ? [comma, ...args] : [comma, args]
       ),
     ]
   # NOTE: Added nested arguments on separate new lines
-  ( NestedBulletedArray / NestedImplicitObjectLiteral ) ( CommaDelimiter ( NestedBulletedArray / NestedImplicitObjectLiteral / NestedArgumentList ) )* ->
+  NestedArguments ( OptionalCommaDelimiter NestedArguments )* ->
+    if (!Array.isArray($1)) $1 = [$1]
     return [
-      trimFirstSpace($1),
+      ...trimFirstSpace($1),
       ...$2.flatMap(([comma, args]) =>
         Array.isArray(args) ? [comma, ...args] : [comma, args]
       ),
     ]
-  NestedArgumentList
   # NOTE: Eliminated left recursion
   _? ArgumentPart ( CommaDelimiter _? ArgumentPart )* ->
     return [
@@ -449,13 +452,18 @@ ArgumentList
       ...$3.flatMap(([comma, ws, arg]) => [comma, prepend(ws, arg)]),
     ]
 
+NestedArguments
+  NestedBulletedArray
+  NestedImplicitObjectLiteral
+  NestedArgumentList
+
 NestedArgumentList
   PushIndent AllowPipeline AllowTrailingMemberProperty NestedArgument*:args RestoreTrailingMemberProperty RestorePipeline PopIndent ->
     if (!args.length) return $skip
-    return args.flat()
+    return stripTrailingImplicitComma(args.flat())
 
 NestedArgument
-  Nested:indent SingleLineArgumentExpressions:args ParameterElementDelimiter:comma ->
+  Nested:indent !Bullet SingleLineArgumentExpressions:args ParameterElementDelimiter:comma ->
     // Attach indentation to first argument in SingleLineArgumentExpressions
     let [ arg0, ...rest ] = args
     arg0 = prepend(indent, arg0)
@@ -3224,7 +3232,7 @@ ArrayBulletDelimiter
 
 # NOTE: Unicode bullet doesn't need a space, but ASCII bullet does
 BulletIndent
-  ( "•" [ \t]* ) / ( "." [ \t]+ ) ->
+  Bullet ->
     const [ bullet, ws ] = $1
     const indent = {
       token: " " + ws,
@@ -3234,6 +3242,10 @@ BulletIndent
     if (config.verbose) console.log("pushing bullet indent", indent)
     state.indentLevels.push(indent)
     return indent
+
+Bullet
+  "•" [ \t]*
+  "." [ \t]+
 
 BulletedArrayWithTrailing
   BulletedArray:array AllowedTrailingCallExpressions?:trailing ( NotDedented Pipe __ PipelineTailItem )*:pipeline ->
