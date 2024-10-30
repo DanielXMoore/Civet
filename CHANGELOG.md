@@ -4,6 +4,16 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.11 (2024-10-30, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.10...v0.8.11), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.11))
+* Placeholders lift through reverse slice operators [[#1537](https://github.com/DanielXMoore/Civet/pull/1537)]
+* Playground `comptime` restarts playground worker and resets toggle after editing [[#1538](https://github.com/DanielXMoore/Civet/pull/1538)]
+* "civet strict" directive to enable JS strict mode [[#1539](https://github.com/DanielXMoore/Civet/pull/1539)]
+* Fix reverse slices handling of extreme indices, trailing member access [[#1545](https://github.com/DanielXMoore/Civet/pull/1545)]
+* Fix `& &` disambiguation (placeholder vs. bitwise and) [[#1546](https://github.com/DanielXMoore/Civet/pull/1546)]
+* Inequality slicing without `..`: `x[<i]` etc. [[#1547](https://github.com/DanielXMoore/Civet/pull/1547)]
+* Allow multiple indented blocks of arguments in function call [[#1548](https://github.com/DanielXMoore/Civet/pull/1548)]
+* Restart LSP when `package.json` or Civet config file changes [[#1544](https://github.com/DanielXMoore/Civet/pull/1544)]
+
 ## 0.8.10 (2024-10-28, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.9...v0.8.10), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.10))
 * Fix `sum`/`count`/`each`/`own`/etc. as loop iteration variables [[#1531](https://github.com/DanielXMoore/Civet/pull/1531)]
 * Fix parenthesized `for` expression without body [[#1532](https://github.com/DanielXMoore/Civet/pull/1532)]
