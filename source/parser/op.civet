@@ -6,6 +6,7 @@ import type {
 } from ./types.civet
 
 import {
+  assert
   makeLeftHandSideExpression
   replaceNode
   trimFirstSpace
@@ -14,6 +15,10 @@ import {
 import {
   processPatternTest
 } from ./pattern-matching.civet
+
+import {
+  maybeRefAssignment
+} from ./ref.civet
 
 // Binary operator precedence, from low to high
 // See https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Operator_precedence#table
@@ -285,7 +290,7 @@ function expandChainedComparisons([first, binops]: [ASTNode, [ASTNode, BinaryOp,
   return results
 
   function processChains: void
-    if chains.length > 0
+    if chains# > 0
       // At least one relational op, so expand any existence operators `x?`
       first = expandExistence first
       for each index, k of chains
@@ -297,28 +302,41 @@ function expandChainedComparisons([first, binops]: [ASTNode, [ASTNode, BinaryOp,
         exp := binop[3] = expandExistence binop[3]
 
         results.push first
-        endIndex := chains[k + 1] ?? i + 1
-        results.push ...binops[start...endIndex].flat()
-        // TODO: add refs to ensure middle expressions are evaluated only once
-        // NOTE: This first gets discarded if we're in the last iteration of the chain
-        first = [exp] ++ binops[index + 1...endIndex]
-        start = endIndex
+        // If there's more to the chain, ref the right-hand side of this
+        // relation (which is the left-hand side of the next op)
+        if k+1 < chains#
+          endIndex := chains[k + 1]
+          rhs :=
+            index + 1 < endIndex ? [exp] ++ binops[index + 1...endIndex] : exp
+          { ref, refAssignment } := maybeRefAssignment rhs
+          // TODO: do we need to recurse on the binary ops here?
+          binops[index][3] = makeLeftHandSideExpression refAssignment ?? rhs
+          results.push ...binops[start...index + 1].flat()
+          first = ref
+          start = endIndex
+        else
+          results.push ...binops[start...i + 1].flat()
     else
       // Advance start if there was no chain
       results.push first
       results.push ...binops[start...i + 1].flat()
-      start = i + 1
+    start = i + 1
 
     chains.length = 0
 
   function expandExistence(exp: ASTNode): ASTNode
     // Expand existence operator like x?
     if existence := isExistence(exp)
+      { ref, refAssignment } := maybeRefAssignment existence.expression
+      if refAssignment?
+        replaceNode
+          existence.expression
+          makeLeftHandSideExpression refAssignment
+          existence
       results.push existence, " ", chainOp, " "
-      existence.expression
+      ref
     else
       exp
-  ; // avoid implicit return of hoisted function
 
 export {
   getPrecedence
