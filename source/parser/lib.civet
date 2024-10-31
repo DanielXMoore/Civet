@@ -551,11 +551,11 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
     if glob?.type is "PropertyGlob"
       prefix .= children[...i]
       parts := []
-      let hoistDec, refAssignmentComma
+      let refAssignmentComma
       // add ref to ensure object base evaluated only once
       if prefix.length > 1
         ref := makeRef()
-        { hoistDec, refAssignmentComma } = makeRefAssignment ref, prefix
+        { refAssignmentComma } = makeRefAssignment ref, prefix
         prefix = [ref]
       prefix = prefix.concat(glob.dot)
 
@@ -613,7 +613,7 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
               part.delim // comma delimiter
             ]
           }
-      object .= {
+      object: ASTNodeObject .= {
         type: "ObjectExpression"
         children: [
           glob.object.children.0 // {
@@ -621,18 +621,16 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
           glob.object.children.-1 // whitespace and }
         ],
         properties: parts
-        hoistDec
       }
       if refAssignmentComma
-        object = {
+        object = makeNode
           type: "ParenthesizedExpression"
           children: ["(", ...refAssignmentComma, object, ")"]
           expression: object
-        }
       if (i is children.length - 1) return object
       return processCallMemberExpression({  // in case there are more
-        ...node,
-        children: [object, ...children.slice(i + 1)]
+        ...node
+        children: [object, ...children[i+1..]]
       })
     else if glob?.type is "PropertyBind"
       // TODO: add ref to ensure object base evaluated only once
@@ -654,6 +652,42 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
             ]
           }
           ...children[i+1..]
+        ]
+      })
+    else if glob is like {type: "Index", mod: true}
+      assert.notEqual i, 0, "Index modifier must be preceded by an expression"
+      prefix := i is 1 ? children[0] : children[<i]
+      { ref, refAssignment } .= maybeRefAssignment prefix
+      call := makeNode
+        type: "CallExpression"
+        children: [
+          getHelperRef "modulo"
+          makeNode
+            type: "Call"
+            children:  [
+              "("
+              ...glob.children[<..<] // between "[" and "]" tokens
+              ", "
+              ref
+              ".length"
+              ")"
+            ]
+        ]
+      return processCallMemberExpression({  // in case there are more
+        ...node
+        children: [
+          makeLeftHandSideExpression refAssignment ?? prefix
+          {
+            ...glob
+            mod: false
+            expression: call
+            children: [
+              glob.children[0] // "[" token
+              call
+              glob.children.-1 // "]" token
+            ]
+          }
+          ...children[>i]
         ]
       })
     else if glob is like {type: "SliceExpression", reversed: true}
@@ -1319,9 +1353,9 @@ function processNegativeIndexAccess(statements: StatementTuple[]): void
         throw new Error("Invalid parse tree for negative index access")
 
       if subexp
-        { hoistDec, refAssignment } := makeRefAssignment ref, subexp
-        exp.hoistDec = hoistDec
+        { refAssignment } := makeRefAssignment ref, subexp
         children.splice start, 0, makeLeftHandSideExpression refAssignment
+        refAssignment.parent = exp
 
       exp.len.children = [
         ref,
