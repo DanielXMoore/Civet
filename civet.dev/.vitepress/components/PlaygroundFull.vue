@@ -79,6 +79,9 @@ function runInBrowser() {
     }
   } catch (err) {
     console.error(err);
+    if (err instanceof SyntaxError) {
+      console.log('Attempted to eval:', code)
+    }
     evalOutput.value += `[THROWN] ${err.toString()}\n`
   }
   evalComplete.value = true
