@@ -465,6 +465,17 @@ you can avoid `..` altogether:
 [left, right] = [x[<i], x[>=i]]
 </Playground>
 
+### Modulo Indexing
+
+You can use `a[i%]` to index into an array modulo its length:
+
+<Playground>
+for i of [0...a#]
+  drawAngle v[i-1%], v[i], v[i+1%]
+</Playground>
+
+See also [length shorthand](#length-shorthand).
+
 ## Strings
 
 Strings can span multiple lines:
