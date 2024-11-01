@@ -17,11 +17,13 @@ import {
 } from 'vscode-languageserver/node';
 
 import {
-  TextDocument
+  TextDocument,
+  type Position
 } from 'vscode-languageserver-textdocument';
 import TSService from './lib/typescript-service.mjs';
 import * as Previewer from "./lib/previewer.mjs";
 import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier, logTiming, WithResolvers, withResolvers } from './lib/util.mjs';
+import { asPlainTextWithLinks, tagsToMarkdown } from './lib/textRendering.mjs';
 import assert from "assert"
 import path from "node:path"
 import ts, {
@@ -274,14 +276,13 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
     const p = document.offsetAt(position)
     const completions = service.getCompletionsAtPosition(sourcePath, p, completionOptions)
     if (!completions) return
-    return convertCompletions(completions, document)
+    return convertCompletions(completions, document, sourcePath, position)
   }
 
   // need to sourcemap the line/columns
   const meta = service.host.getMeta(sourcePath)
   if (!meta) return
-  const sourcemapLines = meta.sourcemapLines
-  const transpiledDoc = meta.transpiledDoc
+  const { sourcemapLines, transpiledDoc } = meta
   if (!transpiledDoc) return
 
   // Map input hover position into output TS position
@@ -296,12 +297,68 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
   const completions = service.getCompletionsAtPosition(transpiledPath, p, completionOptions)
   if (!completions) return;
 
-  return convertCompletions(completions, transpiledDoc, sourcemapLines)
+  return convertCompletions(completions, transpiledDoc, sourcePath, position, sourcemapLines)
 });
 
-// TODO
-connection.onCompletionResolve((item) => {
-  return item;
+type CompletionItemData = {
+  sourcePath: string
+  position: Position
+  name: string
+  source: string | undefined
+  data: ts.CompletionEntryData | undefined
+}
+
+connection.onCompletionResolve(async (item) => {
+  let { sourcePath, position, name, source, data } =
+    item.data as CompletionItemData
+  const service = await ensureServiceForSourcePath(sourcePath)
+  if (!service) return item
+
+  let document
+  if (sourcePath.match(tsSuffix)) { // non-transpiled
+    document = documents.get(pathToFileURL(sourcePath).toString())
+    assert(document)
+  } else {
+    // use transpiled doc; forward source mapping already done
+    const meta = service.host.getMeta(sourcePath)
+    if (!meta) return item
+    const { transpiledDoc } = meta
+    if (!transpiledDoc) return item
+    document = transpiledDoc
+    sourcePath = documentToSourcePath(transpiledDoc)
+  }
+  const p = document.offsetAt(position)
+
+  const detail = service.getCompletionEntryDetails(sourcePath, p, name, undefined, source, undefined, data)
+  if (!detail) return item
+
+  // getDetails from https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
+  const details = []
+  for (const action of detail.codeActions ?? []) {
+    details.push(action.description)
+  }
+  details.push(asPlainTextWithLinks(detail.displayParts))
+  item.detail = details.join("\n\n")
+
+  // getDocumentation from https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
+  const documentations = []
+  if (detail.documentation) {
+    documentations.push(asPlainTextWithLinks(detail.documentation))
+  }
+  if (detail.tags) {
+    documentations.push(tagsToMarkdown(detail.tags))
+  }
+  if (documentations.length) {
+    item.documentation = {
+      kind: "markdown",
+      value: documentations.join("\n\n"),
+      // @ts-ignore
+      baseUri: document.uri,
+      isTrusted: { enabledCommands: ["_typescript.openJsDocLink"] },
+    }
+  }
+
+  return item
 });
 
 connection.onDefinition(async ({ textDocument, position }) => {
@@ -670,7 +727,7 @@ function documentToSourcePath(textDocument: TextDocumentIdentifier) {
   return fileURLToPath(textDocument.uri);
 }
 
-function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcemapLines?: any): CompletionItem[] {
+function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: any): CompletionItem[] {
   // Partial simulation of MyCompletionItem in
   // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
   const { entries } = completions;
@@ -680,6 +737,10 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
     const item: CompletionItem = {
       label: entry.name || (entry.insertText ?? ''),
       kind: getCompletionItemKind(entry.kind),
+      data: {
+        sourcePath, position,
+        name: entry.name, source: entry.source, data: entry.data,
+      } satisfies CompletionItemData,
     }
 
     if (entry.sourceDisplay) {
