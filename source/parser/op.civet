@@ -66,159 +66,159 @@ function getPrecedence(op: BinaryOp): number
     precedenceMap.get(op.prec ?? op.token) ??
     if op.relational then precedenceRelational else precedenceCustomDefault
 
-function processBinaryOpExpression($0)
-  return recurse expandChainedComparisons($0)
+function processBinaryOpExpression($0: [ASTNode, [ASTNode, BinaryOp, ASTNode, ASTNode][]])
+  return processExpandedBinaryOpExpression expandChainedComparisons($0)
 
-  // Expanded ops is [a, __, op1, __, b, __, op2, __, c, __, op3, __, d], etc.
-  // NOTE: all operators of higher precedence than relational have been merged into the operand expressions
-  function recurse(expandedOps)
-    let i = 2
-    while i < expandedOps.length
-      let op: BinaryOp = expandedOps[i]
-      // a not instanceof b -> !(a instanceof b)
-      // Above is high precedence; below are relational so low precedence.
-      // a in b -> indexOf.call(b, a) >= 0
-      // a is in b -> b.includes(a)
-      // a not in b -> indexOf.call(b, a) < 0
-      // a is not in b -> !b.includes(a)
-      if op.special
-        let start = i - 2, end = i + 2
-        prec := getPrecedence op
+// Expanded ops is [a, __, op1, __, b, __, op2, __, c, __, op3, __, d], etc.
+// NOTE: all operators of higher precedence than relational have been merged into the operand expressions
+function processExpandedBinaryOpExpression(expandedOps: ASTNode[])
+  let i = 2
+  while i < expandedOps.length
+    op .= expandedOps[i] as BinaryOp
+    // a not instanceof b -> !(a instanceof b)
+    // Above is high precedence; below are relational so low precedence.
+    // a in b -> indexOf.call(b, a) >= 0
+    // a is in b -> b.includes(a)
+    // a not in b -> indexOf.call(b, a) < 0
+    // a is not in b -> !b.includes(a)
+    if op.special
+      let start = i - 2, end = i + 2
+      prec := getPrecedence op
 
-        // Grow argument range left or right, and return whether next
-        // operator is at the same precedence level as op.
-        function advanceLeft(allowEqual: boolean): boolean
-          while start >= 4
-            prevPrec := getPrecedence expandedOps[start - 2]
-            unless prevPrec > prec or (allowEqual and prevPrec is prec)
-              return prevPrec is prec
-            start -= 4
-          false
-        function advanceRight(allowEqual: boolean): boolean
-          while end + 4 < expandedOps.length
-            nextPrec := getPrecedence expandedOps[end + 2]
-            unless nextPrec > prec or (allowEqual and nextPrec is prec)
-              return nextPrec is prec
-            end += 4
-          false
+      // Grow argument range left or right, and return whether next
+      // operator is at the same precedence level as op.
+      function advanceLeft(allowEqual: boolean): boolean
+        while start >= 4
+          prevPrec := getPrecedence expandedOps[start - 2]
+          unless prevPrec > prec or (allowEqual and prevPrec is prec)
+            return prevPrec is prec
+          start -= 4
+        false
+      function advanceRight(allowEqual: boolean): boolean
+        while end + 4 < expandedOps.length
+          nextPrec := getPrecedence expandedOps[end + 2]
+          unless nextPrec > prec or (allowEqual and nextPrec is prec)
+            return nextPrec is prec
+          end += 4
+        false
 
-        let error
-        switch op.assoc
-          when "left", undefined
-            advanceLeft true
-            advanceRight false
-          when "right"
-            advanceLeft false
-            advanceRight true
-          when "non"
-            if advanceLeft(false) or advanceRight(false)
-              error =
-                type: "Error"
-                message: `non-associative operator ${op.token} used at same precedence level without parenthesization`
-          when "arguments"
-            if advanceLeft false
-              error =
-                type: "Error"
-                message: `arguments operator ${op.token} used at same precedence level as ${expandedOps[start - 2].token} to the left`
-            advanceRight true
-          else
-            throw new Error `Unsupported associativity: ${op.assoc}`
-
-        let a = start === i - 2
-          ? expandedOps[start]
-          : expandedOps.slice(start, i - 1)
-        let wsOp = expandedOps[i - 1]
-        //let op = expandedOps[i]
-        let wsB = expandedOps[i + 1]
-        let b = end === i + 2
-          ? expandedOps[i + 2]
-          : expandedOps.slice(i + 2, end + 1)
-        if op.assoc is "arguments"
-          i .= 2
-          while i < b.length
-            if prec is getPrecedence b[i]
-              unless b[i].token is op.token
-                error ?=
-                  type: "Error"
-                  message: `arguments operator ${op.token} used at same precedence level as ${b[i].token} to the right`
-              b[i] = ","
-            i += 4
+      let error
+      switch op.assoc
+        when "left", undefined
+          advanceLeft true
+          advanceRight false
+        when "right"
+          advanceLeft false
+          advanceRight true
+        when "non"
+          if advanceLeft(false) or advanceRight(false)
+            error =
+              type: "Error"
+              message: `non-associative operator ${op.token} used at same precedence level without parenthesization`
+        when "arguments"
+          if advanceLeft false
+            error =
+              type: "Error"
+              message: `arguments operator ${op.token} used at same precedence level as ${expandedOps[start - 2].token} to the left`
+          advanceRight true
         else
-          b = recurse b
+          throw new Error `Unsupported associativity: ${op.assoc}`
 
-        if op.token is "instanceof"
-          // Ensure space around `instanceof`
-          if wsOp.length is 0
-            wsOp = " "
-          if wsB.length is 0
-            wsB = " "
-
-          // typeof shorthand: x instanceof "string" -> typeof x === "string"
-          if b is like {
-            type: "Literal"
-            children: [ {type: "StringLiteral"}, ... ]
-          }
-            a = ["typeof ", makeLeftHandSideExpression(a)]
-            if op.negated
-              op = { ...op, token: "!==", negated: false }
-            else
-              op = { ...op, token: "===" }
-
-        if op.asConst
-          a = makeAsConst a
-          b = makeAsConst b
-
-        let children, type: string?
-        if op.type is "PatternTest"
-          children = [processPatternTest a, b]
-        else if op.type is "ChainOp"
-          children = [a, wsOp, "&&", wsB, b]
-          // Parenthesize chain if it is surrounded by operator with precedence
-          // in between && (where this will end up being) and relational
-          // (which the chain should simulate).
-          if (start-2 >= 0 and
-              getPrecedence(expandedOps[start-2]) >= precedenceAnd and
-              expandedOps[start-2].token is not '&&') or
-             (end+2 < expandedOps.length and
-              getPrecedence(expandedOps[end+2]) >= precedenceAnd and
-              expandedOps[end+2].token is not '&&')
-            children = ["(", ...children, ")"]
-        else if op.call
-          wsOp = trimFirstSpace wsOp
-          if op.reversed
-            wsB = trimFirstSpace wsB
-            children = [wsOp, op.call, "(", wsB, b, ", ", a, ")", op.suffix]
-          else
-            children = [wsOp, op.call, "(", a, ",", wsB, b, ")", op.suffix]
-          type = "CallExpression"
-        else if op.method
-          wsOp = trimFirstSpace wsOp
-          wsB = trimFirstSpace wsB
-          if op.reversed
-            b = makeLeftHandSideExpression b unless b.type is "CallExpression"
-            b = dotNumericLiteral b
-            children = [wsB, b, wsOp, ".", op.method, "(", a, ")"]
-          else
-            a = makeLeftHandSideExpression a unless a.type is "CallExpression"
-            a = dotNumericLiteral a
-            children = [a, wsOp, ".", op.method, "(", wsB, b, ")"]
-          type = "CallExpression"
-        else if op.token
-          children = [a, wsOp, op, wsB, b]
-          if (op.negated) children = ["(", ...children, ")"]
-        else
-          throw new Error("Unknown operator: " + JSON.stringify(op))
-        if (op.negated) children.unshift("!")
-        children.push error if error?
-
-        expandedOps.splice(start, end - start + 1, {
-          type
-          children
-        })
-        i = start + 2
+      let a = start === i - 2
+        ? expandedOps[start]
+        : expandedOps.slice(start, i - 1)
+      let wsOp = expandedOps[i - 1]
+      //let op = expandedOps[i]
+      let wsB = expandedOps[i + 1]
+      let b = end === i + 2
+        ? expandedOps[i + 2]
+        : expandedOps.slice(i + 2, end + 1)
+      if op.assoc is "arguments"
+        i .= 2
+        while i < b.length
+          if prec is getPrecedence b[i]
+            unless b[i].token is op.token
+              error ?=
+                type: "Error"
+                message: `arguments operator ${op.token} used at same precedence level as ${b[i].token} to the right`
+            b[i] = ","
+          i += 4
       else
-        i += 4
-    expandedOps
+        b = processExpandedBinaryOpExpression b
+
+      if op.token is "instanceof"
+        // Ensure space around `instanceof`
+        if wsOp.length is 0
+          wsOp = " "
+        if wsB.length is 0
+          wsB = " "
+
+        // typeof shorthand: x instanceof "string" -> typeof x === "string"
+        if b is like {
+          type: "Literal"
+          children: [ {type: "StringLiteral"}, ... ]
+        }
+          a = ["typeof ", makeLeftHandSideExpression(a)]
+          if op.negated
+            op = { ...op, token: "!==", negated: false }
+          else
+            op = { ...op, token: "===" }
+
+      if op.asConst
+        a = makeAsConst a
+        b = makeAsConst b
+
+      let children, type: string?
+      if op.type is "PatternTest"
+        children = [processPatternTest a, b]
+      else if op.type is "ChainOp"
+        children = [a, wsOp, "&&", wsB, b]
+        // Parenthesize chain if it is surrounded by operator with precedence
+        // in between && (where this will end up being) and relational
+        // (which the chain should simulate).
+        if (start-2 >= 0 and
+            getPrecedence(expandedOps[start-2]) >= precedenceAnd and
+            expandedOps[start-2].token is not '&&') or
+            (end+2 < expandedOps.length and
+            getPrecedence(expandedOps[end+2]) >= precedenceAnd and
+            expandedOps[end+2].token is not '&&')
+          children = ["(", ...children, ")"]
+      else if op.call
+        wsOp = trimFirstSpace wsOp
+        if op.reversed
+          wsB = trimFirstSpace wsB
+          children = [wsOp, op.call, "(", wsB, b, ", ", a, ")", op.suffix]
+        else
+          children = [wsOp, op.call, "(", a, ",", wsB, b, ")", op.suffix]
+        type = "CallExpression"
+      else if op.method
+        wsOp = trimFirstSpace wsOp
+        wsB = trimFirstSpace wsB
+        if op.reversed
+          b = makeLeftHandSideExpression b unless b.type is "CallExpression"
+          b = dotNumericLiteral b
+          children = [wsB, b, wsOp, ".", op.method, "(", a, ")"]
+        else
+          a = makeLeftHandSideExpression a unless a.type is "CallExpression"
+          a = dotNumericLiteral a
+          children = [a, wsOp, ".", op.method, "(", wsB, b, ")"]
+        type = "CallExpression"
+      else if op.token
+        children = [a, wsOp, op, wsB, b]
+        if (op.negated) children = ["(", ...children, ")"]
+      else
+        throw new Error("Unknown operator: " + JSON.stringify(op))
+      if (op.negated) children.unshift("!")
+      children.push error if error?
+
+      expandedOps.splice(start, end - start + 1, {
+        type
+        children
+      })
+      i = start + 2
+    else
+      i += 4
+  expandedOps
 
 /** Add dot after numeric literal if needed for method calls. */
 function dotNumericLiteral(literal: ASTNode)
@@ -307,9 +307,11 @@ function expandChainedComparisons([first, binops]: [ASTNode, [ASTNode, BinaryOp,
         if k+1 < chains#
           endIndex := chains[k + 1]
           rhs :=
-            index + 1 < endIndex ? [exp] ++ binops[index + 1...endIndex] : exp
+            if index + 1 < endIndex
+              processExpandedBinaryOpExpression [exp] ++ binops[index + 1...endIndex].flat()
+            else
+              exp
           { ref, refAssignment } := maybeRefAssignment rhs
-          // TODO: do we need to recurse on the binary ops here?
           binops[index][3] = makeLeftHandSideExpression refAssignment ?? rhs
           results.push ...binops[start...index + 1].flat()
           first = ref
