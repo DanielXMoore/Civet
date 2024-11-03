@@ -4,6 +4,15 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.12 (2024-11-03, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.11...v0.8.12), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.12))
+* Fix REPL support for `ref`s created by Civet [[#1553](https://github.com/DanielXMoore/Civet/pull/1553)]
+* `array[i%]` modulo index shorthand [[#1554](https://github.com/DanielXMoore/Civet/pull/1554)]
+* Bun docs: improve getting started guidance [[#1555](https://github.com/DanielXMoore/Civet/pull/1555)]
+* Avoid duplicate calls in relation chains and `@` bind shorthand via refs  [[#1556](https://github.com/DanielXMoore/Civet/pull/1556)]
+* LSP completions show details and documentation [[#1561](https://github.com/DanielXMoore/Civet/pull/1561)]
+* Fix `for key: T, value in` loop to define `value` using typed `key` [[#1564](https://github.com/DanielXMoore/Civet/pull/1564)]
+* Lone `finally` block provides cleanup for rest of block [[#1566](https://github.com/DanielXMoore/Civet/pull/1566)]
+
 ## 0.8.11 (2024-10-30, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.10...v0.8.11), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.11))
 * Placeholders lift through reverse slice operators [[#1537](https://github.com/DanielXMoore/Civet/pull/1537)]
 * Playground `comptime` restarts playground worker and resets toggle after editing [[#1538](https://github.com/DanielXMoore/Civet/pull/1538)]
