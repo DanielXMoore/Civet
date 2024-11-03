@@ -2103,6 +2103,23 @@ try
 catch {message: /^EPIPE:/}
 </Playground>
 
+Finally, you can specify a `finally` block without a `try` block,
+and it automatically wraps the rest of the block (similar to
+`defer` in
+[Zig](https://ziglang.org/documentation/master/#defer) and
+[Swift](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/statements/#Defer-Statement)):
+
+<Playground>
+depth .= 0
+function recurse(node)
+  depth++
+  finally depth--
+  console.log depth, "entering", node
+  finally console.log depth, "exiting", node
+  return unless node?
+  recurse child for child of node
+</Playground>
+
 ### Do Blocks
 
 To put multiple lines in a scope and possibly an expression,
