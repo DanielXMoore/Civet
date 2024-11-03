@@ -1758,9 +1758,8 @@ for own key in object
 You can add types to the declarations (unlike TypeScript):
 
 <Playground>
-for var key: string, value: unknown in object
-  console.log key, JSON.stringify value
-key ?= "no last key"
+for key: keyof typeof object, value in object
+  process key, value
 </Playground>
 
 ### Loop Expressions
