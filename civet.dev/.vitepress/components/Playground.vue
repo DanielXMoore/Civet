@@ -16,7 +16,6 @@ const props = defineProps<{
   showComptime?: boolean;
   comptime?: boolean;
 }>();
-const showCopy = ref(false);
 
 const userCode = ref(b64.decode(props.b64Code));
 const compileError = ref<string | undefined>('');
@@ -99,41 +98,33 @@ function fixTextareaSize() {
   }
 }
 
-async function copyOutputToClipboard(pointerEvent) {
-  let successed = false;
+let feedbackTimeout;
+async function copyToClipboard(textarea, pointerEvent) {
+  let success = false;
   try {
-    const { textContent } = outputHtmlEl.value!;
+    const { textContent } = textarea.value!;
     await navigator.clipboard.writeText(textContent as string);
-    successed = true;
+    success = true;
   } catch (err) {
     console.error(err);
   }
   // feedback
-  const labelTextEl = pointerEvent.target.parentNode.querySelector("[data-label-text]");
-  if (!labelTextEl) return;
-  
-  const currentElementLabel = labelTextEl.textContent;
-  const SUCCESS = "Copied!";
-  const FAIL = "Failed to copy";
-  const elementLabelIsNotPrimary = [SUCCESS, FAIL].includes(currentElementLabel);
-  if (elementLabelIsNotPrimary){
-    return;
-  } 
-  const providedMessage = successed ? SUCCESS : FAIL;
-  labelTextEl.textContent = providedMessage;
-  setTimeout(() => {
-    labelTextEl.textContent = currentElementLabel /* primary label */;
-  }, 2_000 /* DEFAULT */);
+  const button = pointerEvent.target;
+  if (!button) return;
+  button.classList.toggle("success", success);
+  button.classList.toggle("failure", !success);
+  clearTimeout(feedbackTimeout);
+  feedbackTimeout = setTimeout(() => {
+    button.classList.remove("success");
+    button.classList.remove("failure");
+  }, 2_000);
 }
-
-const showCopy_condition = async () => {
-  await nextTick();
-  const THRESHOLD = 300 /* symbols */;
-  showCopy.value = outputHtmlEl.value?.textContent?.length! > THRESHOLD;
-};
-watch(outputHtml, showCopy_condition)
-watch(outputHtmlEl, showCopy_condition)
-
+function copyInputToClipboard(pointerEvent) {
+  copyToClipboard(inputHtmlEl, pointerEvent);
+}
+function copyOutputToClipboard(pointerEvent) {
+  copyToClipboard(outputHtmlEl, pointerEvent);
+}
 
 const playgroundUrl = computed(() => {
   return `/playground?code=${b64.encode(userCode.value)}`;
@@ -160,18 +151,17 @@ const playgroundUrl = computed(() => {
         <slot v-else name="input" />
       </div>
 
-      <div class="compilation-info" v-if="!hideLink">
-        <span>
+      <div class="compilation-info">
+        <span v-if="!hideLink">
           Edit inline or
           <a
             :href="playgroundUrl"
             @click.left.exact.prevent
             class="edit-in-the-background"
-          >
-            edit in the Playground!
-          </a>
+          >edit in the Playground</a>!
         </span>
         <span v-if="inputHtml && compileError"> ❌ Compile error ❌</span>
+        <button class="copy" title="Copy input to clipboard" @click="copyInputToClipboard"/>
       </div>
     </div>
 
@@ -185,10 +175,6 @@ const playgroundUrl = computed(() => {
           <input type="checkbox" v-model="comptime"/>
           comptime
         </label>
-        <label v-if = "showCopy">
-          <input type="button" @click="copyOutputToClipboard" />
-          <span data-label-text>Copy</span>
-        </label>
         <label>
           <input type="checkbox" v-model="ligatures"/>
           Ligatures
@@ -197,6 +183,7 @@ const playgroundUrl = computed(() => {
           <input type="checkbox" v-model="prettier"/>
           Prettier
         </label>
+        <button class="copy" title="Copy output to clipboard" @click="copyOutputToClipboard"/>
       </div>
     </div>
   </div>
@@ -317,8 +304,34 @@ input {
   vertical-align: middle;
 }
 
-label:has(> input),
-label>input {
-  cursor: pointer;
+.copy {
+  width: 20px;
+  height: 20px;
+  vertical-align: -5px;
+  margin-left: 5px;
+  position: relative;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' height='20' width='20' stroke='rgb(128,128,128)' stroke-width='2' viewBox='0 0 24 24'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2'/%3E%3C/svg%3E");
+}
+.copy:hover, .copy:active {
+  filter: brightness(0.75);
+}
+.dark .copy:hover, .dark .copy:active {
+  filter: brightness(1.2);
+}
+.success::before {
+  color: #0a0;
+  content: "✓";
+  display: inline-block;
+  position: absolute;
+  top: -1px;
+  left: 5px;
+}
+.failure::before {
+  color: #f00;
+  content: "✗";
+  display: inline-block;
+  position: absolute;
+  top: -1px;
+  left: 4.5px;
 }
 </style>

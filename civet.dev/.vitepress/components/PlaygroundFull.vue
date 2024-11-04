@@ -137,7 +137,7 @@ function clear() {
 <style scoped>
 .buttons {
   display: flex;
-  justify-content: flex-end;
+  justify-content: center;
   align-items: center;
   flex-wrap: wrap;
   margin: 15px 0;
