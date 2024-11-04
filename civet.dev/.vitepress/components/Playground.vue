@@ -16,12 +16,14 @@ const props = defineProps<{
   showComptime?: boolean;
   comptime?: boolean;
 }>();
+const showCopy = ref(false);
 
 const userCode = ref(b64.decode(props.b64Code));
 const compileError = ref<string | undefined>('');
 const inputHtml = ref('');
 const outputHtml = ref('');
 const inputHtmlEl = ref<HTMLDivElement>();
+const outputHtmlEl = ref<HTMLDivElement>();
 const textareaEl = ref<HTMLTextAreaElement>();
 
 // Compile on input
@@ -97,6 +99,42 @@ function fixTextareaSize() {
   }
 }
 
+async function copyOutputToClipboard(pointerEvent) {
+  let successed = false;
+  try {
+    const { textContent } = outputHtmlEl.value!;
+    await navigator.clipboard.writeText(textContent as string);
+    successed = true;
+  } catch (err) {
+    console.error(err);
+  }
+  // feedback
+  const labelTextEl = pointerEvent.target.parentNode.querySelector("[data-label-text]");
+  if (!labelTextEl) return;
+  
+  const currentElementLabel = labelTextEl.textContent;
+  const SUCCESS = "Copied!";
+  const FAIL = "Failed to copy";
+  const elementLabelIsNotPrimary = [SUCCESS, FAIL].includes(currentElementLabel);
+  if (elementLabelIsNotPrimary){
+    return;
+  } 
+  const providedMessage = successed ? SUCCESS : FAIL;
+  labelTextEl.textContent = providedMessage;
+  setTimeout(() => {
+    labelTextEl.textContent = currentElementLabel /* primary label */;
+  }, 2_000 /* DEFAULT */);
+}
+
+const showCopy_condition = async () => {
+  await nextTick();
+  const THRESHOLD = 300 /* symbols */;
+  showCopy.value = outputHtmlEl.value?.textContent?.length! > THRESHOLD;
+};
+watch(outputHtml, showCopy_condition)
+watch(outputHtmlEl, showCopy_condition)
+
+
 const playgroundUrl = computed(() => {
   return `/playground?code=${b64.encode(userCode.value)}`;
 });
@@ -138,7 +176,7 @@ const playgroundUrl = computed(() => {
     </div>
 
     <div class="col" :class="{ 'col--error': compileError }">
-      <div class="code code--output">
+      <div class="code code--output" ref="outputHtmlEl">
         <div v-if="outputHtml" v-html="outputHtml" />
         <slot v-else name="output" />
       </div>
@@ -146,6 +184,10 @@ const playgroundUrl = computed(() => {
         <label v-if="showComptime && hasComptime">
           <input type="checkbox" v-model="comptime"/>
           comptime
+        </label>
+        <label v-if = "showCopy">
+          <input type="button" @click="copyOutputToClipboard" />
+          <span data-label-text>Copy</span>
         </label>
         <label>
           <input type="checkbox" v-model="ligatures"/>
@@ -271,5 +313,12 @@ const playgroundUrl = computed(() => {
   overflow: visible;
 }
 
-input { vertical-align: middle; }
+input {
+  vertical-align: middle;
+}
+
+label:has(> input),
+label>input {
+  cursor: pointer;
+}
 </style>
