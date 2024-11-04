@@ -49,6 +49,9 @@ declare module "@danielx/civet" {
     trace?: string
     parseOptions?: ParseOptions
   }
+  export type GenerateOptions = Omit<CompileOptions, "sourceMap"> & {
+    sourceMap?: undefined | SourceMap
+  }
   export type SyncCompileOptions = CompileOptions &
     { parseOptions?: { comptime?: false } }
 
@@ -61,6 +64,7 @@ declare module "@danielx/civet" {
       lines: SourceMapping[][]
     }
   }
+  export function SourceMap(source: string): SourceMap
 
   // TODO: Import ParseError class from Hera
   export type ParseError = {
@@ -93,7 +97,12 @@ declare module "@danielx/civet" {
   /** Warning: No caching */
   export function parseProgram<T extends CompileOptions>(source: string, options?: T):
     T extends { comptime: true } ? Promise<CivetAST> : CivetAST
-  export function generate(ast: CivetAST, options?: CompileOptions): string
+  export function generate(ast: CivetAST, options?: GenerateOptions): string
+
+  export const lib: {
+    gatherRecursive(ast: CivetAST, predicate: (node: CivetAST) => boolean): CivetAST[]
+    gatherRecursiveAll(ast: CivetAST, predicate: (node: CivetAST) => boolean): CivetAST[]
+  }
 
   const Civet: {
     version: string
@@ -101,6 +110,9 @@ declare module "@danielx/civet" {
     isCompileError: typeof isCompileError
     parse: typeof parse
     generate: typeof generate
+    SourceMap: typeof SourceMap
+    ParseError: typeof ParseError
+    ParseErrors: typeof ParseErrors
     sourcemap: {
       locationTable(input: string): number[]
       lookupLineColumn(table: number[], pos: number): [number, number]

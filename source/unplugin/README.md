@@ -199,6 +199,7 @@ interface PluginOptions {
   - Specifying `true` aborts the build (with an error code) on TypeScript errors.
   - Alternatively, you can specify a string with any combination of `error`, `warning`, `suggestion`, or `message` to specify which diagnostics abort the build. For example, `"none"` ignores all diagnostics, `"error+warning"` aborts on errors and warnings, and `"all"` aborts on all diagnostics.
 - `implicitExtension`: Whether to allow importing `filename.civet` via `import "filename"`. Default: `true`.
+  - *Note*: Incompatible with `typecheck: true` (TypeScript needs an explicit `.civet` extension)
 - `outputExtension`: JavaScript or TypeScript extension to append to `.civet` for internal purposes. Default: `".jsx"`, or `".tsx"` if `ts` is `"preserve"`.
 - `ts`: Mode for transpiling TypeScript features into JavaScript. Default: `"civet"`. Options:
   - `"civet"`: Use Civet's JS mode. (Not all TS features supported.)
