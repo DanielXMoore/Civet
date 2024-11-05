@@ -4,6 +4,16 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.13 (2024-11-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.12...v0.8.13), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.13))
+* Playground copy button for large text fragments [[#1569](https://github.com/DanielXMoore/Civet/pull/1569)]
+* Fix unplugin `typecheck`: source mapping and `rewriteCivetImports` combination [[#1571](https://github.com/DanielXMoore/Civet/pull/1571)]
+* Playground buttons to copy input or output [[#1572](https://github.com/DanielXMoore/Civet/pull/1572)]
+* Fix modulo access with placeholders: `x[& %]` [[#1573](https://github.com/DanielXMoore/Civet/pull/1573)]
+* Fix parenthesized `&` followed by type postfix [[#1574](https://github.com/DanielXMoore/Civet/pull/1574)]
+* Playground TypeScript toggle [[#1577](https://github.com/DanielXMoore/Civet/pull/1577)]
+* Fix parenthesized `&` followed by binary op [[#1576](https://github.com/DanielXMoore/Civet/pull/1576)]
+* Object and array literals via `{}` and `[]` followed by items [[#1575](https://github.com/DanielXMoore/Civet/pull/1575)]
+
 ## 0.8.12 (2024-11-03, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.11...v0.8.12), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.12))
 * Fix REPL support for `ref`s created by Civet [[#1553](https://github.com/DanielXMoore/Civet/pull/1553)]
 * `array[i%]` modulo index shorthand [[#1554](https://github.com/DanielXMoore/Civet/pull/1554)]
