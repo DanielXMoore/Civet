@@ -12,6 +12,7 @@ const props = defineProps<{
   clearTrigger?: boolean;
   hideLink?: boolean;
   showPrettier?: boolean;
+  showTypescript?: boolean;
   raw?: boolean;
   showComptime?: boolean;
   comptime?: boolean;
@@ -51,6 +52,11 @@ const showPrettier = props.showPrettier;
 const prettier = ref(true);
 watch(prettier, compile);
 
+// TypeScript toggle for full Playground
+const showTypescript = props.showTypescript;
+const typescript = ref(true);
+watch(typescript, compile);
+
 const showComptime = props.showComptime;
 const comptime = ref(false);
 watch(comptime, compile);
@@ -71,7 +77,8 @@ async function compile() {
 
   const snippet = await compileCivetToHtml({
     code: userCode.value + '\n',
-    jsOutput: props.emitJsOutput,
+    jsOutput: props.emitJsOutput || !typescript.value,
+    tsOutput: typescript.value,
     prettierOutput: !props.raw && showPrettier && prettier.value,
     parseOptions: { comptime: props.comptime || comptime.value },
   });
@@ -182,6 +189,10 @@ const playgroundUrl = computed(() => {
         <label v-if="showPrettier">
           <input type="checkbox" v-model="prettier"/>
           Prettier
+        </label>
+        <label v-if="showTypescript">
+          <input type="checkbox" v-model="typescript"/>
+          TypeScript
         </label>
         <button class="copy" title="Copy output to clipboard" @click="copyOutputToClipboard"/>
       </div>

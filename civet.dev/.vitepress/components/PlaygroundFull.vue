@@ -101,6 +101,7 @@ function clear() {
     emit-js-output
     hide-link
     show-prettier
+    show-typescript
     show-comptime
     :b64-code="b64Code"
     :clear-trigger="clearTrigger"
