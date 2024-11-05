@@ -165,6 +165,19 @@ cast := {value as T}
 bool := {!!available}
 </Playground>
 
+To avoid the trailing `}` in a braced object literal, you can use `{}`
+followed by its properties (as if they were arguments
+in an [implicit function application](#function-calls)):
+
+<Playground>
+obj := {}
+  a: 1
+  b
+  person.name
+  method()
+    console.log "hi"
+</Playground>
+
 ### Property Names
 
 Both braced and unbraced literals support shorthand for
@@ -336,6 +349,19 @@ people := [
   name: "Bob"
   id: 9
 ]
+</Playground>
+
+To avoid the trailing `]` in a bracketed array literal, you can use `[]`
+followed by its elements (as if they were arguments
+in an [implicit function application](#function-calls)):
+
+<Playground>
+rotate := []
+  c, -s
+  s, c
+func.apply @, []
+  arg1
+  arg2
 </Playground>
 
 ### Bulleted
