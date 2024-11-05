@@ -5,7 +5,7 @@ importScripts('https://cdn.jsdelivr.net/npm/shiki@0.14.7');
 importScripts('/__civet.js');
 
 onmessage = async (e) => {
-  const { uid, code, prettierOutput, jsOutput, parseOptions } = e.data;
+  const { uid, code, prettierOutput, jsOutput, tsOutput, parseOptions } = e.data;
   const highlighter = await getHighlighter();
   const inputHtml = highlighter.codeToHtml(code, { lang: 'coffee' });
 
@@ -13,7 +13,7 @@ onmessage = async (e) => {
   try {
     let errors = []
     ast = await Civet.compile(code, { ast: true, parseOptions });
-    tsCode = Civet.generate(ast, { errors });
+    tsCode = Civet.generate(ast, { js: !tsOutput, errors });
     if (errors.length) {
       // Rerun with SourceMap to get error location
       errors = []

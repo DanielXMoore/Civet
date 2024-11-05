@@ -37,10 +37,11 @@ export function compileCivetToHtml({
   code = '',
   prettierOutput = true,
   jsOutput = false,
+  tsOutput = true,
   parseOptions = {},
 }): Promise<WorkerResult> {
   uid++;
-  playgroundWorker.postMessage({ uid, code, prettierOutput, jsOutput, parseOptions });
+  playgroundWorker.postMessage({ uid, code, prettierOutput, jsOutput, tsOutput, parseOptions });
   return new Promise((resolve) => {
     msgMap[uid] = {
       resolve,
