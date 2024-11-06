@@ -20,7 +20,7 @@ import type {
   CatchClause
   ComptimeStatement
   Condition
-  DeclarationStatement
+  Declaration
   DoStatement
   ElseClause
   FinallyClause
@@ -203,12 +203,17 @@ function negateCondition(condition)
   i := children.indexOf(expression)
   if i < 0
     throw new Error `Could not find expression in condition`
-  children[i] = expression =
+  pre := ["!"]
+  expression = makeLeftHandSideExpression expression
+  children[i] = expression = {
     type: "UnaryExpression"
     children: [
-      "!"
-      makeLeftHandSideExpression expression
+      pre
+      expression
     ]
+    pre
+    expression
+  }
   { ...condition, expression, children }
 
 /**
@@ -459,7 +464,7 @@ function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause[],
       block: emptyCatchBlock
 
   // else clause support
-  let hoistDec: DeclarationStatement?
+  let hoistDec: Declaration?
   if e
     c = c!  // absent catch clause would have been created above
     // `let ok = true` before try
@@ -731,6 +736,7 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
 // Wrap expression in parentheses to make into a statement when:
 // * object literal expression
 // * anonymous function expression
+// * unary suffix applied to above
 // * comma operators applied to above
 function makeExpressionStatement(expression: ASTNode): ASTNode
   if Array.isArray(expression) and expression[1]?[0]?[0]?[1]?.token is "," // CommaExpression
@@ -740,7 +746,10 @@ function makeExpressionStatement(expression: ASTNode): ASTNode
         [comma, makeExpressionStatement exp]
     ]
   else if expression?.type is "ObjectExpression" or
-          (expression?.type is "FunctionExpression" and not expression.id)
+          (expression?.type is "FunctionExpression" and not expression.id) or
+          (expression?.type is "UnaryExpression" and not expression.pre?# and
+           expression.expression is not
+           makeExpressionStatement expression.expression)
     makeLeftHandSideExpression expression
   else
     expression
@@ -1421,13 +1430,14 @@ function processProgram(root: BlockStatement): void
     createVarDecs(root, [])
   }
 
+  // REPL wants all top-level variables hoisted to outermost scope
+  processRepl root, rootIIFE if config.repl
+
+  // Automatic semicolon insertion
   processBlocks(statements)
 
   populateRefs(statements)
   adjustAtBindings(statements)
-
-  // REPL wants all top-level variables hoisted to outermost scope
-  processRepl root, rootIIFE if config.repl
 
   // Run synchronous versions of async steps in case we're in sync mode
   if getSync()
@@ -1447,7 +1457,11 @@ function processRepl(root: BlockStatement, rootIIFE: ASTNode): void
     continue unless decl.names?# // skip 'let ref'
     if decl.parent is topBlock or decl.decl is "var"
       decl.children.shift() // remove const/let/var
-      root.expressions.splice i++, 0, ["", `var ${decl.names.join ','};`]
+      if decl.bindings.0?.pattern?.type is "ObjectBindingPattern"
+        // If first pattern is braced, need to wrap in parens
+        decl.children.unshift "("
+        decl.children.push ")"
+      root.expressions.splice i++, 0, ["", `var ${decl.names.join ','}`, ";"]
   // Hoist all function declarations, and hoist values when top-level
   for each func of gatherRecursive topBlock, .type is "FunctionExpression"
     if func.name and func.parent?.type is "BlockStatement" // declaration
@@ -1458,12 +1472,12 @@ function processRepl(root: BlockStatement, rootIIFE: ASTNode): void
         func.parent = root
       else
         func.children.unshift func.name, "="
-        root.expressions.splice i++, 0, ["", `var ${func.name};`]
+        root.expressions.splice i++, 0, ["", `var ${func.name}`, ";"]
   // Hoist top-level class declarations (like `let`)
   for each classExp of gatherRecursiveWithinFunction topBlock, .type is "ClassExpression"
     if classExp.name and classExp.parent is topBlock or classExp.parent is like {type: "ReturnStatement", parent: ^topBlock}
       classExp.children.unshift classExp.name, "="
-      root.expressions.splice i++, 0, ["", `var ${classExp.name};`]
+      root.expressions.splice i++, 0, ["", `var ${classExp.name}`, ";"]
 
 function populateRefs(statements: ASTNode): void {
   const refNodes = gatherRecursive(statements, .type is "Ref")
