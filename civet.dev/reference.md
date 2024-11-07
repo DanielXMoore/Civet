@@ -1965,7 +1965,7 @@ max := for max item of array
 ### Object Comprehensions
 
 Loops can also accumulate their body values into an object.
-When any loop is found is found within a braced object expression,
+When a loop is inside a [braced object literal](#braced-literals),
 its body value is spread into the containing object.
 
 <Playground>
@@ -1985,12 +1985,11 @@ squares := {
 }
 </Playground>
 
-The loop can exist anywhere a property is expected.
-It can be freely mixed with other object properties.
+Loops can be freely mixed with other object properties.
 
 <Playground>
 rateLimits := {
-  admin: Infinity,
+  admin: Infinity
   for user of users
     [user.name]: getRemainingLimit(user)
 }
