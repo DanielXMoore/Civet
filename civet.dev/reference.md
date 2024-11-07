@@ -1962,6 +1962,40 @@ min := for min item of array
 max := for max item of array
 </Playground>
 
+### Object Comprehensions
+
+Loops can also accumulate their body values into an object.
+When any loop is found is found within a braced object expression,
+its body value is spread into the containing object.
+
+<Playground>
+object  := {a: 1, b: 2, c: 3}
+doubled := {
+  for key in object
+    [key]: 2 * object[key]
+}
+</Playground>
+
+<Playground>
+i .= 1
+squares := {
+  do
+    [i]: i * i
+  while i++ < 10
+}
+</Playground>
+
+The loop can exist anywhere a property is expected.
+It can be freely mixed with other object properties.
+
+<Playground>
+rateLimits := {
+  admin: Infinity,
+  for user of users
+    [user.name]: getRemainingLimit(user)
+}
+</Playground>
+
 ### Infinite Loop
 
 <Playground>
