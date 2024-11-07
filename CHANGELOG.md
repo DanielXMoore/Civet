@@ -4,6 +4,13 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.14 (2024-11-07, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.13...v0.8.14), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.14))
+* Syntax highlighting: fix leading `_` being treated as a number [[#1578](https://github.com/DanielXMoore/Civet/pull/1578)]
+* Scientific numeric literals take priority over access [[#1579](https://github.com/DanielXMoore/Civet/pull/1579)]
+* Fix parenthesized `⧺` and `—` shorthands for `++` and `--` [[#1584](https://github.com/DanielXMoore/Civet/pull/1584)]
+* Fix wrapping of braced objects in parentheses [[#1585](https://github.com/DanielXMoore/Civet/pull/1585)]
+* Object comprehensions via loops in braces [[#1563](https://github.com/DanielXMoore/Civet/pull/1563)]
+
 ## 0.8.13 (2024-11-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.12...v0.8.13), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.13))
 * Playground copy button for large text fragments [[#1569](https://github.com/DanielXMoore/Civet/pull/1569)]
 * Fix unplugin `typecheck`: source mapping and `rewriteCivetImports` combination [[#1571](https://github.com/DanielXMoore/Civet/pull/1571)]
