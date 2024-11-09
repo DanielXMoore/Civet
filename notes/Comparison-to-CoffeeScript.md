@@ -89,7 +89,7 @@ Things Changed from CoffeeScript
   (unless you specify `"civet coffeeCompat"` or `"civet coffeeNot"`),
   instead of `isnt`
   (unless you specify `"civet coffeeCompat"` or `"civet coffeeIsnt"`)
-- `for in` and `for of` are no longer swapped and become their JS equivalents (unless you specify `"civet coffeeCompat"` or `"civet CoffeeOf"`)
+- `for in` and `for of` are no longer swapped and become their JS equivalents (unless you specify `"civet coffeeCompat"` or `"civet coffeeForLoops"`)
 - `a is in b` → `b.indexOf(a) >= 0` and
   `a is not in b` → `b.indexOf(a) < 0` instead of `a in b` and `a not in b`;
   `a in b` remains `a in b` as in JS, and `a not in b` → `!(a in b)`
