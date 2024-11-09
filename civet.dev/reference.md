@@ -2459,7 +2459,7 @@ class Civet <: Animal, Named
 
 ### Decorators
 
-Civet uses [`@` for `this](#this), so decorators need to use `@@`:
+Civet uses [`@` for `this`](#this), so decorators need to use `@@`:
 
 <Playground>
 @@Object.seal
