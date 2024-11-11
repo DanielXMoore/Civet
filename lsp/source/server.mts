@@ -31,7 +31,8 @@ import ts, {
   displayPartsToString,
   GetCompletionsAtPositionOptions,
   findConfigFile,
-  ScriptElementKindModifier
+  ScriptElementKindModifier,
+  SemicolonPreference,
 } from 'typescript';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { setTimeout } from 'timers/promises';
@@ -329,7 +330,15 @@ connection.onCompletionResolve(async (item) => {
   }
   const p = document.offsetAt(position)
 
-  const detail = service.getCompletionEntryDetails(sourcePath, p, name, undefined, source, undefined, data)
+  let detail
+  try {
+    detail = service.getCompletionEntryDetails(sourcePath, p, name, {
+      semicolons: SemicolonPreference.Remove,
+    }, source, undefined, data)
+  } catch (e) {
+    console.log("Failed to get completion details for", name)
+    console.log(e)
+  }
   if (!detail) return item
 
   // getDetails from https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
