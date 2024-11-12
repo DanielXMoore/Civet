@@ -271,12 +271,14 @@ NonPipelineExpression
   NonPipelineAssignmentExpression
 
 NestedExpressionizedStatement
+  # Allow trailing call expressions at two levels:
+  # within the indentation and outside
   &EOS PushIndent ( Nested ExpressionizedStatementWithTrailingCallExpressions )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
     if (!expression) return $skip
     if (!trailing) return expression
     return {
       type: "CallExpression",
-      children: [ expression, ...trailing.flat() ]
+      children: [ expression, ...trailing ]
     }
 
 ExpressionizedStatementWithTrailingCallExpressions
@@ -288,7 +290,7 @@ ExpressionizedStatementWithTrailingCallExpressions
       type: "CallExpression",
       children: [
         makeLeftHandSideExpression($1),
-        $2,
+        ...$2,
       ],
     }
 
@@ -368,7 +370,7 @@ ExplicitArguments
 ApplicationStart
   # Indented argument cannot start with a binary operator or a
   # trailing member expression
-  IndentedApplicationAllowed &( IndentedFurther !IdentifierBinaryOp !ReservedBinary ) !IndentedTrailingMemberExpression
+  IndentedApplicationAllowed &( IndentedFurther !IdentifierBinaryOp !ReservedBinary ) !IndentedTrailingMemberExpressions
   !EOS &( _ ( BracedApplicationAllowed / !"{" ) !ForbiddenImplicitCalls )
 
 ForbiddenImplicitCalls
@@ -403,24 +405,57 @@ ArgumentsWithTrailingMemberExpressions
   Arguments:args AllowedTrailingMemberExpressions:trailing ->
     return [ args, ...trailing ]
 
+# Matches in the empty case
 TrailingMemberExpressions
-  MemberExpressionRest* IndentedTrailingMemberExpression* ->
+  MemberExpressionRest* IndentedTrailingMemberExpressions? ->
+    if (!$2) return $1
     return [...$1, ...$2]
 
-IndentedTrailingMemberExpression
+# Does not match in the empty case
+IndentedTrailingMemberExpressions
+  # All trailing member expressions should be at the same indentation level:
+  # either strictly indented, or at the same indentation level
+  PushIndent NestedTrailingMemberExpression* PopIndent ->
+    if (!$2.length) return $skip
+    return $2.flat()
+  NestedTrailingMemberExpression+ ->
+    return $1.flat()
+
+NestedTrailingMemberExpression
   # NOTE: Assert "." to not match "?" or "!" as a member expression on the following line
-  IndentedAtLeast:ws &( "?"? "." ![0-9] ) MemberExpressionRest:rest ->
-    return prepend(ws, rest)
+  Nested:ws &( "?"? "." ![0-9] ) MemberExpressionRest+:rests ->
+    const [ first, ...rest ] = rests
+    return [ prepend(ws, first), ...rest ]
 
 AllowedTrailingMemberExpressions
   TrailingMemberPropertyAllowed TrailingMemberExpressions -> $2
   MemberExpressionRest*
 
+# Does not match in the empty case
 TrailingCallExpressions
   # NOTE: Assert "." to not match "?" or "!" or string literal
   # as a call expression on the following line
-  ( IndentedAtLeast &( "?"? "." ![0-9] ) CallExpressionRest+ )+
+  CallExpressionRest* IndentedTrailingCallExpressions? ->
+    if (!$1.length && !$2) return $skip
+    if (!$2) return $1
+    return [...$1, ...$2]
 
+# Does not match in the empty case
+IndentedTrailingCallExpressions
+  # All trailing call expressions should be at the same indentation level:
+  # either strictly indented, or at the same indentation level
+  PushIndent NestedTrailingCallExpression* PopIndent ->
+    if (!$2.length) return $skip
+    return $2.flat()
+  NestedTrailingCallExpression+ ->
+    return $1.flat()
+
+NestedTrailingCallExpression
+  Nested:ws &( "?"? "." ![0-9] ) CallExpressionRest+:rests ->
+    const [ first, ...rest ] = rests.flat()
+    return [ prepend(ws, first), ...rest ]
+
+# Does not match in the empty case
 AllowedTrailingCallExpressions
   TrailingMemberPropertyAllowed TrailingCallExpressions -> $2
 
@@ -1401,12 +1436,12 @@ CallExpression
       children: [$1, ...$2, ...rest.flat()],
     })
 
-  MemberExpression:member AllowedTrailingMemberExpressions:trailing CallExpressionRest*:rest ->
-    if (rest.length || trailing.length) {
+  MemberExpression:member CallExpressionRest*:rest AllowedTrailingCallExpressions?:trailing ->
+    if (rest.length || trailing) {
       rest = rest.flat()
       return processCallMemberExpression({
         type: "CallExpression",
-        children: [member, ...trailing, ...rest]
+        children: [member, ...rest, ...trailing ?? []]
       })
     }
 
