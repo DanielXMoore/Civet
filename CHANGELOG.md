@@ -4,6 +4,16 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.15 (2024-11-12, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.14...v0.8.15), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.15))
+* Fix typo in Coffeescript comparison [[#1589](https://github.com/DanielXMoore/Civet/pull/1589)]
+* Fix range `for` loop with complex left-hand side [[#1592](https://github.com/DanielXMoore/Civet/pull/1592)]
+* Type's postfix `if` must be on the same line [[#1591](https://github.com/DanielXMoore/Civet/pull/1591)]
+* Fix missing parentheses in one-line `if` condition [[#1595](https://github.com/DanielXMoore/Civet/pull/1595)]
+* LSP: fix autocompletion details error message [[#1596](https://github.com/DanielXMoore/Civet/pull/1596)]
+* Fix reduction inside conditions, and other subtle aliasing issues [[#1598](https://github.com/DanielXMoore/Civet/pull/1598)]
+* Track indentation of trailing member/call expressions [[#1599](https://github.com/DanielXMoore/Civet/pull/1599)]
+  * BREAKING CHANGE: A chain of trailing member accesses must now be consistently indented.
+
 ## 0.8.14 (2024-11-07, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.13...v0.8.14), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.14))
 * Syntax highlighting: fix leading `_` being treated as a number [[#1578](https://github.com/DanielXMoore/Civet/pull/1578)]
 * Scientific numeric literals take priority over access [[#1579](https://github.com/DanielXMoore/Civet/pull/1579)]
