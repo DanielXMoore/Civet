@@ -1936,7 +1936,7 @@ numEven := for count item of array
 numKeys := for count key in object
 </Playground>
 
-`for sum` adds up the body values with `+`.
+`for sum` adds up the body values with `+`, starting from `0`.
 If there is no body, it adds the item being looped over.
 
 <Playground>
@@ -1960,6 +1960,14 @@ If there is no body, it uses the item being looped over.
 <Playground>
 min := for min item of array
 max := for max item of array
+</Playground>
+
+`for join` concatenates the body values as strings, using `+`.
+It's like `for sum` but starting from `""` instead of `0`.
+
+<Playground>
+all := for join item of array
+  `[${item.type}] ${item.title}`
 </Playground>
 
 ### Object Comprehensions
