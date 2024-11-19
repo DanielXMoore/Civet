@@ -31,6 +31,7 @@ import type {
   MemberExpression
   MethodDefinition
   NormalCatchParameter
+  ObjectExpression
   ParenthesizedExpression
   Placeholder
   StatementNode
@@ -558,13 +559,14 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
     if glob?.type is "PropertyGlob"
       prefix .= children[...i]
       parts := []
-      let refAssignmentComma
+      let ref
       // add ref to ensure object base evaluated only once
-      if prefix.length > 1
-        ref := makeRef()
-        { refAssignmentComma } = makeRefAssignment ref, prefix
-        prefix = [ref]
-      prefix = prefix.concat(glob.dot)
+      if prefix.length > 1 and glob.object.properties# > 1
+        ref = makeRef()
+        { refAssignment } := makeRefAssignment ref, prefix
+        // First use of prefix assigns ref
+        prefix = [ makeLeftHandSideExpression refAssignment ]
+      prefix = prefix.concat glob.dot
 
       for part of glob.object.properties
         if part.type is "Error"
@@ -575,7 +577,7 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
             type: "Error"
             message: "Glob pattern cannot have method definition"
           continue
-        if part.value and !["CallExpression", "MemberExpression", "Identifier"].includes(part.value.type)
+        if part.value and part.value.type is not in ["CallExpression", "MemberExpression", "Identifier"] as (string?)[]
           parts.push
             type: "Error"
             message: `Glob pattern must have call or member expression value, found ${JSON.stringify(part.value)}`
@@ -591,8 +593,10 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
         // Not yet needed:
         [name, value] = [value, name] if glob.reversed
 
-        if !suppressPrefix // Don't prefix @ shorthand
+        unless suppressPrefix // Don't prefix @ shorthand
           value = prefix.concat trimFirstSpace value
+          // Switch from refAssignment to ref
+          prefix = [ ref ] ++ glob.dot if ref?
         if (wValue) value.unshift(wValue)
         if part.type is "SpreadProperty"
           parts.push {
@@ -603,6 +607,7 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
             names: part.names
             children: part.children.slice(0, 2) // whitespace, ...
               .concat(value, part.delim)
+            usesRef: Boolean ref
           }
         else
           parts.push {
@@ -619,21 +624,16 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
               value
               part.delim // comma delimiter
             ]
+            usesRef: Boolean ref
           }
-      object: ASTNodeObject .= {
+      object: ObjectExpression :=
         type: "ObjectExpression"
         children: [
           glob.object.children.0 // {
           ...parts
           glob.object.children.-1 // whitespace and }
-        ],
+        ]
         properties: parts
-      }
-      if refAssignmentComma
-        object = makeNode
-          type: "ParenthesizedExpression"
-          children: ["(", ...refAssignmentComma, object, ")"]
-          expression: object
       if (i is children.length - 1) return object
       return processCallMemberExpression({  // in case there are more
         ...node
@@ -842,44 +842,36 @@ function convertNamedImportsToObject(node, pattern?: boolean)
 // {foo} is equivalent to foo={foo}, and
 // {foo, bar: baz} is equivalent to foo={foo} and bar={baz}.
 // {...foo} is a special case.
-function convertObjectToJSXAttributes(obj) {
-  const { properties } = obj
-  const parts = [] // JSX attributes
-  const rest = []  // parts that need to be in {...rest} form
-  for (let i = 0; i < properties.length; i++) {
+function convertObjectToJSXAttributes(obj: ObjectExpression)
+  parts := [] // JSX attributes
+  rest := []  // parts that need to be in {...rest} form
+  for part, i of obj.properties
+    if part.usesRef
+      rest.push part
+      continue
     if (i > 0) parts.push(' ')
-    const part = properties[i]
-    switch (part.type) {
-      case 'Identifier':
+    switch part.type
+      when "Identifier"
         parts.push([part.name, '={', part.name, '}'])
-        break
-      case 'Property':
-        if (part.name.type is 'ComputedPropertyName') {
+      when "Property"
+        if part.name.type is "ComputedPropertyName"
           rest.push(part)
-        } else {
+        else
           parts.push([part.name, '={', trimFirstSpace(part.value), '}'])
-        }
-        break
-      case 'SpreadProperty':
+      when "SpreadProperty"
         parts.push(['{', part.dots, part.value, '}'])
-        break
-      case 'MethodDefinition':
+      when "MethodDefinition"
         const func = convertMethodToFunction(part)
-        if (func) {
+        if func
           parts.push([part.name, '={', convertMethodToFunction(part), '}'])
-        } else {
+        else
           rest.push(part)
-        }
-        break
-      default:
-        throw new Error(`invalid object literal type in JSX attribute: ${part.type}`)
-    }
-  }
-  if (rest.length) {
-    parts.push(['{...{', ...rest, '}}'])
-  }
+      else
+        throw new Error `invalid object literal type in JSX attribute: ${part.type}`
+  if rest#
+    parts.push " " if parts# and parts.-1 is not " "
+    parts.push(["{...{", ...rest, "}}"])
   return parts
-}
 
 /**
  * Returns a new MethodDefinition node.
