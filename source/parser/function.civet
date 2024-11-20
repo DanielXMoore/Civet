@@ -2,9 +2,11 @@ import type {
   ASTLeaf
   ASTNode
   ASTNodeObject
+  BindingIdentifier
   BlockStatement
   BreakStatement
   CallExpression
+  Children
   Declaration
   ForStatement
   FunctionNode
@@ -284,41 +286,83 @@ function processReturnValue(func: FunctionNode)
 
   return true
 
-function patternAsValue(pattern): ASTNode
-  switch (pattern.type) {
-    case "ArrayBindingPattern": {
-      const children = [...pattern.children]
-      const index = children.indexOf(pattern.elements)
+function patternAsValue(pattern: ASTNodeObject): ASTNode
+  switch pattern.type
+    when "ArrayBindingPattern"
+      children := [...pattern.children]
+      index := children.indexOf pattern.elements
       if (index < 0) throw new Error("failed to find elements in ArrayBindingPattern")
-      children[index] = pattern.elements.map((el) => {
-        const [ws, e, delim] = el.children
-        return { ...el, children: [ws, patternAsValue(e), delim] }
-      })
-      return { ...pattern, children }
-    }
-    case "ObjectBindingPattern": {
-      const children = [...pattern.children]
-      const index = children.indexOf(pattern.properties)
+      elements := children[index] = pattern.elements.map patternAsValue
+      { ...pattern, elements, children }
+    when "ObjectBindingPattern"
+      children := [...pattern.children]
+      index := children.indexOf pattern.properties
       if (index < 0) throw new Error("failed to find properties in ArrayBindingPattern")
-      children[index] = pattern.properties.map patternAsValue
-      return { ...pattern, children }
-    }
-    case "Identifier":
-    case "BindingProperty": {
-      const children = [
-        // { name: value } = ... declares value, not name
-        pattern.value ?? pattern.name
-        pattern.delim
-      ]
-      // Check for leading whitespace
-      if (isWhitespaceOrEmpty(pattern.children[0])) {
-        children.unshift(pattern.children[0])
-      }
-      return { ...pattern, children }
-    }
-    default:
-      return pattern
-  }
+      properties := children[index] = pattern.properties.map patternAsValue
+      { ...pattern, properties, children }
+    when "BindingProperty"
+      let children: Children
+      // { name: value } = ... declares value, not name
+      if pattern.value?.type is "Identifier"
+        children = [ pattern.value, pattern.delim ]
+        // Check for leading whitespace
+        if isWhitespaceOrEmpty pattern.children[0]
+          children.unshift pattern.children[0]
+      else
+        children = [...pattern.children]
+        if pattern.initializer?
+          index := children.indexOf pattern.initializer
+          assert.notEqual index, -1, "failed to find initializer in BindingElement"
+          children.splice index, 1
+        if pattern.value?
+          children = children.map & is pattern.value ?
+            patternAsValue pattern.value : &
+      { ...pattern, children }
+    when "AtBindingProperty"
+      children := [...pattern.children]
+      if pattern.initializer?
+        index := children.indexOf pattern.initializer
+        assert.notEqual index, -1, "failed to find initializer in AtBindingProperty"
+        children.splice index, 1
+      { ...pattern, children }
+    when "BindingElement"
+      children := [...pattern.children]
+      if pattern.initializer?
+        index := children.indexOf pattern.initializer
+        assert.notEqual index, -1, "failed to find initializer in BindingElement"
+        children.splice index, 1
+      index := children.indexOf pattern.binding
+      assert.notEqual index, -1, "failed to find binding in BindingElement"
+      children[index] = patternAsValue pattern.binding
+      { ...pattern, children }
+    else
+      pattern
+
+/**
+Find all bound variables in a pattern and return as an array
+Example: {x: [, y], z} -> [y, z]
+*/
+function patternBindings(pattern: ASTNodeObject): BindingIdentifier[]
+  bindings: BindingIdentifier[] := []
+  recurse pattern
+  return bindings
+
+  function recurse(pattern: ASTNodeObject): void
+    switch pattern.type
+      when "ArrayBindingPattern"
+        for each element of pattern.elements
+          recurse element
+      when "ObjectBindingPattern"
+        for each property of pattern.properties
+          recurse property
+      when "BindingElement"
+        recurse pattern.binding
+      when "BindingProperty"
+        recurse pattern.value ?? pattern.name
+      when "Binding"
+        recurse pattern.pattern
+      when "Identifier", "AtBinding"
+        bindings.push pattern
 
 // NOTE: this is almost the same as insertReturn but doesn't remove `breaks` in `when` and
 // does construct an else clause pushing undefined in if statements that lack them
@@ -740,7 +784,24 @@ function iterationDefaultBody(statement: IterationStatement | ForStatement): boo
 
   if statement.type is "ForStatement" and
      statement.declaration?.type is "ForDeclaration"
-    fillBlock [ "", patternAsValue statement.declaration.binding ]
+    // For regular loops and object comprehensions, use entire pattern
+    // For reductions, use the first binding
+    if reduction
+      bindings := patternBindings statement.declaration.binding.pattern
+      if bindings#
+        fillBlock [ "", bindings[0] ]
+        for binding of bindings[1..]
+          binding.children.unshift
+            type: "Error"
+            subtype: "Warning"
+            message: "Ignored binding in reduction loop with implicit body"
+      else
+        fillBlock [ "",
+          type: "Error"
+          message: "Empty binding pattern in reduction loop with implicit body"
+        ]
+    else
+      fillBlock [ "", patternAsValue statement.declaration.binding.pattern ]
     block.empty = false
 
   return false

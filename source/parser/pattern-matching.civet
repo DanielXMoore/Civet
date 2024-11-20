@@ -1,11 +1,16 @@
 import type {
+  ArrayBindingPatternContent
   ASTNode
   ASTNodeObject
   ASTRef
+  BindingProperty
+  BindingRestElement
+  BindingRestProperty
   BlockStatement
   Condition
   ContinueStatement
   ElseClause
+  Identifier
   ParenthesizedExpression
   ParseRule
   PatternClause
@@ -314,24 +319,23 @@ function getPatternBlockPrefix(
     ...duplicateDeclarations.map ['', &, ";"]
   ]
 
-function elideMatchersFromArrayBindings(elements) {
-  return elements.map((el) => {
-    // TODO: this isn't unified with the element [ws, e, sep] tuple yet
-    if (el.type is "BindingRestElement") {
-      return ["", el, undefined]
-    }
-    const { children: [ws, e, delim] } = el
-    switch (e.type) {
-      case "Literal":
-      case "RegularExpressionLiteral":
-      case "StringLiteral":
-      case "PinPattern":
-        return delim
-      default:
-        return [ws, nonMatcherBindings(e), delim]
-    }
-  })
-}
+function elideMatchersFromArrayBindings(elements: ArrayBindingPatternContent): ASTNode[]
+  for each element of elements
+    switch element.type
+      when "BindingRestElement", "ElisionElement"
+        element
+      when "BindingElement"
+        switch element.binding.type
+          when "Literal", "RegularExpressionLiteral", "StringLiteral", "PinPattern"
+            element.delim
+          else
+            binding := nonMatcherBindings element.binding
+            makeNode {
+              ...element
+              binding
+              children: element.children.map (c) =>
+                c is element.binding ? binding : c
+            }
 
 function elideMatchersFromPropertyBindings(properties) {
   return properties.map((p) => {
@@ -373,28 +377,18 @@ function elideMatchersFromPropertyBindings(properties) {
   })
 }
 
-function nonMatcherBindings(pattern)
+function nonMatcherBindings(pattern: ASTNodeObject)
   switch pattern.type
-    when "ArrayBindingPattern"
-      elements := elideMatchersFromArrayBindings(pattern.elements)
-      {
+    when "ArrayBindingPattern", "PostRestBindingElements"
+      elements := elideMatchersFromArrayBindings pattern.elements
+      makeNode {
         ...pattern
         elements
         children: pattern.children.map & is pattern.elements ? elements : &
       }
-    when "PostRestBindingElements"
-      const els = elideMatchersFromArrayBindings(pattern.children[1])
-      {
-        ...pattern,
-        children: [
-          pattern.children[0],
-          els,
-          ...pattern.children.slice(2),
-        ],
-      }
     when "ObjectBindingPattern"
-      properties := elideMatchersFromPropertyBindings(pattern.properties)
-      {
+      properties := elideMatchersFromPropertyBindings pattern.properties
+      makeNode {
         ...pattern
         properties
         children: pattern.children.map & is pattern.properties ? properties : &
@@ -403,21 +397,18 @@ function nonMatcherBindings(pattern)
       pattern
 
 function aggregateDuplicateBindings(bindings)
-  props := gatherRecursiveAll bindings, .type is "BindingProperty"
-  arrayBindings := gatherRecursiveAll bindings, .type is "ArrayBindingPattern"
-
-  for each { elements } of arrayBindings
-    for each element of elements
-      if Array.isArray element
-        [, e] := element
-        if e.type is "Identifier"
-          props.push e
-        else if e.type is "BindingRestElement"
-          props.push e
+  props := gatherRecursiveAll bindings,
+    ($): $ is BindingProperty | BindingRestProperty | Identifier | BindingRestElement => (or)
+      $.type is "BindingProperty"
+      // Don't deduplicate ...rest properties; user should do so manually
+      // because ...rest can be named arbitrarily
+      //$.type is "BindingRestProperty"
+      $.type is "Identifier" and $.parent?.type is "BindingElement"
+      $.type is "BindingRestElement"
 
   declarations: ASTNode[] := []
 
-  propsGroupedByName: Map<string, ASTNodeObject[]> := new Map
+  propsGroupedByName := new Map<string, ASTNodeObject[]>
 
   for each p of props
     { name, value } := p
@@ -475,7 +466,7 @@ function aggregateDuplicateBindings(bindings)
  * Adjust the alias of a binding property, adding an alias if one doesn't exist or
  * replacing an existing alias. This mutates the property in place.
  */
-function aliasBinding(p, ref: ASTRef): void
+function aliasBinding(p: ASTNodeObject, ref: ASTRef): void
   if p.type is "Identifier"
     // Array element binding
     // TODO: This ignores `name` and `names` properties of Identifier and
