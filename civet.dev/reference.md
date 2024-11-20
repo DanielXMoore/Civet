@@ -1970,6 +1970,18 @@ all := for join item of array
   `[${item.type}] ${item.title}`
 </Playground>
 
+Implicit bodies in `for sum/product/min/max/join` reductions
+can use a single destructuring:
+
+<Playground>
+xMin := for min {x} of points
+</Playground>
+
+<Playground>
+xMin := for min [x] of points
+yMin := for min [, y] of points
+</Playground>
+
 ### Object Comprehensions
 
 Loops can also accumulate their body values into an object.
