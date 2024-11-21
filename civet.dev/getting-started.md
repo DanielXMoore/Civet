@@ -151,6 +151,10 @@ normally, but you'll need to mark `"fs"` as an external dependency
 (see e.g. [esbuild instructions](https://esbuild.github.io/api/#external>)
 and [Vite instructions](https://vitejs.dev/guide/build#library-mode)).
 
+See the
+[API types](https://github.com/DanielXMoore/Civet/blob/main/types/types.d.ts)
+for more details about the Civet API.
+
 ## Typechecking
 
 You can ask Civet to run TypeScript to check for type errors in your Civet code
