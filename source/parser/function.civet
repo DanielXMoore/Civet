@@ -62,6 +62,7 @@ import {
   deepCopy
   getTrimmingSpace
   hasAwait
+  hasTrailingComment
   hasYield
   inplacePrepend
   isEmptyBareBlock
@@ -275,13 +276,10 @@ function processReturnValue(func: FunctionNode)
 
   // Implicit return before }
   unless block.children.-2?.type is "ReturnStatement"
-    indent := getIndent(block.expressions.-1) or ";"
+    indent := getIndent block.expressions.-1
     block.expressions.push [
-      [indent]
-    ,
-      type: "ReturnStatement",
-      expression: ref,
-      children: ["return ", ref]
+      indent
+      wrapWithReturn ref, block, not indent
     ]
 
   return true
@@ -443,13 +441,15 @@ function assignResults(node: StatementTuple[] | ASTNode, collect: (node: ASTNode
       return
     when "SwitchStatement"
       // insert a results.push in each case block
-      assignResults(exp.children[2], collect)
+      for each clause of exp.caseBlock.clauses
+        assignResults clause, collect
       return
     when "TryStatement"
       // NOTE: CoffeeScript doesn't add a push to an empty catch block but does add if there is any statement in the catch block
       // we always add a push to the catch block
       // NOTE: does not insert a push in the finally block
-      exp.blocks.forEach((block) => assignResults(block, collect))
+      for each block of exp.blocks
+        assignResults block, collect
       return
 
   // Don't push if there's a trailing semicolon
@@ -464,23 +464,31 @@ function insertReturn(node: ASTNode): void
   // TODO: unify this with the `exp` switch
   switch node.type
     when "BlockStatement"
-      if node.expressions.length
+      if node.expressions#
         return if node.expressions.some ([, exp]) => isExit exp
         last := node.expressions[node.expressions.length - 1]
         insertReturn(last)
       else
         // NOTE: Kind of hacky but I'm too much of a coward to make `->` add an implicit return
-        if node.parent.type is "CatchClause"
-          node.expressions.push(["return"])
+        if node.parent?.type is like "CatchClause", "WhenClause"
+          node.expressions.push ["", wrapWithReturn(undefined, node)]
       return
     // NOTE: "CaseClause"s don't get a return statement inserted
     when "WhenClause"
       // Remove inserted `break;` if it hasn't already been removed
-      node.children.splice node.children.indexOf(node.break), 1 if node.break
-      if node.block.expressions.length
-        insertReturn(node.block)
-      else
-        node.block.expressions.push(wrapWithReturn())
+      if node.break
+        breakIndex := node.children.indexOf node.break
+        assert.notEqual breakIndex, -1, "Could not find break in when clause"
+        node.children.splice breakIndex, 1
+        node.break = undefined
+      // Then try to add implicit return
+      insertReturn node.block
+      unless isExit node.block
+        comment := hasTrailingComment node.block.expressions
+        node.block.expressions.push [
+          comment ? node.block.expressions.-1.0 or "\n" : ""
+          wrapWithReturn undefined, node, not comment
+        ]
       return
     when "DefaultClause"
       insertReturn(node.block)
@@ -507,7 +515,7 @@ function insertReturn(node: ASTNode): void
       parent := outer.parent as BlockStatement?
       index := findChildIndex parent?.expressions, outer
       assert.notEqual index, -1, "Could not find declaration in parent"
-      parent!.expressions.splice index+1, 0, ["", {
+      parent!.expressions.splice index+1, 0, ["",
         type: "ReturnStatement"
         expression: value
         children: [
@@ -516,7 +524,7 @@ function insertReturn(node: ASTNode): void
           value
         ]
         parent: exp
-      }]
+      ]
       braceBlock parent!
       return
     when "FunctionExpression"
@@ -526,10 +534,7 @@ function insertReturn(node: ASTNode): void
         index := findChildIndex parent?.expressions, outer
         assert.notEqual index, -1, "Could not find function declaration in parent"
         parent!.expressions.splice index+1, 0, ["",
-          type: "ReturnStatement"
-          expression: exp.id
-          children: [";return ", exp.id]
-          parent: exp
+          wrapWithReturn exp.id, exp, true
         ]
         braceBlock parent!
         return
@@ -549,21 +554,23 @@ function insertReturn(node: ASTNode): void
       // else block
       if (exp.else) insertReturn(exp.else.block)
       // Add explicit return after if block if no else block
-      else exp.children.push ["", {
-        type: "ReturnStatement"
-        // NOTE: add a prefixed semi-colon because the if block may not be braced
-        children: [";return"]
-        parent: exp
-      }]
+      else exp.children.push ["",
+        // NOTE: add a prefixed semicolon because the if block may not be braced
+        wrapWithReturn undefined, exp, true
+      ]
       return
     when "PatternMatchingStatement"
-      insertReturn(exp.children[0])
+      insertReturn exp.children[0]
       return
     when "SwitchStatement"
-      insertSwitchReturns(exp)
+      // insert a return in each when/else/default block
+      // case blocks don't get implicit returns
+      for each clause of exp.caseBlock.clauses
+        insertReturn clause
       return
     when "TryStatement"
-      exp.blocks.forEach((block) => insertReturn(block))
+      for each block of exp.blocks
+        insertReturn block
       // NOTE: do not insert a return in the finally block
       return
 
@@ -571,15 +578,7 @@ function insertReturn(node: ASTNode): void
   return if node.-1?.type is "SemicolonDelimiter"
 
   // Insert return after indentation and before expression
-  const returnStatement = wrapWithReturn(node[1])
-  node.splice(1, 1, returnStatement)
-
-// insert a return in each when/else/default block
-// case blocks don't get implicit returns
-// maybe default blocks shouldn't either?
-function insertSwitchReturns(exp): void
-  exp.caseBlock.clauses.forEach (clause) =>
-    insertReturn clause
+  node[1] = wrapWithReturn node[1]
 
 // Process `break with` and `continue with` within a loop statement
 // that already has a resultsRef attribute.

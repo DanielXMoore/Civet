@@ -9,6 +9,7 @@ import type {
   IsToken
   IterationStatement
   Literal
+  Parent
   StatementNode
   TypeSuffix
   ReturnTypeAnnotation
@@ -192,9 +193,25 @@ function isExit(node: ASTNode): boolean
       true
     // if checks then and else clause
     when "IfStatement"
+      (or)
+        // `insertReturn` for IfStatement adds a return to children
+        // when there's no else block
+        node.children.-1?.type is "ReturnStatement"
+        (node.children.-1 as StatementTuple)?[1]?.type is "ReturnStatement"
+        (and)
+          isExit node.then
+          isExit node.else?.block
+    when "PatternMatchingStatement"
+      isExit node.children[0][1]
+    when "SwitchStatement"
       (and)
-        isExit node.then
-        isExit node.else?.block
+        // Ensure exhaustive by requiring an else/default clause
+        node.caseBlock.clauses.some .type is "DefaultClause"
+        // Every clause should exit
+        node.caseBlock.clauses.every isExit
+    when "TryStatement"
+      // Require all non-finally blocks to exit
+      node.blocks.every isExit
     when "BlockStatement"
       // [1] extracts statement from [indent, statement, delim]
       node.expressions.some (s) => isExit s[1]
@@ -234,6 +251,15 @@ function stripTrailingImplicitComma(children: ASTNode[])
     children[...-1]
   else
     children
+
+function hasTrailingComment(node: ASTNode): boolean
+  return false unless node?
+  return true if node.type is "Comment"
+  if Array.isArray node
+    return hasTrailingComment node.-1
+  if "children" in node
+    return hasTrailingComment (node.children as Children).-1
+  false
 
 /**
  * Trims the first single space from the spacing array or node's children if present
@@ -788,14 +814,15 @@ function wrapIIFE(expressions: StatementTuple[], asyncFlag?: boolean, generator?
 
   return exp
 
-function wrapWithReturn(expression?: ASTNode): ASTNode
-  const children = expression ? ["return ", expression] : ["return"]
+function wrapWithReturn(expression?: ASTNode, parent: Parent = expression?.parent, semi = false): ASTNode
+  children := expression ? ["return ", expression] : ["return"]
+  children.unshift ";" if semi
 
   return makeNode {
     type: "ReturnStatement"
     children
     expression
-    parent: expression?.parent
+    parent
   }
 
 function flatJoin<T, S>(array: T[][], separator: S): (T | S)[]
@@ -819,6 +846,7 @@ export {
   hasAwait
   hasExportDeclaration
   hasImportDeclaration
+  hasTrailingComment
   hasYield
   inplaceInsertTrimmingSpace
   inplacePrepend
