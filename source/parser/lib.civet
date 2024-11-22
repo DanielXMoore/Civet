@@ -37,8 +37,11 @@ import type {
   StatementNode
   StatementTuple
   SwitchStatement
+  TypeArgument
   TypeArguments
+  TypeNode
   TypeSuffix
+  TypeUnary
   WSNode
 } from ./types.civet
 
@@ -1219,69 +1222,117 @@ function attachPostfixStatementAsExpression(exp, post: [WSNode, IfStatement | It
 
 function processTypes(node: ASTNode)
   // T? -> T | undefined; T?? -> T | undefined | null; T! -> NonNullable<T>
-  gatherRecursiveAll node, (n) => n.type is "TypeUnary"
-  // @ts-ignore
-  .forEach (unary): void =>
-    return unless unary.suffix#
-    switch unary.suffix.-1
-      {token: "?"}
-        let last: ASTNode
-        count .= 0
-        while unary.suffix# and unary.suffix.-1?.token is "?"
-          last = unary.suffix.pop()
-          count++
-        // Remove pointless non-null assertions before question marks
-        while unary.suffix# and unary.suffix.-1?.type is "NonNullAssertion"
-          unary.suffix.pop()
-        // Remove UnaryType wrapper if no prefix or suffix,
-        // so we can correctly decide whether to parenthesize
-        t := if unary.suffix# or unary.prefix# then unary else unary.t
-        if unary.parent?.type is "TypeElement" and not unary.parent.name
-          // Leave one ? inside an unnamed element of type tuple
-          if count is 1
-            unary.suffix.push last
-            return
-          replaceNode unary, [
-            getTrimmingSpace unary
-            "("
-            parenthesizeType trimFirstSpace t
-            " | null)"
-            last
-          ]
-        else
-          replaceNode unary,
-            type: "TypeParenthesized"
-            ts: true
-            children: [
-              getTrimmingSpace unary
+  for each unary of gatherRecursiveAll node, .type is "TypeUnary"
+    // Start at last suffix, and allow skipping more than one
+    suffixIndex .= unary.suffix# - 1
+    while suffixIndex >= 0
+      suffix := unary.suffix[suffixIndex]
+      switch suffix
+        {token: "?"}
+          count .= 0
+          while unary.suffix[suffixIndex] is like {token: "?"}
+            unary.suffix.splice suffixIndex--, 1
+            count++
+          // Remove pointless non-null assertions before question marks
+          while unary.suffix[suffixIndex] is like {type: "NonNullAssertion"}
+            unary.suffix.splice suffixIndex--, 1
+          // Prefix operations move outside
+          {parent, prefix} := unary
+          unary.prefix = []
+          unary.children = unary.children.filter (is not prefix)
+          // Later suffix operations move outside
+          outer := unary.suffix.splice suffixIndex+1, Infinity
+          // Remove inner UnaryType wrapper if no remaining suffix,
+          // so we can correctly decide whether to parenthesize
+          space := getTrimmingSpace unary
+          let replace: TypeNode
+          if unary.parent?.type is "TypeElement" and not unary.parent.name
+            // Leave one ? inside an unnamed element of type tuple
+            if count is 1
+              unary.suffix.splice suffixIndex+1, 0, suffix // put back
+              continue
+            inplaceInsertTrimmingSpace unary, ""
+            t := parenthesizeType if unary.suffix# then unary else unary.t
+            replace = [
+              space
               "("
-              parenthesizeType trimFirstSpace t
-              count is 1 ? " | undefined" : " | undefined | null"
-              ")"
+              t
+              " | null)"
+              suffix
             ]
-      {type: "NonNullAssertion"}
-        while unary.suffix# and unary.suffix.-1?.type is "NonNullAssertion"
-          unary.suffix.pop()
-        // Remove pointless non-null assertions before question marks
-        while unary.suffix# and unary.suffix.-1?.token is "?"
-          unary.suffix.pop()
-        t := trimFirstSpace
-          if unary.suffix# or unary.prefix# then unary else unary.t
-        args: TypeArguments :=
-          type: "TypeArguments"
-          ts: true
-          types: [t]
-          children: ["<", t, ">"]
-        replaceNode unary, {
-          type: "TypeIdentifier"
-          raw: "NonNullable"
-          args
-          children: [
-            getTrimmingSpace unary
-            "NonNullable"
+          else
+            inplaceInsertTrimmingSpace unary, ""
+            t := parenthesizeType if unary.suffix# then unary else unary.t
+            replace = makeNode
+              type: "TypeParenthesized"
+              ts: true
+              children: [
+                space
+                "("
+                t
+                count is 1 ? " | undefined" : " | undefined | null"
+                ")"
+              ]
+          if prefix# or outer#
+            replace = makeNode {
+              type: "TypeUnary"
+              ts: true
+              t: replace
+              prefix
+              suffix: outer
+              children: [ prefix, replace, outer ]
+            }
+          replaceNode unary, replace, parent
+        {type: "NonNullAssertion"}
+          while unary.suffix[suffixIndex] is like {type: "NonNullAssertion"}
+            unary.suffix.splice suffixIndex--, 1
+          // Remove pointless non-null assertions before question marks
+          while unary.suffix[suffixIndex] is like {token: "?"}
+            unary.suffix.splice suffixIndex--, 1
+          // Prefix operations move outside
+          {parent, prefix} := unary
+          unary.prefix = []
+          unary.children = unary.children.filter (is not prefix)
+          // Later suffix operations move outside
+          outer := unary.suffix.splice suffixIndex+1, Infinity
+          // Remove inner UnaryType wrapper if no remaining suffix
+          space := getTrimmingSpace unary
+          inplaceInsertTrimmingSpace unary, ""
+          t := if unary.suffix# then unary else unary.t
+          arg: TypeArgument := makeNode {
+            type: "TypeArgument"
+            ts: true
+            t
+            children: [t]
+          }
+          argArray := [arg]
+          args: TypeArguments := makeNode
+            type: "TypeArguments"
+            ts: true
+            args: argArray
+            children: ["<", argArray, ">"]
+          replace: ASTNode .= makeNode {
+            type: "TypeIdentifier"
+            raw: "NonNullable"
             args
-          ]
-        }
+            children: [
+              space
+              "NonNullable"
+              args
+            ]
+          }
+          if prefix# or outer#
+            replace = makeNode {
+              type: "TypeUnary"
+              ts: true
+              t: replace
+              prefix
+              suffix: outer
+              children: [ prefix, replace, outer ]
+            }
+          replaceNode unary, replace, parent
+        else
+          suffixIndex--
 
 /**
 Wrap any remaining statement expressions in IIFE.
