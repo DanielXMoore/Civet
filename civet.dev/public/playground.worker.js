@@ -61,8 +61,10 @@ onmessage = async (e) => {
       if (errors.length) {
         // Rerun with SourceMap to get error location
         errors = []
-        tsCode = Civet.generate(ast, { js: true, errors, sourceMap: Civet.SourceMap(code) });
-        return postError(errors[0])
+        jsCode = Civet.generate(ast, { js: true, errors, sourceMap: Civet.SourceMap(code) });
+        // Don't postError(errors[0]) here so that we still display TypeScript
+        // transpilation; only show error when trying to Run code
+        throw errors[0]
       }
 
       if (ast.topLevelAwait) {
