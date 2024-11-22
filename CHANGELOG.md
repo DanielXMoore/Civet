@@ -4,6 +4,18 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.16 (2024-11-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.15...v0.8.16), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.16))
+* `for join` reduction to concatenate strings [[#1604](https://github.com/DanielXMoore/Civet/pull/1604)]
+* Numeric object keys in pattern matching [[#1608](https://github.com/DanielXMoore/Civet/pull/1608)]
+* Fix trailing member/call behavior [[#1609](https://github.com/DanielXMoore/Civet/pull/1609)]
+* Fix complex property globs [[#1610](https://github.com/DanielXMoore/Civet/pull/1610)]
+* Allow postfix in indented `if` conditions [[#1612](https://github.com/DanielXMoore/Civet/pull/1612)]
+* `for` reduction implicit body can destructure, fix implicitly returned patterns in some cases [[#1613](https://github.com/DanielXMoore/Civet/pull/1613)]
+* Fix fallthrough in implicitly returned switch with semicolon, improve `hasExit` heuristic [[#1615](https://github.com/DanielXMoore/Civet/pull/1615)]
+* Type postfix `?` and `!` work in long postfix sequence [[#1617](https://github.com/DanielXMoore/Civet/pull/1617)]
+* Playground shows IIFE failures only when clicking Run [[#1618](https://github.com/DanielXMoore/Civet/pull/1618)]
+* Fix automatic `Promise` wrapping of async return types [[#1619](https://github.com/DanielXMoore/Civet/pull/1619)]
+
 ## 0.8.15 (2024-11-12, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.14...v0.8.15), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.15))
 * Fix typo in Coffeescript comparison [[#1589](https://github.com/DanielXMoore/Civet/pull/1589)]
 * Fix range `for` loop with complex left-hand side [[#1592](https://github.com/DanielXMoore/Civet/pull/1592)]
