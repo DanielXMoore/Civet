@@ -1,5 +1,8 @@
 type {
+  ASTNode
   AssignmentExpression
+  Call
+  ThrowStatement
 } from ./types.civet
 { gatherRecursiveAll } from ./traversal.civet
 {
@@ -11,7 +14,6 @@ type {
   removeHoistDecs
   skipIfOnlyWS
   updateParentPointers
-  wrapIIFE
 } from ./util.civet
 {
   makeRef
@@ -20,11 +22,14 @@ type {
 
 { processUnaryExpression } from ./unary.civet
 
-function constructInvocation(fn, arg) {
-  const fnArr = [fn.leadingComment, fn.expr, fn.trailingComment]
+type ExprWithComments
+  expr: ASTNode!
+  leadingComment: ASTNode
+  trailingComment: ASTNode
 
+function constructInvocation(fn: ExprWithComments, arg: ASTNode!)
   // Unwrap ampersand blocks
-  let expr = fn.expr
+  expr .= fn.expr
   while expr.type is "ParenthesizedExpression"
     expr = expr.expression
   if expr.ampersandBlock
@@ -41,27 +46,48 @@ function constructInvocation(fn, arg) {
     }
 
   expr = fn.expr
-  const lhs = makeLeftHandSideExpression(expr)
+  lhs .= expr
+  // NewExpressions get handled specially later
+  unless lhs.type is "NewExpression"
+    lhs = makeLeftHandSideExpression(lhs)!
 
   // Attach comments
-  let comment = skipIfOnlyWS(fn.trailingComment)
-  if (comment) lhs.children.splice(2, 0, comment)
+  comment .= skipIfOnlyWS(fn.trailingComment)
+  if (comment) lhs.children.push comment
   comment = skipIfOnlyWS(fn.leadingComment)
   if (comment) lhs.children.splice(1, 0, comment)
 
-  switch (arg.type) {
-    case "CommaExpression":
-      arg = makeLeftHandSideExpression(arg)
-      break
-  }
+  // TODO: We don't actually have CommaExpression nodes yet
+  switch arg.type
+    when "CommaExpression"
+      arg = makeLeftHandSideExpression arg
 
-  return {
-    type: "CallExpression",
-    children: [lhs, "(", arg, ")"],
+  args := [arg]
+  call: Call := {
+    type: "Call"
+    args
+    children: ["(", args, ")"]
   }
-}
+  // Turn `|> new Foo` into `new Foo(arg)` by adding to existing CallExpression
+  if lhs.type is "NewExpression"
+    { expression } .= lhs
+    expression = {
+      ...expression
+      type: "CallExpression"
+      children: [ ...expression.children, call ]
+    }
+    {
+      ...lhs
+      expression
+      children: lhs.children.map & is lhs.expression ? expression : &
+    }
+  else
+    {
+      type: "CallExpression"
+      children: [lhs, call]
+    }
 
-function constructPipeStep(fn, arg, returning)
+function constructPipeStep(fn: ExprWithComments, arg: ASTNode!, returning: ASTNode??): [ASTNode, ASTNode??]
   returning = null unless returning
   children .= [[fn.leadingComment, fn.expr, fn.trailingComment].map(skipIfOnlyWS), " ", arg]
 
@@ -72,11 +98,11 @@ function constructPipeStep(fn, arg, returning)
       continue switch
     when "yield"
       return [
-        children,
+        children
         returning
       ]
     when "throw"
-      statement := { type: "ThrowStatement", children }
+      statement: ThrowStatement := { type: "ThrowStatement", children }
       return
         . {
             type: "StatementExpression"
@@ -96,7 +122,6 @@ function constructPipeStep(fn, arg, returning)
     returning
   ]
 
-
 // head: expr
 // body: [ws, pipe, ws, expr][]
 
@@ -112,8 +137,7 @@ function processPipelineExpressions(statements): void
 
       let usingRef = null
 
-      for (i = 0; i < l; i++)
-        const step = body[i]
+      for each step, i of body
         const [leadingComment, pipe, trailingComment, expr] = step
         const returns = pipe.token is "||>"
         let ref, result,
@@ -125,10 +149,11 @@ function processPipelineExpressions(statements): void
             checkValidLHS arg
 
             :outer switch arg.type
-              case "MemberExpression":
+              when "MemberExpression"
                 // If there is only a single access then we don't need a ref
-                if (arg.children.length <= 2) break
-              case "CallExpression":
+                break if arg.children.length <= 2
+                continue switch
+              when "CallExpression"
                 const access = arg.children.pop()
                 // processAssignments will check that this is a valid
                 // last access to assign to
@@ -144,24 +169,22 @@ function processPipelineExpressions(statements): void
                   children: [usingRef, access]
                 }
 
-                break
-
             // assignment node
-            const lhs = [[
-              [initRef],
-              arg,
-              [],
+            lhs := [[
+              [initRef]
+              arg
+              []
               { token: "=", children: [" = "] }
-            ]];
+            ]]
 
-            Object.assign(s, {
-              type: "AssignmentExpression",
-              children: [lhs, children],
-              names: null,
-              lhs,
-              assigned: arg,
-              expression: children,
-            } satisfies AssignmentExpression)
+            Object.assign s, {
+              type: "AssignmentExpression"
+              children: [lhs, children]
+              names: null
+              lhs
+              assigned: arg
+              expression: children
+            } satisfies AssignmentExpression
 
             // Clone so that the same node isn't on the left and right because splice manipulation
             // moves things around and can cause a loop in the graph
@@ -187,16 +210,16 @@ function processPipelineExpressions(statements): void
           arg = {
             type: "ParenthesizedExpression",
             children: ["(", {
-              type: "AssignmentExpression",
-              children: [usingRef, " = ", arg],
+              type: "AssignmentExpression"
+              children: [usingRef, " = ", arg]
             }, ")"],
           }
           returning = usingRef
 
         [result, returning] = constructPipeStep
           {
-            leadingComment: skipIfOnlyWS(leadingComment),
-            trailingComment: skipIfOnlyWS(trailingComment),
+            leadingComment: skipIfOnlyWS(leadingComment)
+            trailingComment: skipIfOnlyWS(trailingComment)
             expr
           }
           arg
@@ -210,7 +233,7 @@ function processPipelineExpressions(statements): void
               message: "Can't continue a pipeline after returning",
             })
           arg = result
-          if children[children.length - 1] is ","
+          if children.-1 is ","
             children.pop()
             children.push(";")
           break
@@ -235,7 +258,7 @@ function processPipelineExpressions(statements): void
         { parent } := s
         parenthesizedExpression := makeLeftHandSideExpression { ...s }
         Object.assign s, parenthesizedExpression, {
-          parent,
+          parent
           hoistDec: undefined
         }
 
