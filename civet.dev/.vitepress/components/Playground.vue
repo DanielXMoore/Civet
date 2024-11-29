@@ -143,7 +143,7 @@ const playgroundUrl = computed(() => {
 <template>
   <div v-if="props.compileAtStart && loading">Loading playground...</div>
   <div v-else :class="{ wrapper: true,  ligatures: ligatures}">
-    <div class="col scroll" @click="textareaEl?.focus()">
+    <div class="col scroll" @click="textareaEl?.focus()" style="tab-size: 4">
       <div class="code code--user">
         <textarea
           :value="userCode"
