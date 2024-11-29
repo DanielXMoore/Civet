@@ -4,6 +4,8 @@ import { compileCivetToHtml } from '../utils/compileCivetToHtml';
 import { b64 } from '../utils/b64';
 import { ligatures } from '../store/ligatures.store';
 
+const document_ = document
+
 const emit = defineEmits(['input']);
 const props = defineProps<{
   b64Code: string;
@@ -146,6 +148,12 @@ const playgroundUrl = computed(() => {
         <textarea
           :value="userCode"
           :onInput="(e: any) => (userCode = e.target.value)"
+          :onkeydown="(event: any) => {
+            if (event.key == `Tab`) {
+              event.preventDefault()
+              document_.execCommand(`insertText`, false, `\t`)
+            }
+          }"
           ref="textareaEl"
           resize="false"
           spellcheck="false"
