@@ -3727,60 +3727,22 @@ MethodDefinition
       abstract: true,
       signature,
       parameters: signature.parameters,
-      ts: true
+      async: signature.async,
+      generator: signature.generator,
+      ts: true,
     }
   # NOTE: Not adding extra validation using PropertySetParameterList
   # NOTE: If this node layout changes, be sure to update `convertMethodTOFunction`
   MethodSignature:signature !(PropertyAccess / ExplicitPropertyGlob / UnaryPostfix / NonNullAssertion) BracedBlock?:block ->
-    let children = $0
-    let generatorPos = 0
-    let { modifier } = signature
-
-    if (hasAwait(block)) {
-      generatorPos++
-      children = children.slice()
-      // get or set
-      if (modifier?.get || modifier?.set) {
-        children.push({
-          type: "Error",
-          message: "Getters and setters cannot be async",
-        })
-      } else if(modifier?.async) {
-        // Do nothing, already async
-      } else {
-        // Insert implicit async
-        children.unshift("async ")
-        modifier = { ...modifier, async: true }
-        signature = { ...signature, modifier }
-      }
-    }
-
-    if (hasYield(block)) {
-      if (children === $0) children = children.slice()
-
-      // get or set
-      if (modifier?.get || modifier?.set) {
-        children.push({
-          type: "Error",
-          message: "Getters and setters cannot be generators",
-        })
-      } else if(modifier?.generator) {
-        // Do nothing, already generator
-      } else {
-        // Insert implicit generator
-        children.splice(generatorPos, 0, "*")
-        modifier = { ...modifier, generator: true }
-        signature = { ...signature, modifier }
-      }
-    }
-
     return {
       type: "MethodDefinition",
-      children,
+      children: $0,
       name: signature.name,
       signature,
       block,
       parameters: signature.parameters,
+      async: signature.async,
+      generator: signature.generator,
     }
 
   # shorthand get method definition
@@ -3863,33 +3825,31 @@ MethodDefinition
 
 MethodModifier
   # NOTE: Merged get/set definitions
-  GetOrSet:kind _? &ClassElementName ->
+  GetOrSet:kind _?:ws &ClassElementName ->
     return {
-      type: "MethodModifier",
-      async: false,
-      generator: false,
-      get: kind.token === "get",
-      set: kind.token === "set",
-      children: $0,
+      // no async or generator, because getters and setters can't be
+      modifier: {
+        async: false,
+        generator: false,
+        get: kind.token === "get",
+        set: kind.token === "set",
+      },
+      children: [ kind, ws ],
     }
   # NOTE: Merged async and generator into MethodModifier
-  ( Async __ ) ( Star __ )? ->
+  ( Async __ )?:async ( Star __ )?:generator ->
+    if (!async) async = []
+    if (!generator) generator = []
     return {
-      type: "MethodModifier",
-      async: true,
-      get: false,
-      set: false,
-      generator: !!$2,
-      children: $0,
-    }
-  Star __ ->
-    return {
-      type: "MethodModifier",
-      async: false,
-      get: false,
-      set: false,
-      generator: true,
-      children: $0,
+      async,
+      generator,
+      modifier: {
+        async: !!async.length,
+        get: false,
+        set: false,
+        generator: !!generator.length,
+      },
+      children: [ async, generator ],
     }
 
 # TypeScript method signature
@@ -3905,8 +3865,8 @@ MethodSignature
     }
 
   # NOTE: If this node layout changes, be sure to update
-  # `convertMethodToFunction` and `[3]` in code below
-  MethodModifier?:modifier ClassElementName:name _? QuestionMark?:optional _? NonEmptyParameters:parameters ReturnTypeSuffix?:returnType ->
+  # `convertMethodToFunction`
+  MethodModifier:modifier ClassElementName:name _?:ws1 QuestionMark?:optional _?:ws2 NonEmptyParameters:parameters ReturnTypeSuffix?:returnType ->
     // Normalize name so we can check if it is `constructor`
     if (name.name) {
       name = name.name
@@ -3915,16 +3875,16 @@ MethodSignature
     }
 
     // TypeScript supports optional methods with bodies; remove ? from JS output
-    if (optional) $0[3] = optional = { ...optional, ts: true }
-
-    modifier = modifier || {}
+    if (optional) optional = { ...optional, ts: true }
 
     return {
       type: "MethodSignature",
-      children: $0,
+      children: [ ...modifier.children, name, ws1, optional, ws2, parameters, returnType ],
+      async: modifier.async,
+      generator: modifier.generator,
       name,
       optional,
-      modifier, // get/set/async/generator
+      modifier: modifier.modifier, // get/set/async/generator
       returnType,
       parameters,
     }
