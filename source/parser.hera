@@ -408,9 +408,8 @@ ArgumentsWithTrailingCallExpressions
 
 # Does not match in the empty case
 TrailingCallExpressions
-  # NOTE: Assert "." to not match "?" or "!" or string literal
-  # as a call expression on the following line
-  CallExpressionRest* IndentedTrailingCallExpressions? ->
+  # NOTE: Forbid nested implicit calls because trailing calls are dedented
+  ExplicitCallExpressionRest* IndentedTrailingCallExpressions? ->
     $1 = $1.flat()
     if (!$1.length && !$2) return $skip
     if (!$2) return $1
@@ -1445,6 +1444,27 @@ CallExpressionRest
       children: [optional, ...call.children],
       optional,
     }, ...argsWithTrailing.slice(1) ]
+
+ExplicitCallExpressionRest
+  MemberExpressionRest
+  # NOTE: TypeScript instantiation expressions
+  # https://devblogs.microsoft.com/typescript/announcing-typescript-4-7/#instantiation-expressions
+  # But x<y>z and x<y>0 is a comparison chain.
+  TypeArguments !( IdentifierName / NumericLiteral ) -> $1
+  # perf: assertion to exit early
+  /(?=['"`])/ ( TemplateLiteral / StringLiteral ):literal ->
+    if (literal.type === "StringLiteral") {
+      literal = "`" + literal.token.slice(1, -1).replace(/(`|\$\{)/g, "\\$1") + "`"
+    }
+    return literal
+  OptionalShorthand?:optional ExplicitArguments:call ->
+    if (!optional) return call
+
+    return {
+      ...call,
+      children: [optional, ...call.children],
+      optional,
+    }
 
 # NOTE: Added shorthand x?(3) -> x?.(3)
 OptionalShorthand
@@ -5472,30 +5492,37 @@ Debugger
 
 MaybeNestedNonPipelineExpression
   NestedBulletedArray
-  PushIndent ( Nested NonPipelineExpression )? PopIndent ->
-    if ($3) return $3
-    return $skip
+  NestedImplicitObjectLiteral
+  PushIndent ( Nested NonPipelineExpression )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
+    if (!expression) return $skip
+    if (!trailing) return expression
+    return [ expression, trailing ]
   NonPipelineExpression
 
 MaybeNestedPostfixedExpression
   NestedBulletedArray
-  PushIndent ( Nested PostfixedExpression )? PopIndent ->
-    if ($3) return $3
-    return $skip
+  NestedImplicitObjectLiteral
+  PushIndent ( Nested PostfixedExpression )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
+    if (!expression) return $skip
+    if (!trailing) return expression
+    return [ expression, trailing ]
   PostfixedExpression
+
+NestedPostfixedExpressionNoTrailing
+  NestedBulletedArray
+  NestedImplicitObjectLiteral
+  PushIndent ( Nested PostfixedExpression )?:expression PopIndent ->
+    if (!expression) return $skip
+    return expression
 
 MaybeNestedExpression
   NestedBulletedArray
-  PushIndent ( Nested Expression )? PopIndent ->
-    if ($3) return $3
-    return $skip
+  NestedImplicitObjectLiteral
+  PushIndent ( Nested Expression )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
+    if (!expression) return $skip
+    if (!trailing) return expression
+    return [ expression, trailing ]
   Expression
-
-NestedExpression
-  NestedBulletedArray
-  PushIndent ( Nested Expression )? PopIndent ->
-    if ($3) return $3
-    return $skip
 
 # MaybeNestedExpression but where expression needs to be output with
 # parentheses if indented, so that the expression starts on the same line.
@@ -5510,7 +5537,7 @@ MaybeParenNestedExpression
   &EOS ( ArrayLiteral / ObjectLiteral ) -> $2
   # Value after `return` needs to be wrapped in parentheses
   # if it starts on another line.
-  &EOS InsertSpace InsertOpenParen PushIndent ( Nested Expression ):exp PopIndent InsertNewline InsertIndent InsertCloseParen ->
+  &EOS InsertSpace InsertOpenParen PushIndent ( Nested Expression ):exp PopIndent AllowedTrailingCallExpressions? InsertNewline InsertIndent InsertCloseParen ->
     if (!exp) return $skip
     return $0.slice(1)
 
@@ -7196,9 +7223,9 @@ JSXAttributeName
 JSXAttributeInitializer
   # Outside CoffeeScript compatibility mode,
   # allow attribute value to be an indented expression
-  !CoffeeJSXEnabled Whitespace?:ws1 Equals:equals &( NonNewlineWhitespace* EOL ):ws2 InsertInlineOpenBrace:open PushIndent:indent PostfixedExpression?:expression PopIndent InsertCloseBrace:close ->
-    if (!expression) return $skip
-    return [ ws1, equals, ws2, open, indent, expression, close ]
+  # Forbid trailing expressions outside the indentation, as that should be JSX
+  !CoffeeJSXEnabled Whitespace?:ws1 Equals:equals &( NonNewlineWhitespace* EOL ) InsertInlineOpenBrace:open NestedPostfixedExpressionNoTrailing:expression InsertCloseBrace:close ->
+    return [ ws1, equals, open, trimFirstSpace(expression), close ]
   Whitespace? Equals Whitespace? JSXAttributeValue
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeValue
