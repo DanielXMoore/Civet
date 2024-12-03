@@ -80,6 +80,7 @@ For now, we have the following related options:
 | [`coffeeNot`](reference#coffeescript-operators) | `not` → `!`, disabling Civet extensions like [`is not`](reference#humanized-operators) |
 | [`coffeeOf`](reference#coffeescript-operators) | `a of b` → `a in b`, `a not of b` → `!(a in b)`, `a in b` → `b.indexOf(a) >= 0`, `a not in b` → `b.indexOf(a) < 0` |
 | [`coffeePrototype`](reference#coffeescript-operators) | `x::` -> `x.prototype`, `x::y` -> `x.prototype.y` |
+| [`coffeeRange`](reference#coffeescript-range-literals) | `[a..b]` increases or decreases depending on whether `a < b` or `a > b` |
 
 ## Environment Options
 

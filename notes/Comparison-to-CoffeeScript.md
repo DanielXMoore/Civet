@@ -40,6 +40,7 @@ Things Kept from CoffeeScript
 - `for ... when <condition>`
 - `for ... by <step>` when looping over range literals
 - Range literals `[0...10]`, `[a..b]`, `[x - 2 .. x + 2]`
+  (with some [changes](#things-changed-from-coffeescript))
 - Array slices `list[0...2]` → `list.slice(0, 2)`
 - Slice assignment `numbers[3..6] = [-3, -4, -5, -6]` → `numbers.splice(3, 4, ...[-3, -4, -5, -6])`
 - Implicit returns
@@ -69,6 +70,10 @@ Civet.
 - `for from` (use JS `for of`, `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for in` (use `for each of`, or `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
 - `for own of` (use `for own in`, or `"civet coffeeCompat"`, or `"civet coffeeForLoops"`)
+- Range literals `[a..b]` and `[a...b]` are increasing by default
+  (same as Civet and CoffeeScript slices): if `a > b`, then `[a..b]` is empty.
+  To get a decreasing range, use `[a..>=b]` or `[a..>b]`,
+  or use `"civet coffeeCompat"` or `"civet coffeeRange"`.
 - `a ? b` (use `a ?? b`, though it doesn't check for undeclared variables; `"civet coffeeCompat"`, or `"civet coffeeBinaryExistential"` enables `a ? b` at the cost of losing JS ternary operator)
 - `a of b` (use `a in b` as in JS, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)
 - `a not of b` (use `a not in b`, or `"civet coffeeCompat"`, or `"civet coffeeOf"`)

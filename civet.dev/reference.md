@@ -437,27 +437,32 @@ You can also omit the name of the rest component:
 <Playground>
 letters := ['a'..'f']
 numbers := [1..10]
-reversed := [10..1]
 indices := [0...array.length]
 </Playground>
 
 An infinite range `[x..]` is supported when [looping](#range-loop).
 
-Alternatively, `..` can explicitly exclude endpoints with `<` or `>`,
-or include endpoints with `<=` or `>=`. These also control loop direction,
-whereas `[a..b]` determines direction based on whether `a <= b`.
+Alternatively, `..` can exclude an endpoint with `<`,
+or explicitly include an endpoint with `<=` (or `≤`):
 
 <Playground>
 indices := [0..<array.length]
+strict := [a<..<b]
+// [a<=..≤b] same as [a..b]
 </Playground>
 
-<Playground>
-reversed := [array.length>..0]
-</Playground>
+You can construct a reverse (decreasing) range by specifying `>` (exclusive)
+or `>=` (inclusive) on at least one endpoint:
 
 <Playground>
-increasing := [a..<=b]
+reversed := [10..>=1]
+reversedIndices := [array.length>..0]
 </Playground>
+
+If you'd rather `[a..b]` and `[a...b]` construct an increasing or decreasing
+range depending on whether `a < b` or `a > b` (unless you specify an explicit
+direction via `<`/`>`/`<=`/`>=`), use the
+[`"civet coffeeRange"` directive](#coffeescript-ranges).
 
 ### Array/String Slicing
 
@@ -3281,6 +3286,15 @@ on
 off
 yes
 no
+</Playground>
+
+### CoffeeScript Ranges
+
+<Playground>
+"civet coffeeRange"
+[10..1]
+[a..b]
+[a...b]
 </Playground>
 
 ### CoffeeScript Comments
