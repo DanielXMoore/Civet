@@ -4,6 +4,15 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.8.17 (2024-12-02, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.16...v0.8.17), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.17))
+* `%%` operator types support `bigint` in addition to `number` [[#1620](https://github.com/DanielXMoore/Civet/pull/1620)]
+* Fix `new` expression at start of pipeline [[#1625](https://github.com/DanielXMoore/Civet/pull/1625)]
+* Fix implicit `async` and `*` in methods [[#1627](https://github.com/DanielXMoore/Civet/pull/1627)]
+* Fix object literals and bulleted lists in JSX indented attributes, fix indentation detection [[#1628](https://github.com/DanielXMoore/Civet/pull/1628)]
+* Fix placeholders in `for each` loops [[#1630](https://github.com/DanielXMoore/Civet/pull/1630)]
+* Fix implicit objects in indented arguments after other arguments [[#1629](https://github.com/DanielXMoore/Civet/pull/1629)]
+* Fix mixing access modifiers (e.g. `readonly`) with `@` arguments in constructors [[#1631](https://github.com/DanielXMoore/Civet/pull/1631)]
+
 ## 0.8.16 (2024-11-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.15...v0.8.16), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.16))
 * `for join` reduction to concatenate strings [[#1604](https://github.com/DanielXMoore/Civet/pull/1604)]
 * Numeric object keys in pattern matching [[#1608](https://github.com/DanielXMoore/Civet/pull/1608)]
