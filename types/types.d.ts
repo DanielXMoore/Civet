@@ -19,6 +19,7 @@ declare module "@danielx/civet" {
     coffeeNot: boolean
     coffeeOf: boolean
     coffeePrototype: boolean
+    coffeeRange: boolean
     defaultElement: string
     globals: string[]
     implicitReturns: boolean
