@@ -33,7 +33,6 @@ Things Kept from CoffeeScript
 - Chained comparisons: `a < b < c` → `a < b && b < c`
 - Postfix `if/unless/while/until/for`
 - Block Strings `"""` / `'''`
-  - `#{exp}` interpolation in `"""` strings
 - `when` inside `switch` automatically breaks
 - Multiple `,` separated `case`/`when` expressions
 - `else` → `default` in `switch`
@@ -109,7 +108,7 @@ Things Changed from CoffeeScript
 - Generators don't implicitly return the last value (as this is rarely useful)
 - Backtick embedded JS has been replaced with JS template literals.
 - No longer allowing multiple postfix `if/unless` on the same line (use `&&` or `and` to combine conditions).
-- `#{}` interpolation in `""` strings only when `"civet coffeeCompat"` or `"civet coffeeInterpolation"`
+- `#{}` interpolation in `"..."` and `"""..."""` strings only when `"civet coffeeCompat"` or `"civet coffeeInterpolation"`
 - Expanded chained comparisons to work on more operators `a in b instanceof C` → `a in b && b instanceof C`
 - Postfix iteration/conditionals always wrap the statement [#5431](https://github.com/jashkenas/coffeescript/issues/5431):
   `try x() if y` → `if (y) try x()`
@@ -117,12 +116,12 @@ Things Changed from CoffeeScript
   In Coffee `(x)` → `x;` but in Civet `(x)` → `(x)`. Spacing and comments are also preserved as much as possible.
 - Heregex / re.X
   - Stay closer to the [Python spec](https://docs.python.org/3/library/re.html#re.X)
-  - Allows both kinds of substitutions `#{..}`, `${..}`.
-  - Also allows both kinds of single line comments `//`, `#`.
+  - Allows JS-style substitutions `${..}`. For Coffee-style substitutions `#{..}`, use `"civet coffeeCompat"` or `"civet coffeeInterpolation"`.
+  - Allows JS-style comments `//` unless `"civet coffeeDiv"` is set (including by `"civet coffeeCompat"`). For Coffee-style comments `#`, use `"civet coffeeCompat"` or `"civet coffeeInterpolation"`.
+  - With `coffeeComment` on, `#` is always the start of a comment outside of character classes regardless of leading space (CoffeeScript treats
+  `\s+#` as comment starts inside and outside of character classes).
   - Keeps non-newline whitespace inside of character classes.
   - Doesn't require escaping `#` after space inside of character classes.
-  - `#` is always the start of a comment outside of character classes regardless of leading space (CoffeeScript treats
-  `\s+#` as comment starts inside and outside of character classes).
   - Might later add a compat flag to get more CoffeeScript compatibility.
   - Might also later add a compat flag to only use ES interpolations and comments inside Heregexes.
 - JSX children need to be properly indented
@@ -167,15 +166,17 @@ Civet provides a compatibility prologue directive that aims to be 97+% compatibl
 | coffeeBooleans      | `yes`, `no`, `on`, `off` |
 | coffeeClasses       | CoffeeScript-style `class` methods via `->` functions |
 | coffeeComment       | `# single line comments` |
+| coffeeDiv           | `x // y` integer division instead of JS comment |
 | coffeeDo            | `do ->`, disables ES6 do/while |
 | coffeeEq            | `==` → `===`, `!=` → `!==` |
 | coffeeForLoops      | for in, of, from loops behave like they do in CoffeeScript |
-| coffeeInterpolation | `"a string with #{myVar}"` |
+| coffeeInterpolation | `"a string with #{myVar}"`, `///regex #{myVar}///` |
 | coffeeIsnt          | `isnt` → `!==` |
 | coffeeLineContinuation | `\` at end of line continues to next line |
 | coffeeNot           | `not` → `!`, disabling Civet extensions like `is not` |
 | coffeeOf            | `a of b` → `a in b`, `a not of b` → `!(a in b)`, `a in b` → `b.indexOf(a) >= 0`, `a not in b` → `b.indexOf(a) < 0` |
 | coffeePrototype     | `x::` -> `x.prototype`, `x::y` -> `x.prototype.y` |
+| coffeeRange         | `[a..b]` increases or decreases depending on whether `a < b` or `a > b` |
 
 You can use these with `"civet coffeeCompat"` to opt in to all or use them bit by bit with `"civet coffeeComment coffeeEq coffeeInterpolation"`.
 Another possibility is to slowly remove them to provide a way to migrate files a little at a time `"civet coffeeCompat -coffeeBooleans -coffeeComment -coffeeEq"`.
