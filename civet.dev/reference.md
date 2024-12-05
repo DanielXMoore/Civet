@@ -531,7 +531,7 @@ console.log '''
 <Playground>
 console.log """
   <div>
-    Civet #{version}
+    Civet
   </div>
 """
 </Playground>
@@ -552,7 +552,8 @@ first slash is not immediately followed by a space.  Instead of `/ x /`
 write `/\ x /` or `/[ ]x /` (or more escaped forms like `/[ ]x[ ]/`).
 
 In addition, you can use `///...///` to write multi-line regular expressions
-that ignore top-level whitespace and single-line comments:
+that ignore top-level whitespace and single-line comments, and interpolates
+`${expression}` like in template literals:
 
 <Playground>
 phoneNumber := ///
@@ -562,6 +563,10 @@ phoneNumber := ///
   (?=\d) [\d-. ]+ \d    // start and end with digit
   $
 ///
+</Playground>
+
+<Playground>
+r := /// ${prefix} \s+ ${suffix} ///
 </Playground>
 
 :::info
@@ -3231,11 +3236,19 @@ do (url) ->
   await fetch url
 </Playground>
 
-### Double-Quoted Strings
+### CoffeeScript Interpolation
 
 <Playground>
 "civet coffeeInterpolation"
 console.log "Hello #{name}!"
+console.log """
+  Goodbye #{name}!
+"""
+</Playground>
+
+<Playground>
+"civet coffeeInterpolation"
+r = /// #{prefix} \s+ #{suffix} ///
 </Playground>
 
 ### CoffeeScript Operators
@@ -3306,6 +3319,13 @@ you can enable `#` for single-line comments:
 <Playground>
 "civet coffeeComment"
 # one-line comment
+</Playground>
+
+<Playground>
+"civet coffeeComment"
+r = ///
+  \s+ # whitespace
+///
 </Playground>
 
 [`###...###` block comments](#block-comments) are always available.

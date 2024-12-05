@@ -69,11 +69,11 @@ For now, we have the following related options:
 | [`coffeeBooleans`](reference#coffeescript-booleans) | `yes`, `no`, `on`, `off` |
 | [`coffeeClasses`](reference#coffeescript-classes) | CoffeeScript-style `class` methods via `->` functions |
 | [`coffeeComment`](reference#coffeescript-comments) | `# single line comments` |
-| [`coffeeDiv`](reference#coffeescript-comments) | `x // y` integer division |
+| [`coffeeDiv`](reference#coffeescript-comments) | `x // y` integer division instead of JS comment |
 | [`coffeeDo`](reference#coffeescript-do) | `do ->`; disables [ES6 `do...while` loops](reference#do-while-until-loop) and [Civet `do` blocks](reference#do-blocks) |
 | [`coffeeEq`](reference#coffeescript-operators) | `==` → `===`, `!=` → `!==` |
 | [`coffeeForLoops`](reference#coffeescript-for-loops) | `for in`/`of`/`from` loops behave like they do in CoffeeScript (like Civet's `for each of`/`in`/`of` respectively) |
-| [`coffeeInterpolation`](reference#double-quoted-strings) | `"a string with #{myVar}"` |
+| [`coffeeInterpolation`](reference#double-quoted-strings) | `"a string with #{myVar}"`, `///regex #{myVar}///` |
 | [`coffeeIsnt`](reference#coffeescript-operators) | `isnt` → `!==` |
 | [`coffeeJSX`](reference#indentation) | JSX children ignore indentation; tags need to be explicitly closed |
 | [`coffeeLineContinuation`](reference#coffeescript-line-continuations) | `\` at end of line continues to next line |
