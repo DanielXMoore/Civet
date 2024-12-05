@@ -4,6 +4,12 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.9.0 (2024-12-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.17...v0.9.0), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.0))
+* Range literal `[a..b]` defaults to increasing; adaptive behavior behind `"civet coffeeRange"` directive [[#1632](https://github.com/DanielXMoore/Civet/pull/1632)]
+  * BREAKING CHANGE: `[a..b]` and `[a...b]` no longer creates a decreasing range without an explicit `>` or `>=`; add one where needed.
+* `"""` interpolations require `coffeeInterpolation`, `///` respects `coffeeInterpolation`, `coffeeComment`, `coffeeDiv` [[#1635](https://github.com/DanielXMoore/Civet/pull/1635)]
+  * BREAKING CHANGE: `"""` and `///` no longer support `#{expr}` interpolation unless you set `coffeeInterpolation`; `///` no longer supports `#` comments without `coffeeComment`; `///` no longer supports `//` comments with `coffeeDiv`
+
 ## 0.8.17 (2024-12-02, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.16...v0.8.17), [commits](https://github.com/DanielXMoore/Civet/commits/v0.8.17))
 * `%%` operator types support `bigint` in addition to `number` [[#1620](https://github.com/DanielXMoore/Civet/pull/1620)]
 * Fix `new` expression at start of pipeline [[#1625](https://github.com/DanielXMoore/Civet/pull/1625)]
