@@ -358,7 +358,7 @@ export function logTiming<R, A extends unknown[]>(name: string, fn: (...args: A)
     const start = performance.now(),
       result = fn(...args),
       end = performance.now();
-    console.log(`${name.padStart(32)}${(end - start).toFixed(2).padStart(8)}ms`)
+    // console.log(`${name.padStart(32)}${(end - start).toFixed(2).padStart(8)}ms`)
 
     return result;
   }

@@ -232,7 +232,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
       const extension = getExtensionFromPath(path)
       const transpiler = transpilers.get(extension)
 
-      // console.log("addOrUpdateDocument", path, extension, transpiler)
+      // logger.log("addOrUpdateDocument", path, extension, transpiler)
 
       if (transpiler) {
         const { target } = transpiler
@@ -300,7 +300,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
       return Array.from(scriptFileNames)
     },
     writeFile(fileName: string, content: string) {
-      console.log("write", fileName, content)
+      // console.log("write", fileName, content)
     }
   });
 
@@ -445,7 +445,11 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
 }
 
 function TSService(projectURL = "./") {
-  const logger = console
+  const logger = {
+    info: (...args: unknown[]) => void 0,
+    error: (...args: unknown[]) => void 0,
+    warn: (...args: unknown[]) => void 0
+  }
 
   logger.info("CIVET VSCODE PLUGIN", version)
   logger.info("TYPESCRIPT", typescriptVersion)
@@ -495,27 +499,27 @@ function TSService(projectURL = "./") {
   const civetPath = "@danielx/civet"
   try {
     projectRequire(`${civetPath}/lsp/package.json`)
-    console.info("USING DEVELOPMENT VERSION OF CIVET -- BE SURE TO yarn build")
+    logger.info("USING DEVELOPMENT VERSION OF CIVET -- BE SURE TO yarn build")
   } catch (e) {}
   try {
     Civet = projectRequire(civetPath)
     CivetConfig = projectRequire(`${civetPath}/config`)
     const CivetVersion = projectRequire(`${civetPath}/package.json`).version
-    console.info(`LOADED PROJECT CIVET ${CivetVersion}: ${path.join(projectURL, civetPath)} \n\n`)
+    logger.info(`LOADED PROJECT CIVET ${CivetVersion}: ${path.join(projectURL, civetPath)} \n\n`)
   } catch (e) {
-    console.info("USING BUNDLED CIVET")
+    logger.info("USING BUNDLED CIVET")
   }
 
   let civetConfig: CompileOptions = {}
   CivetConfig.findConfig(projectPath).then(async (configPath) => {
     if (configPath) {
-      console.info("Loading Civet config @", configPath)
+      logger.info("Loading Civet config @", configPath)
       const config = await CivetConfig.loadConfig(configPath)
-      console.info("Found civet config!")
+      logger.info("Found civet config!")
       civetConfig = config
-    } else console.info("No Civet config found")
+    } else logger.info("No Civet config found")
   }).catch((e: unknown) => {
-    console.error("Error loading Civet config", e)
+    logger.error("Error loading Civet config", e)
   })
 
   return Object.assign({}, service, {
@@ -534,7 +538,7 @@ function TSService(projectURL = "./") {
         .map(file => pathToFileURL(file).toString())
 
       for (const filePath of pluginFiles) {
-        console.info("Loading plugin", filePath)
+        logger.info("Loading plugin", filePath)
         await loadPlugin(filePath)
       }
     }
@@ -543,13 +547,13 @@ function TSService(projectURL = "./") {
   async function loadPlugin(path: string) {
     await import(path)
       .then(({ default: plugin }: { default: Plugin }) => {
-        console.info("Loaded plugin", plugin)
+        logger.info("Loaded plugin", plugin)
         plugin.transpilers?.forEach((transpiler: Transpiler) => {
           transpilers.set(transpiler.extension, transpiler)
         })
       })
       .catch(e => {
-        console.error("Error loading plugin", path, e)
+        logger.error("Error loading plugin", path, e)
       })
   }
 
