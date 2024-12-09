@@ -2102,7 +2102,9 @@ while item?
 
 ::: info
 Labels have the colon on the left to avoid conflict with implicit object
-literals.  The colons are optional in `break` and `continue`.
+literals.  The colons are optional in `break` and `continue`,
+except for Civet reserved words (e.g. `and`) where a colon is required.
+JavaScript reserved words are invalid as labels.
 :::
 
 ### Controlling Loop Value
