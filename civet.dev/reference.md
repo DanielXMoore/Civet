@@ -2107,6 +2107,21 @@ except for Civet reserved words (e.g. `and`) where a colon is required.
 JavaScript reserved words are invalid as labels.
 :::
 
+Iterations also get implicit labels if you refer to them by type,
+via `break/continue for/while/until/loop/do`:
+
+<Playground>
+loop
+  while list = next()
+    for item of list
+      if item is 'skip'
+        continue for
+      else if item is 'next'
+        continue while
+      else if item is 'done'
+        break loop
+</Playground>
+
 ### Controlling Loop Value
 
 <Playground>

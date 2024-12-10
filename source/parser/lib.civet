@@ -13,6 +13,7 @@ import type {
   ASTNodeObject
   ASTRef
   BlockStatement
+  BreakStatement
   Call
   CallExpression
   CaseBlock
@@ -20,6 +21,7 @@ import type {
   CatchClause
   ComptimeStatement
   Condition
+  ContinueStatement
   Declaration
   DoStatement
   ElseClause
@@ -28,6 +30,8 @@ import type {
   IfStatement
   Initializer
   IterationStatement
+  Label
+  LabelledStatement
   MemberExpression
   MethodDefinition
   NormalCatchParameter
@@ -41,7 +45,6 @@ import type {
   TypeArguments
   TypeNode
   TypeSuffix
-  TypeUnary
   WSNode
 } from ./types.civet
 
@@ -1413,6 +1416,51 @@ function processFinallyClauses(statements: StatementTuple[]): void
     ]
     block.expressions[>=index] = [tuple]
 
+// Handle `break/continue loop/while/for/do` to add necessary labels
+// See also `processBreakContinueWith` which handles `break/continue with`
+function processBreaksContinues(statements: StatementTuple[]): void
+  for control of gatherRecursive(statements,
+    ($: ASTNodeObject): $ is BreakStatement | ContinueStatement => Boolean
+      ($.type is "BreakStatement" or $.type is "ContinueStatement") and
+      $.label?.special
+  )
+    label := control.label!
+    special := label.special!
+
+    // Find nearest containing loop/while/for/do iteration statement
+    { ancestor } := findAncestor control,
+      ($: ASTNodeObject): $ is IterationStatement | ForStatement =>
+        special is "for" ? $.type is "ForStatement" : (and)
+          $.type is "IterationStatement"
+          $.subtype.startsWith special
+          // in particular, special = "do" matches "do-while" and "do-until"
+      isFunction // don't go outside the current function
+    unless ancestor?
+      control.children.push
+        type: "Error"
+        message: `No matching '${special}' iteration found above '${control.type.toLowerCase().replace "statement", ""} ${special}'`
+      continue
+    { parent } .= ancestor
+
+    // Wrap loop with label if there isn't already one
+    unless parent?.type is "LabelledStatement"
+      ref := makeRef `_${special.replace "-", "_"}`
+      label: Label := makeNode
+        type: "Label"
+        name: ref
+        children: [ ref, ":" ]
+      replaceNode ancestor,
+        makeNode {}
+          type: "LabelledStatement"
+          label
+          statement: ancestor
+          children: [ label, " ", ancestor ]
+        parent
+      parent = ancestor.parent as LabelledStatement
+
+    label.children.push label.name = parent.label.name
+    delete label.special
+
 function processProgram(root: BlockStatement): void
   state := getState()
   config := getConfig()
@@ -1450,6 +1498,7 @@ function processProgram(root: BlockStatement): void
   processPatternMatching(statements)
   processIterationExpressions(statements)
   processFinallyClauses(statements)
+  processBreaksContinues(statements)
 
   // Hoist hoistDec attributes to actual declarations.
   // NOTE: This should come after iteration expressions get processed
