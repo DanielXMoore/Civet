@@ -4,6 +4,13 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.9.1 (2024-12-12, [diff](https://github.com/DanielXMoore/Civet/compare/v0.9.0...v0.9.1), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.1))
+* Fat pipe `||>` uses semicolons at statement level [[#1636](https://github.com/DanielXMoore/Civet/pull/1636)]
+* Fix parser crash on blocks inside `switch` [[#1640](https://github.com/DanielXMoore/Civet/pull/1640)]
+* `:label` supports Civet reserved words (but not JS reserved words) [[#1641](https://github.com/DanielXMoore/Civet/pull/1641)]
+* `break/continue loop/while/until/for/do` refer to anonymous containing iteration [[#1642](https://github.com/DanielXMoore/Civet/pull/1642)]
+* Update unplugin to v2.1.0 [[#1643](https://github.com/DanielXMoore/Civet/pull/1643)]
+
 ## 0.9.0 (2024-12-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.8.17...v0.9.0), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.0))
 * Range literal `[a..b]` defaults to increasing; adaptive behavior behind `"civet coffeeRange"` directive [[#1632](https://github.com/DanielXMoore/Civet/pull/1632)]
   * BREAKING CHANGE: `[a..b]` and `[a...b]` no longer creates a decreasing range without an explicit `>` or `>=`; add one where needed.
