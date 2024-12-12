@@ -13,9 +13,9 @@ export default async function vitePressConfig() {
   const highlighter = await getHighlighter();
   return defineConfig({
     lang: 'en-US',
-    title: 'Civet - The Modern Way to Write TypeScript',
+    title: 'Civet - A Programming Language for the New Millennium',
     titleTemplate: 'Civet',
-    description: 'Concise Syntax and Faster Coding with Civet',
+    description: 'Code More with Less in a TypeScript Superset',
     lastUpdated: true,
     cleanUrls: 'with-subfolders',
     appearance: 'dark',
