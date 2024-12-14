@@ -8,6 +8,7 @@ import type { BlockStatement } from ./parser/types.civet
 export type { ASTError, BlockStatement } from ./parser/types.civet
 
 import StateCache from "./state-cache.civet"
+import { WorkerPool } from "./worker-pool.civet"
 
 export class ParseErrors extends Error
   name = "ParseErrors"
@@ -90,13 +91,30 @@ export type CompilerOptions
     comptime?: boolean
     globals?: string[]
     symbols?: string[]
-  // Specifying an empty array will prevent ParseErrors from being thrown
+  /** Specifying an empty array will prevent ParseErrors from being thrown */
   errors?: ParseError[]
+  /** Number of parallel threads to compile with (Node only) */
+  threads?: number
 
 type CompileOutput<T extends CompilerOptions> =
   T extends { ast: true } ? BlockStatement : T extends { sourceMap: true } ? { code: string, sourceMap: ReturnType<typeof SourceMap> } : string
 
+let workerPool: WorkerPool?
+
 export function compile<const T extends CompilerOptions>(src: string, options?: T): T extends { sync: true } ? CompileOutput<T> : Promise<CompileOutput<T>>
+  // `CIVET_THREADS=0` (including in browser build) forces no threads
+  unless process.env.CIVET_THREADS == 0
+    threads := parseInt options.threads ?? process.env.CIVET_THREADS, 10
+    if threads is 0 // explicit 0 terminates existing threads
+      workerPool?.setThreads 0
+    else if not isNaN(threads) and threads > 0 and not options.sync
+      if workerPool?
+        workerPool.setThreads threads
+      else
+        workerPool = new WorkerPool threads
+      // Prevent worker from recursively spawning its own worker
+      return workerPool.run 'compile', src, {...options, threads: 0}
+
   unless options
     options = {} as T
   else
