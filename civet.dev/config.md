@@ -209,3 +209,10 @@ civet --config custom-config.civet ...
 # Disable config files
 civet --no-config ...
 ```
+
+## Compiler Options
+
+In addition to the "parse options" described above, there are a few
+top-level options (above `parseOptions`):
+
+- `threads`: Use specified number of Node worker threads to compile Civet files faster. Default: `0` (don't use threads), or `CIVET_THREADS` environment variable if set.
