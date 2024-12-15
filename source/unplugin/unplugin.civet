@@ -45,6 +45,11 @@ export type PluginOptions
   config?: string? | null
   parseOptions?: ParseOptions
 
+type CacheEntry
+  mtime: number
+  result?: TransformResult
+  promise?: Promise<void>
+
 civetExtension := /\.civet$/
 isCivetTranspiled := /(\.civet)(\.[jt]sx)([?#].*)?$/
 postfixRE := /[?#].*$/s
@@ -131,7 +136,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         : (f) => f.toLowerCase()
     }
 
-  const cache = options.cache ? new Map<string, {mtime: number, result: TransformResult}>() : undefined;
+  cache := options.cache ? new Map<string, CacheEntry> : undefined
 
   plugin: ReturnType<typeof rawPlugin> & { __virtualModulePrefix?: string } := {
     name: 'unplugin-civet'
@@ -423,14 +428,19 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
 
       filename := path.resolve rootDir, basename
 
-      let mtime
-      if cache
+      let mtime: number?, cached: CacheEntry?, resolve: =>?
+      if cache?
         mtime = fs.promises.stat(filename) |> await |> .mtimeMs
-        const cached = cache?.get filename
+        cached = cache?.get filename
         if cached and cached.mtime is mtime
-          return cached.result
+          // If the file is currently being compiled, wait for it to finish
+          await cached.promise if cached.promise
+          return cached.result if cached.result
+        // We're the first to compile this file with this mtime
+        promise := new Promise<void> (r): void => resolve = r
+        cache.set filename, cached = {mtime, promise}
+      finally resolve?()
 
-      rawCivetSource := await fs.promises.readFile filename, 'utf-8'
       this.addWatchFile filename
 
       let compiled: string
@@ -444,6 +454,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         if civetOptions.errors#
           throw new civet.ParseErrors civetOptions.errors
 
+      rawCivetSource := await fs.promises.readFile filename, 'utf-8'
       ast := await civet.compile rawCivetSource, {
         ...civetOptions
         ast: true
@@ -533,7 +544,9 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       if options.transformOutput
         transformed = await options.transformOutput transformed.code, id
 
-      cache?.set filename, {mtime!, result: transformed}
+      if cached?
+        cached.result = transformed
+        delete cached.promise
 
       return transformed
 
