@@ -1,4 +1,5 @@
 import type {
+  ASTError
   ASTLeaf
   ASTNode
   ASTNodeObject
@@ -10,6 +11,8 @@ import type {
   Declaration
   ForStatement
   FunctionNode
+  FunctionParameter
+  FunctionRestParameter
   IterationExpression
   IterationFamily
   IterationStatement
@@ -18,11 +21,14 @@ import type {
   ReturnTypeAnnotation
   StatementTuple
   SwitchStatement
+  ThisType
   TypeArgument
   TypeArguments
   TypeIdentifier
   TypeLiteral
   TypeNode
+  TypeParameters
+  TypeSuffix
   Whitespace
 } from ./types.civet
 
@@ -812,6 +818,117 @@ function iterationDefaultBody(statement: IterationStatement | ForStatement): boo
 
   return false
 
+function preprocessParams(tp: TypeParameters?, open: ASTNode, params: FunctionParameter[], close: ASTNode)
+  // Categorize arguments to put any ThisType in front, and split remaining
+  // arguments into before and after the rest parameter.
+  let tt, before: (FunctionParameter | ASTError)[] = [], rest: FunctionRestParameter?, after: (FunctionParameter | ASTError)[] = []
+  function append(p: FunctionParameter | ASTError): void
+    (rest ? after : before).push(p)
+  for each param of params
+    switch param.type
+      when "ThisType"
+        if tt
+          append
+            type: "Error"
+            message: "Only one typed this parameter is allowed"
+          append param
+        else
+          tt = trimFirstSpace(param) as ThisType
+          if before# or rest // moving ThisType to front
+            delim .= tt.children.-1
+            delim = delim.-1 if Array.isArray delim
+            unless delim is like {token: ","}
+              tt = {
+                ...tt
+                children: [...tt.children, ", "]
+              }
+      when "FunctionRestParameter"
+        if rest
+          append
+            type: "Error"
+            message: "Only one rest parameter is allowed"
+          append param
+        else
+          rest = param
+      else
+        append param
+
+  names := before.flatMap .names
+  if rest
+    restIdentifier := rest.binding.ref or rest.binding
+    names.push ...rest.names or []
+
+    let blockPrefix
+    if after#
+      blockPrefix = {
+        children: [
+          "[", trimFirstSpace(after), "] = ", restIdentifier
+          ".splice(-", after#.toString(), ")"
+        ]
+        names: after.flatMap .names
+      }
+      // Correct type of new rest parameter to tuple with `after` parameters
+      if rest.typeSuffix
+        // Handle imprecise typing of `splice`
+        blockPrefix.children.push
+          ts: true
+          children: [" as any"]
+        function optionalType(typeSuffix: TypeSuffix?, fallback: ASTNode): ASTNode
+          t := typeSuffix?.t ?? fallback
+          if typeSuffix?.optional
+            return
+              . t
+              . type: "Error"
+                message: "Optional parameter not allowed in/after rest parameter"
+          t
+        oldSuffix := rest.typeSuffix
+        colon := oldSuffix.colon ?? ": "
+        t :=
+          . "["
+          . "...", optionalType oldSuffix, "unknown[]"
+          . ...after.flatMap (p) =>
+              . ",", optionalType (p as Parameter).typeSuffix, " unknown"
+          . "]"
+        typeSuffix: TypeSuffix := {}
+          type: "TypeSuffix"
+          ts: true
+          colon
+          t
+          children:
+            . ...oldSuffix.children.filter (and) // spaces and colon
+                & is not oldSuffix.optional
+                & is not oldSuffix.t
+            . colon unless oldSuffix.colon
+            . t
+        rest = {
+          ...rest
+          typeSuffix
+          children: rest.children.map & is rest!.typeSuffix ? typeSuffix : &
+        }
+
+    return {
+      type: "Parameters",
+      children: [
+        tp,
+        open,
+        tt,
+        ...before,
+        // Remove delimiter
+        {...rest, children: rest.children.slice(0, -1)},
+        close,
+      ],
+      tp,
+      names,
+      blockPrefix,
+    }
+
+  return {
+    type: "Parameters",
+    children: [tp, open, tt, ...before, close],
+    names,
+    tp,
+  }
+
 function processParams(f): void
   { type, parameters, block } := f
   isConstructor := f.name is 'constructor'
@@ -1125,6 +1242,7 @@ export {
   assignResults
   insertReturn
   makeAmpersandFunction
+  preprocessParams
   processCoffeeDo
   processFunctions
   processIterationExpressions
