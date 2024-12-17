@@ -1,4 +1,5 @@
 import type {
+  AmpersandBlockBody
   ASTError
   ASTLeaf
   ASTNode
@@ -27,7 +28,6 @@ import type {
   TypeIdentifier
   TypeLiteral
   TypeNode
-  TypeParameters
   TypeSuffix
   Whitespace
 } from ./types.civet
@@ -818,13 +818,21 @@ function iterationDefaultBody(statement: IterationStatement | ForStatement): boo
 
   return false
 
-function preprocessParams(tp: TypeParameters?, open: ASTNode, params: FunctionParameter[], close: ASTNode)
+function processParams(f): void
+  { type, parameters, block } := f
+  isConstructor := f.name is 'constructor'
+
+  // Check for singleton TypeParameters <Foo> before arrow function,
+  // which TypeScript (in tsx mode) treats like JSX; replace with <Foo,>
+  if type is "ArrowFunction" and parameters and parameters.tp and parameters.tp.parameters# is 1
+    parameters.tp.parameters.push(",")
+
   // Categorize arguments to put any ThisType in front, and split remaining
   // arguments into before and after the rest parameter.
   let tt, before: (FunctionParameter | ASTError)[] = [], rest: FunctionRestParameter?, after: (FunctionParameter | ASTError)[] = []
   function append(p: FunctionParameter | ASTError): void
     (rest ? after : before).push(p)
-  for each param of params
+  for each param of parameters.parameters
     switch param.type
       when "ThisType"
         if tt
@@ -853,14 +861,16 @@ function preprocessParams(tp: TypeParameters?, open: ASTNode, params: FunctionPa
       else
         append param
 
-  names := before.flatMap .names
+  parameters.names = before.flatMap .names
+  parameters.parameters[..] = []
+  parameters.parameters.push tt if tt
+  parameters.parameters.push ...before
   if rest
     restIdentifier := rest.binding.ref or rest.binding
-    names.push ...rest.names or []
+    parameters.names.push ...rest.names or []
 
-    let blockPrefix
     if after#
-      blockPrefix = {
+      parameters.blockPrefix = {
         children: [
           "[", trimFirstSpace(after), "] = ", restIdentifier
           ".splice(-", after#.toString(), ")"
@@ -870,7 +880,7 @@ function preprocessParams(tp: TypeParameters?, open: ASTNode, params: FunctionPa
       // Correct type of new rest parameter to tuple with `after` parameters
       if rest.typeSuffix
         // Handle imprecise typing of `splice`
-        blockPrefix.children.push
+        parameters.blockPrefix.children.push
           ts: true
           children: [" as any"]
         function optionalType(typeSuffix: TypeSuffix?, fallback: ASTNode): ASTNode
@@ -906,37 +916,8 @@ function preprocessParams(tp: TypeParameters?, open: ASTNode, params: FunctionPa
           children: rest.children.map & is rest!.typeSuffix ? typeSuffix : &
         }
 
-    return {
-      type: "Parameters",
-      children: [
-        tp,
-        open,
-        tt,
-        ...before,
-        // Remove delimiter
-        {...rest, children: rest.children.slice(0, -1)},
-        close,
-      ],
-      tp,
-      names,
-      blockPrefix,
-    }
-
-  return {
-    type: "Parameters",
-    children: [tp, open, tt, ...before, close],
-    names,
-    tp,
-  }
-
-function processParams(f): void
-  { type, parameters, block } := f
-  isConstructor := f.name is 'constructor'
-
-  // Check for singleton TypeParameters <Foo> before arrow function,
-  // which TypeScript (in tsx mode) treats like JSX; replace with <Foo,>
-  if type is "ArrowFunction" and parameters and parameters.tp and parameters.tp.parameters# is 1
-    parameters.tp.parameters.push(",")
+    rest.children.pop() // remove delimiter
+    parameters.parameters.push rest
 
   return unless block
   { expressions } := block
@@ -1149,10 +1130,11 @@ function processCoffeeDo(ws: Whitespace, expression: ASTNode): ASTNode
   ws = trimFirstSpace(ws) as Whitespace
   args: ASTNode[] := []
   if expression is like {type: "ArrowFunction"}, {type: "FunctionExpression"}
-    { parameters } := expression
+    { parameters } .= expression
+    parameterList := parameters.parameters
     // Move initializers to arguments
-    newParameters := { ...parameters, children:
-      for each let parameter of parameters.children
+    newParameterList :=
+      for each let parameter of parameterList
         if parameter is like {type: "Parameter"}
           if initializer := parameter.initializer
             args.push initializer.expression, parameter.delim
@@ -1165,6 +1147,10 @@ function processCoffeeDo(ws: Whitespace, expression: ASTNode): ASTNode
             args.push parameter.children.filter
               (is not (parameter as Parameter).typeSuffix)
         parameter
+    newParameters := {
+      ...parameters
+      parameters: newParameterList
+      children: parameters.children.map & is parameterList ? newParameterList : &
     }
     expression = {
       ...expression
@@ -1191,9 +1177,13 @@ function makeAmpersandFunction(rhs: AmpersandBlockBody): ASTNode
   if startsWithPredicate(body, .type is "ObjectExpression")
     body = makeLeftHandSideExpression body
 
+  parameterList := [
+    typeSuffix ? [ ref, typeSuffix ] as tuple : ref
+  ]
   parameters := makeNode {
     type: "Parameters"
-    children: typeSuffix ? ["(", ref, typeSuffix, ")"] : [ref]
+    children: typeSuffix ? ["(", parameterList, ")"] : [parameterList]
+    parameters: parameterList
     names: []
   } as ParametersNode
   expressions := [[' ', body]] satisfies StatementTuple[]
@@ -1242,7 +1232,6 @@ export {
   assignResults
   insertReturn
   makeAmpersandFunction
-  preprocessParams
   processCoffeeDo
   processFunctions
   processIterationExpressions
