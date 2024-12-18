@@ -213,6 +213,7 @@ interface PluginOptions {
 - `cache`: Cache compilation results based on file's mtime.
   Useful when bundling the same source files for both CommonJS and ESM,
   or for longer running processes like `watch` or `serve`.  Default: `true`.
+  Be sure to re-use plugins instead of calling the plugin generator repeatedly.
 - `threads`: Use specified number of Node worker threads to
   compile Civet files faster. Default: `0` (don't use threads), or `CIVET_THREADS` environment variable if set.
 - `config`: Civet config filename to load, or `null` to avoid looking for the
