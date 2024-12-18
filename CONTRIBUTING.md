@@ -43,6 +43,12 @@ yarn
 yarn build
 ```
 
+To use multiple cores while building:
+
+```sh
+CIVET_THREADS=4 yarn build
+```
+
 ## Testing
 
 You can run all tests via
