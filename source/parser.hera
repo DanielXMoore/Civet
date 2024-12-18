@@ -792,6 +792,7 @@ ArrowFunction
         modifier: {
           async: !!async.length,
         },
+        parameters,
         returnType,
       },
       parameters,
@@ -1811,10 +1812,12 @@ AfterReturnShorthand
 Parameters
   NonEmptyParameters
   TypeParameters?:tp Loc:p ->
+    const parameters = []
     return {
       type: "Parameters",
-      children: [tp, {$loc: p.$loc, token: "()"}],
+      children: [tp, {$loc: p.$loc, token: "("}, parameters, ")"],
       tp,
+      parameters,
       names: [],
       implicit: true,
     }
@@ -1833,95 +1836,21 @@ ShortArrowParameters
 
 ArrowParameters
   ShortArrowParameters ->
+    const parameters = [ $1 ]
     return {
       type: "Parameters",
-      children: ["(", $1, ")"],
-      names: $1.names,
+      children: ["(", parameters, ")"],
+      parameters,
     }
   Parameters
 
 NonEmptyParameters
-  TypeParameters?:tp OpenParen:open ParameterList:params ( __ CloseParen ):close ->
-    // Categorize arguments to put any ThisType in front, and split remaining
-    // arguments into before and after the rest parameter.
-    let tt, before = [], rest, after = [], errors = []
-    function append(p) {
-      (rest ? after : before).push(p)
-    }
-    for (const param of params) {
-      switch (param.type) {
-        case "ThisType":
-          if (tt) {
-            append({
-              type: "Error",
-              message: "Only one typed this parameter is allowed",
-            })
-            append(param)
-          } else {
-            tt = trimFirstSpace(param)
-            if (before.length || rest) { // moving ThisType to front
-              let delim = tt.children.at(-1)
-              if (Array.isArray(delim)) delim = delim.at(-1)
-              if (delim?.token !== ",") {
-                tt = {
-                  ...tt,
-                  children: [...tt.children, ", "],
-                }
-              }
-            }
-          }
-          break
-        case "FunctionRestParameter":
-          if (rest) {
-            append({
-              type: "Error",
-              message: "Only one rest parameter is allowed",
-            })
-            append(param)
-          } else {
-            rest = param
-          }
-          break
-        default:
-          append(param)
-      }
-    }
-
-    const names = before.flatMap(p => p.names)
-    if (rest) {
-      const restIdentifier = rest.binding.ref || rest.binding
-      names.push(...rest.names || [])
-
-      let blockPrefix
-      if (after.length) {
-        blockPrefix = {
-          children: ["[", trimFirstSpace(after), "] = ", restIdentifier, ".splice(-", after.length.toString(), ")"],
-          names: after.flatMap(p => p.names)
-        }
-      }
-
-      return {
-        type: "Parameters",
-        children: [
-          tp,
-          open,
-          tt,
-          ...before,
-          // Remove delimiter
-          {...rest, children: rest.children.slice(0, -1)},
-          close,
-        ],
-        tp,
-        names,
-        blockPrefix,
-      }
-    }
-
+  TypeParameters?:tp OpenParen:open ParameterList:parameters ( __ CloseParen ):close ->
     return {
       type: "Parameters",
-      children: [tp, open, tt, ...before, close],
-      names,
+      children: [ tp, open, parameters, close ],
       tp,
+      parameters,
     }
 
 ParameterList
@@ -1957,12 +1886,14 @@ Parameter
 FunctionRestParameter
   # BindingRestElement has a leading _?
   # but also sometimes invokes __ via BindingIdentifier
-  !EOS BindingRestElement:id TypeSuffix? ParameterElementDelimiter ->
+  !EOS BindingRestElement:rest TypeSuffix?:typeSuffix ParameterElementDelimiter ->
     return {
       type: "FunctionRestParameter",
       children: $0.slice(1),
-      names: id.names,
-      binding: id.binding,
+      rest,
+      names: rest.names,
+      binding: rest.binding,
+      typeSuffix,
     }
 
 # NOTE: Similar to BindingElement but appears in formal parameters list
@@ -2286,7 +2217,7 @@ BindingRestElement
   _?:ws DotDotDot:dots ( BindingIdentifier / BindingPattern / EmptyBindingPattern ):binding BindingTypeSuffix?:typeSuffix ->
     return {
       type: "BindingRestElement",
-      children: [ws, [dots, binding]],
+      children: [ws, dots, binding],
       dots,
       binding,
       typeSuffix,
@@ -2386,10 +2317,11 @@ FunctionExpression
         [[], op, [], refB] // BinaryOpRHS
       ]])
 
+    const parameterList = [ [ refA, "," ], refB ]
     const parameters = {
       type: "Parameters",
-      children: ["(", refA, ",", refB, ")"],
-      names: [],
+      children: ["(", parameterList, ")"],
+      parameters: parameterList
     }
 
     const block = {
@@ -7954,17 +7886,19 @@ TypeIndex
 # parse both (?!).  For simplicity, we allow either in all cases.
 # In some cases (e.g. let/const), we transpile them away later.
 TypeSuffix
-  _? QuestionMark?:optional _? Colon MaybeNestedType:t -> {
+  _? QuestionMark?:optional _? Colon:colon MaybeNestedType:t -> {
     type: "TypeSuffix",
     ts: true,
     optional,
     t,
+    colon,
     children: $0,
   }
   _? QuestionMark:optional _? -> {
     type: "TypeSuffix",
     ts: true,
     optional,
+    colon: undefined,
     children: $0,
   }
   # TypeScript has a special error for ! without : ("Declarations with definite
@@ -7977,6 +7911,7 @@ TypeSuffix
       ts: true,
       nonnull,
       t,
+      colon,
       children: [ $1, $2, colon, t ],
     }
 

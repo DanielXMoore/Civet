@@ -1,7 +1,12 @@
 import type {
+  AmpersandBlockBody
+  ArrayBindingPattern
+  ASTError
   ASTLeaf
   ASTNode
   ASTNodeObject
+  Binding
+  BindingElement
   BindingIdentifier
   BlockStatement
   BreakStatement
@@ -10,19 +15,24 @@ import type {
   Declaration
   ForStatement
   FunctionNode
+  FunctionParameter
+  FunctionRestParameter
   IterationExpression
   IterationFamily
   IterationStatement
   Parameter
   ParametersNode
+  PostRestBindingElements
   ReturnTypeAnnotation
   StatementTuple
   SwitchStatement
+  ThisType
   TypeArgument
   TypeArguments
   TypeIdentifier
   TypeLiteral
   TypeNode
+  TypeSuffix
   Whitespace
 } from ./types.civet
 
@@ -35,6 +45,7 @@ import {
 
 import {
   gatherBindingCode
+  gatherBindingPatternTypeSuffix
 } from ./binding.civet
 
 import {
@@ -812,7 +823,7 @@ function iterationDefaultBody(statement: IterationStatement | ForStatement): boo
 
   return false
 
-function processParams(f): void
+function processParams(f: FunctionNode): void
   { type, parameters, block } := f
   isConstructor := f.name is 'constructor'
 
@@ -821,11 +832,153 @@ function processParams(f): void
   if type is "ArrowFunction" and parameters and parameters.tp and parameters.tp.parameters# is 1
     parameters.tp.parameters.push(",")
 
+  // Categorize arguments to put any ThisType in front, and split remaining
+  // arguments into before and after the rest parameter.
+  let tt, before: (FunctionParameter | ASTError)[] = [], rest: FunctionRestParameter?, after: (FunctionParameter | ASTError)[] = []
+  function append(p: FunctionParameter | ASTError): void
+    (rest ? after : before).push(p)
+  for each param of parameters.parameters
+    switch param.type
+      when "ThisType"
+        if tt
+          append
+            type: "Error"
+            message: "Only one typed this parameter is allowed"
+          append param
+        else
+          tt = trimFirstSpace(param) as ThisType
+          if before# or rest // moving ThisType to front
+            delim .= tt.children.-1
+            delim = delim.-1 if Array.isArray delim
+            unless delim is like {token: ","}
+              tt = {
+                ...tt
+                children: [...tt.children, ", "]
+              }
+      when "FunctionRestParameter"
+        if rest
+          append
+            type: "Error"
+            message: "Only one rest parameter is allowed"
+          append param
+        else
+          rest = param
+      else
+        append param
+
+  parameters.names = before.flatMap .names
+  parameters.parameters[..] = []
+  parameters.parameters.push tt if tt
+  parameters.parameters.push ...before
+  if rest
+    restIdentifier := rest.binding.ref or rest.binding
+    parameters.names.push ...rest.names or []
+    rest.children.pop() // remove delimiter
+
+    if after#  // non-end rest
+      if rest.binding.type is "ArrayBindingPattern" or
+         rest.binding.type is "ObjectBindingPattern"
+        parameters.parameters.push
+          type: "Error"
+          message: "Non-end rest parameter cannot be binding pattern"
+
+      after = trimFirstSpace after
+      names := after.flatMap .names
+      elements := (after as (Parameter | ASTError)[]).map (p) =>
+        return p if p.type is "Error"
+        {
+          ...p
+          // omit individual argument types from output
+          children: p.children.filter (is not p.typeSuffix)
+          type: "BindingElement"
+        } satisfies BindingElement
+      pattern := makeNode {
+        type: "ArrayBindingPattern"
+        elements
+        length: after#
+        children: [ "[", elements, "]" ]
+        names
+      } satisfies ArrayBindingPattern
+      |> gatherBindingPatternTypeSuffix
+      |> as ArrayBindingPattern
+      { typeSuffix } := pattern
+      blockPrefix := parameters.blockPrefix = makeNode {
+        type: "PostRestBindingElements"
+        children: [
+          pattern, " = ", restIdentifier, ".splice(-", after#.toString(), ")"
+        ]
+        elements
+        names
+      } satisfies PostRestBindingElements
+
+      // Correct type of new rest parameter to tuple with `after` parameters
+      if rest.typeSuffix
+        // In TypeScript, use ref for rest parameter to assign correct type
+        ref := makeRef "rest"
+        restRef := [
+          { children: [ ref ], ts: true }
+          { children: [ restIdentifier ], js: true }
+        ]
+        blockPrefix.children[blockPrefix.children.indexOf restIdentifier] = restRef
+        blockPrefix.children.push
+          ts: true
+          children: [
+            ", ", restIdentifier, " = ", ref, " as "
+            trimFirstSpace rest.typeSuffix.t
+          ]
+        bindingIndex := rest.rest.children.indexOf rest.rest.binding
+        assert.notEqual bindingIndex, -1, "Could not find binding in rest parameter"
+        rest.rest.children[bindingIndex] = rest.rest.binding =
+          { ...rest.rest.binding, js: true }
+        rest.rest.children.splice bindingIndex+1, 0,
+          children: [ ref ]
+          ts: true
+
+        function optionalType(typeSuffix: TypeSuffix?, fallback: ASTNode): ASTNode
+          t := typeSuffix?.t ?? fallback
+          if typeSuffix?.optional
+            return
+              . t
+              . type: "Error"
+                message: "Optional parameter not allowed in/after rest parameter"
+          t
+
+        oldSuffix := rest.typeSuffix
+        colon := oldSuffix.colon ?? ": "
+        afterTypes := after.flatMap (p) =>
+          . ",", optionalType (p as Parameter).typeSuffix, " unknown"
+        t :=
+          . "["
+          . "...", optionalType oldSuffix, "unknown[]"
+          . ...afterTypes
+          . "]"
+        typeSuffix: TypeSuffix := makeNode {}
+          type: "TypeSuffix"
+          ts: true
+          colon
+          t
+          children:
+            . ...oldSuffix.children.filter (and) // spaces and colon
+                & is not oldSuffix.optional
+                & is not oldSuffix.t
+            . colon unless oldSuffix.colon
+            . t
+        suffixIndex := rest.children.indexOf rest.typeSuffix
+        assert.notEqual suffixIndex, -1, "Could not find typeSuffix in rest parameter"
+        rest.children[suffixIndex] = rest.typeSuffix = typeSuffix
+
+        // Handle imprecise typing of `splice`
+        blockPrefix.children.splice -1, 0,
+          ts: true
+          children: [" as [", afterTypes[1..], "]"]
+
+    parameters.parameters.push rest
+
   return unless block
   { expressions } := block
   return unless expressions
 
-  let indent: string
+  let indent: ASTNode
   unless expressions#
     indent = ""
   else
@@ -878,17 +1031,25 @@ function processParams(f): void
     type: "SemicolonDelimiter"
     children: [";"]
 
-  prefix := splices
-    .map (s) => ["let ", s]
-    .concat(thisAssignments)
-    .map((s) => s.type
-      ? {
-        // TODO: figure out how to get JS only statement tuples
-        ...s,
-        children: [indent, ...s.children, delimiter]
-      }
-      : [indent, s, delimiter]
-    )
+  prefix: ASTNode[] .= []
+  for each binding of splices as Binding[]
+    assert.equal binding.type, "PostRestBindingElements", "splice should be of type Binding"
+    prefix.push makeNode {
+      type: "Declaration"
+      children: ["let ", binding]
+      names: binding.names
+      bindings: [] // avoid implicit return of any bindings
+      decl: "let"
+    } satisfies Declaration
+  prefix ++= thisAssignments
+  // Add indentation and delimiters
+  prefix = prefix.map (s) => s?.js
+    ? ["", makeNode {
+      // TODO: figure out how to get JS only statement tuples
+      ...s
+      children: [indent, ...s.children, delimiter]
+    }]
+    : [indent, s, delimiter]
 
   return unless prefix#
   // In constructor definition, insert prefix after first super() call
@@ -903,6 +1064,7 @@ function processParams(f): void
       expressions.splice(index + 1, 0, ...prefix)
       return
   expressions.unshift(...prefix)
+  updateParentPointers block
   braceBlock block
 
 function processSignature(f: FunctionNode): void
@@ -1032,10 +1194,11 @@ function processCoffeeDo(ws: Whitespace, expression: ASTNode): ASTNode
   ws = trimFirstSpace(ws) as Whitespace
   args: ASTNode[] := []
   if expression is like {type: "ArrowFunction"}, {type: "FunctionExpression"}
-    { parameters } := expression
+    { parameters } .= expression
+    parameterList := parameters.parameters
     // Move initializers to arguments
-    newParameters := { ...parameters, children:
-      for each let parameter of parameters.children
+    newParameterList :=
+      for each let parameter of parameterList
         if parameter is like {type: "Parameter"}
           if initializer := parameter.initializer
             args.push initializer.expression, parameter.delim
@@ -1048,6 +1211,10 @@ function processCoffeeDo(ws: Whitespace, expression: ASTNode): ASTNode
             args.push parameter.children.filter
               (is not (parameter as Parameter).typeSuffix)
         parameter
+    newParameters := {
+      ...parameters
+      parameters: newParameterList
+      children: parameters.children.map & is parameterList ? newParameterList : &
     }
     expression = {
       ...expression
@@ -1074,9 +1241,13 @@ function makeAmpersandFunction(rhs: AmpersandBlockBody): ASTNode
   if startsWithPredicate(body, .type is "ObjectExpression")
     body = makeLeftHandSideExpression body
 
+  parameterList := [
+    typeSuffix ? [ ref, typeSuffix ] as tuple : ref
+  ]
   parameters := makeNode {
     type: "Parameters"
-    children: typeSuffix ? ["(", ref, typeSuffix, ")"] : [ref]
+    children: typeSuffix ? ["(", parameterList, ")"] : [parameterList]
+    parameters: parameterList
     names: []
   } as ParametersNode
   expressions := [[' ', body]] satisfies StatementTuple[]
