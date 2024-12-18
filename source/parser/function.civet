@@ -1,9 +1,12 @@
 import type {
   AmpersandBlockBody
+  ArrayBindingPattern
   ASTError
   ASTLeaf
   ASTNode
   ASTNodeObject
+  Binding
+  BindingElement
   BindingIdentifier
   BlockStatement
   BreakStatement
@@ -19,6 +22,7 @@ import type {
   IterationStatement
   Parameter
   ParametersNode
+  PostRestBindingElements
   ReturnTypeAnnotation
   StatementTuple
   SwitchStatement
@@ -41,6 +45,7 @@ import {
 
 import {
   gatherBindingCode
+  gatherBindingPatternTypeSuffix
 } from ./binding.civet
 
 import {
@@ -818,7 +823,7 @@ function iterationDefaultBody(statement: IterationStatement | ForStatement): boo
 
   return false
 
-function processParams(f): void
+function processParams(f: FunctionNode): void
   { type, parameters, block } := f
   isConstructor := f.name is 'constructor'
 
@@ -870,13 +875,35 @@ function processParams(f): void
     parameters.names.push ...rest.names or []
 
     if after#
-      parameters.blockPrefix = {
+      after = trimFirstSpace after
+      names := after.flatMap .names
+      elements := (after as (Parameter | ASTError)[]).map (p) =>
+        return p if p.type is "Error"
+        {
+          ...p
+          // omit individual argument types from output
+          children: p.children.filter (is not p.typeSuffix)
+          type: "BindingElement"
+        } satisfies BindingElement
+      pattern := makeNode {
+        type: "ArrayBindingPattern"
+        elements
+        length: after#
+        children: [ "[", elements, "]" ]
+        names
+      } satisfies ArrayBindingPattern
+      |> gatherBindingPatternTypeSuffix
+      |> as ArrayBindingPattern
+      { typeSuffix } := pattern
+      parameters.blockPrefix = makeNode {
+        type: "PostRestBindingElements"
         children: [
-          "[", trimFirstSpace(after), "] = ", restIdentifier
+          pattern, typeSuffix, " = ", restIdentifier
           ".splice(-", after#.toString(), ")"
         ]
-        names: after.flatMap .names
-      }
+        elements
+        names
+      } satisfies PostRestBindingElements
       // Correct type of new rest parameter to tuple with `after` parameters
       if rest.typeSuffix
         // Handle imprecise typing of `splice`
@@ -899,7 +926,7 @@ function processParams(f): void
           . ...after.flatMap (p) =>
               . ",", optionalType (p as Parameter).typeSuffix, " unknown"
           . "]"
-        typeSuffix: TypeSuffix := {}
+        typeSuffix: TypeSuffix := makeNode {}
           type: "TypeSuffix"
           ts: true
           colon
@@ -910,7 +937,7 @@ function processParams(f): void
                 & is not oldSuffix.t
             . colon unless oldSuffix.colon
             . t
-        rest = {
+        rest = makeNode {
           ...rest
           typeSuffix
           children: rest.children.map & is rest!.typeSuffix ? typeSuffix : &
@@ -923,7 +950,7 @@ function processParams(f): void
   { expressions } := block
   return unless expressions
 
-  let indent: string
+  let indent: ASTNode
   unless expressions#
     indent = ""
   else
@@ -976,17 +1003,25 @@ function processParams(f): void
     type: "SemicolonDelimiter"
     children: [";"]
 
-  prefix := splices
-    .map (s) => ["let ", s]
-    .concat(thisAssignments)
-    .map((s) => s.type
-      ? {
-        // TODO: figure out how to get JS only statement tuples
-        ...s,
-        children: [indent, ...s.children, delimiter]
-      }
-      : [indent, s, delimiter]
-    )
+  prefix: ASTNode[] .= []
+  for each binding of splices as Binding[]
+    assert.equal binding.type, "PostRestBindingElements", "splice should be of type Binding"
+    prefix.push makeNode {
+      type: "Declaration"
+      children: ["let ", binding]
+      names: binding.names
+      bindings: [] // avoid implicit return of any bindings
+      decl: "let"
+    } satisfies Declaration
+  prefix ++= thisAssignments
+  // Add indentation and delimiters
+  prefix = prefix.map (s) => s?.js
+    ? ["", makeNode {
+      // TODO: figure out how to get JS only statement tuples
+      ...s
+      children: [indent, ...s.children, delimiter]
+    }]
+    : [indent, s, delimiter]
 
   return unless prefix#
   // In constructor definition, insert prefix after first super() call
@@ -1001,6 +1036,7 @@ function processParams(f): void
       expressions.splice(index + 1, 0, ...prefix)
       return
   expressions.unshift(...prefix)
+  updateParentPointers block
   braceBlock block
 
 function processSignature(f: FunctionNode): void
