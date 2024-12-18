@@ -4,6 +4,10 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.9.2 (2024-12-18, [diff](https://github.com/DanielXMoore/Civet/compare/v0.9.1...v0.9.2), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.2))
+* Non-end rest parameters support types [[#1648](https://github.com/DanielXMoore/Civet/pull/1648)]
+* Multithreaded compilation via Node workers and `threads` option or `CIVET_THREADS` environment variable; enable Node compiler cache; improve unplugin caching [[#1646](https://github.com/DanielXMoore/Civet/pull/1646)]
+
 ## 0.9.1 (2024-12-12, [diff](https://github.com/DanielXMoore/Civet/compare/v0.9.0...v0.9.1), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.1))
 * Fat pipe `||>` uses semicolons at statement level [[#1636](https://github.com/DanielXMoore/Civet/pull/1636)]
 * Fix parser crash on blocks inside `switch` [[#1640](https://github.com/DanielXMoore/Civet/pull/1640)]
