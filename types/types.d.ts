@@ -49,6 +49,10 @@ declare module "@danielx/civet" {
     hits?: string
     trace?: string
     parseOptions?: ParseOptions
+    /** Specifying an empty array will prevent ParseErrors from being thrown */
+    errors?: ParseError[]
+    /** Number of parallel threads to compile with (Node only) */
+    threads?: number
   }
   export type GenerateOptions = Omit<CompileOptions, "sourceMap"> & {
     sourceMap?: undefined | SourceMap

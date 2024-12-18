@@ -39,14 +39,23 @@ export type PluginOptions
   js?: boolean
   /** @deprecated Use "emitDeclaration" instead */
   dts?: boolean
+  /** Number of parallel threads to compile with (Node only) */
+  threads?: number
   /** Cache compilation results based on file mtime (useful for serve or watch mode) */
   cache?: boolean
   /** config filename, or null to not look for default config file */
   config?: string? | null
   parseOptions?: ParseOptions
 
+type CacheEntry
+  mtime: number
+  result?: TransformResult
+  promise?: Promise<void>
+
 civetExtension := /\.civet$/
-isCivetTranspiled := /(\.civet)(\.[jt]sx)([?#].*)?$/
+// Normally .jsx/.tsx extension should be present, but sometimes
+// (e.g. esbuild's alias feature) loads directly without resolve
+isCivetTranspiled := /(\.civet)(\.[jt]sx)?([?#].*)?$/
 postfixRE := /[?#].*$/s
 isWindows := os.platform() is 'win32'
 windowsSlashRE := /\\/g
@@ -131,7 +140,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         : (f) => f.toLowerCase()
     }
 
-  const cache = options.cache ? new Map<string, {mtime: number, result: TransformResult}>() : undefined;
+  cache := new Map<string, CacheEntry> unless options.cache is false
 
   plugin: ReturnType<typeof rawPlugin> & { __virtualModulePrefix?: string } := {
     name: 'unplugin-civet'
@@ -142,12 +151,13 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         ? options.config
         : await findInDir(process.cwd())
       if civetConfigPath
-        compileOptions = await loadConfig(civetConfigPath)
+        compileOptions = await loadConfig civetConfigPath
       // Merge parseOptions, with plugin options taking priority
       compileOptions.parseOptions = {
         ...compileOptions.parseOptions
         ...options.parseOptions
       }
+      compileOptions.threads = options.threads if options.threads?
 
       if transformTS or ts is "tsc"
         ts := await tsPromise!
@@ -423,14 +433,19 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
 
       filename := path.resolve rootDir, basename
 
-      let mtime
-      if cache
+      let mtime: number?, cached: CacheEntry?, resolve: =>?
+      if cache?
         mtime = fs.promises.stat(filename) |> await |> .mtimeMs
-        const cached = cache?.get filename
+        cached = cache?.get filename
         if cached and cached.mtime is mtime
-          return cached.result
+          // If the file is currently being compiled, wait for it to finish
+          await cached.promise if cached.promise
+          return cached.result if cached.result
+        // We're the first to compile this file with this mtime
+        promise := new Promise<void> (r): void => resolve = r
+        cache.set filename, cached = {mtime, promise}
+      finally resolve?()
 
-      rawCivetSource := await fs.promises.readFile filename, 'utf-8'
       this.addWatchFile filename
 
       let compiled: string
@@ -439,11 +454,12 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         ...compileOptions
         filename: id
         errors: []
-      } as const
+      }
       function checkErrors
         if civetOptions.errors#
           throw new civet.ParseErrors civetOptions.errors
 
+      rawCivetSource := await fs.promises.readFile filename, 'utf-8'
       ast := await civet.compile rawCivetSource, {
         ...civetOptions
         ast: true
@@ -533,7 +549,9 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       if options.transformOutput
         transformed = await options.transformOutput transformed.code, id
 
-      cache?.set filename, {mtime!, result: transformed}
+      if cached?
+        cached.result = transformed
+        delete cached.promise
 
       return transformed
 

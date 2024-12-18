@@ -1,8 +1,18 @@
+try { require('node:module').enableCompileCache() } catch {}
 esbuild := require "esbuild"
 heraPlugin := require "@danielx/hera/esbuild-plugin"
 // Need to use the packaged version because we may not have built our own yet
-civetPlugin := require "../node_modules/@danielx/civet/dist/esbuild-plugin.js"
+civetOldPlugin := require "../node_modules/@danielx/civet/dist/esbuild-plugin.js"
 civetUnplugin := require("../node_modules/@danielx/civet/dist/unplugin/esbuild.js").default
+civetPlugin := civetUnplugin
+  ts: "civet"
+  cache: true
+  config: null
+civetPluginEmit := civetUnplugin
+  ts: 'civet'
+  emitDeclaration: true
+  declarationExtension: ".d.ts"
+  config: null
 
 path := require "path"
 {access} := require "fs/promises"
@@ -56,6 +66,13 @@ rewriteCivetImports := {
         external: true
 }
 
+defineDirname := (esm: boolean) =>
+  if esm
+    "__dirname": "undefined"
+  else
+    "__dirname": 'undefined'
+    "import.meta.url": '""'
+
 // Files that need civet imports re-written
 // since they aren't actually bundled
 for name of ["cli", "esbuild-plugin"]
@@ -67,7 +84,7 @@ for name of ["cli", "esbuild-plugin"]
     outfile: `dist/${name}.js`
     plugins: [
       rewriteCivetImports
-      civetPlugin()
+      civetPlugin
     ]
     external: [
       '../package.json'
@@ -92,7 +109,7 @@ for name of ["config", "babel-plugin"]
       outExtension: ".js": if format is "esm" then ".mjs" else ".js"
       plugins: [
         rewriteCivetImports
-        civetPlugin()
+        civetPlugin
       ]
       footer:
         // Rewrite default export as CJS exports object,
@@ -101,7 +118,7 @@ for name of ["config", "babel-plugin"]
     }).catch -> process.exit 1
 
 // esm needs to be a module for import.meta
-for name of ["esm"]
+for name of ["esm", "node-worker"]
   build({
     entryPoints: [`source/${name}.civet`]
     bundle: true
@@ -110,7 +127,7 @@ for name of ["esm"]
     outfile: `dist/${name}.mjs`
     plugins: [
       rewriteCivetImports
-      civetPlugin()
+      civetPlugin
     ]
   }).catch -> process.exit 1
 
@@ -124,8 +141,11 @@ for esm of [false, true]
     plugins: [
       resolveExtensions
       heraPlugin module: true
-      civetPlugin()
+      civetPlugin
     ]
+    define: unless esm
+      "import.meta.url": '""' // avoid warning; eliminated by `dropLabels`
+    dropLabels: ['ESM_ONLY'] unless esm
   }).catch -> process.exit 1
 
 // Browser build
@@ -140,11 +160,20 @@ build({
     'node:module': './source/browser-shim.civet'
     'node:path': './source/browser-shim.civet'
     'node:vm': './source/browser-shim.civet'
-  external: ['node:fs']
+  external:
+    . 'node:fs'
+    . 'node:url' // won't actually be imported, via `dropLabels`
+    . 'node:worker_threads' // won't actually be imported, via `define`
+  define:
+    "process.env.CIVET_THREADS": '0'
+    "import.meta.url": '""' // avoid warning; eliminated by `dropLabels`
+  dropLabels: ['ESM_ONLY']
+  minifySyntax: true // eliminate `if (false)` from `define` setting
+  minify
   plugins: [
     resolveExtensions
     heraPlugin module: true
-    civetPlugin()
+    civetOldPlugin() // currently necessary for `alias` to work
   ]
 }).catch -> process.exit 1
 
@@ -158,7 +187,7 @@ build({
   target: "esNext"
   outfile: 'dist/bun-civet.mjs'
   plugins: [
-    civetPlugin()
+    civetPlugin
   ]
 }).catch -> process.exit 1
 
@@ -185,11 +214,8 @@ for format of ["esm", "cjs"]
     outExtension: ".js": if format is "esm" then ".mjs" else ".js"
     plugins: [
       rewriteCivetImports
-      civetUnplugin
-        ts: 'civet'
-        emitDeclaration: format is "esm"  // only run TypeScript once
-        declarationExtension: ".d.ts"
-        config: null
+      // only run TypeScript once
+      if format is "esm" then civetPluginEmit else civetPlugin
     ]
   }).catch -> process.exit 1
 
@@ -206,7 +232,5 @@ for format of ["esm", "cjs"]
     outExtension: ".js": if format is "esm" then ".mjs" else ".js"
     plugins: [
       civetPlugin
-        emitDeclaration: format is "esm"
-        declarationExtension: ".d.ts"
     ]
   }).catch -> process.exit 1

@@ -23,7 +23,11 @@ rm -rf dist/unplugin/source
 
 # cli
 BIN="dist/civet"
-echo "#!/usr/bin/env node" | cat - dist/cli.js > "$BIN"
+(
+  echo "#!/usr/bin/env node"
+  echo '"use strict"'
+  echo "try { require('node:module').enableCompileCache() } catch {}"
+) | cat - dist/cli.js > "$BIN"
 echo "cli()" >> "$BIN"
 chmod +x "$BIN"
 rm dist/cli.js
