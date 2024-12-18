@@ -210,8 +210,11 @@ interface PluginOptions {
     Note that some bundlers require additional plugins to handle TS.
     For example, for Webpack, you would need to install `ts-loader` and add it to your webpack config.
     Unfortunately, Rollup's TypeScript plugin is incompatible with this plugin, so you need to set `ts` to another option.
-- `cache`: Cache compilation results based on file's mtime. (Useful when bundling the same source files for both CommonJS and ESM, or for longer running processes like `watch` or `serve`.)
-- `threads`: Use specified number of Node worker threads to compile Civet files faster. Default: `0` (don't use threads), or `CIVET_THREADS` environment variable if set.
+- `cache`: Cache compilation results based on file's mtime.
+  Useful when bundling the same source files for both CommonJS and ESM,
+  or for longer running processes like `watch` or `serve`.  Default: `true`.
+- `threads`: Use specified number of Node worker threads to
+  compile Civet files faster. Default: `0` (don't use threads), or `CIVET_THREADS` environment variable if set.
 - `config`: Civet config filename to load, or `null` to avoid looking for the
   default config filenames in the project root directory.
   See [Civet config](https://civet.dev/config).
