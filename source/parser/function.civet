@@ -873,8 +873,15 @@ function processParams(f: FunctionNode): void
   if rest
     restIdentifier := rest.binding.ref or rest.binding
     parameters.names.push ...rest.names or []
+    rest.children.pop() // remove delimiter
 
-    if after#
+    if after#  // non-end rest
+      if rest.binding.type is "ArrayBindingPattern" or
+         rest.binding.type is "ObjectBindingPattern"
+        parameters.parameters.push
+          type: "Error"
+          message: "Non-end rest parameter cannot be binding pattern"
+
       after = trimFirstSpace after
       names := after.flatMap .names
       elements := (after as (Parameter | ASTError)[]).map (p) =>
@@ -904,12 +911,32 @@ function processParams(f: FunctionNode): void
         elements
         names
       } satisfies PostRestBindingElements
+
       // Correct type of new rest parameter to tuple with `after` parameters
       if rest.typeSuffix
         // Handle imprecise typing of `splice`
         parameters.blockPrefix.children.push
           ts: true
           children: [" as any"]
+
+        // In TypeScript, use ref for rest parameter to assign correct type
+        ref := makeRef "rest"
+        restRef := [
+          { children: [ ref ], ts: true }
+          { children: [ restIdentifier ], js: true }
+        ]
+        parameters.blockPrefix.children[3..3] = restRef
+        parameters.blockPrefix.children.push
+          ts: true
+          children: [
+            ", ", deepCopy(rest.binding), " = ", ref, " as "
+            trimFirstSpace rest.typeSuffix.t
+          ]
+        rest.rest.binding.js = true
+        rest.rest.children.push
+          children: [ ref ]
+          ts: true
+
         function optionalType(typeSuffix: TypeSuffix?, fallback: ASTNode): ASTNode
           t := typeSuffix?.t ?? fallback
           if typeSuffix?.optional
@@ -918,6 +945,7 @@ function processParams(f: FunctionNode): void
               . type: "Error"
                 message: "Optional parameter not allowed in/after rest parameter"
           t
+
         oldSuffix := rest.typeSuffix
         colon := oldSuffix.colon ?? ": "
         t :=
@@ -937,13 +965,10 @@ function processParams(f: FunctionNode): void
                 & is not oldSuffix.t
             . colon unless oldSuffix.colon
             . t
-        rest = makeNode {
-          ...rest
-          typeSuffix
-          children: rest.children.map & is rest!.typeSuffix ? typeSuffix : &
-        }
+        suffixIndex := rest.children.indexOf rest.typeSuffix
+        assert.notEqual suffixIndex, -1, "Could not find typeSuffix in rest parameter"
+        rest.children[suffixIndex] = rest.typeSuffix = typeSuffix
 
-    rest.children.pop() // remove delimiter
     parameters.parameters.push rest
 
   return unless block
