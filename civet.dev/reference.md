@@ -3359,10 +3359,12 @@ loop
 ### CoffeeScript Classes
 
 <Playground>
-"civet coffeeClasses"
+"civet coffeeClasses autoVar"
 class X
+  privateVar = 5
   constructor: (@x) ->
   get: -> @x
+  bound: => @x
 </Playground>
 
 ### IIFE Wrapper

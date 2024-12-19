@@ -12,6 +12,7 @@ import {
   attachPostfixStatementAsExpression,
   append,
   blockWithPrefix,
+  braceBlock,
   convertNamedImportsToObject,
   convertObjectToJSXAttributes,
   convertWithClause,
@@ -1244,12 +1245,11 @@ AccessModifier
 
 # https://262.ecma-international.org/#prod-FieldDefinition
 FieldDefinition
-  # TODO: CoffeeCompat class method fields
   # name: (param1, param2) ->
+  # name: (param1, param2) => which gets wrapped in bind in constructor
   CoffeeClassesEnabled ClassElementName:id _? Colon __ AssignmentExpression:exp ->
     switch (exp.type) {
-      // TODO: => functions
-      case "FunctionExpression":
+      case "FunctionExpression": {
         const fnTokenIndex = exp.children.findIndex(c => c?.token?.startsWith("function"))
         // copy
         const children = exp.children.slice()
@@ -1262,8 +1262,31 @@ FieldDefinition
         }
         return {
           ...exp,
+          type: "MethodDefinition",
+          name: id.name,
+          signature: { ...exp.signature, id, name: id.name },
           children,
         }
+      }
+      case "ArrowFunction": {
+        const block = {...exp.block} // prepare for bracing
+        const children = exp.children
+        .filter(c => !(Array.isArray(c) && c[c.length-1]?.token?.includes("=>")))
+        .map(c => c === exp.block ? block : c)
+        children.unshift(id)
+        exp = {
+          ...exp,
+          type: "MethodDefinition",
+          name: id.name,
+          signature: { ...exp.signature, id, name: id.name },
+          block,
+          children,
+          autoBind: true
+        }
+        block.parent = exp // needed by braceBlock
+        braceBlock(block)
+        return exp
+      }
       default:
         return {
           type: "FieldDefinition",
@@ -1273,9 +1296,9 @@ FieldDefinition
     }
 
   # NOTE: Added readonly semantic equivalent of const field assignment
-  InsertReadonly:r ClassElementName:id TypeSuffix?:typeSuffix __ ConstAssignment:ca MaybeNestedExpression ->
+  InsertReadonly:readonly ClassElementName:id TypeSuffix?:typeSuffix __ ConstAssignment:ca MaybeNestedExpression ->
     // Adjust position to space before assignment to make TypeScript remapping happier
-    r.children[0].$loc = {
+    readonly.children[0].$loc = {
       pos: ca.$loc.pos - 1,
       length: ca.$loc.length + 1,
     }
@@ -1284,15 +1307,28 @@ FieldDefinition
       id,
       typeSuffix,
       children: $0,
+      readonly,
     }
 
-  ( Abstract _? )? ( Readonly _? )? ClassElementName:id TypeSuffix?:typeSuffix Initializer? ->
+  # In a CoffeeScript class, `x = y` makes a private variable x visible
+  # only within the class scope only
+  CoffeeClassesEnabled ActualAssignment:assignment ->
+    return {
+      type: "CoffeeClassPrivate",
+      children: [ assignment ],
+      assignment,
+    }
+
+  ( Abstract _? )?:abstract ( Readonly _? )?:readonly ClassElementName:id TypeSuffix?:typeSuffix Initializer?:initializer ->
     return {
       type: "FieldDefinition",
       children: $0,
-      ts: $1 ? true : undefined,
+      ts: abstract ? true : undefined,
       id,
       typeSuffix,
+      abstract,
+      readonly,
+      initializer,
     }
 
 ThisLiteral
