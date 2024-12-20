@@ -315,3 +315,39 @@ floor # / 2
 ```
 
 </div>
+
+## ASCII Symbols
+
+Here is a list of ASCII symbols and their various contextual meanings in Civet.
+(There are also more [Unicode symbols](/reference#unicode-operators).)
+
+| Symbol | Meanings |
+|--------|----------|
+| space | Function call |
+| `?` | Non-null test `x?`; non-null access `x?.y`, `x?y`, `x?(...)`, `x?[...]`; null coalescing `x ?? y` (`x ? y` with `coffeeBinaryExistential`); TypeScript optionals `(x?: number) => x`; if/then/else ternary `x ? y : z` |
+| `!` | Negation `!x`; object flag `{!x}`; TypeScript non-null assertion `x!`; non-null assertion access `x!.y`, `x!y` |
+| `@` | this shorthand `@`; this properties `@x`; method bind `x@y`, `x@.y`, `@@x`; decorators `@@d` |
+| `#` | private properties `x.#y`, `#y`; length shorthand `x#`, `#`; block comments `### ... ###`; one-line comments `# ...` with `coffeeComment`; CoffeeScript string interpolations `"x#{y}"` with `coffeeInterpolation` |
+| `$` | JavaScript identifier character; template interpolations `` `x${y}` `` |
+| `_` | JavaScript identifier character |
+| `%` | Modulo operators `x % y`, `x %% y`; modulo indexing `x[i %]`; integer division `%/` |
+| `^` | Binary XOR `x ^ y`; logical XOR `x ^^ y`; logical XNOR `x !^ y`, `x !^^ y`; pin patterns `(^x) =>` |
+| `&` | Binary AND `x & y`; logical AND `x && y`; TypeScript AND `number & string`; placeholder for function shorthand `&[x]+1` |
+| `\|` | Binary OR `x \| y`; logical OR `x \|\| y`; TypeScript OR `number \| string`; pipeline `\|>`, `\|\|>` |
+| `+` | Addition `x + y`; positive `+x`; increment `x++`, `++x`; object flag `{+x}`; concatenation `x ++ y` |
+| `-` | Subtraction `x - y`; negation `-x`; decrement `x--`, `--x`; object flag `{-x}`; function arrows `->`; property name symbol `x-y: z` |
+| `*` | Multiplication `x * y`; exponentiation `x ** y`; generators `function*`, `*method()`, `for*`; comments `/* x */` |
+| `/` | Division `x / y`; integer division `x %/ y`; comments `// x`, `/* x */`; regular expressions `/x/`, `///x///`; TypeScript triple-slash directive `/// <reference/>` |
+| `\` | String escape `"\""`; regular expression escape `/\//` |
+| `=` | Assignment `x = y`, `x op= y`; declaration shorthand `.=`, `:=`, `::=`; function arrows `=>` |
+| `~` | Binary NOT `~x` |
+| `.` | Property access `x.y`; property access function `.x`; argument placeholder `f(x, .)`; bulleted list `. x` (after indentation); let shorthand `x .= y`; range literals `[x..y]`; spreads `...x` |
+| `:` | Labels `:x`; symbols `:x`; object properties `x: y`, `{x: y}`; TypeScript types `let x: number`, `(x: number) =>`; property typing `{x:: number}`, `[x:: number]`; if/then/else ternary `x ? y : z`; const shorthand `x := y`; type shorthand `T ::= x`; prototype shorthand `x::y` with `coffeePrototype` |
+| `,` | Argument separator `f x, y`; comma operator `x, y` |
+| `'` | Strings `'hello'`, `'''hello'''`; template strings `f'hello'`; property access `x's y` |
+| `"` | Strings `"hello"`, `"""hello"""`; template strings `f"hello"` |
+| `` ` `` | Template strings `` `x${y}` ``, ` ```x${y}``` `, ``f`x${y}` `` |
+| `<`/`>` | Comparison operators `x < y > z`; JSX `<div>`; TypeScript parameter `Set<number>`; range literals `[x<..<y]`; function arrows `->`, `=>`; pipelines `|>`, `||>` |
+| `(`/`)` | Operator ordering `(x + y) * z`; operator sections `(* 2)`; function calls and parameters |
+| `[`/`]` | Property access `x[y]`; array literals `[x, y]`, `[] x, y`; range literals `[x..y]` |
+| `{`/`}` | Object literals `{x, y: z}`, `{} x, y: z`; code blocks `if (x) { y }`; object globs `x.{y,z}`, `x{y,z}` |
