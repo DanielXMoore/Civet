@@ -1135,6 +1135,24 @@ You can also use Unicode arrows:
 curryAdd := (a: number) → (b: number) ⇒ a + b
 </Playground>
 
+### Pin Parameters and This Parameters
+
+You can directly assign an argument to an outer variable `foo` by writing
+`^foo` (see pins from [pattern matching](#pattern-matching)):
+
+<Playground>
+let resolve, reject
+promise := new Promise (^resolve, ^reject) =>
+</Playground>
+
+Similarly, you can directly assign an argument to `this.foo` by writing `@foo`
+(see [`@` shorthand for `this`](#at)).
+This is particularly useful within methods.
+
+<Playground>
+@promise := new Promise (@resolve, @reject) =>
+</Playground>
+
 ### `return.value`
 
 Instead of specifying a function's return value when it returns,
