@@ -2556,6 +2556,12 @@ let i: number?
 let x: string??
 </Playground>
 
+To allow for type inference and the initial `undefined` value:
+
+<Playground>
+let x?
+</Playground>
+
 ### Non-Null Types
 
 `T!` removes `undefined` and `null` from the type:
