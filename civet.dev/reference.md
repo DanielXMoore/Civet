@@ -2548,7 +2548,7 @@ function f(x?: string)?: string
   x
 </Playground>
 
-More generally, `T?` allows for `undefined` and
+More generally, type `T?` allows for `undefined` and
 `T??` additionally allows for `null`:
 
 <Playground>
@@ -2560,6 +2560,14 @@ To allow for type inference and the initial `undefined` value:
 
 <Playground>
 let x?
+</Playground>
+
+To allow for later assignment of `undefined` while specifying an initial value
+(currently limited to a literal or member expression):
+
+<Playground>
+let x? = 5
+let y? = x
 </Playground>
 
 ### Non-Null Types
