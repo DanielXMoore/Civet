@@ -323,31 +323,32 @@ Here is a list of ASCII symbols and their various contextual meanings in Civet.
 
 | Symbol | Meanings |
 |--------|----------|
-| space | Function call |
-| `?` | Non-null test `x?`; non-null access `x?.y`, `x?y`, `x?(...)`, `x?[...]`; null coalescing `x ?? y` (`x ? y` with `coffeeBinaryExistential`); TypeScript optionals `(x?: number) => x`; if/then/else ternary `x ? y : z` |
-| `!` | Negation `!x`; object flag `{!x}`; TypeScript non-null assertion `x!`; non-null assertion access `x!.y`, `x!y` |
+| space | Function call `f x`; TypeScript argument `Set T` |
+| `?` | Non-null test `x?`, `if x? := foo()`; non-null access `x?.y`, `x?y`, `x?(...)`, `x?[...]`; null coalescing `x ?? y` (`x ? y` with `coffeeBinaryExistential`); TypeScript optionals `(x?: T) => x`; optional declaration `let x?: T`; optional types `T?`, `T??`; if/then/else ternary `x ? y : z` |
+| `!` | Negation `!x`; negated operators `!=`, `!==`, `!in`, `!instanceof`, `is !like`, `!custom`, `!<?`, `!^`, `!^^`; object flag `{!x}`; JSX flag `<div !draggable>`; TypeScript non-null assertion `x!`; non-null assertion access `x!.y`, `x!y`; non-null type `T!`; forced type assertion `as!`; negated extends shorthand `!<` |
 | `@` | this shorthand `@`; this properties `@x`; method bind `x@y`, `x@.y`, `@@x`; decorators `@@d` |
 | `#` | private properties `x.#y`, `#y`; length shorthand `x#`, `#`; block comments `### ... ###`; one-line comments `# ...` with `coffeeComment`; CoffeeScript string interpolations `"x#{y}"` with `coffeeInterpolation` |
 | `$` | JavaScript identifier character; template interpolations `` `x${y}` `` |
 | `_` | JavaScript identifier character |
 | `%` | Modulo operators `x % y`, `x %% y`; modulo indexing `x[i %]`; integer division `%/` |
 | `^` | Binary XOR `x ^ y`; logical XOR `x ^^ y`; logical XNOR `x !^ y`, `x !^^ y`; pin patterns `(^x) =>` |
-| `&` | Binary AND `x & y`; logical AND `x && y`; TypeScript AND `number & string`; placeholder for function shorthand `&[x]+1` |
-| `\|` | Binary OR `x \| y`; logical OR `x \|\| y`; TypeScript OR `number \| string`; pipeline `\|>`, `\|\|>` |
-| `+` | Addition `x + y`; positive `+x`; increment `x++`, `++x`; object flag `{+x}`; concatenation `x ++ y` |
-| `-` | Subtraction `x - y`; negation `-x`; decrement `x--`, `--x`; object flag `{-x}`; function arrows `->`; property name symbol `x-y: z` |
-| `*` | Multiplication `x * y`; exponentiation `x ** y`; generators `function*`, `*method()`, `for*`; comments `/* x */` |
-| `/` | Division `x / y`; integer division `x %/ y`; comments `// x`, `/* x */`; regular expressions `/x/`, `///x///`; TypeScript triple-slash directive `/// <reference/>` |
+| `&` | Binary AND `x & y`; logical AND `x && y`; TypeScript AND `T & S`; placeholder for function shorthand `&[x]+1` |
+| `\|` | Binary OR `x \| y`; logical OR `x \|\| y`; TypeScript OR `T \| S`; pipeline `\|>`, `\|\|>` |
+| `+` | Addition `x + y`; positive `+x`; increment `x++`, `++x`; object flag `{+x}`; JSX flag `<div +draggable>`; concatenation `x ++ y` |
+| `-` | Subtraction `x - y`; negation `-x`; decrement `x--`, `--x`; object flag `{-x}`; JSX flag `<div -draggable>`; function arrows `->`; property name symbol `x-y: z` |
+| `*` | Multiplication `x * y`; exponentiation `x ** y`; generators `function*`, `*method()`, `for*`, `yield*`; comments `/* x */` |
+| `/` | Division `x / y`; integer division `x %/ y` (`x // y` with `coffeeDiv`); comments `// x`, `/* x */`; regular expressions `/x/`, `///x///`; TypeScript triple-slash directive `/// <reference/>` |
 | `\` | String escape `"\""`; regular expression escape `/\//` |
-| `=` | Assignment `x = y`, `x op= y`; declaration shorthand `.=`, `:=`, `::=`; function arrows `=>` |
+| `=` | Assignment `x = y`, `x op= y`; comparisons `x == y`, `x === y`, `x != y`, `x !== y`; declaration shorthand `x .= y`, `x := y`; type shorthand `T ::= x`; function arrows `=>` |
 | `~` | Binary NOT `~x` |
 | `.` | Property access `x.y`; property access function `.x`; argument placeholder `f(x, .)`; bulleted list `. x` (after indentation); let shorthand `x .= y`; range literals `[x..y]`; spreads `...x` |
-| `:` | Labels `:x`; symbols `:x`; object properties `x: y`, `{x: y}`; TypeScript types `let x: number`, `(x: number) =>`; property typing `{x:: number}`, `[x:: number]`; if/then/else ternary `x ? y : z`; const shorthand `x := y`; type shorthand `T ::= x`; prototype shorthand `x::y` with `coffeePrototype` |
-| `,` | Argument separator `f x, y`; comma operator `x, y` |
-| `'` | Strings `'hello'`, `'''hello'''`; template strings `f'hello'`; property access `x's y` |
-| `"` | Strings `"hello"`, `"""hello"""`; template strings `f"hello"` |
-| `` ` `` | Template strings `` `x${y}` ``, ` ```x${y}``` `, ``f`x${y}` `` |
-| `<`/`>` | Comparison operators `x < y > z`; JSX `<div>`; TypeScript parameter `Set<number>`; range literals `[x<..<y]`; function arrows `->`, `=>`; pipelines `|>`, `||>` |
-| `(`/`)` | Operator ordering `(x + y) * z`; operator sections `(* 2)`; function calls and parameters |
-| `[`/`]` | Property access `x[y]`; array literals `[x, y]`, `[] x, y`; range literals `[x..y]` |
-| `{`/`}` | Object literals `{x, y: z}`, `{} x, y: z`; code blocks `if (x) { y }`; object globs `x.{y,z}`, `x{y,z}` |
+| `:` | Labels `:x`; symbols `:x`; object properties `x: y`, `{x: y}`; TypeScript types `let x: T`, `(x: T) =>`; property typing `{x:: T}`, `[x:: T]`; if/then/else ternary `x ? y : z`; const shorthand `x := y`; type shorthand `T ::= x`; prototype shorthand `x::`, `x::y` with `coffeePrototype` |
+| `;` | Statement separator `x; y` |
+| `,` | Argument separator `f x, y`; element separator `[x, y]`; property separator `{x, y}`; comma operator `x, y` |
+| `'` | Strings `'x'`, `'''x'''`; tagged template literals `tag'x'`; property access `x's y`; directives `'civet coffeeCompat'` |
+| `"` | Strings `"x"`, `"""x"""`; tagged template literals `tag"x"`; directives `"civet coffeeCompat"` |
+| `` ` `` | Template literals `` `x${y}` ``, ` ```x${y}``` `, ``tag`x${y}` `` |
+| `<`/`>` | Comparison operators `x < y > z`; instanceof shorthand `x <? Class`; typeof shorthand `x <? "string"`; extends shorthand `class A < B`; implements shorthand `class A <: B`; TypeScript extends shorthand `A < B`, `A > B`, `A !< B`; JSX `<div>`, `</div>`; JSX code child `> expr`; TypeScript parameter `Set<number>`; range literals `[x<..<y]`; slices `x[<i]`; function arrows `->`, `=>`; pipelines `\|>`, `\|\|>` |
+| `(`/`)` | Operator ordering `(x + y) * z`; operator sections `(* 2)`; operators as functions `(*)`; function calls `f(x)`; function parameters `(x) =>` |
+| `[`/`]` | Property access `x[y]`; expression properties `{[x]: y}`; array literals `[x, y]`, `[] x, y`; range literals `[x..y]` |
+| `{`/`}` | Object literals `{x, y: z}`, `{} x, y: z`; object globs `x.{y,z}`, `x{y,z}`; code blocks `if (x) { y }`; JSX attributes `<div x={y}>`; template interpolations `` `x${y}` `` |
