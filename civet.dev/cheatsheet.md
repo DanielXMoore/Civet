@@ -324,7 +324,7 @@ Here is a list of ASCII symbols and their various contextual meanings in Civet.
 | Symbol | Meanings |
 |--------|----------|
 | space | Function call `f x`; TypeScript argument `Set T` |
-| `?` | Non-null test `x?`, `if x? := foo()`; non-null access `x?.y`, `x?y`, `x?(...)`, `x?[...]`; null coalescing `x ?? y` (`x ? y` with `coffeeBinaryExistential`); TypeScript optionals `(x?: T) => x`; optional declaration `let x?: T`; optional types `T?`, `T??`; if/then/else ternary `x ? y : z` |
+| `?` | Non-null test `x?`, `if x? := foo()`; non-null access `x?.y`, `x?y`, `x?(...)`, `x?[...]`; null coalescing `x ?? y` (`x ? y` with `coffeeBinaryExistential`); TypeScript optionals `(x?: T) => x`; optional declaration `let x?: T`; optional types `T?`, `T??`; instanceof shorthand `x <? Class`; typeof shorthand `x <? "string"`; if/then/else ternary `x ? y : z` |
 | `!` | Negation `!x`; negated operators `!=`, `!==`, `!in`, `!instanceof`, `is !like`, `!custom`, `!<?`, `!^`, `!^^`; object flag `{!x}`; JSX flag `<div !draggable>`; TypeScript non-null assertion `x!`; non-null assertion access `x!.y`, `x!y`; non-null type `T!`; forced type assertion `as!`; negated extends shorthand `!<` |
 | `@` | this shorthand `@`; this properties `@x`; method bind `x@y`, `x@.y`, `@@x`; decorators `@@d` |
 | `#` | private properties `x.#y`, `#y`; length shorthand `x#`, `#`; block comments `### ... ###`; one-line comments `# ...` with `coffeeComment`; CoffeeScript string interpolations `"x#{y}"` with `coffeeInterpolation` |
@@ -342,7 +342,7 @@ Here is a list of ASCII symbols and their various contextual meanings in Civet.
 | `=` | Assignment `x = y`, `x op= y`; comparisons `x == y`, `x === y`, `x != y`, `x !== y`; declaration shorthand `x .= y`, `x := y`; type shorthand `T ::= x`; function arrows `=>` |
 | `~` | Binary NOT `~x` |
 | `.` | Property access `x.y`; property access function `.x`; argument placeholder `f(x, .)`; bulleted list `. x` (after indentation); let shorthand `x .= y`; range literals `[x..y]`; spreads `...x` |
-| `:` | Labels `:x`; symbols `:x`; object properties `x: y`, `{x: y}`; TypeScript types `let x: T`, `(x: T) =>`; property typing `{x:: T}`, `[x:: T]`; if/then/else ternary `x ? y : z`; const shorthand `x := y`; type shorthand `T ::= x`; prototype shorthand `x::`, `x::y` with `coffeePrototype` |
+| `:` | Labels `:x`; symbols `:x`; object properties `x: y`, `{x: y}`; TypeScript types `let x: T`, `(x: T) =>`; property typing `{x:: T}`, `[x:: T]`; if/then/else ternary `x ? y : z`; const shorthand `x := y`; type shorthand `T ::= x`; implements shorthand `class A <: B`; prototype shorthand `x::`, `x::y` with `coffeePrototype` |
 | `;` | Statement separator `x; y` |
 | `,` | Argument separator `f x, y`; element separator `[x, y]`; property separator `{x, y}`; comma operator `x, y` |
 | `'` | Strings `'x'`, `'''x'''`; tagged template literals `tag'x'`; property access `x's y`; directives `'civet coffeeCompat'` |
