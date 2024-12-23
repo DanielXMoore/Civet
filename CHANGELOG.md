@@ -4,6 +4,13 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.9.3 (2024-12-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.9.2...v0.9.3), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.3))
+* `coffeeClasses` improved compatibility: private static class fields via `=`, bound methods via `=>` , `constructor` shouldn't `return` [[#1650](https://github.com/DanielXMoore/Civet/pull/1650)]
+* Pin parameter `^p` assigns function parameter to outer variable [[#1651](https://github.com/DanielXMoore/Civet/pull/1651)]
+* List of ASCII symbols in cheatsheet [[#1653](https://github.com/DanielXMoore/Civet/pull/1653)]
+* `let x?` allows initial `undefined` value + type inference; `let x? = y` for simple `y` [[#1654](https://github.com/DanielXMoore/Civet/pull/1654)]
+* Extension bug fix for unplugin on webpack; cleanup old bug workarounds [[#1655](https://github.com/DanielXMoore/Civet/pull/1655)]
+
 ## 0.9.2 (2024-12-18, [diff](https://github.com/DanielXMoore/Civet/compare/v0.9.1...v0.9.2), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.2))
 * Non-end rest parameters support types [[#1648](https://github.com/DanielXMoore/Civet/pull/1648)]
 * Multithreaded compilation via Node workers and `threads` option or `CIVET_THREADS` environment variable; enable Node compiler cache; improve unplugin caching [[#1646](https://github.com/DanielXMoore/Civet/pull/1646)]
