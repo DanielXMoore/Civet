@@ -1861,6 +1861,13 @@ function flatJoin<T>(list: T[][], sep: T): T[]
       ...sublist
 </Playground>
 
+<Playground>
+flatImage :=
+  for x of [0...nx]
+    ...for y of [0...ny]
+      image.get x, y
+</Playground>
+
 If you don't specify a body, `for` loops list the item being iterated over:
 
 <Playground>
