@@ -1995,10 +1995,19 @@ It's like `for sum` but starting from `""` instead of `0`.
 
 <Playground>
 all := for join item of array
-  `[${item.type}] ${item.title}`
+  `[${item.type}] ${item.title}\n`
 </Playground>
 
-Implicit bodies in `for sum/product/min/max/join` reductions
+`for concat` concatenates the body values as arrays,
+using the [concat operator `++`](#concat-operator).
+If there is no body, it uses the item being looped over.
+
+<Playground>
+function flat1<T>(arrays: T[][]): T[]
+  for concat array of arrays
+</Playground>
+
+Implicit bodies in `for sum/product/min/max/join/concat` reductions
 can use a single destructuring:
 
 <Playground>
