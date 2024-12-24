@@ -1982,6 +1982,19 @@ numEven := for count item of array
 numKeys := for count key in object
 </Playground>
 
+`for first` returns the first body value.
+If there is no body, it uses the item being looped over.
+Combined with a `when` condition, this can act like
+[`Array.prototype.find`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/find).
+
+<Playground>
+firstEven :=
+  for first item of array when item % 2 === 0
+firstEvenSquare :=
+  for first item of array when item % 2 === 0
+    item * item
+</Playground>
+
 `for sum` adds up the body values with `+`, starting from `0`.
 If there is no body, it adds the item being looped over.
 
@@ -2013,10 +2026,19 @@ It's like `for sum` but starting from `""` instead of `0`.
 
 <Playground>
 all := for join item of array
-  `[${item.type}] ${item.title}`
+  `[${item.type}] ${item.title}\n`
 </Playground>
 
-Implicit bodies in `for sum/product/min/max/join` reductions
+`for concat` concatenates the body values as arrays,
+using the [concat operator `++`](#concat-operator).
+If there is no body, it uses the item being looped over.
+
+<Playground>
+function flat1<T>(arrays: T[][]): T[]
+  for concat array of arrays
+</Playground>
+
+Implicit bodies in `for sum/product/min/max/join/concat` reductions
 can use a single destructuring:
 
 <Playground>
