@@ -999,7 +999,7 @@ Here is a table of all currently supported:
 | `‖` | `\|\|` | `≪` | `<<` | `≫` | `>>` | `⋙` | `>>>` |
 | `…` | `...` | `‥` | `..` | `∈` | `is in` | `∉` | `is not in` |
 | `▷` | `\|>` | `→` | `->` | `⇒` | `=>` | `’s` | `'s` |
-| `⧺` | `++` | `—` | `--` | `÷` | `%/` |
+| `⧺` | `++` | `—` | `--` | `÷` | `%/` | `•` | `.` bullet |
 
 </div>
 
@@ -1133,6 +1133,24 @@ You can also use Unicode arrows:
 
 <Playground>
 curryAdd := (a: number) → (b: number) ⇒ a + b
+</Playground>
+
+### Pin Parameters and This Parameters
+
+You can directly assign an argument to an outer variable `foo` by writing
+`^foo` (see pins from [pattern matching](#pattern-matching)):
+
+<Playground>
+let resolve, reject
+promise := new Promise (^resolve, ^reject) =>
+</Playground>
+
+Similarly, you can directly assign an argument to `this.foo` by writing `@foo`
+(see [`@` shorthand for `this`](#at)).
+This is particularly useful within methods.
+
+<Playground>
+@promise := new Promise (@resolve, @reject) =>
 </Playground>
 
 ### `return.value`
@@ -1800,7 +1818,7 @@ for key: keyof typeof object, value in object
 
 ### Loop Expressions
 
-If needed, loops automatically assemble an Array of the last value
+If needed, loops automatically assemble an array of the last value
 within the body of the loop for each completed iteration.
 
 <Playground>
@@ -1831,6 +1849,24 @@ When not at the top level, loop expressions wrap in an
 so you cannot use `return` inside such a loop,
 nor can you `break` or `continue` any outer loop.
 :::
+
+You can also accumulate multiple items and/or spreads:
+
+<Playground>
+function flatJoin<T>(list: T[][], sep: T): T[]
+  for sublist, i of list
+    if i
+      sep, ...sublist
+    else
+      ...sublist
+</Playground>
+
+<Playground>
+flatImage :=
+  for x of [0...nx]
+    ...for y of [0...ny]
+      image.get x, y
+</Playground>
 
 If you don't specify a body, `for` loops list the item being iterated over:
 
@@ -1946,6 +1982,19 @@ numEven := for count item of array
 numKeys := for count key in object
 </Playground>
 
+`for first` returns the first body value.
+If there is no body, it uses the item being looped over.
+Combined with a `when` condition, this can act like
+[`Array.prototype.find`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/find).
+
+<Playground>
+firstEven :=
+  for first item of array when item % 2 === 0
+firstEvenSquare :=
+  for first item of array when item % 2 === 0
+    item * item
+</Playground>
+
 `for sum` adds up the body values with `+`, starting from `0`.
 If there is no body, it adds the item being looped over.
 
@@ -1977,10 +2026,19 @@ It's like `for sum` but starting from `""` instead of `0`.
 
 <Playground>
 all := for join item of array
-  `[${item.type}] ${item.title}`
+  `[${item.type}] ${item.title}\n`
 </Playground>
 
-Implicit bodies in `for sum/product/min/max/join` reductions
+`for concat` concatenates the body values as arrays,
+using the [concat operator `++`](#concat-operator).
+If there is no body, it uses the item being looped over.
+
+<Playground>
+function flat1<T>(arrays: T[][]): T[]
+  for concat array of arrays
+</Playground>
+
+Implicit bodies in `for sum/product/min/max/join/concat` reductions
 can use a single destructuring:
 
 <Playground>
@@ -2530,12 +2588,26 @@ function f(x?: string)?: string
   x
 </Playground>
 
-More generally, `T?` allows for `undefined` and
+More generally, type `T?` allows for `undefined` and
 `T??` additionally allows for `null`:
 
 <Playground>
 let i: number?
 let x: string??
+</Playground>
+
+To allow for type inference and the initial `undefined` value:
+
+<Playground>
+let x?
+</Playground>
+
+To allow for later assignment of `undefined` while specifying an initial value
+(currently limited to a literal or member expression):
+
+<Playground>
+let x? = 5
+let y? = x
 </Playground>
 
 ### Non-Null Types

@@ -677,7 +677,24 @@ function wrapIterationReturningResults(
   // to implement `implicitlyReturned`
   return if statement.resultsRef?
 
-  resultsRef := statement.resultsRef = makeRef "results"
+  // Inherit parent's resultsRef if requested
+  if statement.resultsParent
+    { ancestor } := findAncestor statement,
+      .type is "ForStatement" or .type is "IterationStatement"
+      isFunction
+    unless ancestor
+      statement.children.unshift
+        type: "Error"
+        message: "Could not find ancestor of spread iteration"
+      return
+    resultsRef := statement.resultsRef = ancestor.resultsRef
+    iterationDefaultBody statement
+    { block } := statement
+    unless block.empty
+      assignResults block, (node) => [ resultsRef, ".push(", node, ")" ]
+    return
+
+  resultsRef := statement.resultsRef ?= makeRef "results"
 
   declaration := iterationDeclaration statement
   { ancestor, child } := findAncestor statement, .type is "BlockStatement"
@@ -727,10 +744,12 @@ function iterationDeclaration(statement: IterationStatement | ForStatement)
       switch reduction.subtype
         when "some" then "false"
         when "every" then "true"
+        when "first" then "undefined"
         when "min" then "Infinity"
         when "max" then "-Infinity"
         when "product" then "1"
         when "join" then '""'
+        when "concat" then "[]"
         else "0"
   else if statement.object
     declaration.children.push "={}"
@@ -758,7 +777,11 @@ function iterationDeclaration(statement: IterationStatement | ForStatement)
               resultsRef, " = false; break}" ]
           when "count"
             [ "if (", node, ") ++", resultsRef ]
+          when "first"
+            [ resultsRef, " = ", node, "; break" ]
           when "sum", "join" then [ resultsRef, " += ", node ]
+          when "concat"
+            [ getHelperRef("concatAssign"), "(", resultsRef, ", ", node, ")" ]
           when "product" then [ resultsRef, " *= ", node ]
           when "min" then [ resultsRef, " = Math.min(", resultsRef, ", ", node, ")" ]
           when "max" then [ resultsRef, " = Math.max(", resultsRef, ", ", node, ")" ]
@@ -986,6 +1009,7 @@ function processParams(f: FunctionNode): void
 
   [splices, thisAssignments] := gatherBindingCode parameters,
     injectParamProps: isConstructor
+    assignPins: true
 
   // `@(@x: number)` adds `x: number` declaration to class body
   if isConstructor
@@ -1144,6 +1168,7 @@ function expressionizeIteration(exp: IterationExpression): void
 
     statements =
       . ["", statement]
+
   else
     resultsRef := statement.resultsRef ??= makeRef "results"
 

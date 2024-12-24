@@ -326,6 +326,56 @@ CommaExpression
     if($2.length == 0) return $1
     return $0
 
+# Variation on CommaExpression that allows ... spreads,
+# which we allow in statements for the sake of expressionized iterations
+CommaExpressionSpread
+  _?:ws DotDotDot _?:ws2 IterationActualStatement:iteration ->
+    if (iteration.subtype === "do" || iteration.subtype === "comptime") return $skip
+    if (ws2) {
+      if (ws) {
+        ws = [ws, ws2]
+      } else {
+        ws = ws2
+      }
+    }
+    iteration = { ...iteration, resultsParent: true }
+    return prepend(ws, iteration)
+  AssignmentExpressionSpread ( CommaDelimiter AssignmentExpressionSpread )* ->
+    if($2.length == 0) return $1
+    return $0
+
+AssignmentExpressionSpread
+  _? DotDotDot AssignmentExpression:expression ->
+    return {
+      type: "SpreadElement",
+      children: $0,
+      expression,
+      names: expression.names,
+    }
+  AssignmentExpression:expression ( _? DotDotDot )? ->
+    if (!$2) return $1
+    return {
+      type: "SpreadElement",
+      children: [ ...$2, $1 ],
+      expression,
+      names: expression.names,
+    }
+  _? DotDotDot AssignmentExpression:expression ->
+    return {
+      type: "SpreadElement",
+      children: $0,
+      expression,
+      names: expression.names,
+    }
+  AssignmentExpression:expression ( _? DotDotDot )? ->
+    if (!$2) return $1
+    return {
+      type: "SpreadElement",
+      children: [ ...$2, $1 ],
+      expression,
+      names: expression.names,
+    }
+
 # https://262.ecma-international.org/#prod-Arguments
 Arguments
   ExplicitArguments
@@ -1996,7 +2046,7 @@ PinPattern
   Caret SingleLineExpressionWithIndentedApplicationForbidden:expression ->
     return {
       type: "PinPattern",
-      children: $0,
+      children: [expression],
       expression,
     }
   ActualMemberExpression:expression ->
@@ -2155,6 +2205,8 @@ BindingProperty
     }
 
     if (pin) {
+      // Note that this has the name but not the value.
+      // This is what we want when destructuring, but not in function params.
       children = [ws, binding]
       if (typeSuffix) {
         children.push({
@@ -2174,6 +2226,7 @@ BindingProperty
         name: binding,
         value: {
           type: "PinPattern",
+          children: [binding],
           expression: binding,
         },
       }
@@ -2648,7 +2701,14 @@ BareBlock
   EmptyBareBlock
 
 ThenClause
-  Then SingleLineStatements -> $2
+  Then ThenBlock -> $2
+
+# `then` can be followed by nested block (unlike CoffeeScript)
+# or same-line statements separated by `;`, or empty
+ThenBlock
+  NoBlock EmptyBlock -> $2
+  ImplicitNestedBlock
+  SingleLineStatements
 
 BracedThenClause
   &Then InsertOpenBrace:open ThenClause:exp InsertCloseBrace:close ->
@@ -2877,7 +2937,7 @@ LiteralContent
 # https://262.ecma-international.org/#prod-NullLiteral
 NullLiteral
   "null" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "NullLiteral", $loc, token: $1 }
 
 # https://262.ecma-international.org/#prod-BooleanLiteral
 BooleanLiteral
@@ -2887,13 +2947,13 @@ BooleanLiteral
 _BooleanLiteral
   CoffeeBooleansEnabled CoffeeScriptBooleanLiteral -> $2
   ( "true" / "false" ) NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "BooleanLiteral", $loc, token: $1 }
 
 CoffeeScriptBooleanLiteral
   ( "yes" / "on" ) NonIdContinue ->
-    return { $loc, token: "true" }
+    return { type: "BooleanLiteral", $loc, token: "true" }
   ( "no" / "off" ) NonIdContinue ->
-    return { $loc, token: "false" }
+    return { type: "BooleanLiteral", $loc, token: "false" }
 
 # NOTE: Added :symbol shorthand for Symbol.symbol or Symbol.for("symbol")
 SymbolLiteral
@@ -4361,12 +4421,7 @@ Statement
   KeywordStatement
   VariableStatement
   IfStatement !ShouldExpressionize -> $1
-  IterationStatement !ShouldExpressionize ->
-    // Leave generator forms for IterationExpression
-    if ($1.generator) return $skip
-    // Leave `for` reductions for IterationExpression
-    if ($1.reduction) return $skip
-    return $1
+  IterationActualStatement
   SwitchStatement !ShouldExpressionize -> $1
   TryStatement !ShouldExpressionize -> $1
   FinallyClause
@@ -4381,6 +4436,14 @@ Statement
   BlockStatement
 
   # NOTE: no WithStatement
+
+IterationActualStatement
+  IterationStatement !ShouldExpressionize ->
+    // Leave generator forms for IterationExpression
+    if ($1.generator) return $skip
+    // Leave `for` reductions for IterationExpression
+    if ($1.reduction) return $skip
+    return $1
 
 # NOTE: Leave statement with trailing call expressions or pipe operator
 # to be expressionized by
@@ -4472,7 +4535,7 @@ LabelledItem
 # https://262.ecma-international.org/#prod-IfStatement
 IfStatement
   # NOTE: Allow indentation in condition when there's an explicit `then` clause
-  ( If / Unless ):kind _?:ws BoundedCondition:condition Then BlockOrEmpty:block ElseClause?:e ->
+  ( If / Unless ):kind _?:ws BoundedCondition:condition ThenClause:block ElseClause?:e ->
     if (kind.negated) {
       kind = { ...kind, token: "if" }
       condition = negateCondition(condition)
@@ -4713,7 +4776,7 @@ ForStatementControlWithReduction
     return { ...control, reduction }
 
 ForReduction
-  ( "some" / "every" / "count" / "sum" / "product" / "min" / "max" / "join" ):subtype NonIdContinue __:ws ->
+  ( "some" / "every" / "count" / "first" / "sum" / "product" / "min" / "max" / "join" / "concat" ):subtype NonIdContinue __:ws ->
     return {
       type: "ForReduction",
       subtype,
@@ -5396,7 +5459,9 @@ CommaExpressionStatement
   # NOTE: semi-colons are being handled elsewhere
   # NOTE: Shouldn't need negative lookahead if shadowed in the proper order
   # NOTE: CommaExpression allows , operator
-  CommaExpression ->
+  # NOTE: CommaExpressionSpread allows ... spreads,
+  # which are useful within expressionized iterations
+  CommaExpressionSpread ->
     // Wrap object literal with parens to disambiguate from block statements.
     // Also wrap nameless functions from `->` expressions with parens
     // as needed in JS.
@@ -6150,8 +6215,12 @@ CoffeeDoubleQuotedStringCharacters
 # https://262.ecma-international.org/#prod-RegularExpressionLiteral
 RegularExpressionLiteral
   HeregexLiteral
-  $("/" RegularExpressionBody "/" RegularExpressionFlags) ->
-    return { type: "RegularExpressionLiteral", $loc, token: $1 }
+  $("/" RegularExpressionBody "/" RegularExpressionFlags):raw ->
+    return {
+      type: "RegularExpressionLiteral",
+      raw,
+      children: [ { $loc, token: raw } ]
+    }
 
 RegularExpressionClass
   $(OpenBracket RegularExpressionClassCharacters CloseBracket) ->
@@ -8118,10 +8187,11 @@ TypePrimary
   # NOTE: typeof takes a unary expression, as in
   # https://github.com/microsoft/TypeScript/blob/ae27e55b027c66bf5b80f596da866f8485ac491d/src/compiler/parser.ts#L5666-L5669
   # (binary expression can accidentally grab closing ">" of type arguments)
-  _? Typeof _? UnaryExpression ->
+  _? Typeof _? UnaryExpression:expression ->
     return {
-      type: "TypeofType",
+      type: "TypeTypeof",
       children: $0,
+      expression,
     }
   _? TypeTuple ->
     return prepend($1, $2)

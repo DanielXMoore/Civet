@@ -14,8 +14,13 @@ import {
 } from ./traversal.civet
 
 import {
+  makeRef
+} from ./ref.civet
+
+import {
   parenthesizeType
   trimFirstSpace
+  updateParentPointers
 } from ./util.civet
 
 /**
@@ -102,18 +107,45 @@ function adjustBindingElements(elements: ASTNodeObject[])
     length
   }
 
-function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: boolean })
+function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: boolean, assignPins?: boolean })
   thisAssignments: ThisAssignments := []
   splices: unknown[] := []
 
   function insertRestSplices(s, p: unknown[], thisAssignments: ThisAssignments): void
-    for each n of gatherRecursiveAll s, (n) => n.blockPrefix or (opts?.injectParamProps and n.accessModifier) or n.type is "AtBinding"
+    for each let n of gatherRecursiveAll(s, (n) => (or)
+      n.blockPrefix
+      opts?.injectParamProps and n.accessModifier
+      n.type is "AtBinding"
+      opts?.assignPins and n.type is like "PinPattern", "PinProperty"
+    )
       // Insert `this` assignments
       if n.type is "AtBinding"
         { ref } := n
         { id } := ref
         thisAssignments.push([`this.${id} = `, ref])
         continue
+
+      if opts?.assignPins
+        if n.type is "PinProperty"
+          n.children = n.children.flatMap
+            & is n.name ? [ n.name, ": ", n.value ] : &
+          updateParentPointers n
+          // Fall through to handle PinPattern
+          // (It won't be found by gatherRecursiveAll because wasn't a child)
+          n = n.value
+        if n.type is "PinPattern"
+          n.ref = makeRef
+            n.expression.type is "Identifier" ? n.expression.name : "pin"
+          n.children = [n.ref]
+          updateParentPointers n
+          thisAssignments.push
+            type: "AssignmentExpression"
+            children: [n.expression, " = ", n.ref]
+            names: []
+            lhs: n.expression as any
+            assigned: n.expression
+            expression: n.ref
+          continue
 
       if opts?.injectParamProps and n.type is "Parameter" and n.accessModifier
         for each id of n.names
