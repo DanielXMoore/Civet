@@ -1472,27 +1472,13 @@ function processBreaksContinues(statements: StatementTuple[]): void
 function processImportLiterals(root: BlockStatement): void
   type ImportRecord = { export: ImportLiteral["export"], ref: ASTRef }
   type ImportDeclarationWithMap = ImportDeclaration & {
-    imports: ASTNode[][]
+    imports: ASTNode[]
     map: Map<string, ImportRecord>
   }
   importMap := new Map<string, ImportDeclarationWithMap>
 
   for each literal of gatherRecursiveAll root, .type is "ImportLiteral"
-    module := stringLiteralValue literal.module
-    let imports: ASTNode[][], map
-    unless importMap.has module
-      from := [ "from ", literal.module ]
-      map = new Map<string, ImportRecord>
-      imports = []
-      importMap.set module, {}
-        type: "ImportDeclaration"
-        children: [ "import { ", imports, " } ", from ]
-        imports
-        map
-        from
-    else
-      { imports, map } = importMap.get(module)!
-
+    module .= stringLiteralValue literal.module
     exp := literal.export
     exportName :=
       switch exp
@@ -1502,8 +1488,29 @@ function processImportLiterals(root: BlockStatement): void
           name
         {type: "StringLiteral"}
           stringLiteralValue exp
+        {token: "*"}
+          "*"
         else
           throw new Error `Invalid export name ${exp} in import literal`
+    // Use separate import declaration for * import because JS does not support
+    // combination of default import, * import, and named imports
+    if exportName is "*"
+      module += "*"
+
+    let imports: ASTNode[], map
+    unless importMap.has module
+      from := [ "from ", literal.module ]
+      map = new Map<string, ImportRecord>
+      imports = ["{ "]
+      importMap.set module, {}
+        type: "ImportDeclaration"
+        children: [ "import ", imports, " ", from ]
+        imports
+        map
+        from
+    else
+      { imports, map } = importMap.get(module)!
+
     let ref
     unless map.has exportName
       name .= `${module}$${exportName}`
@@ -1511,7 +1518,14 @@ function processImportLiterals(root: BlockStatement): void
       name or= "imp"
       ref = makeRef name
       map.set exportName, {export: exp, ref}
-      imports.push [ exp, " as ", ref, ", " ]
+      if exportName is "default"
+        imports.unshift ref, ", "
+      else
+        importAs := [ exp, " as ", ref, ", " ]
+        if exportName is "*"
+          imports.unshift ...importAs
+        else
+          imports.push ...importAs
     else
       ref = map.get(exportName)!.ref
 
@@ -1523,7 +1537,13 @@ function processImportLiterals(root: BlockStatement): void
   root.expressions.unshift ...for imp of importMap.values()
     // @ts-ignore Transform into normal ImportDeclaration
     delete imp.map
-    imp.imports.-1?.pop() // remove trailing comma
+    named := imp.imports.-1 is not "{ " // any named imports?
+    unless named
+      imp.imports.pop() // remove unneeded open brace
+    if imp.imports.-1 is ", "
+      imp.imports.pop() // remove trailing comma
+    if named
+      imp.imports.push " }"
     updateParentPointers imp, root
     ["", imp, ";\n"] as tuple
 
