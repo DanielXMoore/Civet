@@ -1818,7 +1818,7 @@ for key: keyof typeof object, value in object
 
 ### Loop Expressions
 
-If needed, loops automatically assemble an Array of the last value
+If needed, loops automatically assemble an array of the last value
 within the body of the loop for each completed iteration.
 
 <Playground>
@@ -1849,6 +1849,24 @@ When not at the top level, loop expressions wrap in an
 so you cannot use `return` inside such a loop,
 nor can you `break` or `continue` any outer loop.
 :::
+
+You can also accumulate multiple items and/or spreads:
+
+<Playground>
+function flatJoin<T>(list: T[][], sep: T): T[]
+  for sublist, i of list
+    if i
+      sep, ...sublist
+    else
+      ...sublist
+</Playground>
+
+<Playground>
+flatImage :=
+  for x of [0...nx]
+    ...for y of [0...ny]
+      image.get x, y
+</Playground>
 
 If you don't specify a body, `for` loops list the item being iterated over:
 
