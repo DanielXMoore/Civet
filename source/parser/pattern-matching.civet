@@ -11,10 +11,11 @@ import type {
   ContinueStatement
   ElseClause
   Identifier
+  ObjectBindingPatternContent
   ParenthesizedExpression
-  ParseRule
   PatternClause
   PatternExpression
+  PinProperty
   StatementTuple
   SwitchStatement
 } from ./types.civet
@@ -28,6 +29,7 @@ import {
   isExit
   makeLeftHandSideExpression
   makeNode
+  prepend
   replaceNode
   updateParentPointers
 } from ./util.civet
@@ -57,7 +59,6 @@ import {
 import {
   ReservedWord
 } from ../parser.hera
-declare var ReservedWord: ParseRule
 
 function processPatternTest(lhs: ASTNode, patterns: PatternExpression[]): ASTNode
   { ref, refAssignmentComma } := maybeRefAssignment lhs, "m"
@@ -302,6 +303,9 @@ function getPatternBlockPrefix(
   // Gather bindings
   [splices, thisAssignments] .= gatherBindingCode(pattern)
   patternBindings := nonMatcherBindings(pattern)
+  subbindings :=
+    for each p of gatherRecursiveAll patternBindings, (& as BindingProperty).subbinding?
+      prepend ", ", (p as BindingProperty).subbinding
 
   splices = splices.map (s) => [", ", nonMatcherBindings(s)]
   thisAssignments = thisAssignments.map ['', &, ";"]
@@ -311,7 +315,7 @@ function getPatternBlockPrefix(
   [
     ['', {
       type: "Declaration"
-      children: [decl, patternBindings, typeSuffix, " = ", ref, ...splices]
+      children: [decl, patternBindings, typeSuffix, " = ", ref, ...subbindings, ...splices]
       names: []
       bindings: [] // avoid implicit return of any bindings
     }, ";"]
@@ -337,45 +341,52 @@ function elideMatchersFromArrayBindings(elements: ArrayBindingPatternContent): A
                 c is element.binding ? binding : c
             }
 
-function elideMatchersFromPropertyBindings(properties) {
-  return properties.map((p) => {
-    switch (p.type) {
-      case "BindingProperty": {
-        const { children, name, value } = p
-        const [ws] = children
+function elideMatchersFromPropertyBindings(properties: ObjectBindingPatternContent): ObjectBindingPatternContent
+  for each p of properties
+    switch p.type
+      when "BindingProperty", "PinProperty"
+        { children, name, value, bind } := p
+        [ws] := children
 
         shouldElide := (or)
           name.type is "NumericLiteral" and !value?.name
           name.type is "ComputedPropertyName" and value?.subtype is "NumericLiteral"
+        if shouldElide
+          if bind
+            type: "Error" as const
+            message: `Cannot bind ${name.type}`
+          else
+            continue
+        else
 
-        return if shouldElide
-
-        switch (value and value.type) {
-          when "ArrayBindingPattern", "ObjectBindingPattern"
-            bindings := nonMatcherBindings(value)
-            return {
-              ...p,
-              children: [ws, name, bindings && ": ", bindings, p.delim],
+          let contents: (BindingProperty | PinProperty)?
+          switch value?.type
+            when "ArrayBindingPattern", "ObjectBindingPattern"
+              bindings := nonMatcherBindings(value)
+              contents = {
+                ...p
+                value: bindings
+                children: [ws, name, bindings && ": ", bindings, p.delim]
+              }
+            when "Identifier", undefined
+              contents = p
+            else // "Literal", "RegularExpressionLiteral", "StringLiteral"
+              contents = undefined
+          if bind
+            {
+              ...p
+              children: [ws, name, p.delim]
+              subbinding: if contents?.value
+                . contents.value
+                . " = "
+                . name
             }
-          when "Identifier"
-            return p
-          case "Literal":
-          case "RegularExpressionLiteral":
-          case "StringLiteral":
-          default:
-            return {
-              ...p,
-              children: [ws, name, p.delim],
-            }
-        }
-      }
-      case "PinProperty":
-      case "BindingRestProperty":
-      default:
-        return p
-    }
-  })
-}
+          else if contents
+            contents
+          else
+            continue
+      else // "BindingRestProperty"
+        p
 
 function nonMatcherBindings(pattern: ASTNodeObject)
   switch pattern.type

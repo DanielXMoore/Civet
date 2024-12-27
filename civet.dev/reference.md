@@ -1646,6 +1646,16 @@ switch x
     type
 </Playground>
 
+Object properties with value matchers are not bound by default (similar to
+[object destructuring assignment](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Destructuring_assignment)).
+Add a trailing `^` to bind them:
+
+<Playground>
+switch x
+  {type^: /list/, content^: [first, ...]}
+    console.log type, content, first
+</Playground>
+
 Use `^x` to refer to variable `x` in the parent scope,
 as opposed to a generic name that gets destructured.
 (This is called "pinning" in
