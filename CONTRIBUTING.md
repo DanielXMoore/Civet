@@ -57,6 +57,12 @@ You can run all tests via
 yarn test
 ```
 
+To use multiple cores while testing:
+
+```sh
+CIVET_THREADS=4 yarn test
+```
+
 A useful trick when developing is to pick one test and add
 [the `.only` suffix](https://mochajs.org/#exclusive-tests)
 so that it is the only test that runs.
