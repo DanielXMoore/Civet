@@ -2,5 +2,13 @@
 
 set -euo pipefail
 
-c8 mocha "$@"
+# Translate CIVET_THREADS into Mocha's --parallel
+# In particular, CIVET_THREADS Workers don't work within Mocha
+args=""
+if [ ! -z "${CIVET_THREADS:-}" ]; then
+  args="--parallel -j $CIVET_THREADS"
+  export CIVET_THREADS=
+fi
+
+c8 mocha $args "$@"
 tsc --noEmit
