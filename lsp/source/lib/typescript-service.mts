@@ -46,9 +46,8 @@ try {
 }
 
 interface SourceMap {
-  data: {
-    lines: CivetSourceMap["data"]["lines"]
-  }
+  lines: CivetSourceMap["lines"]
+  data: CivetSourceMap["data"]
 }
 
 // ts doesn't have this key in the type
@@ -57,7 +56,7 @@ interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithF
 }
 
 export interface FileMeta {
-  sourcemapLines: SourceMap["data"]["lines"] | undefined
+  sourcemapLines: SourceMap["lines"] | undefined
   transpiledDoc: TextDocument | undefined
   parseErrors: (Error | ParseError)[] | undefined
   fatal: boolean // whether errors were fatal during compilation, so no doc
@@ -384,7 +383,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
     return snapshot
   }
 
-  function createOrUpdateMeta(path: string, transpiledDoc: TextDocument, sourcemapLines?: SourceMap["data"]["lines"], parseErrors?: (Error | ParseError)[], fatal?: boolean) {
+  function createOrUpdateMeta(path: string, transpiledDoc: TextDocument, sourcemapLines?: SourceMap["lines"], parseErrors?: (Error | ParseError)[], fatal?: boolean) {
     let meta = fileMetaData.get(path)
 
     if (!meta) {
@@ -415,7 +414,8 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
 
     if (result) {
       const { code: transpiledCode, sourceMap, errors } = result
-      createOrUpdateMeta(sourcePath, transpiledDoc, sourceMap?.data.lines, errors, false)
+      const sourceMapLines = sourceMap?.lines ?? sourceMap?.data.lines // older Civet
+      createOrUpdateMeta(sourcePath, transpiledDoc, sourceMapLines, errors, false)
       TextDocument.update(transpiledDoc, [{ text: transpiledCode }], version)
 
       return transpiledCode

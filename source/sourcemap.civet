@@ -1,11 +1,11 @@
-type SourceMapEntries = (
+export type SourceMapEntries = (
   [number, number, number, number, number] |
   [number, number, number, number] |
   [number]
 )[][]
 
 // Utility function to create a line/column lookup table for an input string
-export locationTable = (input: string) ->
+export function locationTable(input: string): number[]
   linesRe := /([^\r\n]*)(\r\n|\r|\n|$)/y
   lines := []
   line .= 0
@@ -19,7 +19,7 @@ export locationTable = (input: string) ->
 
   return lines
 
-export lookupLineColumn = (table: number[], pos: number) ->
+export function lookupLineColumn(table: number[], pos: number)
   l .= 0
   prevEnd .= 0
 
@@ -29,83 +29,84 @@ export lookupLineColumn = (table: number[], pos: number) ->
   // [line, column]; zero based
   return [l, pos - prevEnd]
 
-export SourceMap = (sourceString: string) ->
-  srcTable := locationTable sourceString
+EOL := /\r?\n|\r/
+export class SourceMap
+  lines: SourceMapEntries
+  line: number
+  colOffset: number  // relative to previous entry
+  srcLine: number
+  srcColumn: number
+  srcOffset: number
+  srcTable: number[]
 
-  sm :=
-    lines: [[]] as SourceMapEntries
-    line: 0
-    colOffset: 0 // relative to previous entry
-    srcLine: 0
-    srcColumn: 0
-    srcOffset: 0
-    srcTable: srcTable
+  @(@source: string)
+    @lines = [[]]
+    @line = 0
+    @colOffset = 0 // relative to previous entry
+    @srcLine = 0
+    @srcColumn = 0
+    @srcOffset = 0
+    @srcTable = locationTable @source
 
-  EOL := /\r?\n|\r/
+  renderMappings(): string
+    lastSourceLine .= 0
+    lastSourceColumn .= 0
 
-  return
-    data: sm
-    source: ->
-      sourceString
-    renderMappings: ->
-      lastSourceLine .= 0
-      lastSourceColumn .= 0
+    for each line of @lines
+      for each entry of line
+        if entry.length is 4
+          [colDelta, sourceFileIndex, srcLine, srcCol] .= entry
+          lineDelta := srcLine - lastSourceLine
+          colDelta = srcCol - lastSourceColumn
+          lastSourceLine = srcLine
+          lastSourceColumn = srcCol
+          `${encodeVlq(entry[0])}${encodeVlq(sourceFileIndex)}${encodeVlq(lineDelta)}${encodeVlq(colDelta)}`
+        else
+          encodeVlq entry[0]
+      .join(",")
+    .join(";")
 
-      sm.lines.map (line) =>
-        line.map (entry) =>
-          if entry.length is 4
-            [colDelta, sourceFileIndex, srcLine, srcCol] .= entry
-            lineDelta := srcLine - lastSourceLine
-            colDelta = srcCol - lastSourceColumn
-            lastSourceLine = srcLine
-            lastSourceColumn = srcCol
-            `${encodeVlq(entry[0])}${encodeVlq(sourceFileIndex)}${encodeVlq(lineDelta)}${encodeVlq(colDelta)}`
-          else
-            encodeVlq entry[0]
-        .join(",")
-      .join(";")
+  json(srcFileName: string, outFileName: string)
+    version: 3
+    file: outFileName
+    sources: [srcFileName]
+    mappings: @renderMappings()
+    names: []
+    sourcesContent: [@source]
+    toString: ->
+      JSON.stringify this
 
-    json: (srcFileName: string, outFileName: string) ->
-      version: 3
-      file: outFileName
-      sources: [srcFileName]
-      mappings: @renderMappings()
-      names: []
-      sourcesContent: [sourceString]
-      toString: ->
-        JSON.stringify this
+  updateSourceMap(outputStr: string, inputPos?: number, colOffset=0)
+    outLines := outputStr.split(EOL)
 
-    updateSourceMap: (outputStr: string, inputPos?: number, colOffset=0) ->
-      outLines := outputStr.split(EOL)
+    let srcLine: number, srcCol: number
 
-      let srcLine: number, srcCol: number
+    if inputPos?
+      [srcLine, srcCol] = lookupLineColumn @srcTable, inputPos
+      srcCol += colOffset
+      @srcLine = srcLine
+      @srcColumn = srcCol
+      @srcOffset = inputPos + outputStr#
+
+    for each line, i of outLines
+      if i > 0
+        @line++
+        @srcLine++
+        @colOffset = 0
+        @lines[@line] = []
+        @srcColumn = srcCol = colOffset
+
+      l := @colOffset
+      @colOffset = line.length
+      @srcColumn += line.length
 
       if inputPos?
-        [srcLine, srcCol] = lookupLineColumn(srcTable, inputPos)
-        srcCol += colOffset
-        sm.srcLine = srcLine
-        sm.srcColumn = srcCol
-        sm.srcOffset = inputPos + outputStr#
+        // srcLine and srcCol are absolute here
+        @lines[@line].push [l, 0, srcLine+i, srcCol]
+      else if l != 0
+        @lines[@line].push [l]
 
-      for each line, i of outLines
-        if i > 0
-          sm.line++
-          sm.srcLine++
-          sm.colOffset = 0
-          sm.lines[sm.line] = []
-          sm.srcColumn = srcCol = colOffset
-
-        l := sm.colOffset
-        sm.colOffset = line.length
-        sm.srcColumn += line.length
-
-        if inputPos?
-          // srcLine and srcCol are absolute here
-          sm.lines[sm.line].push [l, 0, srcLine+i, srcCol]
-        else if l != 0
-          sm.lines[sm.line].push [l]
-
-      return
+    return
 
 smRegexp := /\n\/\/# sourceMappingURL=data:application\/json;charset=utf-8;base64,([+a-zA-Z0-9\/]*=?=?)$/
 
@@ -114,7 +115,7 @@ Remap a string with compiled code and a source map to use a new source map
 referencing upstream source files.
 */
 /* c8 ignore start */
-remap := (codeWithSourceMap: string, upstreamMap: {data: {lines: SourceMapEntries}, json: any}, sourcePath: string, targetPath: string) ->
+remap := (codeWithSourceMap: string, upstreamMap: {lines: SourceMapEntries, json: any}, sourcePath: string, targetPath: string) ->
   let sourceMapText?: string
   codeWithoutSourceMap := codeWithSourceMap.replace smRegexp, (match, sm) =>
     sourceMapText = sm
@@ -122,8 +123,8 @@ remap := (codeWithSourceMap: string, upstreamMap: {data: {lines: SourceMapEntrie
 
   if sourceMapText
     parsed := parseWithLines sourceMapText
-    composedLines := composeLines upstreamMap.data.lines, parsed.lines
-    upstreamMap.data.lines = composedLines
+    composedLines := composeLines upstreamMap.lines, parsed.lines
+    upstreamMap.lines = composedLines
 
   remappedSourceMapJSON := upstreamMap.json(sourcePath, targetPath)
 

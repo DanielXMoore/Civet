@@ -62,14 +62,15 @@ declare module "@danielx/civet" {
 
   export type SourceMapping = [number] | [number, number, number, number]
 
-  export interface SourceMap {
+  export class SourceMap {
+    constructor(source: string)
     updateSourceMap?(outputStr: string, inputPos: number): void
     json(srcFileName: string, outFileName: string): unknown
-    data: {
-      lines: SourceMapping[][]
-    }
+    source: string
+    lines: SourceMapping[][]
+    /** @deprecated */
+    data: { lines: SourceMapping[][] }
   }
-  export function SourceMap(source: string): SourceMap
 
   // TODO: Import ParseError class from Hera
   export type ParseError = {
@@ -121,7 +122,7 @@ declare module "@danielx/civet" {
     sourcemap: {
       locationTable(input: string): number[]
       lookupLineColumn(table: number[], pos: number): [number, number]
-      SourceMap(input: string): SourceMap
+      SourceMap: typeof SourceMap
     }
   }
 

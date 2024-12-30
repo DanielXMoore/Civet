@@ -17,7 +17,7 @@ onmessage = async (e) => {
     if (errors.length) {
       // Rerun with SourceMap to get error location
       errors = []
-      tsCode = Civet.generate(ast, { errors, sourceMap: Civet.SourceMap(code) });
+      tsCode = Civet.generate(ast, { errors, sourceMap: new Civet.SourceMap(code) });
       error = errors[0]
     }
   } catch (e) {
@@ -61,7 +61,7 @@ onmessage = async (e) => {
       if (errors.length) {
         // Rerun with SourceMap to get error location
         errors = []
-        jsCode = Civet.generate(ast, { js: true, errors, sourceMap: Civet.SourceMap(code) });
+        jsCode = Civet.generate(ast, { js: true, errors, sourceMap: new Civet.SourceMap(code) });
         // Don't postError(errors[0]) here so that we still display TypeScript
         // transpilation; only show error when trying to Run code
         throw errors[0]

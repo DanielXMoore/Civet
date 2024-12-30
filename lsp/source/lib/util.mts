@@ -24,7 +24,7 @@ import {
   remapRange,
 } from '@danielx/civet/ts-diagnostic';
 
-export type SourcemapLines = SourceMap['data']['lines'];
+export type SourcemapLines = SourceMap['lines'];
 
 export {
   flattenDiagnosticMessageText,
