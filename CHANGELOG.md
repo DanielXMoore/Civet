@@ -14,6 +14,7 @@ as well as a full diff and commit list.
 * Parallel testing via `CIVET_THREADS` (Mocha's `--parallel`) [[#1665](https://github.com/DanielXMoore/Civet/pull/1665)]
 * Range literal improvements: faster, fix doubly strict [[#1664](https://github.com/DanielXMoore/Civet/pull/1664)]
 * Worker threads fixes and SourceMap revamp [[#1666](https://github.com/DanielXMoore/Civet/pull/1666)]
+  * BREAKING CHANGE: Must update VSCode plugin to 0.3.27 and eslint plugin to 0.0.6
 
 ## 0.9.3 (2024-12-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.9.2...v0.9.3), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.3))
 * `coffeeClasses` improved compatibility: private static class fields via `=`, bound methods via `=>` , `constructor` shouldn't `return` [[#1650](https://github.com/DanielXMoore/Civet/pull/1650)]
