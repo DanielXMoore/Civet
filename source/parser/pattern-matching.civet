@@ -10,6 +10,7 @@ import type {
   Condition
   ContinueStatement
   ElseClause
+  HasSubbinding
   Identifier
   ObjectBindingPatternContent
   ParenthesizedExpression
@@ -277,6 +278,9 @@ function getPatternConditions(
         pattern.expression,
       ])
 
+    when "NamedBindingPattern"
+      getPatternConditions pattern.pattern, ref, conditions
+
     when "Literal"
       conditions.push([
         ref,
@@ -303,9 +307,16 @@ function getPatternBlockPrefix(
   // Gather bindings
   [splices, thisAssignments] .= gatherBindingCode(pattern)
   patternBindings := nonMatcherBindings(pattern)
-  subbindings :=
-    for each p of gatherRecursiveAll patternBindings, (& as BindingProperty).subbinding?
-      prepend ", ", (p as BindingProperty).subbinding
+
+  // Find all `subbinding` properties, including search within those
+  // subbindings for more subbindings
+  subbindings: ASTNode[] := []
+  function findSubbindings(node: ASTNode): void
+    for each p of gatherRecursiveAll node, ($): $ is HasSubbinding => ($ as HasSubbinding).subbinding?
+      { subbinding } := p
+      subbindings.push prepend ", ", subbinding
+      findSubbindings subbinding
+  findSubbindings patternBindings
 
   splices = splices.map (s) => [", ", nonMatcherBindings(s)]
   thisAssignments = thisAssignments.map ['', &, ";"]
@@ -323,7 +334,7 @@ function getPatternBlockPrefix(
     ...duplicateDeclarations.map ['', &, ";"]
   ]
 
-function elideMatchersFromArrayBindings(elements: ArrayBindingPatternContent): ASTNode[]
+function elideMatchersFromArrayBindings(elements: ArrayBindingPatternContent): ArrayBindingPatternContent
   for each element of elements
     switch element.type
       when "BindingRestElement", "ElisionElement"
@@ -388,7 +399,7 @@ function elideMatchersFromPropertyBindings(properties: ObjectBindingPatternConte
       else // "BindingRestProperty"
         p
 
-function nonMatcherBindings(pattern: ASTNodeObject)
+function nonMatcherBindings(pattern: ASTNodeObject): ASTNodeObject
   switch pattern.type
     when "ArrayBindingPattern", "PostRestBindingElements"
       elements := elideMatchersFromArrayBindings pattern.elements
@@ -403,6 +414,15 @@ function nonMatcherBindings(pattern: ASTNodeObject)
         ...pattern
         properties
         children: pattern.children.map & is pattern.properties ? properties : &
+      }
+    when "NamedBindingPattern"
+      makeNode {
+        ...pattern
+        children: [ pattern.name ]
+        subbinding:
+          . nonMatcherBindings pattern.pattern
+          . " = "
+          . pattern.name
       }
     else
       pattern
