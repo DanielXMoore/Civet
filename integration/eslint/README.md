@@ -125,3 +125,37 @@ const civetPlugin = civet({
 ## Example
 
 You can see a full working example in the [example](./example) directory.
+
+## VS Code Configuration
+
+The [VS Code ESLint extension](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint)
+needs to be configured to recognize Civet files.
+Add the following setting to your `.vscode/settings.json`:
+
+```json
+{
+  "eslint.validate": [
+    "astro",
+    "civet",
+    "javascript",
+    "javascriptreact",
+    "typescript",
+    "typescriptreact",
+    "html",
+    "mdx",
+    "vue",
+    "markdown",
+    "json",
+    "jsonc"
+  ],
+}
+```
+
+This list adds `"civet"` to
+[the default for `eslint.probe`](https://github.com/microsoft/vscode-eslint/?tab=readme-ov-file#settings-options).
+Alternatively, you can list fewer languages; just be sure to include `"civet"`.
+
+Note that
+[setting `eslint.validate` bypasses `eslint.probe`](https://github.com/microsoft/vscode-eslint/?tab=readme-ov-file#settings-options),
+meaning that failed attempts to lint will now generate errors.
+(The plugin's probe mechanism doesn't yet support Civet.)
