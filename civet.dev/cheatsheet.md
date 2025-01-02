@@ -331,7 +331,7 @@ Here is a list of ASCII symbols and their various contextual meanings in Civet.
 | `$` | JavaScript identifier character; template interpolations `` `x${y}` `` |
 | `_` | JavaScript identifier character |
 | `%` | Modulo operators `x % y`, `x %% y`; modulo indexing `x[i %]`; integer division `%/` |
-| `^` | Binary XOR `x ^ y`; logical XOR `x ^^ y`; logical XNOR `x !^ y`, `x !^^ y`; pin patterns `(^x) =>` |
+| `^` | Binary XOR `x ^ y`; logical XOR `x ^^ y`; logical XNOR `x !^ y`, `x !^^ y`; pin patterns `(^x) =>`; binding property in object pattern `{x^: y}` |
 | `&` | Binary AND `x & y`; logical AND `x && y`; TypeScript AND `T & S`; placeholder for function shorthand `&[x]+1` |
 | `\|` | Binary OR `x \| y`; logical OR `x \|\| y`; TypeScript OR `T \| S`; pipeline `\|>`, `\|\|>` |
 | `+` | Addition `x + y`; positive `+x`; increment `x++`, `++x`; object flag `{+x}`; JSX flag `<div +draggable>`; concatenation `x ++ y` |
