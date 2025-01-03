@@ -1475,6 +1475,7 @@ LeftHandSideExpression
       children: $0,
       expression,
     }
+  NamedBindingPattern
   CallExpression
   # NOTE: OptionalExpression is merged into CallExpression
 
@@ -1983,7 +1984,7 @@ FunctionRestParameter
 
 # NOTE: Similar to BindingElement but appears in formal parameters list
 ParameterElement
-  _? AccessModifier?:accessModifier _? ( NWBindingIdentifier / BindingPattern ):binding TypeSuffix?:typeSuffix Initializer?:initializer ParameterElementDelimiter:delim ->
+  _? AccessModifier?:accessModifier _? ( BindingPattern / NWBindingIdentifier ):binding TypeSuffix?:typeSuffix Initializer?:initializer ParameterElementDelimiter:delim ->
     typeSuffix ??= binding.typeSuffix
     return {
       type: "Parameter",
@@ -2067,6 +2068,21 @@ PinPattern
       expression,
     }
 
+# `name^ pattern` means bind the whole thing to `name`,
+# but also destructure/match `pattern`
+NamedBindingPattern
+  BindingIdentifier:binding Caret _?:ws BindingPattern:pattern ->
+    pattern = prepend(ws, pattern)
+    return {
+      type: "NamedBindingPattern",
+      // NOTE: children just has binding, not pattern, for easy destructuring
+      children: [binding],
+      binding,
+      pattern,
+      subbinding: [pattern, " = ", binding],
+      typeSuffix: pattern.typeSuffix,
+    }
+
 # https://262.ecma-international.org/#prod-BindingPattern
 BindingPattern
   ObjectBindingPattern
@@ -2074,6 +2090,7 @@ BindingPattern
   PinPattern
   Literal
   RegularExpressionLiteral
+  NamedBindingPattern
 
 # https://262.ecma-international.org/#prod-ObjectBindingPattern
 # NOTE: Simplified from spec
@@ -2175,7 +2192,21 @@ BindingProperty
 
   # NOTE: Allow ::T type suffix before value
   # NOTE: name^ means we should bind name despite having a value
-  _?:ws1 PropertyName:name Caret?:bind _?:ws2 Colon:colon _?:ws3 ( BindingIdentifier / BindingPattern ):value BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
+  _?:ws1 PropertyName:name Caret?:bind _?:ws2 Colon:colon _?:ws3 ( BindingPattern / BindingIdentifier ):value BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
+    // Convert `name^: pattern` into `name: name^pattern`
+    if (bind) {
+      const binding = name, pattern = value
+      value = {
+        type: "NamedBindingPattern",
+        // NOTE: children just has binding, not pattern, for easy destructuring
+        children: [binding],
+        binding,
+        pattern,
+        subbinding: [pattern, " = ", binding],
+        typeSuffix: pattern.typeSuffix,
+        names: value.names,
+      }
+    }
     return {
       type: "BindingProperty",
       children: [ws1, name, ws2, colon, ws3, value, initializer],  // omit typeSuffix
@@ -2184,7 +2215,6 @@ BindingProperty
       typeSuffix,
       initializer,
       names: value.names,
-      bind: !!bind,
     }
 
   # NOTE: ^name is short for property `name: ^name`
@@ -2247,7 +2277,6 @@ BindingProperty
       initializer,
       names: binding.names,
       identifier: binding,
-      bind: !!bind,
     }
 
 # https://262.ecma-international.org/#prod-BindingRestProperty
@@ -2292,7 +2321,7 @@ BindingElement
   BindingRestElement
 
   # NOTE: Merged in SingleNameBinding
-  _?:ws ( BindingIdentifier / BindingPattern ):binding BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
+  _?:ws ( BindingPattern / BindingIdentifier ):binding BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
     return {
       type: "BindingElement",
       names: binding.names,
@@ -2312,7 +2341,7 @@ BindingElement
 
 # https://262.ecma-international.org/#prod-BindingRestElement
 BindingRestElement
-  _?:ws DotDotDot:dots ( BindingIdentifier / BindingPattern / EmptyBindingPattern ):binding BindingTypeSuffix?:typeSuffix ->
+  _?:ws DotDotDot:dots ( BindingPattern / BindingIdentifier / EmptyBindingPattern ):binding BindingTypeSuffix?:typeSuffix ->
     return {
       type: "BindingRestElement",
       children: [ws, dots, binding],
@@ -2324,7 +2353,7 @@ BindingRestElement
       rest: true,
     }
 
-  _?:ws ( BindingIdentifier / BindingPattern ):binding DotDotDot:dots ->
+  _?:ws ( BindingPattern / BindingIdentifier ):binding DotDotDot:dots ->
     return {
       type: "BindingRestElement",
       children: [...(ws || []), dots, binding],
@@ -4993,10 +5022,16 @@ ForDeclaration
   # But don't add for member expressions like a.x,
   # which parse as a pinned pattern; leave those for LeftHandSideExpression
   InsertConst:c !ActualMemberExpression ForBinding:binding ->
+    // Avoid parsing something like [x.y] as an array pattern with a pin pattern
+    // (leaving them to parse as LeftHandSideExpression)
+    // Also actual pins like ^x don't make sense in for declaration
+    if (gatherRecursive(binding, $ => $.type === "PinPattern").length) {
+      return $skip
+    }
     return {
       type: "ForDeclaration",
       children: [c, binding],
-      decl: c.token,
+      decl: c.token.trimEnd(),
       binding,
       names: binding.names,
     }
@@ -5132,12 +5167,17 @@ PatternExpressionList
 
 PatternExpression
   BindingPattern
-  ForbidIndentedApplication ( SingleLineBinaryOpRHS+ )?:pattern RestoreIndentedApplication ->
-    if (!pattern) return $skip
+  ForbidIndentedApplication ( ( BindingIdentifier Caret? )? SingleLineBinaryOpRHS+ )?:body RestoreIndentedApplication ->
+    if (!body) return $skip
+    const [ named, rhs ] = body
+    let binding
+    if (named) [ binding ] = named
 
     return {
       type: "ConditionFragment",
-      children: pattern,
+      children: [binding, rhs],
+      binding,
+      rhs,
     }
 
 CaseExpressionList
@@ -5220,13 +5260,6 @@ FinallyClause
 
 # https://262.ecma-international.org/#prod-CatchParameter
 CatchParameter
-  BindingIdentifier:binding TypeSuffix?:typeSuffix ->
-    return {
-      type: "CatchParameter",
-      binding,
-      typeSuffix,
-      children: $0,
-    }
   ( ObjectBindingPattern / ArrayBindingPattern ):binding TypeSuffix:typeSuffix ->
     return {
       type: "CatchParameter",
@@ -5239,6 +5272,13 @@ CatchParameter
       type: "CatchPattern",
       children: $0,
       patterns: $1,
+    }
+  BindingIdentifier:binding TypeSuffix?:typeSuffix ->
+    return {
+      type: "CatchParameter",
+      binding,
+      typeSuffix,
+      children: $0,
     }
 
 # An expression with explicit or implied parentheses, for use in if/while/switch
@@ -6547,7 +6587,7 @@ By
     return { $loc, token: $1 }
 
 Caret
-  "^" ->
+  "^" !"^" ->
     return { $loc, token: $1 }
 
 Case
