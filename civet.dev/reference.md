@@ -1646,7 +1646,8 @@ switch x
     type
 </Playground>
 
-Object properties with value matchers are not bound by default (similar to
+Object properties with value matchers (other than a renaming identifier)
+are not bound by default (similar to
 [object destructuring assignment](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Destructuring_assignment)).
 Add a trailing `^` to bind them:
 
