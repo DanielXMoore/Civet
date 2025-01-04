@@ -1631,9 +1631,7 @@ switch x
     console.log "leading type:", type
 </Playground>
 
-::: info
-You can also use condition fragments as patterns.
-:::
+You can also use condition fragments as patterns:
 
 <Playground>
 switch x
@@ -1647,21 +1645,19 @@ switch x
     console.log "it's something else"
 </Playground>
 
+You can add a binding before a condition fragment:
+
 <Playground>
-switch x
-  % 15 is 0
-    console.log "fizzbuzz"
-  % 3 is 0
-    console.log "fizz"
-  % 5 is 0
-    console.log "buzz"
-  else
-    console.log x
+switch f()
+  x % 15 is 0
+    console.log "fizzbuzz", x
+  x % 3 is 0
+    console.log "fizz", x
+  x % 5 is 0
+    console.log "buzz", x
 </Playground>
 
-::: info
-Aliasing object properties works the same as destructuring.
-:::
+Aliasing object properties works the same as destructuring:
 
 <Playground>
 switch e
@@ -1669,9 +1665,7 @@ switch e
     return [type, eventKey]
 </Playground>
 
-::: info
-Patterns can aggregate duplicate bindings.
-:::
+Patterns can aggregate duplicate bindings:
 
 <Playground>
 switch x
@@ -2325,10 +2319,13 @@ You can also specify multiple `catch` blocks using
 <Playground>
 try
   foo()
+catch e <? MyError
+  console.log "MyError", e.data
 catch <? RangeError, <? ReferenceError
   console.log "R...Error"
-catch {message: /bad/}
-  console.log "bad"
+catch e^{message^: /bad/}
+  console.log "bad", message
+  throw e
 catch e
   console.log "other", e
 </Playground>
