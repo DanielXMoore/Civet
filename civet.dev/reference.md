@@ -900,7 +900,7 @@ Use `as T` to cast types in your pipeline:
 data |> JSON.parse |> as MyRecord |> addRecord
 </Playground>
 
-Use `await`, `throw`, `yield`, or `return` in your pipeline:
+Use `await`, `throw`, `yield`, `yield*`, or `return` in your pipeline:
 
 <Playground>
 fetch url |> await
