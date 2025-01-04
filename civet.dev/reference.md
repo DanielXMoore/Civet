@@ -641,6 +641,28 @@ a + b = c
 ++count *= 2
 </Playground>
 
+### Multi Destructuring
+
+Use `name^pattern` to assign `name` while also destructuring into `pattern`:
+
+<Playground>
+[first^{x, y}, ...rest] = points
+</Playground>
+
+Shorthand for destructuring an object property and its contents:
+
+<Playground>
+{name^: {first, last}} = person
+</Playground>
+
+::: info
+Multi destructuring also works in
+[declarations](#variable-declaration),
+[function parameters](#parameter-multi-destructuring),
+[`for` loops](#for-loop-multi-destructuring), and
+[pattern matching](#pattern-matching).
+:::
+
 ### Humanized Operators
 
 <Playground>
@@ -1153,6 +1175,17 @@ This is particularly useful within methods.
 @promise := new Promise (@resolve, @reject) =>
 </Playground>
 
+### Parameter Multi Destructuring
+
+[Multi destructuring](#multi-destructuring) applies to function parameters:
+
+<Playground>
+function Component(props^{
+  name^: {first, last},
+  counter
+})
+</Playground>
+
 ### `return.value`
 
 Instead of specifying a function's return value when it returns,
@@ -1657,6 +1690,16 @@ switch x
     console.log type, content, first
 </Playground>
 
+More generally, use `name^pattern` or `name^ pattern`
+([multi destructuring](#multi-destructuring))
+to bind `name` while also matching `pattern`:
+
+<Playground>
+switch x
+  [space^ /^\s*$/, number^ /^\d+$/, ...]
+    console.log space, number
+</Playground>
+
 Use `^x` to refer to variable `x` in the parent scope,
 as opposed to a generic name that gets destructured.
 (This is called "pinning" in
@@ -2092,6 +2135,27 @@ rateLimits := {
   for user of users
     [user.name]: getRemainingLimit(user)
 }
+</Playground>
+
+### For Loop Multi Destructuring
+
+[Multi destructuring](#multi-destructuring) applies to `for..of/in` loops:
+
+<Playground>
+for item^[key, value] of map
+  if value and key.startsWith "a"
+    process item
+</Playground>
+
+<Playground>
+for person^{name^: {first, last}, age} of people
+  console.log first, last, age, person
+</Playground>
+
+<Playground>
+for key, value^{x, y} in items
+  if x > y
+    process key, value
 </Playground>
 
 ### Infinite Loop
