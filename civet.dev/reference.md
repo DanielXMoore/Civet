@@ -641,6 +641,28 @@ a + b = c
 ++count *= 2
 </Playground>
 
+### Multi Destructuring
+
+Use `name^pattern` to assign `name` while also destructuring into `pattern`:
+
+<Playground>
+[first^{x, y}, ...rest] = points
+</Playground>
+
+Shorthand for destructuring an object property and its contents:
+
+<Playground>
+{name^: {first, last}} = person
+</Playground>
+
+::: info
+Multi destructuring also works in
+[declarations](#variable-declaration),
+[function parameters](#parameter-multi-destructuring),
+[`for` loops](#for-loop-multi-destructuring), and
+[pattern matching](#pattern-matching).
+:::
+
 ### Humanized Operators
 
 <Playground>
@@ -1153,6 +1175,17 @@ This is particularly useful within methods.
 @promise := new Promise (@resolve, @reject) =>
 </Playground>
 
+### Parameter Multi Destructuring
+
+[Multi destructuring](#multi-destructuring) applies to function parameters:
+
+<Playground>
+function Component(props^{
+  name^: {first, last},
+  counter
+})
+</Playground>
+
 ### `return.value`
 
 Instead of specifying a function's return value when it returns,
@@ -1598,9 +1631,7 @@ switch x
     console.log "leading type:", type
 </Playground>
 
-::: info
-You can also use condition fragments as patterns.
-:::
+You can also use condition fragments as patterns:
 
 <Playground>
 switch x
@@ -1614,21 +1645,19 @@ switch x
     console.log "it's something else"
 </Playground>
 
+You can add a binding before a condition fragment:
+
 <Playground>
-switch x
-  % 15 is 0
-    console.log "fizzbuzz"
-  % 3 is 0
-    console.log "fizz"
-  % 5 is 0
-    console.log "buzz"
-  else
-    console.log x
+switch f()
+  x % 15 is 0
+    console.log "fizzbuzz", x
+  x % 3 is 0
+    console.log "fizz", x
+  x % 5 is 0
+    console.log "buzz", x
 </Playground>
 
-::: info
-Aliasing object properties works the same as destructuring.
-:::
+Aliasing object properties works the same as destructuring:
 
 <Playground>
 switch e
@@ -1636,9 +1665,7 @@ switch e
     return [type, eventKey]
 </Playground>
 
-::: info
-Patterns can aggregate duplicate bindings.
-:::
+Patterns can aggregate duplicate bindings:
 
 <Playground>
 switch x
@@ -1655,6 +1682,16 @@ Add a trailing `^` to bind them:
 switch x
   {type^: /list/, content^: [first, ...]}
     console.log type, content, first
+</Playground>
+
+More generally, use `name^pattern` or `name^ pattern`
+([multi destructuring](#multi-destructuring))
+to bind `name` while also matching `pattern`:
+
+<Playground>
+switch x
+  [space^ /^\s*$/, number^ /^\d+$/, ...]
+    console.log space, number
 </Playground>
 
 Use `^x` to refer to variable `x` in the parent scope,
@@ -2094,6 +2131,27 @@ rateLimits := {
 }
 </Playground>
 
+### For Loop Multi Destructuring
+
+[Multi destructuring](#multi-destructuring) applies to `for..of/in` loops:
+
+<Playground>
+for item^[key, value] of map
+  if value and key.startsWith "a"
+    process item
+</Playground>
+
+<Playground>
+for person^{name^: {first, last}, age} of people
+  console.log first, last, age, person
+</Playground>
+
+<Playground>
+for key, value^{x, y} in items
+  if x > y
+    process key, value
+</Playground>
+
 ### Infinite Loop
 
 <Playground>
@@ -2261,10 +2319,13 @@ You can also specify multiple `catch` blocks using
 <Playground>
 try
   foo()
+catch e <? MyError
+  console.log "MyError", e.data
 catch <? RangeError, <? ReferenceError
   console.log "R...Error"
-catch {message: /bad/}
-  console.log "bad"
+catch e^{message^: /bad/}
+  console.log "bad", message
+  throw e
 catch e
   console.log "other", e
 </Playground>

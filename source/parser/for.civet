@@ -12,10 +12,10 @@ import type {
 } from ./types.civet
 
 import {
-  assert
   checkValidLHS
   literalValue
   makeLeftHandSideExpression
+  makeNode
   makeNumericLiteral
   prepend
   startsWith
@@ -292,7 +292,7 @@ function processForInOf($0: [
       let assignmentNames = [...declaration.names]
 
       if declaration2
-        const [, , ws2, decl2] = declaration2  // strip __ Comma __
+        [, , ws2, decl2] := declaration2  // strip __ Comma __
         blockPrefix.push(["", [
           trimFirstSpace(ws2), decl2, " = ", counterRef
         ], ";"])
@@ -314,6 +314,7 @@ function processForInOf($0: [
       declaration =
         type: "Declaration"
         children: ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", trimFirstSpace(expRef), ".length"]
+        decl: "let"
         names: []
 
       condition := [counterRef, " < ", lenRef, "; "]
@@ -340,6 +341,10 @@ function processForInOf($0: [
   // for dereferencing to get the associated value.
   { binding } := declaration
   pattern .= binding?.pattern
+  // Unwrap NamedBindingPattern to correctly detect "Identifier" and
+  // avoid double subbinding
+  if pattern?.type is "NamedBindingPattern"
+    pattern = pattern.binding
   if binding?.typeSuffix or (
     inOf.token is "in" and declaration2 and pattern.type is not "Identifier"
   )
@@ -378,22 +383,25 @@ function processForInOf($0: [
       hoistDec = {
         type: "Declaration"
         children: ["let ", counterRef, " = 0"]
+        decl: "let"
         names: []
       }
       blockPrefix.push ["", {
         type: "Declaration"
         children: [trimFirstSpace(ws2), decl2, " = ", counterRef, "++"]
         names: decl2.names
+        decl: decl2.decl
       }, ";"]
 
     when "in" // for key, value in object
       // First, wrap object in ref if complex expression
-      expRef := maybeRef(exp)
+      expRef := maybeRef exp
       unless expRef is exp
         hoistDec =
           type: "Declaration"
           children: ["let ", expRef]
           names: []
+          decl: "let"
         exp =
           type: "AssignmentExpression"
           children: [" ", expRef, " =", exp]
@@ -402,16 +410,43 @@ function processForInOf($0: [
         hasPropRef := getHelperRef("hasProp")
         blockPrefix.push ["", ["if (!", hasPropRef, "(", trimFirstSpace(expRef), ", ", trimFirstSpace(pattern), ")) continue"], ";"]
       if decl2
-        blockPrefix.push ["", {
-          type: "Declaration"
-          children: [
-            trimFirstSpace(ws2), decl2, " = "
-            trimFirstSpace(expRef)
-            "[", trimFirstSpace(pattern), "]"
-          ]
-          decl: decl2
-          names: decl2.names
-        }, ";"]
+        trimmedPattern := trimFirstSpace pattern
+        expression := makeNode
+          type: "MemberExpression"
+          children:
+            . trimFirstSpace expRef
+            . makeNode
+                type: "Index"
+                expression: trimmedPattern
+                children: [ "[", trimmedPattern, "]" ]
+        blockPrefix.push ["",
+          if decl2.type is "ForDeclaration"
+            { binding, children } := decl2
+            binding.children.push binding.initializer = makeNode {}
+              type: "Initializer"
+              expression
+              children: [" = ", expression]
+            makeNode
+              type: "Declaration"
+              children: [
+                trimFirstSpace(ws2)
+                ...children
+              ]
+              bindings: [decl2.binding]
+              decl: decl2.decl
+              names: decl2.names
+          else
+            makeNode {}
+              type: "AssignmentExpression"
+              children: [
+                trimFirstSpace(ws2), decl2, " = "
+                trimFirstSpace(expRef)
+                "[", trimFirstSpace(pattern), "]"
+              ]
+              names: decl2.names
+              lhs: decl2
+              assigned: decl2
+          ";"]
 
     else
       throw new Error `for item, index must use 'of' or 'in' instead of '${inOf.token}'`

@@ -29,7 +29,6 @@ import {
   isExit
   makeLeftHandSideExpression
   makeNode
-  prepend
   replaceNode
   updateParentPointers
 } from ./util.civet
@@ -45,7 +44,9 @@ import {
 } from ./block.civet
 
 import {
+  gatherSubbindings
   gatherBindingCode
+  simplifyBindingProperties
 } from ./binding.civet
 
 import {
@@ -251,18 +252,15 @@ function getPatternConditions(
             getPatternConditions(value, subRef, conditions) if value
 
     when "ConditionFragment"
-      let { children } = pattern
+      { rhs } .= pattern
       // Add leading space to first binary operation
-      if (children.length) {
-        let [ first, ...rest ] = children
-        let [ ws, ...op ] = first
-        ws = [" "].concat(ws)
+      if rhs#
+        [ first, ...rest ] .= rhs
+        [ ws, ...op ] .= first
+        ws = [" "].concat ws
         first = [ ws, ...op ]
-        children = [ first, ...rest ]
-      }
-      conditions.push(
-        processBinaryOpExpression([ref, children])
-      )
+        rhs = [ first, ...rest ]
+      conditions.push processBinaryOpExpression [ref, rhs]
 
     when "RegularExpressionLiteral"
       conditions.push(
@@ -277,6 +275,9 @@ function getPatternConditions(
         pattern.expression,
       ])
 
+    when "NamedBindingPattern"
+      getPatternConditions pattern.pattern, ref, conditions
+
     when "Literal"
       conditions.push([
         ref,
@@ -288,7 +289,7 @@ function getPatternConditions(
 
 function getPatternBlockPrefix(
   pattern: PatternExpression
-  ref: ASTNode
+  ref: ASTNode // specify undefined to avoid top-level destructuring (in `for`)
   decl: ASTNode = "const "
   typeSuffix?: ASTNode
 ): StatementTuple[]?
@@ -297,33 +298,45 @@ function getPatternBlockPrefix(
       return unless pattern.length
     when "ObjectBindingPattern"
       return unless pattern.properties.length
-    when "Literal", "RegularExpressionLiteral", "PinPattern", "ConditionFragment"
+    when "Literal", "RegularExpressionLiteral", "PinPattern"
       return
+    when "ConditionFragment"
+      return unless pattern.binding
 
   // Gather bindings
   [splices, thisAssignments] .= gatherBindingCode(pattern)
   patternBindings := nonMatcherBindings(pattern)
-  subbindings :=
-    for each p of gatherRecursiveAll patternBindings, (& as BindingProperty).subbinding?
-      prepend ", ", (p as BindingProperty).subbinding
+  subbindings := gatherSubbindings patternBindings
+  simplifyBindingProperties patternBindings
+  simplifyBindingProperties subbindings
 
-  splices = splices.map (s) => [", ", nonMatcherBindings(s)]
+  splices = splices.flatMap (s) => [", ", nonMatcherBindings(s)]
   thisAssignments = thisAssignments.map ['', &, ";"]
 
-  duplicateDeclarations := aggregateDuplicateBindings([patternBindings, splices])
+  duplicateDeclarations := aggregateDuplicateBindings([patternBindings, splices, subbindings])
 
-  [
-    ['', {
+  blockPrefix: StatementTuple[] := []
+  if ref or subbindings# or splices#
+    children: ASTNode[] := [decl]
+    if ref
+      children.push patternBindings, typeSuffix, " = ", ref
+    children.push ...subbindings
+    children.push ...splices
+    unless ref
+      children.splice 1, 1 // remove leading comma
+    blockPrefix.push ['', {
       type: "Declaration"
-      children: [decl, patternBindings, typeSuffix, " = ", ref, ...subbindings, ...splices]
+      children
+      decl
       names: []
       bindings: [] // avoid implicit return of any bindings
     }, ";"]
-    ...thisAssignments
-    ...duplicateDeclarations.map ['', &, ";"]
-  ]
+  blockPrefix.push ...thisAssignments
+  blockPrefix.push ...duplicateDeclarations.map ['', &, ";"]
+  return unless blockPrefix#
+  blockPrefix
 
-function elideMatchersFromArrayBindings(elements: ArrayBindingPatternContent): ASTNode[]
+function elideMatchersFromArrayBindings(elements: ArrayBindingPatternContent): ArrayBindingPatternContent
   for each element of elements
     switch element.type
       when "BindingRestElement", "ElisionElement"
@@ -345,24 +358,20 @@ function elideMatchersFromPropertyBindings(properties: ObjectBindingPatternConte
   for each p of properties
     switch p.type
       when "BindingProperty", "PinProperty"
-        { children, name, value, bind } := p
+        { children, name, value } := p
         [ws] := children
 
         shouldElide := (or)
           name.type is "NumericLiteral" and !value?.name
           name.type is "ComputedPropertyName" and value?.subtype is "NumericLiteral"
         if shouldElide
-          if bind
-            type: "Error" as const
-            message: `Cannot bind ${name.type}`
-          else
-            continue
+          continue
         else
 
           let contents: (BindingProperty | PinProperty)?
           switch value?.type
             when "ArrayBindingPattern", "ObjectBindingPattern"
-              bindings := nonMatcherBindings(value)
+              bindings := nonMatcherBindings value
               contents = {
                 ...p
                 value: bindings
@@ -370,25 +379,31 @@ function elideMatchersFromPropertyBindings(properties: ObjectBindingPatternConte
               }
             when "Identifier", undefined
               contents = p
+            when "NamedBindingPattern"
+              bindings := nonMatcherBindings value.pattern
+              contents = {
+                ...p
+                subbinding: if bindings?.type is like "ArrayBindingPattern", "ObjectBindingPattern", "Identifier"
+                  . bindings
+                  . " = "
+                  . name
+              }
+              // Similar to `simplifyBindingProperties`,
+              // simplify `{name: name}` to just `{name}`
+              // This occurs because the parser expands `{name^: pattern}`
+              // into `{name: name^pattern}`
+              if p.name is value.binding
+                contents!.children = [ws, name, p.delim]
             else // "Literal", "RegularExpressionLiteral", "StringLiteral"
               contents = undefined
-          if bind
-            {
-              ...p
-              children: [ws, name, p.delim]
-              subbinding: if contents?.value
-                . contents.value
-                . " = "
-                . name
-            }
-          else if contents
+          if contents
             contents
           else
             continue
       else // "BindingRestProperty"
         p
 
-function nonMatcherBindings(pattern: ASTNodeObject)
+function nonMatcherBindings(pattern: ASTNodeObject): ASTNodeObject?
   switch pattern.type
     when "ArrayBindingPattern", "PostRestBindingElements"
       elements := elideMatchersFromArrayBindings pattern.elements
@@ -404,6 +419,16 @@ function nonMatcherBindings(pattern: ASTNodeObject)
         properties
         children: pattern.children.map & is pattern.properties ? properties : &
       }
+    when "NamedBindingPattern"
+      bindings := nonMatcherBindings pattern.pattern
+      makeNode {
+        ...pattern
+        subbinding:
+          if bindings?.type is like "ArrayBindingPattern", "ObjectBindingPattern", "Identifier"
+            [ bindings, " = ", pattern.binding ]
+      }
+    when "ConditionFragment"
+      pattern.binding
     else
       pattern
 
@@ -424,8 +449,9 @@ function aggregateDuplicateBindings(bindings)
   for each p of props
     { name, value } := p
 
-    // We do not bind a property that gets matched against
+    // JavaScript does not bind a property that gets matched against
     // an array or object pattern
+    // (At this point, literals and other nonbinding values have been removed.)
     if value?.type is like "ArrayBindingPattern", "ObjectBindingPattern"
       continue
 
