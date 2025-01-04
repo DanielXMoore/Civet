@@ -4,12 +4,16 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.9.5 (2025-01-04, [diff](https://github.com/DanielXMoore/Civet/compare/v0.9.4...v0.9.5), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.5))
+* Named binding patterns `name^pattern` in pattern matching, function parameters, declarations, `for` loops; fix complex bindings in `for` loops [[#1668](https://github.com/DanielXMoore/Civet/pull/1668)]
+* Fix property `::` typing with private fields [[#1669](https://github.com/DanielXMoore/Civet/pull/1669)]
+
 ## 0.9.4 (2024-12-31, [diff](https://github.com/DanielXMoore/Civet/compare/v0.9.3...v0.9.4), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.4))
 * Multiple items and spreads in array comprehensions [[#1656](https://github.com/DanielXMoore/Civet/pull/1656)]
 * `for concat` reduction for concatenating arrays, `for first` reduction for finding elements [[#1657](https://github.com/DanielXMoore/Civet/pull/1657)]
 * `for` reduction fixes: `each` supports implicit body, `for*` is an error [[#1661](https://github.com/DanielXMoore/Civet/pull/1661)]
 * Fix top-level `await`/`yield` in `iife` mode (including REPL and Playground) [[#1662](https://github.com/DanielXMoore/Civet/pull/1662)]
-* Pattern `name^: value` binds `name`, while `name: value` never does [[#1663](https://github.com/DanielXMoore/Civet/pull/1663)]
+* Pattern `name^: value` binds `name`, while `name: value` never does (except for identifiers) [[#1663](https://github.com/DanielXMoore/Civet/pull/1663)]
   * BREAKING CHANGE: Pattern matching with `{name: literal}` no longer binds `name`; use `{name^: literal}` to bind.
 * Parallel testing via `CIVET_THREADS` (Mocha's `--parallel`) [[#1665](https://github.com/DanielXMoore/Civet/pull/1665)]
 * Range literal improvements: faster, fix doubly strict [[#1664](https://github.com/DanielXMoore/Civet/pull/1664)]
