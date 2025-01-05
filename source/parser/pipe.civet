@@ -127,146 +127,142 @@ function constructPipeStep(fn: ExprWithComments, arg: ASTNode!, returning: ASTNo
 // body: [ws, pipe, ws, expr][]
 
 function processPipelineExpressions(statements): void
-  gatherRecursiveAll(statements, (n) => n.type is "PipelineExpression")
-    .forEach (s) =>
-      [ws, , body] := s.children
-      [, arg] .= s.children
+  for each s of gatherRecursiveAll statements, .type is "PipelineExpression"
+    [ws, , body] := s.children
+    [, arg] .= s.children
 
-      i .= 0
-      l := body.length
+    children := [ws]
+    comma := blockContainingStatement(s) ? ";" : ","
 
-      children := [ws]
-      comma := blockContainingStatement(s) ? ";" : ","
+    let usingRef = null
 
-      let usingRef = null
+    for each step, i of body
+      const [leadingComment, pipe, trailingComment, expr] = step
+      const returns = pipe.token is "||>"
+      let ref, result,
+        returning = returns ? arg : null
 
-      for each step, i of body
-        const [leadingComment, pipe, trailingComment, expr] = step
-        const returns = pipe.token is "||>"
-        let ref, result,
-          returning = returns ? arg : null
+      if pipe.token is "|>="
+        let initRef
+        if i is 0
+          checkValidLHS arg
 
-        if pipe.token is "|>="
-          let initRef
-          if i is 0
-            checkValidLHS arg
+          :outer switch arg.type
+            when "MemberExpression"
+              // If there is only a single access then we don't need a ref
+              break if arg.children.length <= 2
+              continue switch
+            when "CallExpression"
+              const access = arg.children.pop()
+              // processAssignments will check that this is a valid
+              // last access to assign to
 
-            :outer switch arg.type
-              when "MemberExpression"
-                // If there is only a single access then we don't need a ref
-                break if arg.children.length <= 2
-                continue switch
-              when "CallExpression"
-                const access = arg.children.pop()
-                // processAssignments will check that this is a valid
-                // last access to assign to
+              usingRef = makeRef()
+              initRef = {
+                type: "AssignmentExpression"
+                children: [usingRef, " = ", arg, comma]
+              }
 
-                usingRef = makeRef()
-                initRef = {
-                  type: "AssignmentExpression"
-                  children: [usingRef, " = ", arg, comma]
-                }
+              arg = {
+                type: "MemberExpression"
+                children: [usingRef, access]
+              }
 
-                arg = {
-                  type: "MemberExpression"
-                  children: [usingRef, access]
-                }
+          // assignment node
+          lhs := [[
+            [initRef]
+            arg
+            []
+            { token: "=", children: [" = "] }
+          ]]
 
-            // assignment node
-            lhs := [[
-              [initRef]
-              arg
-              []
-              { token: "=", children: [" = "] }
-            ]]
+          Object.assign s, {
+            type: "AssignmentExpression"
+            children: [lhs, children]
+            names: null
+            lhs
+            assigned: arg
+            expression: children
+          } satisfies AssignmentExpression
 
-            Object.assign s, {
-              type: "AssignmentExpression"
-              children: [lhs, children]
-              names: null
-              lhs
-              assigned: arg
-              expression: children
-            } satisfies AssignmentExpression
+          // Clone so that the same node isn't on the left and right because splice manipulation
+          // moves things around and can cause a loop in the graph
+          arg = clone arg
+          removeHoistDecs arg
 
-            // Clone so that the same node isn't on the left and right because splice manipulation
-            // moves things around and can cause a loop in the graph
-            arg = clone arg
-            removeHoistDecs arg
+          // except keep the ref the same
+          if arg.children[0].type is "Ref"
+            arg.children[0] = usingRef
 
-            // except keep the ref the same
-            if arg.children[0].type is "Ref"
-              arg.children[0] = usingRef
-
-          else
-            children.unshift({
-              type: "Error",
-              $loc: pipe.token.$loc,
-              message: "Can't use |>= in the middle of a pipeline",
-            })
         else
-          if (i is 0) s.children = children
+          children.unshift({
+            type: "Error",
+            $loc: pipe.token.$loc,
+            message: "Can't use |>= in the middle of a pipeline",
+          })
+      else
+        if (i is 0) s.children = children
 
-        if returns and (ref = needsRef(arg))
-          // Use the existing ref if present
-          usingRef = usingRef or ref
-          arg = {
-            type: "ParenthesizedExpression",
-            children: ["(", {
-              type: "AssignmentExpression"
-              children: [usingRef, " = ", arg]
-            }, ")"],
-          }
-          returning = usingRef
-
-        [result, returning] = constructPipeStep
-          {
-            leadingComment: skipIfOnlyWS(leadingComment)
-            trailingComment: skipIfOnlyWS(trailingComment)
-            expr
-          }
-          arg
-          returning
-
-        if result.type is "ReturnStatement"
-          // Attach errors/warnings if there are more steps
-          if i < l - 1
-            result.children.push({
-              type: "Error",
-              message: "Can't continue a pipeline after returning",
-            })
-          arg = result
-          if children.-1 is ","
-            children.pop()
-            children.push(";")
-          break
-
-        if returning
-          arg = returning
-          children.push(result, comma)
-        else
-          arg = result
-
-      if usingRef
-        s.hoistDec = {
-          type: "Declaration",
-          children: ["let ", usingRef],
-          names: [],
+      if returns and (ref = needsRef(arg))
+        // Use the existing ref if present
+        usingRef = usingRef or ref
+        arg = {
+          type: "ParenthesizedExpression",
+          children: ["(", {
+            type: "AssignmentExpression"
+            children: [usingRef, " = ", arg]
+          }, ")"],
         }
+        returning = usingRef
 
-      children.push(arg)
-
-      // Wrap with parens because comma operator has low precedence
-      if !children.some(?.type is "ReturnStatement") and children.some & is ","
-        { parent } := s
-        parenthesizedExpression := makeLeftHandSideExpression { ...s }
-        Object.assign s, parenthesizedExpression, {
-          parent
-          hoistDec: undefined
+      [result, returning] = constructPipeStep
+        {
+          leadingComment: skipIfOnlyWS(leadingComment)
+          trailingComment: skipIfOnlyWS(trailingComment)
+          expr
         }
+        arg
+        returning
 
-      // Update parent pointers
-      addParentPointers(s, s.parent)
+      if result.type is "ReturnStatement"
+        // Attach errors/warnings if there are more steps
+        if i < body.length - 1
+          result.children.push({
+            type: "Error",
+            message: "Can't continue a pipeline after returning",
+          })
+        arg = result
+        if children.-1 is ","
+          children.pop()
+          children.push(";")
+        break
+
+      if returning
+        arg = returning
+        children.push(result, comma)
+      else
+        arg = result
+
+    if usingRef
+      s.hoistDec = {
+        type: "Declaration",
+        children: ["let ", usingRef],
+        names: [],
+      }
+
+    children.push(arg)
+
+    // Wrap with parens because comma operator has low precedence
+    if !children.some(?.type is "ReturnStatement") and children.some & is ","
+      { parent } := s
+      parenthesizedExpression := makeLeftHandSideExpression { ...s }
+      Object.assign s, parenthesizedExpression, {
+        parent
+        hoistDec: undefined
+      }
+
+    // Update parent pointers
+    addParentPointers(s, s.parent)
 
 export {
   processPipelineExpressions
