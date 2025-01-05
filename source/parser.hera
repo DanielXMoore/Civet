@@ -48,6 +48,8 @@ import {
   maybeRefAssignment,
   modifyString,
   negateCondition,
+  precedenceCustomDefault,
+  precedenceStep,
   prepend,
   processAssignmentDeclaration,
   processBinaryOpExpression,
@@ -2536,10 +2538,9 @@ OperatorDeclaration
   # `operator {x, y} := ...` declaration while blessing
   Operator:op OperatorBehavior?:behavior _:w LexicalDeclaration:decl ->
     decl.names.forEach((name) => state.operators.set(name, behavior))
-    return {
-      ...decl,
-      children: [ trimFirstSpace(w), ...decl.children ]
-    }
+    if (behavior?.error) decl = prepend(behavior.error, decl)
+    decl = prepend(trimFirstSpace(w), decl)
+    return decl
   # `operator id(a, b) {...}` defines a function
   OperatorSignature:signature BracedBlock:block ->
     state.operators.set(signature.id.name, signature.behavior)
@@ -2553,11 +2554,16 @@ OperatorDeclaration
     }
   # `operator id` alone blesses `id` as an operator
   Operator:op _:w1 Identifier:id OperatorBehavior?:behavior ( CommaDelimiter _? Identifier OperatorBehavior? )*:ids ->
+    const children = []
     state.operators.set(id.name, behavior)
-    ids.forEach(([, , id2, behavior2]) => state.operators.set(id2.name, behavior2))
+    if (behavior?.error) children.push(behavior.error)
+    ids.forEach(([, , id2, behavior2]) => {
+      state.operators.set(id2.name, behavior2)
+      if (behavior2?.error) children.push(behavior2.error)
+    })
     return {
       id,
-      children: [],
+      children,
     }
 
 # NOTE: Like FunctionSignature, but no async or star or @,
@@ -2585,7 +2591,7 @@ OperatorSignature
         generator: !!generator.length,
       },
       block: null,
-      children: [ async, func, generator, w1, id, w2, parameters, returnType ],
+      children: [ async, func, generator, w1, id, behavior?.error, w2, parameters, returnType ],
       behavior,
     }
 
@@ -2598,14 +2604,25 @@ OperatorBehavior
 OperatorPrecedence
   # inspired by https://docs.raku.org/language/functions#Precedence
   _? ( "tighter" / "looser" / "same" ):mod NonIdContinue _? ( Identifier / ( OpenParen BinaryOp CloseParen ) ):op ->
-    let prec = op.type === "Identifier"
-      ? state.operators.get(op.name).prec
-      : getPrecedence(op[1])
-    switch (mod) {
-      case "tighter": prec += 1/64; break
-      case "looser": prec -= 1/64; break
+    let prec, error
+    if (op.type === "Identifier") {
+      if (state.operators.has(op.name)) {
+        prec = state.operators.get(op.name).prec
+      } else {
+        prec = precedenceCustomDefault
+        error = {
+          type: "Error",
+          message: `Precedence refers to unknown operator ${op.name}`,
+        }
+      }
+    } else {
+      prec = getPrecedence(op[1])
     }
-    return {prec}
+    switch (mod) {
+      case "tighter": prec += precedenceStep; break
+      case "looser": prec -= precedenceStep; break
+    }
+    return {prec, error}
 
 OperatorAssociativity
   # inspired by https://docs.raku.org/language/functions#Associativity
@@ -5675,12 +5692,15 @@ ImportDeclaration
       children: [imp, $0.slice(1)],
     }
   ( ( Import __ ) / ImpliedImport ):i Operator OperatorBehavior?:behavior __:ws1 OperatorNamedImports:imports __:ws2 FromClause:from ->
+    const errors = []
+    if (behavior?.error) errors.push(behavior.error)
     imports.specifiers.forEach((spec) => {
       state.operators.set(spec.binding.name, spec.behavior ?? behavior)
+      if (spec.behavior?.error) errors.push(spec.behavior.error)
     })
     return {
       type: "ImportDeclaration",
-      children: [i, trimFirstSpace(ws1), imports, ws2, from],
+      children: [i, ...errors, trimFirstSpace(ws1), imports, ws2, from],
         // omit $2 = Operator and $3 = OperatorBehavior
       imports,
       from,
@@ -5708,12 +5728,15 @@ ImportDeclaration
     return { type: "ImportDeclaration", ts: !!t, children, imports, from }
   # NOTE: [from] ... import ... reverse syntax
   ImpliedFromClause:from __:fws Import:i __:iws Operator OperatorBehavior?:behavior __:ows OperatorNamedImports:imports ->
+    const errors = []
+    if (behavior?.error) errors.push(behavior.error)
     imports.specifiers.forEach((spec) => {
       state.operators.set(spec.binding.name, spec.behavior ?? behavior)
+      if (spec.behavior?.error) errors.push(spec.behavior.error)
     })
     return {
       type: "ImportDeclaration",
-      children: [i, iws, trimFirstSpace(ows), imports, fws, from],
+      children: [i, iws, ...errors, trimFirstSpace(ows), imports, fws, from],
         // omit Operator and OperatorBehavior
       imports,
       from,
@@ -5855,13 +5878,13 @@ OperatorImportSpecifier
     return {
       binding,
       behavior,
-      children: [$1, $2, $4, $5, $6, $7],
+      children: [$1, $2, $3?.error, $4, $5, $6, $7],
     }
   __ ImportedBinding:binding OperatorBehavior?:behavior ObjectPropertyDelimiter ->
     return {
       binding,
       behavior,
-      children: [$1, $2, $4],
+      children: [$1, $2, $3?.error, $4],
     }
 
 ImportAsToken
