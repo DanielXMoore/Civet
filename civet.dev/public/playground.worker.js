@@ -37,7 +37,12 @@ onmessage = async (e) => {
       postMessage({ uid, inputHtml, outputHtml, error });
     } else {
       console.error(error)
-      postMessage({ uid, inputHtml, outputHtml: error.message, error });
+      let outputHtml = (error.stack ?? `${error.name}: ${error.message}`)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+      outputHtml = `<h3>Compiler crashed; please report as a compiler bug.</h3><pre class="shiki crash">${outputHtml}</pre>`;
+      postMessage({ uid, inputHtml, outputHtml, error });
     }
   }
 

@@ -219,7 +219,12 @@ const playgroundUrl = computed(() => {
 }
 
 .col--error {
-  border: 1px solid var(--vp-c-red-dimm-1);
+  border: 1px solid var(--vp-c-red-3);
+}
+.col--error > .code--output:has(.crash) {
+  color: var(--vp-c-red-1);
+  padding: 0 18px; /* match shiki padding */
+  font-size: var(--vp-code-font-size);
 }
 
 .scroll {
@@ -344,5 +349,11 @@ input {
   position: absolute;
   top: -1px;
   left: 4.5px;
+}
+</style>
+
+<style>
+.col--error h3 {
+  margin-top: 16px;
 }
 </style>
