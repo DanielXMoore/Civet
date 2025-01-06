@@ -4,6 +4,16 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.9.6 (2025-01-06, [diff](https://github.com/DanielXMoore/Civet/compare/v0.9.5...v0.9.6), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.6))
+* `yield*` in pipeline [[#1670](https://github.com/DanielXMoore/Civet/pull/1670)]
+* Fix implicit return of pipeline with `return`/`throw` [[#1676](https://github.com/DanielXMoore/Civet/pull/1676)]
+* Fix immediately called `(op)` in pipeline context  [[#1677](https://github.com/DanielXMoore/Civet/pull/1677)]
+* Fix pipe into certain `new` expressions [[#1678](https://github.com/DanielXMoore/Civet/pull/1678)]
+* Improve Playground error styling [[#1679](https://github.com/DanielXMoore/Civet/pull/1679)]
+* Handle invalid precedence in operators [[#1681](https://github.com/DanielXMoore/Civet/pull/1681)]
+* Allow spaces in `(op)`, force spaces in `(in)` and `(instanceof)` [[#1684](https://github.com/DanielXMoore/Civet/pull/1684)]
+* Fix unwrapping of operator sections with placeholders [[#1685](https://github.com/DanielXMoore/Civet/pull/1685)]
+
 ## 0.9.5 (2025-01-04, [diff](https://github.com/DanielXMoore/Civet/compare/v0.9.4...v0.9.5), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.5))
 * Named binding patterns `name^pattern` in pattern matching, function parameters, declarations, `for` loops; fix complex bindings in `for` loops [[#1668](https://github.com/DanielXMoore/Civet/pull/1668)]
 * Fix property `::` typing with private fields [[#1669](https://github.com/DanielXMoore/Civet/pull/1669)]
