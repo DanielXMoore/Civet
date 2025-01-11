@@ -4,6 +4,8 @@ import { compileCivetToHtml } from '../utils/compileCivetToHtml';
 import { b64 } from '../utils/b64';
 import { ligatures } from '../store/ligatures.store';
 
+const document_ = document
+
 const emit = defineEmits(['input']);
 const props = defineProps<{
   b64Code: string;
@@ -141,11 +143,17 @@ const playgroundUrl = computed(() => {
 <template>
   <div v-if="props.compileAtStart && loading">Loading playground...</div>
   <div v-else :class="{ wrapper: true,  ligatures: ligatures}">
-    <div class="col scroll" @click="textareaEl?.focus()">
+    <div class="col scroll" @click="textareaEl?.focus()" style="tab-size: 4">
       <div class="code code--user">
         <textarea
           :value="userCode"
           :onInput="(e: any) => (userCode = e.target.value)"
+          :onkeydown="(event: any) => {
+            if (event.key == `Tab`) {
+              event.preventDefault()
+              document_.execCommand(`insertText`, false, `\t`)
+            }
+          }"
           ref="textareaEl"
           resize="false"
           spellcheck="false"
