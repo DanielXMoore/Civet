@@ -101,7 +101,7 @@ const ensureServiceForSourcePath = async (sourcePath: string) => {
   await projectPathToPendingPromiseMap.get(projPath)
   let service = projectPathToServiceMap.get(projPath)
   if (service) return service
-  console.log("Spawning language server for project path: ", projPath)
+  // console.log("Spawning language server for project path: ", projPath)
   service = TSService(projPath)
   const initP = service.loadPlugins()
   projectPathToPendingPromiseMap.set(projPath, initP)
@@ -116,6 +116,7 @@ const diagnosticsDelay = 16;  // ms delay for primary updated file
 const diagnosticsPropagationDelay = 100;  // ms delay for other files
 
 connection.onInitialize(async (params: InitializeParams) => {
+  connection.console.log(`Initializing civet server at ${new Date().toLocaleTimeString()}`);
   const capabilities = params.capabilities;
 
   // Does the client support the `workspace/configuration` request?
@@ -146,7 +147,6 @@ connection.onInitialize(async (params: InitializeParams) => {
       definitionProvider: true,
       hoverProvider: true,
       referencesProvider: true,
-
     }
   };
 
@@ -158,15 +158,20 @@ connection.onInitialize(async (params: InitializeParams) => {
     };
   }
 
-  // TODO: currently only using the first workspace folder
-  const baseDir = params.workspaceFolders?.[0]?.uri.toString()
-  if (!baseDir)
-    throw new Error("Could not initialize without workspace folders")
+  if (!params.rootUri) {
+    // TODO: currently only using the first workspace folder
+    const baseDir = params.workspaceFolders?.[0]?.uri.toString()
+    if (!baseDir)
+      throw new Error("Could not initialize without workspace folders")
 
-  rootUri = baseDir + "/"
-  rootDir = fileURLToPath(rootUri)
+    rootUri = baseDir + "/"
+    rootDir = fileURLToPath(rootUri)
+  } else {
+    rootUri = params.rootUri
+    rootDir = fileURLToPath(rootUri)
+  }
 
-  console.log("Init", rootDir)
+  // console.log("Init", rootDir)
   return result;
 });
 
@@ -244,6 +249,7 @@ connection.onHover(async ({ textDocument, position }) => {
 
 // This handler provides the initial list of the completion items.
 connection.onCompletion(async ({ textDocument, position, context: _context }) => {
+  connection.console.log('onCompletion');
   const completionConfiguration = {
     useCodeSnippetsOnMethodSuggest: false,
     pathSuggestions: true,
@@ -268,7 +274,7 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
   const service = await ensureServiceForSourcePath(sourcePath)
   if (!service) return
 
-  console.log("completion", sourcePath, position)
+  connection.console.log(`completion ${JSON.stringify({ sourcePath, position }, null, 2)}`);
 
   await updating(textDocument)
   if (sourcePath.match(tsSuffix)) { // non-transpiled
@@ -290,7 +296,7 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
   // Don't map for files that don't have a sourcemap (plain .ts for example)
   if (sourcemapLines) {
     position = forwardMap(sourcemapLines, position)
-    console.log('remapped')
+    // console.log('remapped')
   }
 
   const p = transpiledDoc.offsetAt(position)
@@ -550,11 +556,11 @@ connection.onDocumentSymbol(async ({ textDocument }) => {
 
 // TODO
 documents.onDidClose(({ document }) => {
-  console.log("close", document.uri)
+  // console.log("close", document.uri)
 });
 
 documents.onDidOpen(async ({ document }) => {
-  console.log("open", document.uri)
+  // console.log("open", document.uri)
 })
 
 // Buffer up changes to documents so we don't stack transpilations and become unresponsive
@@ -569,7 +575,7 @@ async function executeQueue() {
   // Reset queue to allow accumulating jobs while this queue runs
   const changed = changeQueue
   changeQueue = new Set
-  console.log("executeQueue", changed.size)
+  // console.log("executeQueue", changed.size)
   // Run all jobs in queue (preventing livelock).
   for (const document of changed) {
     await updateDiagnosticsForDoc(document)
@@ -598,14 +604,14 @@ async function scheduleExecuteQueue() {
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent(async ({ document }) => {
-  console.log("onDidChangeContent", document.uri)
+  // console.log("onDidChangeContent", document.uri)
   documentUpdateStatus.set(document.uri, withResolvers())
   changeQueue.add(document)
   scheduleExecuteQueue()
 });
 
 async function updateDiagnosticsForDoc(document: TextDocument) {
-  console.log("Updating diagnostics for doc:", document.uri)
+  // console.log("Updating diagnostics for doc:", document.uri)
   const sourcePath = documentToSourcePath(document)
   assert(sourcePath)
 
@@ -631,7 +637,7 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
   // Transpiled file
   const meta = service.host.getMeta(sourcePath)
   if (!meta) {
-    console.log("no meta for ", sourcePath)
+    // console.log("no meta for ", sourcePath)
     return
   }
   const { sourcemapLines, transpiledDoc, parseErrors, fatal } = meta
