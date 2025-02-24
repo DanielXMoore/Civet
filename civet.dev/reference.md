@@ -2638,14 +2638,20 @@ class Civet <: Animal, Named
 
 Civet experimentally defines a "mixin" to be a function mapping a class to
 a class (e.g., returning a subclass with added functionality),
-and provides syntax for applying one or more mixins to the base class
+and provides `with` syntax for applying one or more mixins to the base class
 you're extending:
 
 <Playground>
-class Civet extends Animal with Mixin1, Mixin2
+function Movable(C)
+  class extends C
+    move(@x, @y)
+class Civet extends Animal with Movable
+  @()
+    @move 0, 0
 </Playground>
 
-The extended class defaults to `Object`:
+Mixins get applied left to right.
+The extended class defaults to `Object`.
 
 <Playground>
 class Civet with Mixin1, Mixin2
