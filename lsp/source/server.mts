@@ -58,7 +58,7 @@ const projectPathToPendingPromiseMap = new Map<string, Promise<void>>()
 // Mapping from project path -> TSService instance operating on that base directory
 const projectPathToServiceMap = new Map<string, ReturnType<typeof TSService>>()
 
-let rootUri: string, rootDir: string;
+let rootUri: string | undefined, rootDir: string | undefined;
 
 const getProjectPathFromSourcePath = (sourcePath: string) => {
   let projPath = sourcePathToProjectPathMap.get(sourcePath)
@@ -85,7 +85,7 @@ const getProjectPathFromSourcePath = (sourcePath: string) => {
 
   // Otherwise, check whether we're inside the root
   if (!projPath) {
-    if (sourcePath.startsWith(rootDir)) {
+    if (rootDir != null && sourcePath.startsWith(rootDir)) {
       projPath = rootUri
     } else {
       projPath = pathToFileURL(path.dirname(sourcePath) + "/").toString()
@@ -160,11 +160,13 @@ connection.onInitialize(async (params: InitializeParams) => {
 
   // TODO: currently only using the first workspace folder
   const baseDir = params.workspaceFolders?.[0]?.uri.toString()
-  if (!baseDir)
-    throw new Error("Could not initialize without workspace folders")
-
-  rootUri = baseDir + "/"
-  rootDir = fileURLToPath(rootUri)
+  if (!baseDir) {
+    console.log("Warning: No workspace folders")
+    rootUri = rootDir = undefined
+  } else {
+    rootUri = baseDir + "/"
+    rootDir = fileURLToPath(rootUri)
+  }
 
   console.log("Init", rootDir)
   return result;
@@ -755,7 +757,7 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
     if (entry.sourceDisplay) {
       item.labelDetails = { description: Previewer.plain(entry.sourceDisplay) }
     } else if (entry.source && entry.hasAction) {
-      item.labelDetails = { description: path.relative(rootDir, entry.source) }
+      item.labelDetails = { description: rootDir ? path.relative(rootDir, entry.source) : entry.source }
     }
     if (entry.labelDetails) {
       item.labelDetails = { ...item.labelDetails, ...entry.labelDetails }
