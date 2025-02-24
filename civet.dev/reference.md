@@ -2634,6 +2634,23 @@ class Civet < Animal <: Named
 class Civet <: Animal, Named
 </Playground>
 
+### Mixins
+
+Civet experimentally defines a "mixin" to be a function mapping a class to
+a class (e.g., returning a subclass with added functionality),
+and provides syntax for applying one or more mixins to the base class
+you're extending:
+
+<Playground>
+class Civet extends Animal with Mixin1, Mixin2
+</Playground>
+
+The extended class defaults to `Object`:
+
+<Playground>
+class Civet with Mixin1, Mixin2
+</Playground>
+
 ### Decorators
 
 Civet uses [`@` for `this`](#this), so decorators need to use `@@`:
