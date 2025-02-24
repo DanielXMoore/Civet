@@ -4,6 +4,12 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.9.7 (2025-02-24, [diff](https://github.com/DanielXMoore/Civet/compare/v0.9.6...v0.9.7), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.7))
+* Allow binary operators after nested object literals and bulleted arrays, fix `++` with bulleted arrays [[#1688](https://github.com/DanielXMoore/Civet/pull/1688)]
+* Fix bind property shorthand in JSX [[#1690](https://github.com/DanielXMoore/Civet/pull/1690)]
+* Property `::` types with initializers are optional [[#1701](https://github.com/DanielXMoore/Civet/pull/1701)]
+* Fix LSP when opening files without workspace [[#1702](https://github.com/DanielXMoore/Civet/pull/1702)]
+
 ## 0.9.6 (2025-01-06, [diff](https://github.com/DanielXMoore/Civet/compare/v0.9.5...v0.9.6), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.6))
 * `yield*` in pipeline [[#1670](https://github.com/DanielXMoore/Civet/pull/1670)]
 * Fix implicit return of pipeline with `return`/`throw` [[#1676](https://github.com/DanielXMoore/Civet/pull/1676)]
