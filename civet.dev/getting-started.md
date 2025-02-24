@@ -44,7 +44,13 @@ npm i -g @danielx/civet
 The instructions below assume such a global install;
 if you do not want to, use `npx @danielx/civet` in place of `civet`.
 
-To use TypeScript for type checking, create a `tsconfig.json` file. For example:
+If you use VSCode, install the
+[Civet VSCode extension](https://marketplace.visualstudio.com/items?itemName=DanielX.civet).
+You will get best results if you also disable the built-in TypeScript extension.
+
+To use TypeScript for type checking
+(which the VSCode plugin does automatically),
+create a `tsconfig.json` file. For example:
 
 ```json
 {
