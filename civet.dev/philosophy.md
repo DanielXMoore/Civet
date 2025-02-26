@@ -22,7 +22,7 @@ way.
 but based on pragmatic concerns. Things should be consistent where possible, especially conceptually.
 
 Civet builds on top of **history**. We've taken inspiration from languages like CoffeeScript, Elm, LiveScript, Flow,
-Haskell, Perl, Python, Ruby, Crystal, Bash, and others.
+Haskell, Elixir, Erlang, Python, Perl, Ruby, Crystal, Bash, and others.
 
 Civet is **pragmatic**. Civet design is informed by 25+ years of JavaScript development. Frontend frameworks
 have come and gone but they all addressed issues that were important for their time. We focus heavily on
