@@ -3058,13 +3058,12 @@ export default x := 5
 ### Backward Import/Export
 
 Similar to Python, you can put `from` before `import`/`export`.
-Furthermore, `from` is optional.
 This can improve autocompletion behavior.
 
 <Playground>
 from fs/promises import { readFile, writeFile }
-./util import * as util
-./package.json with {type: 'json'} export { version }
+from ./util import * as util
+from ./package.json with {type: 'json'} export { version }
 </Playground>
 
 ## Comments
