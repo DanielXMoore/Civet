@@ -4,6 +4,18 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.10.0 (2025-03-17, [diff](https://github.com/DanielXMoore/Civet/compare/v0.9.7...v0.10.0), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.0))
+* Document `class with A, B` mixins [[#1703](https://github.com/DanielXMoore/Civet/pull/1703)]
+* Document how to use VSCode plugin [[#1704](https://github.com/DanielXMoore/Civet/pull/1704)]
+* Allow comment before bulleted array [[#1713](https://github.com/DanielXMoore/Civet/pull/1713)]
+* Fix exit detection for `switch` with fallthrough [[#1714](https://github.com/DanielXMoore/Civet/pull/1714)]
+* Require `from` in backwards `import`/`export` to fix ambiguity with dynamic `import` [[#1715](https://github.com/DanielXMoore/Civet/pull/1715)]
+  * BREAKING CHANGE: `module import spec` needs to written as `from module import spec` (`from` can no longer be omitted)
+* Support nested types in parentheses [[#1716](https://github.com/DanielXMoore/Civet/pull/1716)]
+* Fix `export`ing statement expressions [[#1717](https://github.com/DanielXMoore/Civet/pull/1717)]
+* Fix complex one-line `if` then blocks via bracing [[#1718](https://github.com/DanielXMoore/Civet/pull/1718)]
+* Indented forms of `implements` and `with` [[#1719](https://github.com/DanielXMoore/Civet/pull/1719)]
+
 ## 0.9.7 (2025-02-24, [diff](https://github.com/DanielXMoore/Civet/compare/v0.9.6...v0.9.7), [commits](https://github.com/DanielXMoore/Civet/commits/v0.9.7))
 * Allow binary operators after nested object literals and bulleted arrays, fix `++` with bulleted arrays [[#1688](https://github.com/DanielXMoore/Civet/pull/1688)]
 * Fix bind property shorthand in JSX [[#1690](https://github.com/DanielXMoore/Civet/pull/1690)]
