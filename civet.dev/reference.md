@@ -2634,6 +2634,16 @@ class Civet < Animal <: Named
 class Civet <: Animal, Named
 </Playground>
 
+Long `implements` lists can be indented:
+
+<Playground>
+class Civet
+  extends Animal
+  implements
+    Named
+    Character
+</Playground>
+
 ### Mixins
 
 Civet experimentally defines a "mixin" to be a function mapping a class to
@@ -2655,6 +2665,16 @@ The extended class defaults to `Object`.
 
 <Playground>
 class Civet with Mixin1, Mixin2
+</Playground>
+
+Long mixin lists can be indented:
+
+<Playground>
+class Civet
+  extends Animal
+  with
+    Mixin1
+    Mixin2
 </Playground>
 
 ### Decorators
