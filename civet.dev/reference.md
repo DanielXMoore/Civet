@@ -2641,7 +2641,7 @@ class Civet
   extends Animal
   implements
     Named
-    Character
+    Record string, number
 </Playground>
 
 ### Mixins
@@ -2673,7 +2673,7 @@ Long mixin lists can be indented:
 class Civet
   extends Animal
   with
-    Mixin1
+    Mixin1 arg
     Mixin2
 </Playground>
 
