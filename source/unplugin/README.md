@@ -8,9 +8,11 @@ The only setup required is adding the plugin to your bundler's config.
 Jump to:
 
 * [Vite](#vite)
-* [Astro](#astro)
-* [Rollup](#rollup)
 * [ESBuild](#esbuild)
+* [Astro](#astro)
+* [Farm](#farm)
+* [Rolldown](#rolldown)
+* [Rollup](#rollup)
 * [Webpack](#webpack)
 
 You probably also want to pass in [options](#options).
@@ -19,8 +21,8 @@ You probably also want to pass in [options](#options).
 
 ```ts
 // vite.config.ts
-import { defineConfig } from 'vite';
-import civetVitePlugin from '@danielx/civet/vite';
+import { defineConfig } from 'vite'
+import civetVitePlugin from '@danielx/civet/vite'
 
 export default defineConfig({
   // ...
@@ -29,7 +31,7 @@ export default defineConfig({
       // options
     }),
   ],
-});
+})
 ```
 
 To use Civet files as Web Workers, you can use
@@ -54,8 +56,8 @@ You'll also need to pass the `civetVitePlugin` via the
 
 ```ts
 // vite.config.ts
-import { defineConfig } from 'vite';
-import civetVitePlugin from '@danielx/civet/vite';
+import { defineConfig } from 'vite'
+import civetVitePlugin from '@danielx/civet/vite'
 
 export default defineConfig({
   // ...
@@ -72,15 +74,30 @@ export default defineConfig({
     ],
     // format: "es",  // if using { type: 'module' }
   },
-});
+})
+```
+
+### ESBuild
+
+```ts
+import esbuild from 'esbuild'
+import civetEsbuildPlugin from '@danielx/civet/esbuild'
+
+esbuild
+  .build({
+    // ...
+    // sourcemap: true, // build and link sourcemap files
+    plugins: [civetEsbuildPlugin()],
+  })
+  .catch(() => process.exit(1));
 ```
 
 ### Astro
 
 ```ts
 // astro.config.ts
-import { defineConfig } from 'astro/config';
-import civet from '@danielx/civet/astro';
+import { defineConfig } from 'astro/config'
+import civet from '@danielx/civet/astro'
 
 // https://astro.build/config
 export default defineConfig({
@@ -90,7 +107,7 @@ export default defineConfig({
       // options
     }),
   ],
-});
+})
 ```
 
 To use Civet files as Web Workers, see the [Vite directions](#vite) above.
@@ -99,9 +116,9 @@ You'll also need to import and pass the Civet Vite plugin via the
 
 ```ts
 // astro.config.ts
-import { defineConfig } from 'astro/config';
-import civet from '@danielx/civet/astro';
-import civetVitePlugin from '@danielx/civet/vite';
+import { defineConfig } from 'astro/config'
+import civet from '@danielx/civet/astro'
+import civetVitePlugin from '@danielx/civet/vite'
 
 // https://astro.build/config
 export default defineConfig({
@@ -121,7 +138,41 @@ export default defineConfig({
       // format: "es",  // if using { type: 'module' }
     },
   },
-});
+})
+```
+
+### Farm
+
+```ts
+// farm.config.ts
+import { defineConfig } from '@farmfe/core'
+import civetFarmPlugin from '@danielx/civet/farm'
+
+export default defineConfig({
+  // ...
+  plugins: [
+    civetFarmPlugin({
+      // options
+    })
+  ],
+})
+```
+
+### Rolldown
+
+```ts
+// rolldown.config.ts
+import { defineConfig } from 'rolldown'
+import civetRolldownPlugin from '@danielx/civet/rolldown'
+
+export default defineConfig({
+  // ...
+  plugins: [
+    civetRolldownPlugin({
+      // options
+    }),
+  ],
+})
 ```
 
 ### Rollup
@@ -137,22 +188,7 @@ export default {
       // options
     }),
   ],
-};
-```
-
-### ESBuild
-
-```ts
-import esbuild from 'esbuild';
-import civetEsbuildPlugin from '@danielx/civet/esbuild';
-
-esbuild
-  .build({
-    // ...
-    // sourcemap: true, // build and link sourcemap files
-    plugins: [civetEsbuildPlugin()],
-  })
-  .catch(() => process.exit(1));
+}
 ```
 
 ### Webpack
@@ -232,4 +268,4 @@ interface PluginOptions {
 ## Examples
 
 See also [full examples of unplugin](../../integration/unplugin-examples)
-in Astro, esbuild, NextJS, Rollup, Vite, and Webpack.
+in Astro, esbuild, NextJS, Farm, Rolldown, Rollup, Vite, and Webpack.

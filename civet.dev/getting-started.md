@@ -199,7 +199,7 @@ civet --emit-declaration src/**/*.civet
 ## Building a project
 
 Use Civet's built-in [unplugin](https://github.com/DanielXMoore/Civet/blob/main/source/unplugin) to integrate with many
-bundlers: Vite, esbuild, Astro, Rollup, Webpack, or Rspack.  For example:
+bundlers: Vite, esbuild, Astro, Farm, Rolldown, Rollup, Webpack.  For example:
 
 ```js
 import esbuild from 'esbuild'
