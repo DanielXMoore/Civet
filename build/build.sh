@@ -16,7 +16,7 @@ cp types/config.d.ts dist/config.d.mts
 civet --no-config build/esbuild.civet "$@"
 
 # built types
-for name in astro esbuild rollup unplugin vite webpack; do
+for name in astro esbuild farm rolldown rollup rspack unplugin vite webpack; do
   sed 's/\.civet"/\.js"/' dist/unplugin/source/unplugin/$name.d.ts >dist/unplugin/$name.d.ts
 done
 rm -rf dist/unplugin/source

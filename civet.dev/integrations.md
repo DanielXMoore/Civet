@@ -10,7 +10,7 @@ title: Integrations
 
 ## Build tools
 
-- [unplugin](https://github.com/DanielXMoore/Civet/blob/main/source/unplugin) integrates Civet into Vite, esbuild, Astro, Rollup, Webpack, and Rspack, including `.d.ts` generation (see [basic instructions](https://civet.dev/getting-started#building-a-project))
+- [unplugin](https://github.com/DanielXMoore/Civet/blob/main/source/unplugin) integrates Civet into Vite, esbuild, Astro, Farm, Rolldown, Rollup, and Webpack, including `.d.ts` generation (see [basic instructions](https://civet.dev/getting-started#building-a-project))
   - [Simpler esbuild plugin](https://github.com/DanielXMoore/Civet/blob/main/source/esbuild-plugin.civet)
   - [Older Vite plugin](https://github.com/edemaine/vite-plugin-civet) (no longer recommended)
 - [ESM/CJS loader](https://github.com/DanielXMoore/Civet/blob/main/register.js) for `import`/`require` to support `.civet` files
@@ -24,7 +24,7 @@ title: Integrations
 
 ## Starter Templates
 
-- [Astro, esbuild, NextJS, Rollup, Vite, and Webpack](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin-examples)
+- [Astro, esbuild, NextJS, Farm, Rolldown, Rollup, Vite, and Webpack](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin-examples)
 - [Solid](https://github.com/edemaine/civet-solid-vite-template) ([older](https://github.com/orenelbaum/solid-civet-template))
 - [SolidStart](https://github.com/orenelbaum/solid-start-civet-template)
 - [p5.js](https://codesandbox.io/p/sandbox/drawing-points-civet-2tk4jq)
