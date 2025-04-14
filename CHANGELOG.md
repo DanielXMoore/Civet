@@ -4,6 +4,9 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.10.2 (2025-04-13, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.1...v0.10.2), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.2))
+* Fix unplugin source map directories [[#1726](https://github.com/DanielXMoore/Civet/pull/1726)]
+
 ## 0.10.1 (2025-03-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.0...v0.10.1), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.1))
 * More general expressions in indented forms of `implements` and `with` [[#1720](https://github.com/DanielXMoore/Civet/pull/1720)]
 * Allow `>code` to continue an implicit JSX fragment [[#1721](https://github.com/DanielXMoore/Civet/pull/1721)]
