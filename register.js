@@ -16,6 +16,20 @@ for CJS `require`s.
 ```bash
 node -r @danielx/civet/register source.civet
 ```
+
+If you want to configure the loader, you can make your own
+`register.mjs` along these lines:
+
+@example
+```javascript
+import { register } from 'node:module';
+register('@danielx/civet/esm', import.meta.url, {data: {
+  parseOptions: {
+    // Add your parse options here
+  },
+}});
+```
+
 */
 
 try {
