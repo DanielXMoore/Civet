@@ -9,6 +9,14 @@ for both ESM `import`s and CJS `require`s.
 node --import @danielx/civet/register source.civet
 ```
 
+If you don't want the loader to search for/use accompanying civetconfig files,
+you can use the `-noconfig` version (where `NOCONFIG` comments are removed):
+
+@example
+```bash
+node --import @danielx/civet/register-noconfig source.civet
+```
+
 On older Node, `require`ing this file will register the `.civet` extension
 for CJS `require`s.
 
@@ -37,7 +45,9 @@ try {
   const { register } = require('node:module');
   const { pathToFileURL } = require('node:url');
 
-  register('./dist/esm.mjs', pathToFileURL(__filename));
+  register('./dist/esm.mjs', pathToFileURL(__filename)
+    //NOCONFIG//, {data: {config: null}}
+  );
 } catch (e) {
   // older Node lacking module register
 }
@@ -53,6 +63,7 @@ if (require.extensions) {
       js: true,
       inlineMap: true,
       sync: true,
+      //NOCONFIG//config: null,
     });
     module._compile(js, filename);
   };
