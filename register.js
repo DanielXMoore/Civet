@@ -24,6 +24,7 @@ If you want to configure the loader, you can make your own
 ```javascript
 import { register } from 'node:module';
 register('@danielx/civet/esm', import.meta.url, {data: {
+  //config: 'path/config.json',
   parseOptions: {
     // Add your parse options here
   },
