@@ -95,11 +95,14 @@ node --import @danielx/civet/register source.civet ...args...
 On Node <20.6.0, you also need to specify `--loader @danielx/civet/esm`
 for ESM `import` of .civet files.
 
-Directly execute a .civet or .ts source file that mixes .civet and .ts code,
-using [ts-node](https://typestrong.org/ts-node/):
+The registration scripts and CLI will automatically search for
+[Civet configuration files](config#global-configuration-via-config-files)
+in the source file's directory and ancestor directories.
+To disable this behavior, use one of the following:
 
 ```sh
-node --loader ts-node/esm --loader @danielx/civet/esm source.civet ...args...
+civet --no-config source.civet ...args...
+node --import @danielx/civet/register-noconfig source.civet ...args...
 ```
 
 ## Transpilation
