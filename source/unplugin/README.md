@@ -217,6 +217,7 @@ interface PluginOptions {
   ts?: 'civet' | 'esbuild' | 'tsc' | 'preserve'
   typecheck?: boolean | string
   cache?: boolean
+  config?: string | false | null
   parseOptions?: {
     comptime?: boolean
     coffeeCompat?: boolean
@@ -252,8 +253,8 @@ interface PluginOptions {
   Be sure to re-use plugins instead of calling the plugin generator repeatedly.
 - `threads`: Use specified number of Node worker threads to
   compile Civet files faster. Default: `0` (don't use threads), or `CIVET_THREADS` environment variable if set.
-- `config`: Civet config filename to load, or `null` to avoid looking for the
-  default config filenames in the project root directory.
+- `config`: Civet config filename to load, or `false`/`null` to avoid looking
+  for the default config filenames in the project root directory.
   See [Civet config](https://civet.dev/config).
 - `parseOptions`: Options object to pass to the Civet parser,
   like adding `"civet"` directives to all files.  Default: `{}`.
