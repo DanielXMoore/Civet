@@ -4,6 +4,12 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.10.3 (2025-04-28, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.2...v0.10.3), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.3))
+* Explicit changelog build script shell [[#1727](https://github.com/DanielXMoore/Civet/pull/1727)]
+* ESM loader supports civetconfig by default, and overriding configuration [[#1734](https://github.com/DanielXMoore/Civet/pull/1734)]
+  * BREAKING CHANGE: If you don't use civetconfig files and want to be robust against their existence in ancestor directories, or want to maximize performance, use `@danielx/civet/register-noconfig` instead of `@danielx/civet/register`
+  * BREAKING CHANGE: In unplugin settings, `config: undefined` no longer disables searching for config files. Use `config: false` or `config: null` instead.
+
 ## 0.10.2 (2025-04-13, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.1...v0.10.2), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.2))
 * Fix unplugin source map directories [[#1726](https://github.com/DanielXMoore/Civet/pull/1726)]
 

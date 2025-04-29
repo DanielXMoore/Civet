@@ -1,8 +1,9 @@
 declare module "@danielx/civet" {
   export type CivetAST = unknown
   export type ParseOptions = Partial<{
-    autoVar: boolean
+    autoConst: boolean
     autoLet: boolean
+    autoVar: boolean
     coffeeBinaryExistential: boolean
     coffeeBooleans: boolean
     coffeeClasses: boolean

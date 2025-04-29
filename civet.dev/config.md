@@ -93,6 +93,7 @@ Running in a particular environment?  Try one of these options:
 | `react`               | Use `className` instead of `class` in [JSX class shorthand](reference#class) |
 | `server`              | Code may run on server (currently just for [Solid](reference#solidjs)) |
 | [`solid`](reference#solidjs) | Automatic type casting of JSX |
+
 ## Local Configuration via Directives
 
 At the top of any Civet file (possibly after a `#!` line, comments,

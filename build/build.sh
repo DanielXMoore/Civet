@@ -12,6 +12,9 @@ node -e 'import("./node_modules/vite/dist/node/constants.js").then((c)=>console.
 cp types/types.d.ts types/config.d.ts dist/
 cp types/config.d.ts dist/config.d.mts
 
+# register-noconfig.js is made from register.js
+sed 's#//NOCONFIG//##g' register.js >register-noconfig.js
+
 # normal files
 civet --no-config build/esbuild.civet "$@"
 
