@@ -52,12 +52,30 @@ type CacheEntry
   result?: TransformResult
   promise?: Promise<void>
 
-civetExtension := /\.civet$/
+civetExtension := /\\.civet$/
 // Normally .jsx/.tsx extension should be present, but sometimes
 // (e.g. esbuild's alias feature) loads directly without resolve
 postfixRE := /[?#].*$/s
 isWindows := os.platform() is 'win32'
 windowsSlashRE := /\\/g
+civetSuffix := '.civet'
+
+// Validate and extract the base Civet filename dynamically using outExt
+function validateAndExtractCivetBase(id: string, outputExtension: string): string | null
+  unless id? and outputExtension? return null
+  cleanedId := id.replace postfixRE, ''
+  unless cleanedId.endsWith outputExtension return null 
+  base := cleanedId.slice 0, -outputExtension.length
+  unless base.endsWith civetSuffix return null 
+  base
+
+// Separate the ID from its query/hash postfix
+function splitIdPostfix(id: string): {idWithoutPostfix: string, postfix: string}
+  postfix .= ''
+  idWithoutPostfix := id.replace postfixRE, (match) =>
+    postfix = match
+    ''
+  return {idWithoutPostfix, postfix}
 
 function tryStatSync(file: string): fs.Stats?
   try
@@ -105,23 +123,9 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
     ts = "civet"
 
   transformTS := options.emitDeclaration or options.typecheck
-  implicitExtension := options.implicitExtension ?? true
-  
   outExt :=
     options.outputExtension ?? (ts is "preserve" ? ".tsx" : ".jsx")
-  cleanOutExt := outExt.replace(/\./g, '\\.')
-  cleanOutputExtRE := new RegExp(`${cleanOutExt}$`)
-  isCivetTranspiled := new RegExp(`(\\.civet)(?:${cleanOutExt})?([?#].*)?$`)
-
-  function cleanCivetId(id: string): {id: string, postfix: string}
-    let postfix = ''
-    id = id
-    .replace postfixRE, (match) =>
-      postfix = match
-      ''
-    .replace cleanOutputExtRE, ''
-    {id, postfix}
-
+  implicitExtension := options.implicitExtension ?? true
   let aliasResolver: (id: string) => string
 
   fsMap: Map<string, string> .= new Map
@@ -386,13 +390,14 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       id = aliasResolver id if aliasResolver?
       if (/\0/.test(id)) return null
 
-      let postfix: string
-      {id, postfix} = cleanCivetId(id)
+      // new simpler function
+      {idWithoutPostfix, postfix} .= splitIdPostfix(id)
+
       resolvedId .=
-        if path.isAbsolute id
-          resolveAbsolutePath rootDir, id, implicitExtension
+        if path.isAbsolute idWithoutPostfix
+          resolveAbsolutePath rootDir, idWithoutPostfix, implicitExtension 
         else
-          path.resolve path.dirname(importer ?? ''), id
+          path.resolve path.dirname(importer ?? ''), idWithoutPostfix
       if (!resolvedId) return null
 
       // Implicit .civet extension
@@ -406,15 +411,15 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       if (options as! {scan?: boolean}).scan and meta.framework is 'vite'
         resolvedId = `\0${resolvedId}`
 
+      // Add back the original postfix at the end
       return resolvedId + outExt + postfix
 
     loadInclude(id)
-      isCivetTranspiled.test id
+      validateAndExtractCivetBase(id, outExt) is not null
 
     async load(id)
-      match := isCivetTranspiled.exec id
-      return null unless match
-      basename := id[...match.index + match[1]#]
+      basename := validateAndExtractCivetBase(id, outExt)
+      unless basename return null 
 
       filename := path.resolve rootDir, basename
       @addWatchFile filename
