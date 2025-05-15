@@ -57,23 +57,23 @@ isWindows := os.platform() is 'win32'
 windowsSlashRE := /\\/g
 civetSuffix := '.civet'
 
-// Validate and extract the base Civet filename dynamically using outExt
-function extractCivetFilename(id: string, outputExtension: string): string?
-  cleanedId := normalizePath(id.replace postfixRE, '')
-  lCleanedId := cleanedId.toLowerCase()
-  lOutputExtension := outputExtension.toLowerCase()
-  if lCleanedId.endsWith lOutputExtension
-    base := cleanedId[<-outputExtension.length]
-    lBase := base.toLowerCase()
-    return base if lBase.endsWith civetSuffix
-
-// Separate the ID from its query/hash postfix
-function splitIdPostfix(id: string): {idWithoutPostfix: string, postfix: string}
+/**
+Extract a possible Civet filename from an id, after removing a possible
+outputExtension and/or a query/hash (?/#) postfix.
+Returns {filename, postfix} in case you need to add the postfix back.
+You should check whether the filename ends in .civet extension,
+or needs an implicit .civet extension, or isn't Civet-related at all.
+*/
+function extractCivetFilename(id: string, outputExtension: string): {filename: string, postfix: string}
   postfix .= ''
-  idWithoutPostfix := id.replace postfixRE, (match) =>
+  filename .= id.replace postfixRE, (match) =>
     postfix = match
     ''
-  return {idWithoutPostfix, postfix}
+  // Normally the outputExtension (.jsx/.tsx by default) should be present,
+  // but sometimes (e.g. esbuild's alias feature) load directly without resolve
+  if filename.endsWith outputExtension
+    filename = filename[< -outputExtension#]
+  {filename, postfix}
 
 function tryStatSync(file: string): fs.Stats?
   try
@@ -361,11 +361,11 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
               (filePath, content) =>
                 if options.declarationExtension?
                   if filePath.endsWith '.d.ts'
-                    filePath = filePath[0...-5]
+                    filePath = filePath[< -5]
                   else
                     console.log `WARNING: No .d.ts extension in ${filePath}`
                   if filePath.endsWith civetSuffix
-                    filePath = filePath[0...-civetSuffix#]
+                    filePath = filePath[< -civetSuffix#]
                   else
                     console.log `WARNING: No .civet extension in ${filePath}`
                   filePath += options.declarationExtension
@@ -388,38 +388,38 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       id = aliasResolver id if aliasResolver?
       if (/\0/.test(id)) return null
 
-      // new simpler function
-      {idWithoutPostfix, postfix} .= splitIdPostfix(id)
+      // Remove query/hash postfix to get actual path
+      {filename, postfix} := extractCivetFilename id, outExt
 
-      resolvedId .=
-        if path.isAbsolute idWithoutPostfix
-          resolveAbsolutePath rootDir, idWithoutPostfix, implicitExtension 
+      resolved .=
+        if path.isAbsolute filename
+          resolveAbsolutePath rootDir, filename, implicitExtension
         else
-          path.resolve path.dirname(importer ?? ''), idWithoutPostfix
-      if (!resolvedId) return null
+          path.resolve path.dirname(importer ?? ''), filename
+      if (!resolved) return null
 
       // Implicit .civet extension
-      unless resolvedId.endsWith '.civet'
+      unless resolved.endsWith civetSuffix
         if (!implicitExtension) return null
-        implicitId := implicitCivet resolvedId
+        implicitId := implicitCivet resolved
         if (!implicitId) return null
-        resolvedId = implicitId
+        resolved = implicitId
 
       // Tell Vite that this is a virtual module during dependency scanning
       if (options as! {scan?: boolean}).scan and meta.framework is 'vite'
-        resolvedId = `\0${resolvedId}`
+        resolved = `\0${resolved}`
 
       // Add back the original postfix at the end
-      return resolvedId + outExt + postfix
+      return resolved + outExt + postfix
 
     loadInclude(id)
-      extractCivetFilename(id, outExt)?
+      extractCivetFilename(id, outExt).filename.endsWith civetSuffix
 
     async load(id)
-      basename := extractCivetFilename(id, outExt)
-      return null unless basename
+      {filename} .= extractCivetFilename id, outExt
+      return null unless filename.endsWith civetSuffix
 
-      filename := path.resolve rootDir, basename
+      filename = path.resolve rootDir, filename
       @addWatchFile filename
 
       let mtime: number?, cached: CacheEntry?, resolve: =>?
