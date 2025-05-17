@@ -4,6 +4,12 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.10.4 (2025-05-17, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.3...v0.10.4), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.4))
+* Fix implicit returns in IIFEs with "civet -implicitReturns" [[#1737](https://github.com/DanielXMoore/Civet/pull/1737)]
+* Typed pinned arguments such as `(^x: T) =>`; forbid implicit object literals in pinned patterns [[#1736](https://github.com/DanielXMoore/Civet/pull/1736)]
+* Fix `outputExtension` option in unplugin, enabling `.svelte.ts`/`.svelte.js` for Svelte Runes reactive compatibility [[#1733](https://github.com/DanielXMoore/Civet/pull/1733)]
+* Type-only class field declarations `declare field: T` [[#1741](https://github.com/DanielXMoore/Civet/pull/1741)]
+
 ## 0.10.3 (2025-04-28, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.2...v0.10.3), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.3))
 * Explicit changelog build script shell [[#1727](https://github.com/DanielXMoore/Civet/pull/1727)]
 * ESM loader supports civetconfig by default, and overriding configuration [[#1734](https://github.com/DanielXMoore/Civet/pull/1734)]
