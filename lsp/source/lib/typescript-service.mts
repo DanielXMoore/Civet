@@ -121,7 +121,30 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
       return moduleNames.map(name => {
         // Try to resolve the module using the standard TypeScript logic
         const { resolvedModule } = ts.resolveModuleName(name, containingFile, compilerOptions, self, resolutionCache) as ResolvedModuleWithFailedLookupLocations
-        if (resolvedModule) return resolvedModule
+
+        // Prefer a sibling `.civet` source over a discovered `.ts` / `.tsx` file
+        if (resolvedModule) {
+          const ext = resolvedModule.extension
+          // Only attempt shadow-swap for regular TS/TSX source files
+          if (ext === ts.Extension.Ts || ext === ts.Extension.Tsx || ext === ts.Extension.Mts || ext === ts.Extension.Cts) {
+            // e.g. "/path/foo.ts" -> "/path/foo.civet"
+            const civetPath = resolvedModule.resolvedFileName.replace(/\.[cm]?tsx?$/, '.civet')
+            if (sys.fileExists(civetPath)) {
+              const civetTranspiler = transpilers.get('.civet')
+              if (civetTranspiler) {
+                const { target } = civetTranspiler // .tsx in our default setup
+                return {
+                  resolvedFileName: civetPath + target, // virtual file e.g. foo.civet.tsx
+                  extension: target,
+                  isExternalLibraryImport: false,
+                }
+              }
+            }
+          }
+
+          // No civet twin – keep the original TS resolution
+          return resolvedModule
+        }
 
         // get the transpiler for the extension
         const extension = getExtensionFromPath(name)
@@ -444,7 +467,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
   }
 }
 
-function TSService(projectURL = "./") {
+async function TSService(projectURL = "./") {
   const logger = console
 
   logger.info("CIVET VSCODE PLUGIN", version)
@@ -507,16 +530,20 @@ function TSService(projectURL = "./") {
   }
 
   let civetConfig: CompileOptions = {}
-  CivetConfig.findConfig(projectPath).then(async (configPath) => {
+
+  // Synchronously (from the perspective of the caller) resolve Civet configuration
+  try {
+    const configPath = await CivetConfig.findConfig(projectPath)
     if (configPath) {
       console.info("Loading Civet config @", configPath)
-      const config = await CivetConfig.loadConfig(configPath)
+      civetConfig = await CivetConfig.loadConfig(configPath)
       console.info("Found civet config!")
-      civetConfig = config
-    } else console.info("No Civet config found")
-  }).catch((e: unknown) => {
+    } else {
+      console.info("No Civet config found")
+    }
+  } catch (e: unknown) {
     console.error("Error loading Civet config", e)
-  })
+  }
 
   return Object.assign({}, service, {
     host,
