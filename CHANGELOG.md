@@ -4,6 +4,11 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.10.5 (2025-06-30, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.4...v0.10.5), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.5))
+* `this` and `@` are valid types (within classes) [[#1743](https://github.com/DanielXMoore/Civet/pull/1743)]
+* Fix CoffeeScript comments getting treated as `length` shorthand [[#1750](https://github.com/DanielXMoore/Civet/pull/1750)]
+* update lsp typescript [[#1753](https://github.com/DanielXMoore/Civet/pull/1753)]
+
 ## 0.10.4 (2025-05-17, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.3...v0.10.4), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.4))
 * Fix implicit returns in IIFEs with "civet -implicitReturns" [[#1737](https://github.com/DanielXMoore/Civet/pull/1737)]
 * Typed pinned arguments such as `(^x: T) =>`; forbid implicit object literals in pinned patterns [[#1736](https://github.com/DanielXMoore/Civet/pull/1736)]
