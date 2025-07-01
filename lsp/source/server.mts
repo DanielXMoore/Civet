@@ -637,6 +637,10 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
     return
   }
   const { sourcemapLines, transpiledDoc, parseErrors, fatal } = meta
+  if (!transpiledDoc) {
+    console.log("no transpiledDoc for ", sourcePath)
+    return
+  }
 
   const transpiledPath = documentToSourcePath(transpiledDoc)
   const diagnostics: Diagnostic[] = [];
