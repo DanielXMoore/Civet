@@ -1,0 +1,118 @@
+* as vscode from vscode
+* as fs from node:fs/promises
+* as path from node:path
+
+{ findConfig, loadConfig as loadCivetConfig } from '@danielx/civet/config'
+import { features } from './grammarList.civet'
+
+// Entry point for VS Code command
+export async function regenerateTextmate()
+  const output = vscode.window.createOutputChannel("Civet Grammar")
+  output.show()
+  output.appendLine("Starting Civet grammar regeneration...")
+
+  try
+    workspaceFolder := vscode.workspace.workspaceFolders?.[0]
+    if !workspaceFolder
+      const msg = 'Civet: No workspace folder – cannot regenerate grammar'
+      output.appendLine(`ERROR: ${msg}`)
+      vscode.window.showErrorMessage(msg)
+      return
+
+    // 1 Load Civet config (may return undefined)
+    configPath := workspaceFolder.uri.fsPath
+    output.appendLine(`Searching for Civet config in: ${configPath}`)
+    cfgFile := await findConfig(configPath).catch((err) => {
+      output.appendLine(`ERROR while searching for config: ${err?.message ?? err}`)
+      return undefined
+    })
+
+    if cfgFile
+      output.appendLine(`Found Civet config: ${cfgFile}`)
+    else
+      output.appendLine('No Civet config file found – using defaults')
+
+    cfg := cfgFile ? await loadCivetConfig(cfgFile).catch((err) => {
+      output.appendLine(`ERROR loading config: ${err?.message ?? err}`)
+      return undefined
+    }) : undefined
+    civetParseOpts := cfg?.parseOptions ?? {}
+    output.appendLine(`Loaded parseOptions: ${JSON.stringify(civetParseOpts, null, 2)}`)
+
+
+    // 2 Locate grammar file within the extension bundle
+    ext := vscode.extensions.getExtension 'DanielX.civet'
+    if !ext
+      const msg = 'Civet: Unable to locate extension path'
+      output.appendLine(`ERROR: ${msg}`)
+      vscode.window.showErrorMessage(msg)
+      return
+    grammarFile := path.join ext.extensionPath, 'syntaxes', 'civet.json'
+    output.appendLine(`Found grammar file at: ${grammarFile}`)
+
+    // 3 Read and parse grammar
+    grammarUri := vscode.Uri.file(grammarFile)
+    rawGrammar := await vscode.workspace.fs.readFile(grammarUri)
+    grammar := JSON.parse(rawGrammar.toString())
+    grammar.repository ?= {}
+    output.appendLine(`Successfully read and parsed grammar file.`)
+
+    // 4 Iterate over feature table
+    modified .= false
+    for feature of features
+      output.appendLine(`\nProcessing feature: '${feature.key}'`)
+      includeRule := { include: `#${feature.marker}` }
+      hasRuleInPatterns := grammar.patterns.some((rule: any) => rule.include === includeRule.include)
+      hasRuleInRepo := grammar.repository.hasOwnProperty(feature.marker)
+      shouldHaveRule := (civetParseOpts as any)[feature.key]
+
+      output.appendLine(`- Should have rule? ${shouldHaveRule ? 'Yes' : 'No'} (from config)`)
+      output.appendLine(`- Rule in patterns? ${hasRuleInPatterns ? 'Yes' : 'No'}`)
+      output.appendLine(`- Rule in repository? ${hasRuleInRepo ? 'Yes' : 'No'}`)
+
+      if shouldHaveRule
+        if not hasRuleInRepo
+          output.appendLine(`- ADDING rule to repository: '${feature.marker}'`)
+          grammar.repository[feature.marker] = JSON.parse(feature.snippet)
+          modified = true
+        if not hasRuleInPatterns
+          output.appendLine(`- ADDING include to patterns: '${includeRule.include}'`)
+          grammar.patterns.unshift(includeRule)
+          modified = true
+
+      else  // should NOT have rule
+        if hasRuleInRepo
+          output.appendLine(`- REMOVING rule from repository: '${feature.marker}'`)
+          delete grammar.repository[feature.marker]
+          modified = true
+        if hasRuleInPatterns
+          output.appendLine(`- REMOVING include from patterns: '${includeRule.include}'`)
+          grammar.patterns = grammar.patterns.filter((rule: any) => rule.include !== includeRule.include)
+          modified = true
+
+    if not modified
+      msg := 'Civet grammar is already up-to-date.'
+      output.appendLine(`\n${msg}`)
+      vscode.window.showInformationMessage(msg)
+      return
+    
+    output.appendLine('\nGrammar has been modified.')
+    // 5 Backup and write
+    try
+      await fs.copyFile grammarFile, grammarFile + '.bak'
+      output.appendLine(`Successfully created backup: ${grammarFile}.bak`)
+    catch err
+      output.appendLine(`Warning: Could not create backup file. ${err}`)
+    
+    newContent := JSON.stringify(grammar, null, 2)
+    await fs.writeFile grammarFile, newContent, 'utf8'
+    output.appendLine(`Successfully wrote updated grammar to: ${grammarFile}`)
+
+    // 6 Prompt user to reload
+    btn := await vscode.window.showInformationMessage 'Civet grammar updated – reload window to apply.', 'Reload Window'
+    if btn is 'Reload Window'
+      vscode.commands.executeCommand 'workbench.action.reloadWindow'
+  catch err
+    const message = err instanceof Error ? err.message : String(err)
+    output.appendLine(`FATAL ERROR: ${message}`)
+    vscode.window.showErrorMessage(`Civet: Failed to regenerate grammar – ${message}`)
