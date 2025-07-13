@@ -1,12 +1,13 @@
 /** A source map entry from the spec with deltas for all fields */
 export type SourceMapEntry =
-| [generatedColumnDelta: number, sourceFileDelta: number, sourceLineDelta: number, sourceColumnDelta: number, sourceNameDelta?: number]
+| [generatedColumnDelta: number, sourceFileDelta: number, sourceLineDelta: number, sourceColumnDelta: number, sourceNameDelta: number]
 | [generatedColumnDelta: number, sourceFileDelta: number, sourceLineDelta: number, sourceColumnDelta: number]
 | [generatedColumnDelta: number]
 
 /** A source map entry with absolute source lines and columns, the other fields are still deltas */
 export type ResolvedSourceMapEntry =
-| [generatedColumnDelta: number, sourceFileDelta: number, sourceLine: number, sourceColumn: number, sourceNameDelta?: number]
+| [generatedColumnDelta: number, sourceFileDelta: number, sourceLine: number, sourceColumn: number, sourceNameDelta: number]
+| [generatedColumnDelta: number, sourceFileDelta: number, sourceLine: number, sourceColumn: number]
 | [generatedColumnDelta: number]
 
 export type SourceMapLine = ResolvedSourceMapEntry[]
@@ -96,6 +97,11 @@ export class SourceMap
     toString: ->
       JSON.stringify this
 
+  /** Generate a comment with the source mapping URL. */
+  comment(srcFileName: string, outFileName: string)
+    // NOTE: be sure to keep comment split up so as not to trigger tools from confusing it with the actual sourceMappingURL
+    `//${'#'} sourceMappingURL=data:application/json;base64,${base64Encode JSON.stringify(@json(srcFileName, outFileName))}`
+
   updateSourceMap(outputStr: string, inputPos?: number, colOffset=0)
     outLines := outputStr.split(EOL)
 
@@ -130,6 +136,7 @@ export class SourceMap
   /**
   Remap a string with compiled code and a source map to use a new source map
   referencing upstream source files.
+  This modifies the upstream map in place.
   */
   @remap := (codeWithSourceMap: string, upstreamMap: SourceMap, sourcePath: string, targetPath: string) =>
     let sourceMapText?: string
@@ -142,12 +149,7 @@ export class SourceMap
       composedLines := @composeLines upstreamMap.lines, parsed.lines
       upstreamMap.lines = composedLines
 
-    remappedSourceMapJSON := upstreamMap.json(sourcePath, targetPath)
-
-    // NOTE: be sure to keep comment split up so as not to trigger tools from confusing it with the actual sourceMappingURL
-    newSourceMap := `${"sourceMapping"}URL=data:application/json;charset=utf-8;base64,${base64Encode JSON.stringify(remappedSourceMapJSON)}`
-
-    remappedCodeWithSourceMap := `${codeWithoutSourceMap}\n//# ${newSourceMap}`
+    remappedCodeWithSourceMap := `${codeWithoutSourceMap}\n${upstreamMap.comment(sourcePath, targetPath)}`
     return remappedCodeWithSourceMap
 
   /**
@@ -190,17 +192,20 @@ export class SourceMap
 
         switch result.length
           when 1
-            [result[0]]
-          when 4
-            [result[0], result[1], sourceLine += result[2], sourceColumn += result[3]]
-          when 5
-            [result[0], result[1], sourceLine += result[2], sourceColumn += result[3], result[4]]
+          when 4, 5
+            // convert deltas to absolute values
+            sourceLine += result[2]
+            result[2] = sourceLine
+            sourceColumn += result[3]
+            result[3] = sourceColumn
           else
             throw new Error(`Unknown source map entry ${JSON.stringify(result)}`)
 
+        result
+
     return { ...json, lines }
 
-smRegexp := /\n\/\/# sourceMappingURL=data:application\/json;charset=utf-8;base64,([+a-zA-Z0-9\/]*=?=?)$/
+smRegexp := /(?:\r?\n|\r)\/\/# sourceMappingURL=data:application\/json;(?:charset=[^;]*;)?base64,([+a-zA-Z0-9\/]*=?=?)(?:\s*)$/
 
 /* c8 ignore start */
 // write a formatted error message to the console displaying the source code with line numbers
@@ -246,14 +251,11 @@ encodeVlq := (value: number) ->
     nextChunk .= valueToEncode & VLQ_VALUE_MASK
     valueToEncode = valueToEncode >> VLQ_SHIFT
     nextChunk |= VLQ_CONTINUATION_BIT if valueToEncode
-    answer += encodeBase64 nextChunk
+    answer += BASE64_CHARS[nextChunk]
 
   return answer
 
 BASE64_CHARS := 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-
-encodeBase64 := (value: number) ->
-  BASE64_CHARS[value] or throw new Error "Cannot Base64 encode value: ${value}"
 
 export base64Encode = (src: string) ->
   if Buffer !<? 'undefined'
