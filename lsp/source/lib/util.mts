@@ -12,6 +12,7 @@ import vs, {
   DocumentSymbol,
   Position,
   Range,
+  RemoteConsole,
   SymbolKind,
   SymbolTag,
 } from 'vscode-languageserver';
@@ -353,12 +354,16 @@ export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
   return position
 }
 
-export function logTiming<R, A extends unknown[]>(name: string, fn: (...args: A) => R) {
-  return function(...args: A) {
+export function logTiming<R, A extends unknown[]>(
+  logger: Console | RemoteConsole = console,
+  name: string,
+  fn: (...args: A) => R,
+) {
+  return function (...args: A) {
     const start = performance.now(),
       result = fn(...args),
       end = performance.now();
-    console.log(`${name.padStart(32)}${(end - start).toFixed(2).padStart(8)}ms`)
+    logger.log(`${name.padStart(32)}${(end - start).toFixed(2).padStart(8)}ms`)
 
     return result;
   }

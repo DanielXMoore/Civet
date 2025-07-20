@@ -40,6 +40,7 @@ import { setTimeout } from 'timers/promises';
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
 const connection = createConnection(ProposedFeatures.all)
+const logger = connection.console;
 
 // Create a simple text document manager.
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
@@ -101,8 +102,8 @@ const ensureServiceForSourcePath = async (sourcePath: string) => {
   await projectPathToPendingPromiseMap.get(projPath)
   let service = projectPathToServiceMap.get(projPath)
   if (service) return service
-  console.log("Spawning language server for project path: ", projPath)
-  service = TSService(projPath)
+  logger.log("Spawning language server for project path: " + projPath)
+  service = TSService(projPath, connection.console)
   const initP = service.loadPlugins()
   projectPathToPendingPromiseMap.set(projPath, initP)
   await initP
@@ -161,14 +162,14 @@ connection.onInitialize(async (params: InitializeParams) => {
   // TODO: currently only using the first workspace folder
   const baseDir = params.workspaceFolders?.[0]?.uri.toString()
   if (!baseDir) {
-    console.log("Warning: No workspace folders")
+    logger.log("Warning: No workspace folders")
     rootUri = rootDir = undefined
   } else {
     rootUri = baseDir + "/"
     rootDir = fileURLToPath(rootUri)
   }
 
-  console.log("Init", rootDir)
+  logger.log("Init " + rootDir)
   return result;
 });
 
@@ -179,7 +180,7 @@ connection.onInitialized(() => {
   }
   if (hasWorkspaceFolderCapability) {
     connection.workspace.onDidChangeWorkspaceFolders(_event => {
-      connection.console.log('Workspace folder change event received.');
+      logger.log('Workspace folder change event received.');
     });
   }
 });
@@ -188,7 +189,7 @@ const updating = (document: { uri: string }) => documentUpdateStatus.get(documen
 const tsSuffix = /\.[cm]?[jt]s$|\.json|\.[jt]sx/
 
 connection.onHover(async ({ textDocument, position }) => {
-  // console.log("hover", position)
+  // logger.log("hover"+ position)
   const sourcePath = documentToSourcePath(textDocument)
   assert(sourcePath)
 
@@ -217,12 +218,12 @@ connection.onHover(async ({ textDocument, position }) => {
       position = forwardMap(sourcemapLines, position)
     }
 
-    // console.log("onHover2", sourcePath, position)
+    // logger.log("onHover2"+ sourcePath+ position)
 
     const p = transpiledDoc.offsetAt(position)
     const transpiledPath = documentToSourcePath(transpiledDoc)
     info = service.getQuickInfoAtPosition(transpiledPath, p)
-    // console.log("onHover3", info)
+    // logger.log("onHover3"+ info)
 
   }
   if (!info) return
@@ -270,7 +271,7 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
   const service = await ensureServiceForSourcePath(sourcePath)
   if (!service) return
 
-  console.log("completion", sourcePath, position)
+  logger.log("completion " + sourcePath + " " + position)
 
   await updating(textDocument)
   if (sourcePath.match(tsSuffix)) { // non-transpiled
@@ -292,7 +293,7 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
   // Don't map for files that don't have a sourcemap (plain .ts for example)
   if (sourcemapLines) {
     position = forwardMap(sourcemapLines, position)
-    console.log('remapped')
+    logger.log('remapped')
   }
 
   const p = transpiledDoc.offsetAt(position)
@@ -338,8 +339,8 @@ connection.onCompletionResolve(async (item) => {
       semicolons: SemicolonPreference.Remove,
     }, source, undefined, data)
   } catch (e) {
-    console.log("Failed to get completion details for", name)
-    console.log(e)
+    logger.log("Failed to get completion details for " + name)
+    logger.log(e)
   }
   if (!detail) return item
 
@@ -552,11 +553,11 @@ connection.onDocumentSymbol(async ({ textDocument }) => {
 
 // TODO
 documents.onDidClose(({ document }) => {
-  console.log("close", document.uri)
+  logger.log("close " + document.uri)
 });
 
 documents.onDidOpen(async ({ document }) => {
-  console.log("open", document.uri)
+  logger.log("open " + document.uri)
 })
 
 // Buffer up changes to documents so we don't stack transpilations and become unresponsive
@@ -571,7 +572,7 @@ async function executeQueue() {
   // Reset queue to allow accumulating jobs while this queue runs
   const changed = changeQueue
   changeQueue = new Set
-  console.log("executeQueue", changed.size)
+  logger.log("executeQueue " + changed.size)
   // Run all jobs in queue (preventing livelock).
   for (const document of changed) {
     await updateDiagnosticsForDoc(document)
@@ -600,14 +601,14 @@ async function scheduleExecuteQueue() {
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
 documents.onDidChangeContent(async ({ document }) => {
-  console.log("onDidChangeContent", document.uri)
+  logger.log("onDidChangeContent " + document.uri)
   documentUpdateStatus.set(document.uri, withResolvers())
   changeQueue.add(document)
   scheduleExecuteQueue()
 });
 
 async function updateDiagnosticsForDoc(document: TextDocument) {
-  console.log("Updating diagnostics for doc:", document.uri)
+  logger.log("Updating diagnostics for doc: " + document.uri)
   const sourcePath = documentToSourcePath(document)
   assert(sourcePath)
 
@@ -619,9 +620,9 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
   // Non-transpiled
   if (sourcePath.match(tsSuffix)) {
     const diagnostics: Diagnostic[] = [
-      ...logTiming("service.getSyntacticDiagnostics", service.getSyntacticDiagnostics)(sourcePath),
-      ...logTiming("service.getSemanticDiagnostics", service.getSemanticDiagnostics)(sourcePath),
-      ...logTiming("service.getSuggestionDiagnostics", service.getSuggestionDiagnostics)(sourcePath),
+      ...logTiming(logger, "service.getSyntacticDiagnostics", service.getSyntacticDiagnostics)(sourcePath),
+      ...logTiming(logger, "service.getSemanticDiagnostics", service.getSemanticDiagnostics)(sourcePath),
+      ...logTiming(logger, "service.getSuggestionDiagnostics", service.getSuggestionDiagnostics)(sourcePath),
     ].map((diagnostic) => convertDiagnostic(diagnostic, document))
 
     return connection.sendDiagnostics({
@@ -633,7 +634,7 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
   // Transpiled file
   const meta = service.host.getMeta(sourcePath)
   if (!meta) {
-    console.log("no meta for ", sourcePath)
+    logger.log("no meta for " + sourcePath)
     return
   }
   const { sourcemapLines, transpiledDoc, parseErrors, fatal } = meta
@@ -668,9 +669,9 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
   }
   if (!fatal) {
     [
-      ...logTiming("service.getSyntacticDiagnostics", service.getSyntacticDiagnostics)(transpiledPath),
-      ...logTiming("service.getSemanticDiagnostics", service.getSemanticDiagnostics)(transpiledPath),
-      ...logTiming("service.getSuggestionDiagnostics", service.getSuggestionDiagnostics)(transpiledPath),
+      ...logTiming(logger, "service.getSyntacticDiagnostics", service.getSyntacticDiagnostics)(transpiledPath),
+      ...logTiming(logger, "service.getSemanticDiagnostics", service.getSemanticDiagnostics)(transpiledPath),
+      ...logTiming(logger, "service.getSuggestionDiagnostics", service.getSuggestionDiagnostics)(transpiledPath),
     ].forEach((diagnostic) => {
       diagnostics.push(convertDiagnostic(diagnostic, transpiledDoc, sourcemapLines))
     })
@@ -722,7 +723,7 @@ function scheduleUpdateDiagnostics(skipDocs: Set<TextDocument>) {
 
 connection.onDidChangeWatchedFiles(_change => {
   // Monitored files have change in VSCode
-  connection.console.log('We received an file change event');
+  logger.log('We received an file change event');
 });
 
 // Make the text document manager listen on the connection
