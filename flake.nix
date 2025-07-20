@@ -42,11 +42,42 @@
           '';
         };
 
+        civet-ls-vscode = civet-ls.overrideAttrs (oldAttrs: {
+          pname = oldAttrs.pname + "-vscode";
+          nativeBuildInputs = [pkgs.vsce] ++ oldAttrs.nativeBuildInputs;
+
+          installPhase = ''
+            runHook preInstall
+
+            vsce package
+            install -Dm644 ${
+              # `vsce package`'s output exactly matches `package.json`
+              (builtins.fromJSON
+                (builtins.readFile "${oldAttrs.src}/package.json"))
+                  .name
+            }-${oldAttrs.version}.vsix \
+              $out/${oldAttrs.pname}-${oldAttrs.version}.vsix
+
+            runHook postInstall
+          '';
+
+          meta = {
+            description = "VSCode extension for the Civet language server";
+            homepage = "https://civet.dev/";
+            license = pkgs.lib.licenses.mit;
+            platforms = pkgs.lib.platforms.all;
+            mainProgram = null;
+          };
+        });
+
         mkCivetPackage = {
           pname,
           src,
           entrypoint ? pname,
-          version ? (builtins.fromJSON (builtins.readFile "${src}/package.json")).version,
+          version ?
+            (builtins.fromJSON
+              (builtins.readFile "${src}/package.json"))
+            .version,
           extraIgnoreRules ? "",
           yarnDepsHash ? pkgs.lib.fakeHash,
           patchPhase ? "",
@@ -69,7 +100,6 @@
                   TODO.md
                   .gitattributes
                   .gitignore
-                  .vscodeignore
                   .vscode
                 '';
             };
@@ -128,7 +158,7 @@
           );
       in {
         packages = {
-          inherit civet civet-ls;
+          inherit civet civet-ls civet-ls-vscode;
           default = civet;
         };
         devShells.default = pkgs.mkShell {
