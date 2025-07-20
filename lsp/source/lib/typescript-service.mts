@@ -32,6 +32,7 @@ import { TextDocument } from "vscode-languageserver-textdocument"
 
 // Import version from package.json
 import pkg from "../../package.json" with { type: 'json' }
+import { RemoteConsole } from "vscode-languageserver"
 const { version } = pkg
 
 // HACK to get __dirname working in tests with ts-node
@@ -85,7 +86,13 @@ interface Plugin {
   transpilers?: Transpiler[]
 }
 
-function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[], baseHost: CompilerHost, transpilers: Map<string, Transpiler>): Host {
+function TSHost(
+  compilationSettings: CompilerOptions,
+  initialFileNames: string[],
+  baseHost: CompilerHost,
+  transpilers: Map<string, Transpiler>,
+  logger: Console | RemoteConsole = console,
+): Host {
   const { rootDir } = compilationSettings
   assert(rootDir, "Most have root dir for now")
 
@@ -299,7 +306,7 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
       return Array.from(scriptFileNames)
     },
     writeFile(fileName: string, content: string) {
-      console.log("write", fileName, content)
+      logger.log("write " + fileName + " " + content)
     }
   });
 
@@ -444,11 +451,9 @@ function TSHost(compilationSettings: CompilerOptions, initialFileNames: string[]
   }
 }
 
-function TSService(projectURL = "./") {
-  const logger = console
-
-  logger.info("CIVET VSCODE PLUGIN", version)
-  logger.info("TYPESCRIPT", typescriptVersion)
+function TSService(projectURL = "./", logger: Console | RemoteConsole = console) {
+  logger.info("CIVET VSCODE PLUGIN " + version)
+  logger.info("TYPESCRIPT " + typescriptVersion)
 
   const projectPath = fileURLToPath(projectURL)
   const tsConfigPath = `${projectPath}tsconfig.json`
@@ -471,7 +476,7 @@ function TSService(projectURL = "./") {
     tsConfigPath,
     undefined,
   )
-  logger.info("PARSED TSCONFIG\n", parsedConfig, "\n\n")
+  logger.info("PARSED TSCONFIG\n " + parsedConfig + " " + "\n\n")
 
   //@ts-ignore
   const baseHost = createCompilerHost(parsedConfig)
@@ -484,7 +489,7 @@ function TSService(projectURL = "./") {
 
   const transpilers = new Map<string, Transpiler>(transpilerDefinitions)
   // TODO: May want to add transpiled files to fileNames
-  const host = TSHost(parsedConfig.options, parsedConfig.fileNames, baseHost, transpilers)
+  const host = TSHost(parsedConfig.options, parsedConfig.fileNames, baseHost, transpilers, logger)
   const service = createLanguageService(host)
 
   const projectRequire = createRequire(projectURL)
@@ -495,27 +500,27 @@ function TSService(projectURL = "./") {
   const civetPath = "@danielx/civet"
   try {
     projectRequire(`${civetPath}/lsp/package.json`)
-    console.info("USING DEVELOPMENT VERSION OF CIVET -- BE SURE TO yarn build")
-  } catch (e) {}
+    logger.info("USING DEVELOPMENT VERSION OF CIVET -- BE SURE TO yarn build")
+  } catch (e) { }
   try {
     Civet = projectRequire(civetPath)
     CivetConfig = projectRequire(`${civetPath}/config`)
     const CivetVersion = projectRequire(`${civetPath}/package.json`).version
-    console.info(`LOADED PROJECT CIVET ${CivetVersion}: ${path.join(projectURL, civetPath)} \n\n`)
+    logger.info(`LOADED PROJECT CIVET ${CivetVersion}: ${path.join(projectURL + " " + civetPath)} \n\n`)
   } catch (e) {
-    console.info("USING BUNDLED CIVET")
+    logger.info("USING BUNDLED CIVET")
   }
 
   let civetConfig: CompileOptions = {}
   CivetConfig.findConfig(projectPath).then(async (configPath) => {
     if (configPath) {
-      console.info("Loading Civet config @", configPath)
+      logger.info("Loading Civet config @ " + configPath)
       const config = await CivetConfig.loadConfig(configPath)
-      console.info("Found civet config!")
+      logger.info("Found civet config!")
       civetConfig = config
-    } else console.info("No Civet config found")
+    } else logger.info("No Civet config found")
   }).catch((e: unknown) => {
-    console.error("Error loading Civet config", e)
+    logger.error("Error loading Civet config " + e)
   })
 
   return Object.assign({}, service, {
@@ -534,7 +539,7 @@ function TSService(projectURL = "./") {
         .map(file => pathToFileURL(file).toString())
 
       for (const filePath of pluginFiles) {
-        console.info("Loading plugin", filePath)
+        logger.info("Loading plugin " + filePath)
         await loadPlugin(filePath)
       }
     }
@@ -543,13 +548,13 @@ function TSService(projectURL = "./") {
   async function loadPlugin(path: string) {
     await import(path)
       .then(({ default: plugin }: { default: Plugin }) => {
-        console.info("Loaded plugin", plugin)
+        logger.info("Loaded plugin " + plugin)
         plugin.transpilers?.forEach((transpiler: Transpiler) => {
           transpilers.set(transpiler.extension, transpiler)
         })
       })
       .catch(e => {
-        console.error("Error loading plugin", path, e)
+        logger.error("Error loading plugin " + path + " " + e)
       })
   }
 
