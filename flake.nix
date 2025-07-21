@@ -13,7 +13,7 @@
       system: let
         pkgs = inputs.nixpkgs.legacyPackages.${system};
 
-        civet = mkCivetPackage {
+        cli = mkCivetPackage {
           pname = "civet";
           src = ./.;
           description = "the Civet programming language";
@@ -28,7 +28,7 @@
           '';
         };
 
-        civet-ls = mkCivetPackage {
+        ls = mkCivetPackage {
           pname = "civet-ls";
           src = ./lsp;
           entrypoint = "server.js";
@@ -36,32 +36,20 @@
           yarnDepsHash = "sha256-JyAXj7L1ORT4486U/QYH48cEmfp/3tqVxfnyHoeGhk0=";
         };
 
-        civet-ls-vscode = civet-ls.overrideAttrs (oldAttrs: {
-          pname = oldAttrs.pname + "-vscode";
+        vscode-extension = pkgs.vscode-utils.buildVscodeMarketplaceExtension {
+          mktplcRef = builtins.fromJSON (builtins.readFile ./lsp/package.json);
+          vsix = vscode-vsix;
+        };
+        vscode-vsix = ls.overrideAttrs (oldAttrs: {
+          # `.zip` extension is required for `buildVscodeMarketplaceExtension`'s unpackPhase
+          name = "${oldAttrs.pname}-${oldAttrs.version}-vsix.zip";
           nativeBuildInputs = [pkgs.vsce] ++ oldAttrs.nativeBuildInputs;
-
           installPhase = ''
             runHook preInstall
-
             vsce package
-            install -Dm644 ${
-              # `vsce package`'s output exactly matches `package.json`
-              (builtins.fromJSON
-                (builtins.readFile "${oldAttrs.src}/package.json"))
-                  .name
-            }-${oldAttrs.version}.vsix \
-              $out/${oldAttrs.pname}-${oldAttrs.version}.vsix
-
+            install -Dm644 *.vsix $out
             runHook postInstall
           '';
-
-          meta = {
-            description = "VSCode extension for the Civet language server";
-            homepage = "https://civet.dev/";
-            license = pkgs.lib.licenses.mit;
-            platforms = pkgs.lib.platforms.all;
-            mainProgram = null;
-          };
         });
 
         mkCivetPackage = {
@@ -152,14 +140,14 @@
           );
       in {
         packages = {
-          inherit civet civet-ls civet-ls-vscode;
-          default = civet;
+          inherit cli ls vscode-vsix vscode-extension;
+          default = cli;
         };
         devShells.default = pkgs.mkShell {
           # include all exported packages' build dependencies
           inputsFrom = pkgs.lib.attrValues inputs.self.packages.${system};
           # include civet and civet-ls themselves since parts of civet are written in civet
-          packages = [civet civet-ls];
+          packages = [cli ls];
         };
       }
     );
