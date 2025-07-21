@@ -34,12 +34,6 @@
           entrypoint = "server.js";
           description = "the Civet language server";
           yarnDepsHash = "sha256-JyAXj7L1ORT4486U/QYH48cEmfp/3tqVxfnyHoeGhk0=";
-          patchPhase = let
-            re = ''\s\+console\.'';
-          in ''
-            # <https://github.com/DanielXMoore/Civet/issues/1762>
-            grep -rl '${re}' | xargs sed -i 's/${re}.*/void(0)/'
-          '';
         };
 
         civet-ls-vscode = civet-ls.overrideAttrs (oldAttrs: {
