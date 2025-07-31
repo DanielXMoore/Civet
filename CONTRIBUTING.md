@@ -74,7 +74,13 @@ testCase.only """
 """
 ```
 
-### Debugging
+In particular, if you're fixing a bug or adding a feature, a good approach is
+to add a broken test, and temporarily add `.only`, so that you can repeatedly
+run the test via `yarn test`. (You do not need to `yarn build` in between.)
+With only one test running, you can reasonably add `console.log` and other
+debugging statements to figure out what's going on.
+
+## Debugging
 
 A useful trick is to add a `debugger` statement inside a rule handler in
 `source/parser.hera`, or use the `DebugHere` rule to an expansion,
@@ -101,7 +107,7 @@ You can attach a debugger as follows:
 Then you can step through the parser and see what is going on in practice
 as opposed to in theory.
 
-### Parser Tracing
+## Parser Tracing
 
 Sometimes you may want to check exactly what rules are checked in
 detailed order. You can use `--trace tracefile`.
@@ -114,7 +120,7 @@ Since this logs every rule entry and exit as well as cache hit
 it can quickly become quite large so it is best to use on as
 minimal a test case as possible.
 
-### CLI
+## CLI
 
 A quick way to experiment with the parser (after building it with
 `yarn build`) is to run the CLI in compilation mode:
@@ -125,9 +131,14 @@ dist/civet -c
 
 In this mode, you type a Civet snippet (terminated with a blank line)
 and see what it compiles to (or the resulting error).
-
 To see more detail into how parts of your expression get parsed,
 prefix your Civet snippet with `"civet verbose"`.
+
+You can also test quick one-liners like so:
+
+```sh
+dist/civet -ce 'this is a test'
+```
 
 You can also see what JavaScript (sans TypeScript) will be generated via
 
