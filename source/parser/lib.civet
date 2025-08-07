@@ -829,6 +829,42 @@ function convertMethodToFunction(method)
     block
   }
 
+function convertFunctionToMethod(id, exp)
+  fnTokenIndex := exp.children.findIndex (c) -> c?.token?.startsWith("function")
+  // copy
+  children := exp.children.slice()
+  if exp.generator
+    // replace "function" and move generator ahead of id
+    children.splice(fnTokenIndex, 2, children[fnTokenIndex+1], id)
+  else
+    // replace "function" token with id
+    children.splice(fnTokenIndex, 1, id)
+  
+  {
+    ...exp,
+    type: "MethodDefinition",
+    name: id.name,
+    signature: { ...exp.signature, id, name: id.name },
+    children
+  }
+
+function convertArrowFunctionToMethod(id, exp)
+  block := {...exp.block} // prepare for bracing
+  children := exp.children.filter((c) -> !(Array.isArray(c) && c[c.length-1]?.token?.includes("=>"))).map((c) -> c === exp.block ? block : c)
+  children.unshift(id)
+  exp = {
+    ...exp,
+    type: "MethodDefinition",
+    name: id.name,
+    signature: { ...exp.signature, id, name: id.name },
+    block,
+    children,
+    autoBind: true
+  }
+  block.parent = exp // needed by braceBlock
+  braceBlock(block)
+  exp
+
 // Convert NamedImports into equivalent ObjectExpression or ObjectBindingPattern
 function convertNamedImportsToObject(node, pattern?: boolean)
   properties := node.specifiers.map (specifier) =>
@@ -1524,6 +1560,16 @@ function processCoffeeClasses(statements: StatementTuple[]): void
         ...for each [, a] of autoBinds
           [indent, ["this.", a.name, " = this.", a.name, ".bind(this)"], ";"]
 
+    public_static_function_assignments := expressions.filter((&[1]?.type is "CoffeeClassPublic") && (&[1].assignment?.expression?.type is "FunctionExpression")).map &[1].assignment
+    for public_static_function_assignment of public_static_function_assignments
+      id := public_static_function_assignment.lhs[0][1]
+      replaceNode public_static_function_assignment, convertFunctionToMethod(id, public_static_function_assignment.expression)
+
+    public_static_arrow_function_assignments := expressions.filter((&[1]?.type is "CoffeeClassPublic") && (&[1].assignment?.expression?.type is "ArrowFunction")).map &[1].assignment
+    for public_static_arrow_function_assignment of public_static_arrow_function_assignments
+      id := public_static_arrow_function_assignment.lhs[0][1]
+      replaceNode public_static_arrow_function_assignment, convertArrowFunctionToMethod(id, public_static_arrow_function_assignment.expression)
+    
     // In a CoffeeScript class, `x = y` makes a private variable x visible
     // only within the class scope only, implemented via IIFE wrapper
     privates := expressions.filter &[1]?.type is "CoffeeClassPrivate"
@@ -1956,6 +2002,8 @@ export {
   blockWithPrefix
   braceBlock
   bracedBlock
+  convertArrowFunctionToMethod
+  convertFunctionToMethod
   convertNamedImportsToObject
   convertObjectToJSXAttributes
   convertWithClause
