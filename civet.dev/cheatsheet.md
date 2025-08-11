@@ -211,8 +211,8 @@ switch x
 ```ts
 // JSX
 // Better binding
-<button props.click> Click Me </Button>
-<button @click> Click Me Also </Button>
+<button props.click> Click Me </button>
+<button @click> Click Me Also </button>
 
 // Closing is optional
 <div>
