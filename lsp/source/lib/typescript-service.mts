@@ -451,7 +451,7 @@ function TSHost(
   }
 }
 
-function TSService(projectURL = "./", logger: Console | RemoteConsole = console) {
+async function TSService(projectURL = "./", logger: Console | RemoteConsole = console) {
   logger.info("CIVET VSCODE PLUGIN " + version)
   logger.info("TYPESCRIPT " + typescriptVersion)
 
@@ -512,16 +512,19 @@ function TSService(projectURL = "./", logger: Console | RemoteConsole = console)
   }
 
   let civetConfig: CompileOptions = {}
-  CivetConfig.findConfig(projectPath).then(async (configPath) => {
+  try {
+    const configPath = await CivetConfig.findConfig(projectPath)
     if (configPath) {
       logger.info("Loading Civet config @ " + configPath)
       const config = await CivetConfig.loadConfig(configPath)
       logger.info("Found civet config!")
       civetConfig = config
-    } else logger.info("No Civet config found")
-  }).catch((e: unknown) => {
+    } else {
+      logger.info("No Civet config found")
+    }
+  } catch (e) {
     logger.error("Error loading Civet config " + e)
-  })
+  }
 
   return Object.assign({}, service, {
     host,

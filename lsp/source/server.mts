@@ -57,7 +57,8 @@ const sourcePathToProjectPathMap = new Map<string, string>()
 const projectPathToPendingPromiseMap = new Map<string, Promise<void>>()
 
 // Mapping from project path -> TSService instance operating on that base directory
-const projectPathToServiceMap = new Map<string, ReturnType<typeof TSService>>()
+type ResolvedService = Awaited<ReturnType<typeof TSService>>
+const projectPathToServiceMap = new Map<string, ResolvedService>()
 
 let rootUri: string | undefined, rootDir: string | undefined;
 
@@ -103,7 +104,7 @@ const ensureServiceForSourcePath = async (sourcePath: string) => {
   let service = projectPathToServiceMap.get(projPath)
   if (service) return service
   logger.log("Spawning language server for project path: " + projPath)
-  service = TSService(projPath, connection.console)
+  service = await TSService(projPath, connection.console)
   const initP = service.loadPlugins()
   projectPathToPendingPromiseMap.set(projPath, initP)
   await initP
