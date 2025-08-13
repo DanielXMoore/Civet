@@ -11,10 +11,10 @@ declare module '@danielx/civet/ts-diagnostic' {
     end: Position
   }
 
-  type SourceMapping = [number] | [number, number, number, number]
-  type SourcemapLines = SourceMapping[][]
+  type SourceMap = [number] | [number, number, number, number]
+  type SourcemapLines = SourceMap[][]
 
-  export type { SourcemapLines }
+  export type { SourcemapLines, SourceMap }
 
   export function remapPosition(
     position: Position,

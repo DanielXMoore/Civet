@@ -88,7 +88,7 @@ const getProjectPathFromSourcePath = (sourcePath: string): string => {
   // Otherwise, check whether we're inside the root
   if (!projPath) {
     if (rootDir != null && sourcePath.startsWith(rootDir)) {
-      projPath = rootUri!
+      projPath = rootUri ?? pathToFileURL(path.dirname(sourcePath) + "/").toString()
     } else {
       projPath = pathToFileURL(path.dirname(sourcePath) + "/").toString()
     }
