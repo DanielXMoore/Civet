@@ -47,8 +47,8 @@ try {
 }
 
 interface SourceMap {
-  lines: CivetSourceMap["lines"]
-  data: CivetSourceMap["data"]
+  lines?: CivetSourceMap["data"]["lines"]  // New format: direct lines access
+  data?: CivetSourceMap["data"]             // Old format: nested in data
 }
 
 // ts doesn't have this key in the type
@@ -390,18 +390,17 @@ function TSHost(
     return snapshot
   }
 
-  function createOrUpdateMeta(path: string, transpiledDoc: TextDocument, sourcemapLines?: SourceMap["lines"], parseErrors?: (Error | ParseError)[], fatal?: boolean) {
+  function createOrUpdateMeta(path: string, transpiledDoc: TextDocument, sourcemapLines?: SourceMap["lines"], parseErrors?: (Error | ParseError)[], fatal: boolean = false) {
     let meta = fileMetaData.get(path)
 
     if (!meta) {
-      meta = {
+      const newMeta: FileMeta = {
         sourcemapLines,
         transpiledDoc,
         parseErrors,
         fatal,
       }
-
-      fileMetaData.set(path, meta)
+      fileMetaData.set(path, newMeta)
     } else {
       meta.sourcemapLines = sourcemapLines
       meta.parseErrors = parseErrors
@@ -421,7 +420,7 @@ function TSHost(
 
     if (result) {
       const { code: transpiledCode, sourceMap, errors } = result
-      const sourceMapLines = sourceMap?.lines ?? sourceMap?.data.lines // older Civet
+      const sourceMapLines = sourceMap?.lines ?? sourceMap?.data?.lines // older Civet
       createOrUpdateMeta(sourcePath, transpiledDoc, sourceMapLines, errors, false)
       TextDocument.update(transpiledDoc, [{ text: transpiledCode }], version)
 
