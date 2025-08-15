@@ -1,4 +1,6 @@
 {
+  nixConfig.bash-prompt-prefix = ''(civet) '';
+
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
 
