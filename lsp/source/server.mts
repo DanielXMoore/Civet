@@ -35,7 +35,7 @@ import ts, {
   SemicolonPreference,
 } from 'typescript';
 import { fileURLToPath, pathToFileURL } from 'url';
-// Removed broken import - using native setTimeout
+import { setTimeout } from 'timers/promises';
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -623,7 +623,7 @@ async function scheduleExecuteQueue() {
   // Schedule executeQueue() if there isn't one already running or scheduled
   if (executeTimeout) return
   if (!changeQueue.size) return
-  await (executeTimeout = new Promise(r => setTimeout(r, diagnosticsDelay)))
+  await (executeTimeout = setTimeout(diagnosticsDelay))
   await executeQueue()
 }
 
