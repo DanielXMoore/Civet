@@ -56,15 +56,15 @@
           pname,
           src,
           entrypoint ? pname,
-          version ?
-            (builtins.fromJSON
-              (builtins.readFile "${src}/package.json"))
-            .version,
           extraIgnoreRules ? "",
           yarnDepsHash ? pkgs.lib.fakeHash,
-          patchPhase ? "",
-          description ? "",
-        }: let
+          patchPhase ? null,
+          description ? null,
+        } @ args: let
+          nodejs = pkgs.nodePackages_latest.nodejs;
+          pkgJson =
+            builtins.fromJSON (builtins.readFile "${src}/package.json");
+          version = args.version or pkgJson.version;
           cleanSrc = pkgs.lib.cleanSourceWith {
             name = "${pname}-${version}-clean-src";
             inherit src;
@@ -87,57 +87,36 @@
             };
           };
         in
-          pkgs.stdenv.mkDerivation (
-            {
-              inherit pname version;
-              src = cleanSrc;
+          pkgs.stdenv.mkDerivation {
+            inherit pname version patchPhase;
+            src = cleanSrc;
 
-              yarnOfflineCache = pkgs.fetchYarnDeps {
-                yarnLock = "${cleanSrc}/yarn.lock";
-                hash = yarnDepsHash;
-              };
+            yarnOfflineCache = pkgs.fetchYarnDeps {
+              yarnLock = "${cleanSrc}/yarn.lock";
+              hash = yarnDepsHash;
+            };
 
-              nativeBuildInputs = with pkgs; [
-                nodejs
-                yarnConfigHook
-                yarnInstallHook
-                yarnBuildHook
-              ];
+            nativeBuildInputs =
+              [nodejs]
+              ++ (with pkgs; [yarnConfigHook yarnInstallHook yarnBuildHook]);
 
-              installPhase = ''
-                runHook preInstall
+            fixupPhase = ''
+              mkdir -p $out/{share,bin}
+              makeWrapper \
+                ${pkgs.lib.getExe nodejs} \
+                $out/bin/${pname} \
+                --inherit-argv0 \
+                --add-flag $out/lib/node_modules/${pkgJson.name}/dist/${entrypoint}
+            '';
 
-                mkdir -p $out/{share,bin}
-                mv dist $out/share/${pname}
-                makeWrapper \
-                  ${pkgs.lib.getExe pkgs.nodejs} \
-                  $out/bin/${pname} \
-                  --inherit-argv0 \
-                  --add-flag $out/share/${pname}/${entrypoint}
-
-                runHook postInstall
-              '';
-
-              meta = {
-                inherit description;
-                homepage = "https://civet.dev/";
-                license = pkgs.lib.licenses.mit;
-                platforms = pkgs.lib.platforms.all;
-                mainProgram = pname;
-              };
-            }
-            // (
-              if patchPhase == ""
-              then {}
-              else {
-                patchPhase = ''
-                  runHook prePatch
-                  ${patchPhase}
-                  runHook postPatch
-                '';
-              }
-            )
-          );
+            meta = {
+              inherit description;
+              homepage = "https://civet.dev/";
+              license = pkgs.lib.licenses.mit;
+              platforms = pkgs.lib.platforms.all;
+              mainProgram = pname;
+            };
+          };
       in {
         packages = {
           inherit cli ls vscode-vsix vscode-extension;
