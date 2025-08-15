@@ -52,6 +52,7 @@
             install -Dm644 *.vsix $out
             runHook postInstall
           '';
+          fixupPhase = null;
         });
 
         mkCivetPackage = {
@@ -103,7 +104,8 @@
               ++ (with pkgs; [yarnConfigHook yarnInstallHook yarnBuildHook]);
 
             fixupPhase = ''
-              mkdir -p $out/{share,bin}
+              echo "the phase"
+              mkdir -p $out/bin
               makeWrapper \
                 ${pkgs.lib.getExe nodejs} \
                 $out/bin/${pname} \
