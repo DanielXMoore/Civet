@@ -58,7 +58,8 @@ const sourcePathToProjectPathMap = new Map<string, string>()
 const projectPathToPendingPromiseMap = new Map<string, Promise<void>>()
 
 // Mapping from project path -> TSService instance operating on that base directory
-const projectPathToServiceMap = new Map<string, ReturnType<typeof TSService>>()
+type ResolvedService = Awaited<ReturnType<typeof TSService>>
+const projectPathToServiceMap = new Map<string, ResolvedService>()
 
 let rootUri: string | undefined, rootDir: string | undefined;
 
@@ -104,7 +105,7 @@ const ensureServiceForSourcePath = async (sourcePath: string) => {
   let service = projectPathToServiceMap.get(projPath)
   if (service) return service
   logger.log("Spawning language server for project path: " + projPath)
-  service = TSService(projPath, connection.console)
+  service = await TSService(projPath, connection.console)
   const initP = service.loadPlugins()
   projectPathToPendingPromiseMap.set(projPath, initP)
   await initP
@@ -575,29 +576,47 @@ let changeQueue = new Set<TextDocument>()
 let executeTimeout: Promise<void> | undefined
 const documentUpdateStatus = new Map<string, WithResolvers<boolean>>()
 async function executeQueue() {
-  // Cancel updating any other documents while running queue of primary changes
+  // Cancel any in-flight project-wide diagnostics update to avoid conflicts
   if (runningDiagnosticsUpdate) {
     runningDiagnosticsUpdate.isCanceled = true
   }
-  // Reset queue to allow accumulating jobs while this queue runs
-  const changed = changeQueue
-  changeQueue = new Set
-  logger.log("executeQueue " + changed.size)
-  // Run all jobs in queue (preventing livelock).
-  for (const document of changed) {
-    await updateDiagnosticsForDoc(document)
-    documentUpdateStatus.get(document.uri)?.resolve(true)
-    Promise.resolve()
-      // Wait for the document to be updated before removing it from the status map
-      .then(() => documentUpdateStatus.delete(document.uri))
+  const changed = Array.from(changeQueue);
+  changeQueue = new Set();
+  if (changed.length === 0) {
+    executeTimeout = undefined;
+    return;
   }
-  // Allow executeQueue() again, and run again if there are new jobs now.
-  // Otherwise, schedule update of all other documents.
+  logger.log(`executeQueue: Processing batch of ${changed.length} documents.`);
+
+  const docsByProject = new Map<string, { service: ResolvedService; docs: TextDocument[] }>();
+
+  // Group documents by their project path to ensure atomic updates per project.
+  for (const doc of changed) {
+    const sourcePath = documentToSourcePath(doc);
+    const projPath = getProjectPathFromSourcePath(sourcePath);
+    if (!docsByProject.has(projPath)) {
+      const service = await ensureServiceForSourcePath(sourcePath);
+      if (service) docsByProject.set(projPath, { service, docs: [] });
+    }
+    docsByProject.get(projPath)?.docs.push(doc);
+  }
+
+  for (const { service, docs } of docsByProject.values()) {
+    // Phase 1: Stage all changes within this project.
+    docs.forEach(doc => service.host.addOrUpdateDocument(doc));
+
+    // Phase 2: Analyze all staged documents within this project.
+    for (const doc of docs) {
+      await updateDiagnosticsForDoc(doc, service);
+      documentUpdateStatus.get(doc.uri)?.resolve(true);
+      Promise.resolve().then(() => documentUpdateStatus.delete(doc.uri));
+    }
+  }
   executeTimeout = undefined
   if (changeQueue.size) {
     scheduleExecuteQueue()
   } else {
-    scheduleUpdateDiagnostics(changed)
+    scheduleUpdateDiagnostics(new Set(changed));
   }
 }
 async function scheduleExecuteQueue() {
@@ -617,15 +636,21 @@ documents.onDidChangeContent(async ({ document }) => {
   scheduleExecuteQueue()
 });
 
-async function updateDiagnosticsForDoc(document: TextDocument) {
+async function updateDiagnosticsForDoc(document: TextDocument, service?: ResolvedService) {
   logger.log("Updating diagnostics for doc: " + document.uri)
   const sourcePath = documentToSourcePath(document)
   assert(sourcePath)
 
-  const service = await ensureServiceForSourcePath(sourcePath)
+  if (!service) {
+    service = await ensureServiceForSourcePath(sourcePath)
+  }
   if (!service) return
 
-  service.host.addOrUpdateDocument(document)
+  // When called from executeQueue, document is already staged.
+  // When called from updateProjectDiagnostics, we need to stage it.
+  if (arguments.length === 1) {
+    service.host.addOrUpdateDocument(document)
+  }
 
   // Non-transpiled
   if (sourcePath.match(tsSuffix)) {
@@ -703,36 +728,54 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
 let runningDiagnosticsUpdate: { isCanceled: boolean } | undefined
 
 // Asynchronously update diagnostics for all the documents
-// other than the ones in skip list
-const updatePendingDiagnostics = async (
+// in a project, based on the service instance.
+const updateProjectDiagnostics = async (
   status: { isCanceled: boolean },
-  skipDocs: Set<TextDocument>
+  service: ResolvedService
 ) => {
-  await new Promise(r => setTimeout(r, diagnosticsPropagationDelay))
-  if (status?.isCanceled) return
-  for (let doc of documents.all()) {
-    if (skipDocs.has(doc)) {
-      // We can skip this document because it was updated
-      // right after the content update
-      continue
+  const program = service.getProgram();
+  if (!program) return;
+
+  // A single, short delay before starting the update for a project.
+  await setTimeout(diagnosticsPropagationDelay);
+
+  for (const sourceFile of program.getSourceFiles()) {
+    if (status.isCanceled) return;
+
+    // We only send diagnostics for files the user actually has open,
+    // even though we're checking every file in the project for correctness.
+    const docUri = pathToFileURL(sourceFile.fileName).toString();
+    const doc = documents.get(docUri);
+    if (doc) {
+      await updateDiagnosticsForDoc(doc, service);
     }
-    updateDiagnosticsForDoc(doc)
-    await new Promise(r => setTimeout(r, diagnosticsPropagationDelay))
-    if (status?.isCanceled) return
   }
 }
 
-// Schedule an update of diagnostics for all *other* documents
-// that weren't directly changed, but might depend on changed documents.
-// Skip documents passed in as a set (the already updated changed documents).
-function scheduleUpdateDiagnostics(skipDocs: Set<TextDocument>) {
+// Schedule an update of diagnostics for all projects affected by recent changes.
+function scheduleUpdateDiagnostics(changedDocs: Set<TextDocument>) {
   if (runningDiagnosticsUpdate) {
-    runningDiagnosticsUpdate.isCanceled = true
+    runningDiagnosticsUpdate.isCanceled = true;
   }
-  runningDiagnosticsUpdate = {
-    isCanceled: false
+  const status = { isCanceled: false };
+  runningDiagnosticsUpdate = status;
+
+  // Deduplicate by project path to avoid redundant updates.
+  const servicesToUpdate = new Set<ResolvedService>();
+  for (const doc of changedDocs) {
+    const sourcePath = documentToSourcePath(doc);
+    const projPath = getProjectPathFromSourcePath(sourcePath);
+    const service = projectPathToServiceMap.get(projPath);
+    if (service) {
+      servicesToUpdate.add(service);
+    }
   }
-  updatePendingDiagnostics(runningDiagnosticsUpdate, skipDocs)
+
+  // Trigger updates for each affected project.
+  for (const service of servicesToUpdate) {
+    // Don't await; let updates for different projects run in parallel.
+    updateProjectDiagnostics(status, service);
+  }
 }
 
 connection.onDidChangeWatchedFiles(_change => {
