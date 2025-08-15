@@ -1,5 +1,6 @@
 declare module '@danielx/civet/ts-diagnostic' {
   import type { DiagnosticMessageChain } from 'typescript'
+  import type { SourceMapping } from '@danielx/civet'
 
   interface Position {
     line: number
@@ -11,10 +12,9 @@ declare module '@danielx/civet/ts-diagnostic' {
     end: Position
   }
 
-  type SourceMap = [number] | [number, number, number, number]
-  type SourcemapLines = SourceMap[][]
+  type SourcemapLines = SourceMapping[][]
 
-  export type { SourcemapLines, SourceMap }
+  export type { SourcemapLines, SourceMapping }
 
   export function remapPosition(
     position: Position,

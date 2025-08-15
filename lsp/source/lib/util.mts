@@ -19,13 +19,13 @@ import vs, {
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import assert from 'assert';
-import type { SourceMap, SourcemapLines } from '@danielx/civet/ts-diagnostic';
+import type { SourcemapLines, SourceMapping } from '@danielx/civet/ts-diagnostic';
 import {
   flattenDiagnosticMessageText,
   remapRange,
 } from '@danielx/civet/ts-diagnostic';
 
-export type { SourceMap, SourcemapLines } from '@danielx/civet/ts-diagnostic';
+export type { SourcemapLines, SourceMapping } from '@danielx/civet/ts-diagnostic';
 
 export {
   flattenDiagnosticMessageText,
@@ -295,7 +295,7 @@ export function containsRange(range: Range, otherRange: Range): boolean {
   return true;
 }
 
-const isFourTuple = (m: SourceMap): m is [number, number, number, number] => m.length === 4;
+const isFourTuple = (m: SourceMapping): m is [number, number, number, number] => m.length === 4;
 /**
  * The normal direction for sourcemapping is reverse, given a position in the generated file it points to a position in the source file.
  *
