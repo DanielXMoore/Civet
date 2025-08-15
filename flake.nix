@@ -104,7 +104,6 @@
               ++ (with pkgs; [yarnConfigHook yarnInstallHook yarnBuildHook]);
 
             fixupPhase = ''
-              echo "the phase"
               mkdir -p $out/bin
               makeWrapper \
                 ${pkgs.lib.getExe nodejs} \
