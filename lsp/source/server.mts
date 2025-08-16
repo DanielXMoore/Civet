@@ -22,7 +22,7 @@ import {
 } from 'vscode-languageserver-textdocument';
 import TSService from './lib/typescript-service.mjs';
 import * as Previewer from "./lib/previewer.mjs";
-import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier, logTiming, WithResolvers, withResolvers } from './lib/util.mjs';
+import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier, logTiming, WithResolvers, withResolvers, type SourcemapLines } from './lib/util.mjs';
 import { asPlainTextWithLinks, tagsToMarkdown } from './lib/textRendering.mjs';
 import assert from "assert"
 import path from "node:path"
@@ -47,7 +47,8 @@ const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
-let hasDiagnosticRelatedInformationCapability = false;
+// let hasDiagnosticRelatedInformationCapability = false;
+// comment out unused variable
 
 // Mapping from abs file path -> path of nearest applicable project path (tsconfig.json base)
 const sourcePathToProjectPathMap = new Map<string, string>()
@@ -62,7 +63,7 @@ const projectPathToServiceMap = new Map<string, ResolvedService>()
 
 let rootUri: string | undefined, rootDir: string | undefined;
 
-const getProjectPathFromSourcePath = (sourcePath: string) => {
+const getProjectPathFromSourcePath = (sourcePath: string): string => {
   let projPath = sourcePathToProjectPathMap.get(sourcePath)
   if (projPath) return projPath
 
@@ -88,7 +89,7 @@ const getProjectPathFromSourcePath = (sourcePath: string) => {
   // Otherwise, check whether we're inside the root
   if (!projPath) {
     if (rootDir != null && sourcePath.startsWith(rootDir)) {
-      projPath = rootUri
+      projPath = rootUri ?? pathToFileURL(path.dirname(sourcePath) + "/").toString()
     } else {
       projPath = pathToFileURL(path.dirname(sourcePath) + "/").toString()
     }
@@ -128,11 +129,12 @@ connection.onInitialize(async (params: InitializeParams) => {
   hasWorkspaceFolderCapability = !!(
     capabilities.workspace && !!capabilities.workspace.workspaceFolders
   );
-  hasDiagnosticRelatedInformationCapability = !!(
-    capabilities.textDocument &&
-    capabilities.textDocument.publishDiagnostics &&
-    capabilities.textDocument.publishDiagnostics.relatedInformation
-  );
+  // hasDiagnosticRelatedInformationCapability = !!(
+  //   capabilities.textDocument &&
+  //   capabilities.textDocument.publishDiagnostics &&
+  //   capabilities.textDocument.publishDiagnostics.relatedInformation
+  // );
+  // Removed unused diagnostic capability check
 
   const result: InitializeResult = {
     capabilities: {
@@ -264,7 +266,13 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
   const completionOptions: GetCompletionsAtPositionOptions = {
     includeExternalModuleExports: completionConfiguration.autoImportSuggestions,
     includeInsertTextCompletions: true,
-    ...context,
+  }
+  
+  if (context?.triggerKind) {
+    completionOptions.triggerKind = context.triggerKind
+  }
+  if (context?.triggerCharacter) {
+    completionOptions.triggerCharacter = context.triggerCharacter
   }
 
   const sourcePath = documentToSourcePath(textDocument)
@@ -341,12 +349,12 @@ connection.onCompletionResolve(async (item) => {
     }, source, undefined, data)
   } catch (e) {
     logger.log("Failed to get completion details for " + name)
-    logger.log(e)
+    logger.log(String(e))
   }
   if (!detail) return item
 
   // getDetails from https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
-  const details = []
+  const details: string[] = []
   for (const action of detail.codeActions ?? []) {
     details.push(action.description)
   }
@@ -354,7 +362,7 @@ connection.onCompletionResolve(async (item) => {
   item.detail = details.join("\n\n")
 
   // getDocumentation from https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
-  const documentations = []
+  const documentations: string[] = []
   if (detail.documentation) {
     documentations.push(asPlainTextWithLinks(detail.documentation))
   }
@@ -412,7 +420,8 @@ connection.onDefinition(async ({ textDocument, position }) => {
   const program = service.getProgram()
   assert(program)
 
-  return definitions.map<Location | undefined>((definition) => {
+  const defs = definitions as readonly ts.DefinitionInfo[]
+  return defs.map((definition) => {
     let { fileName, textSpan } = definition
     // source file as it is known to TSServer
     const sourceFile = program.getSourceFile(fileName)
@@ -440,7 +449,7 @@ connection.onDefinition(async ({ textDocument, position }) => {
         end,
       }
     }
-  }).filter((d) => !!d) as Location[]
+  }).filter((d): d is Location => !!d)
 
 })
 
@@ -482,7 +491,8 @@ connection.onReferences(async ({ textDocument, position }) => {
   const program = service.getProgram()
   assert(program)
 
-  return references.map<Location | undefined>((reference) => {
+  const refs = references as readonly ts.ReferenceEntry[]
+  return refs.map((reference) => {
     let { fileName, textSpan } = reference
     // source file as it is known to TSServer
     const sourceFile = program.getSourceFile(fileName)
@@ -510,7 +520,7 @@ connection.onReferences(async ({ textDocument, position }) => {
         end,
       }
     }
-  }).filter((d) => !!d) as Location[]
+  }).filter((d): d is Location => !!d)
 });
 
 connection.onDocumentSymbol(async ({ textDocument }) => {
@@ -663,12 +673,16 @@ async function updateDiagnosticsForDoc(document: TextDocument, service?: Resolve
     return
   }
   const { sourcemapLines, transpiledDoc, parseErrors, fatal } = meta
+  if (!transpiledDoc) {
+    logger.log("no transpiledDoc for " + sourcePath)
+    return
+  }
 
   const transpiledPath = documentToSourcePath(transpiledDoc)
   const diagnostics: Diagnostic[] = [];
 
   if (parseErrors?.length) {
-    diagnostics.push(...parseErrors.map((e: Error | ParseError) => {
+    diagnostics.push(...parseErrors.map((e: Error & {line?: number, column?: number}) => {
       let start = { line: 0, character: 0 }, end = { line: 0, character: 10 }
       let message = e.message
       if (e.line != null && e.column != null) { // ParseError
@@ -698,7 +712,7 @@ async function updateDiagnosticsForDoc(document: TextDocument, service?: Resolve
       ...logTiming(logger, "service.getSemanticDiagnostics", service.getSemanticDiagnostics)(transpiledPath),
       ...logTiming(logger, "service.getSuggestionDiagnostics", service.getSuggestionDiagnostics)(transpiledPath),
     ].forEach((diagnostic) => {
-      diagnostics.push(convertDiagnostic(diagnostic, transpiledDoc, sourcemapLines))
+      diagnostics.push(convertDiagnostic(diagnostic, transpiledDoc!, sourcemapLines))
     })
   }
 
@@ -782,7 +796,7 @@ function documentToSourcePath(textDocument: TextDocumentIdentifier) {
   return fileURLToPath(textDocument.uri);
 }
 
-function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: any): CompletionItem[] {
+function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: SourcemapLines): CompletionItem[] {
   // Partial simulation of MyCompletionItem in
   // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
   const { entries } = completions;
