@@ -22,7 +22,7 @@ import {
 } from 'vscode-languageserver-textdocument';
 import TSService from './lib/typescript-service.mjs';
 import * as Previewer from "./lib/previewer.mjs";
-import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier, logTiming, WithResolvers, withResolvers } from './lib/util.mjs';
+import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier, logTiming, WithResolvers, withResolvers, type SourcemapLines } from './lib/util.mjs';
 import { asPlainTextWithLinks, tagsToMarkdown } from './lib/textRendering.mjs';
 import assert from "assert"
 import path from "node:path"
@@ -796,7 +796,7 @@ function documentToSourcePath(textDocument: TextDocumentIdentifier) {
   return fileURLToPath(textDocument.uri);
 }
 
-function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: any): CompletionItem[] {
+function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: SourcemapLines): CompletionItem[] {
   // Partial simulation of MyCompletionItem in
   // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
   const { entries } = completions;
