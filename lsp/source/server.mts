@@ -725,12 +725,14 @@ const updateProjectDiagnostics = async (
   // A single, short delay before starting the update for a project.
   await setTimeout(diagnosticsPropagationDelay);
 
-  for (const sourceFile of program.getSourceFiles()) {
+  const projectFiles = program.getSourceFiles();
+  for (const sourceFile of projectFiles) {
     if (status.isCanceled) return;
 
-    // We only send diagnostics for files the user actually has open,
-    // even though we're checking every file in the project for correctness.
-    const docUri = pathToFileURL(sourceFile.fileName).toString();
+    // We only need to send diagnostics for files the user has open
+    // TypeScript is analyzing all files in memory anyway
+    const rawFileName = service.getSourceFileName(sourceFile.fileName);
+    const docUri = pathToFileURL(rawFileName).toString();
     const doc = documents.get(docUri);
     if (doc) {
       await updateDiagnosticsForDoc(doc, service);
