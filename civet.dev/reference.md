@@ -3547,10 +3547,12 @@ loop
 <Playground>
 "civet coffeeClasses autoVar"
 class X
-  privateVar = 5
+  privateStaticVar = 5
+  @publicStaticVar = 6
   constructor: (@x) ->
   get: -> @x
   bound: => @x
+  @staticFunc: -> @publicStaticVar
 </Playground>
 
 ### IIFE Wrapper
