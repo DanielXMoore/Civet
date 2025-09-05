@@ -1,7 +1,7 @@
 ---
 title: Integrations
 ---
-
+<!-- markdownlint-disable line-length -->
 # {{ $frontmatter.title }}
 
 ## VSCode
@@ -37,3 +37,42 @@ title: Integrations
 
 - [c8 + Mocha](https://github.com/DanielXMoore/Civet#c8--mocha)
 - [Civet CLI](https://civet.dev/getting-started#executing-code)
+
+## the Nix package manager
+
+Civet's [GitHub repo](https://github.com/DanielXMoore/Civet) is a [nix flake](https://wiki.nixos.org/wiki/flakes) that provides:
+
+- a devshell that can be enabled with
+
+  ```sh
+  nix \
+    --extra-experimental-features 'nix-command flakes' \
+    develop github:danielxmoore/civet
+  ```
+
+- `cli` (default): the Civet CLI, accessible with
+
+  ```sh
+  nix \
+    --extra-experimental-features 'nix-command flakes' \
+    run github:danielxmoore/civet
+  ```
+
+- `ls`: a standalone entrypoint for the Civet Language Server, accessible with
+
+  ```sh
+  nix \
+    --extra-experimental-features 'nix-command flakes' \
+    run github:danielxmoore/civet#ls -- --stdio
+  ```
+
+- `vscode-extension`: an unpacked VSCode extension for the lsp and syntax highlighting that can be used with [`vscode-with-extensions`](https://wiki.nixos.org/wiki/Visual_Studio_Code#Installation)
+- `vscode-vsix`: the VSCode extension packaged as a `.vsix`, which can be installed with
+
+  ```sh
+  nix  \
+    --extra-experimental-features 'nix-command flakes' \
+    build github:danielxmoore/civet#vscode-vsix
+  cp result result.vsix # vscode requires the `.vsix` extension
+  code --install-extension result.vsix
+  ```
