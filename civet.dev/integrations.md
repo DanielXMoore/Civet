@@ -37,3 +37,7 @@ title: Integrations
 
 - [c8 + Mocha](https://github.com/DanielXMoore/Civet#c8--mocha)
 - [Civet CLI](https://civet.dev/getting-started#executing-code)
+
+## Tooling
+
+- [YavaScript](https://github.com/suchipi/yavascript) is a standalone script runner supporting Civet (no Node required)
