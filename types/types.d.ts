@@ -97,7 +97,7 @@ declare module "@danielx/civet" {
       code: string,
       sourceMap: SourceMap,
     } : string
-  export function compile<const T extends CompileOptions>(source: string, options?: T):
+  export function compile<const T extends CompileOptions>(source: string | Buffer, options?: T):
     T extends { sync: true } ? CompileOutput<T> : Promise<CompileOutput<T>>
   /** Warning: No caching */
   export function parse(source: string, options?: CompileOptions & {startRule?: string}): CivetAST
@@ -105,6 +105,7 @@ declare module "@danielx/civet" {
   export function parseProgram<T extends CompileOptions>(source: string, options?: T):
     T extends { comptime: true } ? Promise<CivetAST> : CivetAST
   export function generate(ast: CivetAST, options?: GenerateOptions): string
+  export function decode(source: string | Buffer): string
 
   export const lib: {
     gatherRecursive(ast: CivetAST, predicate: (node: CivetAST) => boolean): CivetAST[]
@@ -117,6 +118,7 @@ declare module "@danielx/civet" {
     isCompileError: typeof isCompileError
     parse: typeof parse
     generate: typeof generate
+    decode: typeof decode
     SourceMap: typeof SourceMap
     ParseError: typeof ParseError
     ParseErrors: typeof ParseErrors
