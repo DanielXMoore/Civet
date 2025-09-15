@@ -9,8 +9,6 @@ import ts, { displayPartsToString, SignatureHelpItems } from 'typescript';
 import { forwardMap, tsSuffix } from '../lib/util.mjs';
 import type { FeatureDeps } from '../../types/types.d';
 
-const debugSignature = false
-
 function isTriggerCharacter(char: string): char is ts.SignatureHelpTriggerCharacter {
   return char === '(' || char === ',' || char === '<';
 }
@@ -74,7 +72,7 @@ export async function handleSignatureHelp(
   }
   
   // Debug breadcrumb to aid future investigations
-  if (debugSignature) { try { console.debug(`[SIGHELP] target=${targetPath}:${targetOffset}`) } catch {} }
+  if (deps.debug.signatureHelp) { try { console.debug(`[SIGHELP] target=${targetPath}:${targetOffset}`) } catch {} }
 
   signatureHelp = service.getSignatureHelpItems(targetPath, targetOffset, options)
 

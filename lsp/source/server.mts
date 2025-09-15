@@ -38,6 +38,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { setTimeout } from 'timers/promises';
 import { handleSignatureHelp } from './features/index.mjs';
 import type { FeatureDeps } from '../types/types.d';
+import { debugSettings } from './lib/debug.mjs';
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -153,7 +154,7 @@ connection.onInitialize(async (params: InitializeParams) => {
       hoverProvider: true,
       referencesProvider: true,
       signatureHelpProvider: {
-        triggerCharacters: ['(', ','],
+        triggerCharacters: ['(', ',', '<'],
         retriggerCharacters: [')', '>']
       },
 
@@ -534,6 +535,7 @@ connection.onSignatureHelp(async (params) => {
     documentToSourcePath,
     documents,
     updating,
+    debug: debugSettings,
   };
   return await handleSignatureHelp(params, deps);
 });
