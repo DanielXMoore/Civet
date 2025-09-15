@@ -7,7 +7,7 @@
  *
  */
 export const debugSettings = {
-  signatureHelp: true,
+  signatureHelp: false,
   completions: false,
   // Add new debug flags here as needed
 };
