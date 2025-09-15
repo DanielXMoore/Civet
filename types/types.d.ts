@@ -41,18 +41,78 @@ declare module "@danielx/civet" {
     repl: boolean
   }>
   export type CompileOptions = {
+    /**
+     * If your Civet code comes from a file, provide it here. This gets used
+     * in sourcemaps and error messages.
+     */
     filename?: string
+    /**
+     * Whether to return a source map in addition to transpiled code.
+     * If false (the default), `compile` just returns transpiled code.
+     * If true (and `inlineMap` is false/unspecified),
+     * `compile` returns an object `{code, sourceMap}` whose `code` property
+     * is transpiled code and `sourceMap` property is a `SourceMap` object.
+     */
     sourceMap?: boolean
+    /**
+     * Whether to inline a source map as a final comment in the transpiled code.
+     * Default is false.
+     */
     inlineMap?: boolean
+    /**
+     * Whether to return an AST of the parsed code instead of transpiled code.
+     * Default is false.
+     * If true, `compile` skips the `generate` step that turns the parsed AST
+     * into a code string, and just returns the AST itself.
+     * If "raw", `compile` also skips the `prune` step, which leaves some
+     * extra properties on the AST nodes (e.g. `parent` pointers) and
+     * preserves that `children` is always an array.
+     */
     ast?: boolean | "raw"
+    /**
+     * Whether Civet should convert TypeScript syntax to JavaScript.
+     * This mostly triggers the removal of type annotations, but some
+     * TypeScript features such as `enum` are also supported.
+     * Default is false.
+     */
     js?: boolean
+    /**
+     * If set to true, turns off the compiler cache of compiled subexpressions.
+     * This should not affect the compilation output,
+     * and can make the compiler exponentially slow.
+     * It is mainly for testing whether there is a bug in the compiler cache.
+     */
     noCache?: boolean
+    /**
+     * If specified, also writes data about compiler cache performance
+     * into the specified filename. Useful for debugging caching performance.
+     */
     hits?: string
+    /**
+     * If specified, also writes data about all parse branches considered by
+     * the compiler into the specified filename.
+     * Useful for debugging why something parsed the way it did.
+     */
     trace?: string
+    /**
+     * Initial parse options, e.g., read from a config file.
+     * They can still be overridden in the code by "civet" pragmas.
+     */
     parseOptions?: ParseOptions
-    /** Specifying an empty array will prevent ParseErrors from being thrown */
+    /**
+     * By default, `compile` will throw a `ParseErrors` containing all
+     * `ParseError`s encountered during compilation.
+     * If you specify an empty array, `compile` will not throw and instead
+     * will add to the array all `ParseError`s encountered.
+     */
     errors?: ParseError[]
-    /** Number of parallel threads to compile with (Node only) */
+    /**
+     * Number of parallel threads to compile with (Node only).
+     * Default is to use the environment variable `CIVET_THREADS`, or 0.
+     * If nonzero, spawns up to that many worker threads so that multiple
+     * calls to `compile` will end up running in parallel.
+     * If `CIVET_THREADS` is set to 0, the `threads` option is ignored.
+     */
     threads?: number
   }
   export type GenerateOptions = Omit<CompileOptions, "sourceMap"> & {
