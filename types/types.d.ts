@@ -114,12 +114,19 @@ declare module "@danielx/civet" {
      * If `CIVET_THREADS` is set to 0, the `threads` option is ignored.
      */
     threads?: number
+    /**
+     * If false (the default), runs the compiler asynchronously and returns
+     * a Promise (for the transpiled string or `{code, sourceMap}` object).
+     * If true, runs the compiler synchronously and returns the result directly.
+     * Sync mode disables some features:
+     *   - parallel computation via `threads`
+     *   - comptime code can't return promises
+     */
+    sync?: boolean
   }
   export type GenerateOptions = Omit<CompileOptions, "sourceMap"> & {
     sourceMap?: undefined | SourceMap
   }
-  export type SyncCompileOptions = CompileOptions &
-    { parseOptions?: { comptime?: false } }
 
   export type SourceMapping = [number] | [number, number, number, number]
 
