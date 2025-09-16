@@ -22,7 +22,7 @@ import {
 } from 'vscode-languageserver-textdocument';
 import TSService from './lib/typescript-service.mjs';
 import * as Previewer from "./lib/previewer.mjs";
-import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier, logTiming, WithResolvers, withResolvers, type SourcemapLines } from './lib/util.mjs';
+import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier, logTiming, WithResolvers, withResolvers, type SourcemapLines, tsSuffix } from './lib/util.mjs';
 import { asPlainTextWithLinks, tagsToMarkdown } from './lib/textRendering.mjs';
 import assert from "assert"
 import path from "node:path"
@@ -36,6 +36,9 @@ import ts, {
 } from 'typescript';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { setTimeout } from 'timers/promises';
+import { handleSignatureHelp } from './features/index.mjs';
+import type { FeatureDeps } from '../types/types.d';
+import { debugSettings } from './lib/debug.mjs';
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -150,6 +153,10 @@ connection.onInitialize(async (params: InitializeParams) => {
       definitionProvider: true,
       hoverProvider: true,
       referencesProvider: true,
+      signatureHelpProvider: {
+        triggerCharacters: ['(', ',', '<'],
+        retriggerCharacters: [')', '>']
+      },
 
     }
   };
@@ -189,7 +196,6 @@ connection.onInitialized(() => {
 });
 
 const updating = (document: { uri: string }) => documentUpdateStatus.get(document.uri)?.promise
-const tsSuffix = /\.[cm]?[jt]s$|\.json|\.[jt]sx/
 
 connection.onHover(async ({ textDocument, position }) => {
   // logger.log("hover"+ position)
@@ -523,6 +529,32 @@ connection.onReferences(async ({ textDocument, position }) => {
   }).filter((d): d is Location => !!d)
 });
 
+connection.onSignatureHelp(async (params) => {
+  if (debugSettings.signatureHelp) {
+    console.debug(`[SERVER] onSignatureHelp called:`, {
+      uri: params.textDocument.uri,
+      position: params.position,
+      context: params.context
+    });
+  }
+  
+  const deps: FeatureDeps = {
+    ensureServiceForSourcePath,
+    documentToSourcePath,
+    documents,
+    updating,
+    debug: debugSettings,
+  };
+  
+  const result = await handleSignatureHelp(params, deps);
+  
+  if (debugSettings.signatureHelp) {
+    console.debug(`[SERVER] onSignatureHelp result:`, result ? 'success' : 'null');
+  }
+  
+  return result;
+});
+
 connection.onDocumentSymbol(async ({ textDocument }) => {
   const sourcePath = documentToSourcePath(textDocument)
   assert(sourcePath)
@@ -792,7 +824,7 @@ connection.listen();
 
 // Utils
 
-function documentToSourcePath(textDocument: TextDocumentIdentifier) {
+function documentToSourcePath(textDocument: TextDocumentIdentifier | TextDocument) {
   return fileURLToPath(textDocument.uri);
 }
 
