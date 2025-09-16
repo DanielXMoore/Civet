@@ -530,6 +530,14 @@ connection.onReferences(async ({ textDocument, position }) => {
 });
 
 connection.onSignatureHelp(async (params) => {
+  if (debugSettings.signatureHelp) {
+    console.debug(`[SERVER] onSignatureHelp called:`, {
+      uri: params.textDocument.uri,
+      position: params.position,
+      context: params.context
+    });
+  }
+  
   const deps: FeatureDeps = {
     ensureServiceForSourcePath,
     documentToSourcePath,
@@ -537,7 +545,14 @@ connection.onSignatureHelp(async (params) => {
     updating,
     debug: debugSettings,
   };
-  return await handleSignatureHelp(params, deps);
+  
+  const result = await handleSignatureHelp(params, deps);
+  
+  if (debugSettings.signatureHelp) {
+    console.debug(`[SERVER] onSignatureHelp result:`, result ? 'success' : 'null');
+  }
+  
+  return result;
 });
 
 connection.onDocumentSymbol(async ({ textDocument }) => {
