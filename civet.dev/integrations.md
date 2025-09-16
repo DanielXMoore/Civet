@@ -37,6 +37,7 @@ title: Integrations
 
 - [c8 + Mocha](https://github.com/DanielXMoore/Civet#c8--mocha)
 - [Civet CLI](https://civet.dev/getting-started#executing-code)
+- [Civet Discord Bot](https://github.com/DanielXMoore/civet-discord) transpiles ` ```civet ... ``` ` code in your Discord server
 
 ## Tooling
 
