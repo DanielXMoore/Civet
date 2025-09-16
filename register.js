@@ -58,7 +58,7 @@ const { compile } = require("./");
 // Old-style CJS registration
 if (require.extensions) {
   require.extensions[".civet"] = function (module, filename) {
-    const js = compile(fs.readFileSync(filename, 'utf8'), {
+    const js = compile(fs.readFileSync(filename), {
       filename,
       js: true,
       inlineMap: true,
@@ -83,7 +83,7 @@ function retrieveFile(path) {
   }
 
   if (!outputCache.has(path)) {
-    outputCache.set(path, compile(fs.readFileSync(path, 'utf8'), {
+    outputCache.set(path, compile(fs.readFileSync(path), {
       filename: path,
       js: true,
       inlineMap: true,
