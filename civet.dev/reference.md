@@ -1440,6 +1440,20 @@ operator combine arguments
 a combine b combine c
 </Playground>
 
+You can specify both precedence and associativity together in either order:
+
+<Playground>
+operator mult arguments tighter (+)
+a mult b mult c + d mult e mult f
+</Playground>
+
+Instead of declaring `operator`s in multiple files, you can declare global
+`operator`s (with custom precedence and associativity) in a project
+[configuration file](config#global-configuration-via-config-files).
+Within a Civet source file, you can redeclare with `operator` to override
+the precedence and/or associativity (but the default behavior is that
+specified in the configuration file).
+
 ### Operator Assignment
 
 Even without blessing a function as an `operator`, you can use it in
