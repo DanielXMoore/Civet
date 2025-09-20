@@ -141,7 +141,7 @@ declare module "@danielx/civet" {
   }
 
   // TODO: Import ParseError class from Hera
-  export type ParseError = {
+  export class ParseError {
     name: "ParseError"
     message: string // filename:line:column header\nbody
     header: string
@@ -151,7 +151,8 @@ declare module "@danielx/civet" {
     column: number | string
     offset: number
   }
-  export type ParseErrors = {
+  export class ParseErrors {
+    constructor(errors: ParseError[])
     name: "ParseErrors"
     message: string
     errors: ParseError[]
@@ -217,9 +218,10 @@ declare module "@danielx/civet/config" {
   export function loadConfig(
     path: string
   ): Promise<import("@danielx/civet").CompileOptions>
-  export default {
-    findInDir,
-    findConfig,
-    loadConfig,
+  const Config: {
+    findInDir: typeof findInDir,
+    findConfig: typeof findConfig,
+    loadConfig: typeof loadConfig,
   }
+  export default Config
 }
