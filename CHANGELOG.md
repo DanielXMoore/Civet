@@ -4,6 +4,14 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.10.7 (2025-09-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.6...v0.10.7), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.7))
+* Support Unicode BOM: UTF-8, UTF-16 LE and BE [[#1792](https://github.com/DanielXMoore/Civet/pull/1792)]
+* Fix access detection in braced expressions [[#1794](https://github.com/DanielXMoore/Civet/pull/1794)]
+* Fix errors in TypeScript types [[#1798](https://github.com/DanielXMoore/Civet/pull/1798)]
+* CLI passes SIGINT etc signals onto ESM scripts [[#1787](https://github.com/DanielXMoore/Civet/pull/1787)]
+* Fix `AutoPromise` wrapper in async functions with complex return types (e.g. OR) [[#1793](https://github.com/DanielXMoore/Civet/pull/1793)]
+* Global configuration of operators via `operators` [[#1799](https://github.com/DanielXMoore/Civet/pull/1799)]
+
 ## 0.10.6 (2025-09-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.5...v0.10.6), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.6))
 * Comment and tidy up source mapping util [[#1758](https://github.com/DanielXMoore/Civet/pull/1758)]
 * Throw on esbuild emitDeclaration misconfiguration [[#1759](https://github.com/DanielXMoore/Civet/pull/1759)]
