@@ -29,6 +29,8 @@ import type {
   ForStatement
   FunctionSignature
   IfStatement
+  ImportDeclaration
+  ImportLiteral
   Initializer
   IterationStatement
   Label
@@ -87,8 +89,10 @@ import {
   prepend
   replaceNode
   replaceNodes
+  stringLiteralValue
   stripTrailingImplicitComma
   trimFirstSpace
+  updateParentPointers
   wrapIIFE
   wrapWithReturn
 } from ./util.civet
@@ -1521,6 +1525,84 @@ function processBreaksContinues(statements: StatementTuple[]): void
     label.children.push label.name = parent.label.name
     delete label.special
 
+function processImportLiterals(root: BlockStatement): void
+  type ImportRecord = { export: ImportLiteral["export"], ref: ASTRef }
+  type ImportDeclarationWithMap = ImportDeclaration & {
+    imports: ASTNode[]
+    map: Map<string, ImportRecord>
+  }
+  importMap := new Map<string, ImportDeclarationWithMap>
+
+  for each literal of gatherRecursiveAll root, .type is "ImportLiteral"
+    module .= stringLiteralValue literal.module
+    exp := literal.export
+    exportName :=
+      switch exp
+        <? "string"
+          exp
+        {type: "Identifier", name}
+          name
+        {type: "StringLiteral"}
+          stringLiteralValue exp
+        {token: "*"}
+          "*"
+        else
+          throw new Error `Invalid export name ${exp} in import literal`
+    // Use separate import declaration for * import because JS does not support
+    // combination of default import, * import, and named imports
+    if exportName is "*"
+      module += "*"
+
+    let imports: ASTNode[], map
+    unless importMap.has module
+      from := [ "from ", literal.module ]
+      map = new Map<string, ImportRecord>
+      imports = ["{ "]
+      importMap.set module, {}
+        type: "ImportDeclaration"
+        children: [ "import ", imports, " ", from ]
+        imports
+        map
+        from
+    else
+      { imports, map } = importMap.get(module)!
+
+    let ref
+    unless map.has exportName
+      name .= `${module}$${exportName}`
+      .replace /^[^\p{ID_Start}_$]+|[^\p{ID_Continue}_$]/ug, ''
+      name or= "imp"
+      ref = makeRef name
+      map.set exportName, {export: exp, ref}
+      if exportName is "default"
+        imports.unshift ref, ", "
+      else
+        importAs := [ exp, " as ", ref, ", " ]
+        if exportName is "*"
+          imports.unshift ...importAs
+        else
+          imports.push ...importAs
+    else
+      ref = map.get(exportName)!.ref
+
+    literal.children =
+      // leading whitespace
+      . ...literal.children[< literal.children.indexOf literal.module]
+      . ref
+
+  root.expressions.unshift ...for imp of importMap.values()
+    // @ts-ignore Transform into normal ImportDeclaration
+    delete imp.map
+    named := imp.imports.-1 is not "{ " // any named imports?
+    unless named
+      imp.imports.pop() // remove unneeded open brace
+    if imp.imports.-1 is ", "
+      imp.imports.pop() // remove trailing comma
+    if named
+      imp.imports.push " }"
+    updateParentPointers imp, root
+    ["", imp, ";\n"] as tuple
+
 function processCoffeeClasses(statements: StatementTuple[]): void
   for each ce of gatherRecursiveAll statements, .type is "ClassExpression"
     { expressions } := ce.body
@@ -1629,6 +1711,7 @@ function processProgram(root: BlockStatement): void
   processIterationExpressions(statements)
   processFinallyClauses(statements)
   processBreaksContinues(statements)
+  processImportLiterals(root)
 
   // Now that e.g. `do*` and `async do` have been processed
   // (processIterationExpressions), we can detect top-level await/yield
