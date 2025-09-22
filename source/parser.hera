@@ -158,6 +158,15 @@ Object.defineProperties(state, {
   },
 })
 
+function setOperatorBehavior(name, behavior) {
+  const existing = state.operators.get(name)
+  if (existing && behavior) { // merge behaviors
+    state.operators.set(name, {...existing, ...behavior})
+  } else { // no merge, in particular double undefined -> undefined
+    state.operators.set(name, behavior || existing)
+  }
+}
+
 export function getStateKey() {
   const stateInt =
     ((state.currentIndent.level % 256) << 8) |
@@ -2565,13 +2574,13 @@ FunctionExpression
 OperatorDeclaration
   # `operator {x, y} := ...` declaration while blessing
   Operator:op OperatorBehavior?:behavior _:w LexicalDeclaration:decl ->
-    decl.names.forEach((name) => state.operators.set(name, behavior))
+    decl.names.forEach((name) => setOperatorBehavior(name, behavior))
     if (behavior?.error) decl = prepend(behavior.error, decl)
     decl = prepend(trimFirstSpace(w), decl)
     return decl
   # `operator id(a, b) {...}` defines a function
   OperatorSignature:signature BracedBlock:block ->
-    state.operators.set(signature.id.name, signature.behavior)
+    setOperatorBehavior(signature.id.name, signature.behavior)
     return {
       ...signature,
       type: "FunctionExpression",
@@ -2583,10 +2592,10 @@ OperatorDeclaration
   # `operator id` alone blesses `id` as an operator
   Operator:op _:w1 Identifier:id OperatorBehavior?:behavior ( CommaDelimiter _? Identifier OperatorBehavior? )*:ids ->
     const children = []
-    state.operators.set(id.name, behavior)
+    setOperatorBehavior(id.name, behavior)
     if (behavior?.error) children.push(behavior.error)
     ids.forEach(([, , id2, behavior2]) => {
-      state.operators.set(id2.name, behavior2)
+      setOperatorBehavior(id2.name, behavior2)
       if (behavior2?.error) children.push(behavior2.error)
     })
     return {
@@ -5724,7 +5733,7 @@ ImportDeclaration
     const errors = []
     if (behavior?.error) errors.push(behavior.error)
     imports.specifiers.forEach((spec) => {
-      state.operators.set(spec.binding.name, spec.behavior ?? behavior)
+      setOperatorBehavior(spec.binding.name, spec.behavior ?? behavior)
       if (spec.behavior?.error) errors.push(spec.behavior.error)
     })
     return {
@@ -5760,7 +5769,7 @@ ImportDeclaration
     const errors = []
     if (behavior?.error) errors.push(behavior.error)
     imports.specifiers.forEach((spec) => {
-      state.operators.set(spec.binding.name, spec.behavior ?? behavior)
+      setOperatorBehavior(spec.binding.name, spec.behavior ?? behavior)
       if (spec.behavior?.error) errors.push(spec.behavior.error)
     })
     return {
@@ -5869,7 +5878,7 @@ TypeAndImportSpecifier
     if (spec.binding.type !== "Identifier") {
       throw new Error("Expected identifier after `operator`")
     }
-    state.operators.set(spec.binding.name, spec.behavior)
+    setOperatorBehavior(spec.binding.name, spec.behavior)
     return {
       ...spec,
       children: [
@@ -8782,6 +8791,7 @@ CivetOption
         break
       case "globals":
       case "symbols":
+      case "operators":
         value = value.split(',').filter(Boolean)
         break
     }
@@ -9109,6 +9119,40 @@ Reset
           "jsxCodeSameLine",
         ]) {
           config[option] = b
+        }
+      }
+    })
+
+    // `operators` can be an array of operator names (strings), or
+    // an object mapping operator names to their behaviors as a parsable string
+    // or OperatorBehavior object.
+    Object.defineProperty(config, "operators", {
+      set(o) {
+        if (!o) return
+        if (typeof o !== "object") {
+          throw new Error("operators configuration must be an object or array")
+        }
+        if (Array.isArray(o)) {
+          o.forEach(name => {
+            if (typeof name !== "string") {
+              throw new Error("operators configuration array must contain only strings")
+            }
+            setOperatorBehavior(name, undefined) // default behavior
+          })
+        } else {
+          for (let [name, behavior] of Object.entries(o)) {
+            if (typeof behavior === "string") {
+              behavior = behavior.trim()
+              behavior = behavior ? parse(behavior, {
+                startRule: "OperatorBehavior",
+                filename: `operator config for ${name}`,
+              }) : undefined
+            }
+            if (behavior && typeof behavior !== "object") {
+              throw new Error("operators configuration object must have string or object values")
+            }
+            setOperatorBehavior(name, behavior)
+          }
         }
       }
     })
