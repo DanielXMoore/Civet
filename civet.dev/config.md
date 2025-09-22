@@ -170,7 +170,8 @@ For example:
   "parseOptions": {
     "operators": {
       "dot": "looser (*)",
-      "mult": "arguments tighter (+)"
+      "mult": "arguments tighter (+)",
+      "normal": ""
     }
   }
 }

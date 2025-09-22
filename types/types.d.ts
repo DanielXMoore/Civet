@@ -28,10 +28,11 @@ declare module "@danielx/civet" {
     objectIs: boolean
     /** Array of names to treat as operators, or object mapping names to
      * parsable operator behaviors such as "relational" or "same (+)" or
-     * "relational same (+)".  (Can also map to OperatorBehavior as defined
-     * in * source/types.civet, but the details are subject to change.)
+     * "relational same (+)", or ""/undefined for default behavior.
+     * (Can also map to OperatorBehavior as defined in source/types.civet,
+     * but the details are subject to change.)
      */
-    operators: string[] | Record<string, string>
+    operators: string[] | Record<string, string?>
     react: boolean
     solid: boolean
     client: boolean
