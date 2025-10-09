@@ -587,12 +587,15 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
       parts := []
       let ref
       // add ref to ensure object base evaluated only once
-      if prefix.length > 1 and glob.object.properties# > 1
+      if needsRef(prefix) and glob.object.properties# > 1
+        // unwrap unnecessary parentheses in ref assignment
+        if prefix is like [{ type: "ParenthesizedExpression", implicit: true }]
+          prefix = [ prefix[0].expression ]
         ref = makeRef()
         { refAssignment } := makeRefAssignment ref, prefix
         // First use of prefix assigns ref
         prefix = [ makeLeftHandSideExpression refAssignment ]
-      prefix = prefix.concat glob.dot
+      prefixDot .= [ ...prefix, glob.dot ]
 
       for part of glob.object.properties
         if part.type is "Error"
@@ -603,7 +606,7 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
             type: "Error"
             message: "Glob pattern cannot have method definition"
           continue
-        if part.value and part.value.type is not in ["CallExpression", "MemberExpression", "Identifier"] as (string?)[]
+        if part.value and part.value.type is not in ["CallExpression", "MemberExpression", "Identifier", "StringLiteral", "ComputedPropertyName"] as (string?)[]
           parts.push
             type: "Error"
             message: `Glob pattern must have call or member expression value, found ${JSON.stringify(part.value)}`
@@ -620,10 +623,23 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
         [name, value] = [value, name] if glob.reversed
 
         unless suppressPrefix // Don't prefix @ shorthand
-          value = prefix.concat trimFirstSpace value
+          if value.type is "StringLiteral"
+            value = [ ...prefix,
+              type: "Index"
+              children: [ "[", trimFirstSpace(value), "]" ]
+            ]
+          else if value.type is "ComputedPropertyName"
+            value = [ ...prefix,
+              type: "Index"
+              children: [ trimFirstSpace value ]
+            ]
+          else
+            value = [ ...prefixDot, trimFirstSpace value ]
           // Switch from refAssignment to ref
-          prefix = [ ref ] ++ glob.dot if ref?
-        if (wValue) value.unshift(wValue)
+          if ref?
+            prefix = [ ref ]
+            prefixDot = [ ...prefix, glob.dot ]
+        if (wValue) value.unshift wValue
         if part.type is "SpreadProperty"
           parts.push {
             type: part.type

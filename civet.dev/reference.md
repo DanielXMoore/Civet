@@ -3072,6 +3072,8 @@ You can also use `import` declarations as expressions, as a shorthand for
 urlPath := import {
   fileURLToPath, pathToFileURL
 } from url
+url := import * from url
+Foo := import default from Foo
 </Playground>
 
 ### Export Shorthand
