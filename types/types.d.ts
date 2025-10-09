@@ -32,7 +32,7 @@ declare module "@danielx/civet" {
      * (Can also map to OperatorBehavior as defined in source/types.civet,
      * but the details are subject to change.)
      */
-    operators: string[] | Record<string, string?>
+    operators: string[] | Record<string, string | undefined>
     react: boolean
     solid: boolean
     client: boolean
