@@ -91,6 +91,7 @@ export const state = {    // parser state
   forbidTrailingMemberProperty: [false],
   forbidNestedBinaryOp: [false],
   forbidNewlineBinaryOp: [false],
+  forbidImplicitFragment: [false],
   forbidPipeline: [false],
   JSXTagStack: [undefined],
 }
@@ -144,6 +145,12 @@ Object.defineProperties(state, {
       return s[s.length-1]
     },
   },
+  implicitFragmentForbidden: {
+    get() {
+      const {forbidImplicitFragment: s} = state
+      return s[s.length-1]
+    },
+  },
   pipelineForbidden: {
     get() {
       const {forbidPipeline: s} = state
@@ -169,13 +176,14 @@ function setOperatorBehavior(name, behavior) {
 
 export function getStateKey() {
   const stateInt =
-    ((state.currentIndent.level % 256) << 8) |
-    (state.classImplicitCallForbidden << 7) |
-    (state.indentedApplicationForbidden << 6) |
-    (state.bracedApplicationForbidden << 5) |
-    (state.trailingMemberPropertyForbidden << 4) |
-    (state.nestedBinaryOpForbidden << 3) |
-    (state.newlineBinaryOpForbidden << 2) |
+    ((state.currentIndent.level % 256) << 9) |
+    (state.classImplicitCallForbidden << 8) |
+    (state.indentedApplicationForbidden << 7) |
+    (state.bracedApplicationForbidden << 6) |
+    (state.trailingMemberPropertyForbidden << 5) |
+    (state.nestedBinaryOpForbidden << 4) |
+    (state.newlineBinaryOpForbidden << 3) |
+    (state.implicitFragmentForbidden << 2) |
     (state.pipelineForbidden << 1) |
     // This is slightly different than the rest of the state,
     // since it is affected by the directive prologue and may be hit
@@ -634,7 +642,9 @@ SingleLineBinaryOpRHS
 RHS
   # NOTE: Check for comptime block first, to avoid matching as function call
   ExpressionizedStatementWithTrailingCallExpressions
-  UnaryExpression
+  ForbidImplicitFragment UnaryExpression?:exp RestoreImplicitFragment ->
+    if (!exp) return $skip
+    return exp
 
 # https://262.ecma-international.org/#prod-UnaryExpression
 UnaryExpression
@@ -5412,7 +5422,7 @@ SingleLineExpressionWithIndentedApplicationForbidden
 # as arguments to implicit function calls.  This is useful in the context of
 # an `if` or `class` line where we don't want to treat the body as an object.
 ExpressionWithObjectApplicationForbidden
-  ForbidBracedApplication ForbidIndentedApplication Expression?:exp RestoreBracedApplication RestoreIndentedApplication ->
+  ForbidBracedApplication ForbidIndentedApplication ForbidImplicitFragment Expression?:exp RestoreBracedApplication RestoreIndentedApplication RestoreImplicitFragment ->
     if (exp) return exp
     return $skip
 
@@ -5535,6 +5545,25 @@ NewlineBinaryOpAllowed
     }
     if (state.newlineBinaryOpForbidden) return $skip
 
+AllowImplicitFragment
+  "" ->
+    state.forbidImplicitFragment.push(false)
+
+ForbidImplicitFragment
+  "" ->
+    state.forbidImplicitFragment.push(true)
+
+RestoreImplicitFragment
+  "" ->
+    state.forbidImplicitFragment.pop()
+
+ImplicitFragmentAllowed
+  "" ->
+    if (config.verbose) {
+      console.log("forbidImplicitFragment:", state.forbidImplicitFragment)
+    }
+    if (state.implicitFragmentForbidden) return $skip
+
 AllowPipeline
   "" ->
     state.forbidPipeline.push(false)
@@ -5555,10 +5584,10 @@ PipelineAllowed
     if (state.pipelineForbidden) return $skip
 
 AllowAll
-  AllowTrailingMemberProperty AllowBracedApplication AllowIndentedApplication AllowClassImplicitCall AllowNestedBinaryOp AllowNewlineBinaryOp AllowPipeline
+  AllowTrailingMemberProperty AllowBracedApplication AllowIndentedApplication AllowClassImplicitCall AllowNestedBinaryOp AllowNewlineBinaryOp AllowImplicitFragment AllowPipeline
 
 RestoreAll
-  RestoreTrailingMemberProperty RestoreBracedApplication RestoreIndentedApplication RestoreClassImplicitCall RestoreNestedBinaryOp RestoreNewlineBinaryOp RestorePipeline
+  RestoreTrailingMemberProperty RestoreBracedApplication RestoreIndentedApplication RestoreClassImplicitCall RestoreNestedBinaryOp RestoreNewlineBinaryOp RestoreImplicitFragment RestorePipeline
 
 # https://262.ecma-international.org/#prod-ExpressionStatement
 CommaExpressionStatement
@@ -5670,7 +5699,9 @@ MaybeNestedNonPipelineExpression
     if (!expression) return $skip
     if (!trailing) return expression
     return [ expression, trailing ]
-  NonPipelineExpression
+  ForbidImplicitFragment NonPipelineExpression?:expression RestoreImplicitFragment ->
+    if (!expression) return $skip
+    return expression
 
 MaybeNestedPostfixedExpression
   # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
@@ -5680,7 +5711,9 @@ MaybeNestedPostfixedExpression
     if (!expression) return $skip
     if (!trailing) return expression
     return [ expression, trailing ]
-  PostfixedExpression
+  ForbidImplicitFragment PostfixedExpression?:expression RestoreImplicitFragment ->
+    if (!expression) return $skip
+    return expression
 
 NestedPostfixedExpressionNoTrailing
   NestedBulletedArray
@@ -5697,7 +5730,9 @@ MaybeNestedExpression
     if (!expression) return $skip
     if (!trailing) return expression
     return [ expression, trailing ]
-  Expression
+  ForbidImplicitFragment Expression?:expression RestoreImplicitFragment ->
+    if (!expression) return $skip
+    return expression
 
 # MaybeNestedExpression but where expression needs to be output with
 # parentheses if indented, so that the expression starts on the same line.
@@ -5708,7 +5743,7 @@ MaybeParenNestedExpression
   &( _? PostfixStatement NoBlock ) -> ""
   # Not nested case
   !EOS Expression -> $2
-  # Avoid wrapping array/object return value in parentheses.
+  # Avoid double wrapping nested array/object return value in parentheses.
   &EOS ( ArrayLiteral / ObjectLiteral ) -> $2
   # Value after `return` needs to be wrapped in parentheses
   # if it starts on another line.
@@ -7067,18 +7102,23 @@ Yield
 ## JSX
 
 JSXImplicitFragment
-  JSXTag ( Nested ( JSXTag / JSXAngleChild ) )* ->
-    const jsx = $2.length === 0 ? $1 : {
+  # Always allow a single JSX tag.
+  # Implicit fragment can be explicitly forbidden; it also inherits
+  # forbidden status from binary ops on the following line.
+  JSXTag:first ( ImplicitFragmentAllowed NestedBinaryOpAllowed NewlineBinaryOpAllowed ( Nested ( JSXTag / JSXAngleChild ) )* )?:rest ->
+    rest = rest ? rest[3] : []
+    const jsx = rest.length === 0 ? first : {
       type: "JSXFragment",
       children: [
         "<>\n",
         state.currentIndent.token,
-        ...$0,
+        first,
+        ...rest,
         "\n",
         state.currentIndent.token,
         "</>",
       ],
-      jsxChildren: [$1].concat($2.map(([, tag]) => tag)),
+      jsxChildren: [ first, ...rest.map(([, tag]) => tag) ],
     }
     const type = typeOfJSX(jsx, config)
     return type ? [
@@ -7758,9 +7798,7 @@ JSXAngleChild
   CloseAngleBracket JSXCodeChild -> $2
 
 JSXCodeChild
-  InsertInlineOpenBrace:open JSXCodeChildExpression:expression InsertCloseBrace:close ->
-    if (!expression) return $skip
-    return [ open, expression, close ]  // omit >
+  InsertInlineOpenBrace JSXCodeChildExpression InsertCloseBrace
 
 JSXCodeChildExpression
   # First check for unindented expression (same line)
@@ -9057,6 +9095,7 @@ Reset
     state.forbidTrailingMemberProperty = [false]
     state.forbidNestedBinaryOp = [false]
     state.forbidNewlineBinaryOp = [false]
+    state.forbidImplicitFragment = [false]
     state.forbidPipeline = [false]
     state.JSXTagStack = [undefined]
 
