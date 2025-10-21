@@ -1976,6 +1976,14 @@ function mapConcatIter(f, a, b)
     f item
 </Playground>
 
+Use `...x` to yield all items from another iterable `x` via `yield*`:
+
+<Playground>
+function concatIter(iters)
+  for* iter of iters
+    ...iter
+</Playground>
+
 ### Postfix Loop
 
 <Playground>
