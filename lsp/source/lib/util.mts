@@ -25,6 +25,8 @@ import {
   remapRange,
 } from '@danielx/civet/ts-diagnostic';
 
+export const tsSuffix = /\.[cm]?[jt]s$|\.json|\.[jt]sx/
+
 export type { SourcemapLines, SourceMapping } from '@danielx/civet/ts-diagnostic';
 
 export {
