@@ -184,6 +184,16 @@ if (x)
 { y }
 </Playground>
 
+Also, in expression context, braces usually construct an object literal
+if possible. Omit braces to avoid this.
+
+<Playground>
+// object literals
+a = if (x) { y } else { z }
+// no object wrapper
+a = if (x) y else z
+</Playground>
+
 ## Automatic Semicolon Insertion
 
 JavaScript has [complicated rules](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Lexical_grammar#automatic_semicolon_insertion)
