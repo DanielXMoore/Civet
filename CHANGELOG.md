@@ -4,6 +4,17 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.0 (2025-11-03, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.7...v0.11.0), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.0))
+* Fix missing space in terse `get`/`set` definitions [[#1802](https://github.com/DanielXMoore/Civet/pull/1802)]
+* Dynamic `import` expressions support `*`, `default`; they and globs support strings and computed names [[#1806](https://github.com/DanielXMoore/Civet/pull/1806)]
+* Fix TypeScript type for `operator` option [[#1808](https://github.com/DanielXMoore/Civet/pull/1808)]
+* Fix expressionization of `if` in some cases, improve errors from threads [[#1809](https://github.com/DanielXMoore/Civet/pull/1809)]
+* Limit implicit JSX fragments to desired scenarios [[#1811](https://github.com/DanielXMoore/Civet/pull/1811)]
+* Spread `...x` makes `yield*` in `for*` loops, fix `for*` in one-line arrow functions [[#1812](https://github.com/DanielXMoore/Civet/pull/1812)]
+* Fix complex splice assignment by adding parentheses [[#1814](https://github.com/DanielXMoore/Civet/pull/1814)]
+* `if`, `else`, `->`, `=>` treat braced clause as object not block [[#1816](https://github.com/DanielXMoore/Civet/pull/1816)]
+  * BREAKING CHANGE: Braced blocks after `->`, `if`, `else` may now return objects in expression/implicit return context. Omit braces to avoid.
+
 ## 0.10.7 (2025-09-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.6...v0.10.7), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.7))
 * Support Unicode BOM: UTF-8, UTF-16 LE and BE [[#1792](https://github.com/DanielXMoore/Civet/pull/1792)]
 * Fix access detection in braced expressions [[#1794](https://github.com/DanielXMoore/Civet/pull/1794)]
