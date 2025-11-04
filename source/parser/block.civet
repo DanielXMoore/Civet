@@ -3,11 +3,14 @@ import type {
   ASTNodeObject
   BlockStatement
   FunctionNode
+  ObjectExpression
+  ParenthesizedExpression
   StatementTuple
 } from ./types.civet
 
 import {
   isToken
+  replaceNode
   startsWith
   updateParentPointers
 } from ./util.civet
@@ -62,6 +65,14 @@ function braceBlock(block: BlockStatement): void
     block.bare = block.implicitlyReturned = false
     if implicitlyReturned
       processReturn block.parent as FunctionNode, true
+
+/** Undo any bracing done by braceBlock */
+function unbraceBlock(block: BlockStatement): void
+  return if block.bare
+  if block.children[0] is " {" and block.children.-1 is "}"
+    block.children.shift()
+    block.children.pop()
+    block.bare = true
 
 function duplicateBlock(block: BlockStatement): BlockStatement
   expressions := [...block.expressions]
@@ -175,10 +186,49 @@ function insertHoistDec(block: BlockStatement, node: ASTNode | StatementTuple, d
   updateParentPointers dec, block
 
 function processBlocks(statements: StatementTuple[]): void
-  insertSemicolon(statements)
+  insertSemicolon statements
 
-  for each { expressions } of gatherRecursive statements, .type is "BlockStatement"
-    processBlocks expressions
+  for each block of gatherRecursive statements, .type is "BlockStatement"
+    // Unwrap blocks that got wrapped in parentheses and possibly braces because
+    // they contained what might have been an object literal,
+    // but we haven't already wrapped them in `return` at this point,
+    // so they're used as statements not expressions
+    if block.unwrapObject and block.expressions# is 1 and
+       block.expressions[0][1] is like {
+         type: "ParenthesizedExpression"
+         implicit: true
+         expression: {
+           type: "ObjectExpression"
+         }
+       }
+      object := (block.expressions[0][1] as ParenthesizedExpression).expression as ObjectExpression
+      // Don't process `...spread` or `name: value` or `method() ...`
+      continue unless for every prop of object.properties
+        prop.type is "Property" and prop.implicitName
+      // Unwrap parentheses
+      block.expressions[0][1] =
+        (block.expressions[0][1] as ParenthesizedExpression).expression
+      // Unwrap braces
+      unbraceBlock block
+      // Remove implicit names added to props
+      for each prop, i of object.properties
+        // Remove implicit square brackets around e.g. template strings
+        if prop.name is like {type: "ComputedPropertyName", implicit: true}
+          replaceNode prop.name, prop.name.expression, prop
+        // Remove implicit commas between properties
+        if prop.delim?.implicit
+          if needsPrecedingSemicolon object.properties[i+1]
+            prop.delim.token = ";"
+          else
+            replaceNode prop.delim, undefined, prop
+            prop.delim = undefined
+        // Remove implicit `name: ` added to properties
+        colon := prop.children.indexOf ": "
+        continue if colon < 0
+        continue unless prop.children[colon-1] is prop.name
+        prop.children.splice colon-1, 2
+
+    processBlocks block.expressions
 
 /**
 * Automatic Semicolon Insertion (ASI):
@@ -266,4 +316,5 @@ export {
   makeEmptyBlock
   processBlocks
   replaceBlockExpression
+  unbraceBlock
 }
