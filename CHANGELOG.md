@@ -4,6 +4,9 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.1 (2025-12-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.0...v0.11.1), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.1))
+* Don't unwrap statement expressions that might be short-circuited [[#1821](https://github.com/DanielXMoore/Civet/pull/1821)]
+
 ## 0.11.0 (2025-11-03, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.7...v0.11.0), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.0))
 * Fix missing space in terse `get`/`set` definitions [[#1802](https://github.com/DanielXMoore/Civet/pull/1802)]
 * Dynamic `import` expressions support `*`, `default`; they and globs support strings and computed names [[#1806](https://github.com/DanielXMoore/Civet/pull/1806)]
