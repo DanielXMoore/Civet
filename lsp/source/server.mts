@@ -14,6 +14,7 @@ import {
   CompletionItemTag,
   Location,
   DiagnosticSeverity,
+  TextEdit,
 } from 'vscode-languageserver/node';
 
 import {
@@ -150,6 +151,7 @@ connection.onInitialize(async (params: InitializeParams) => {
       definitionProvider: true,
       hoverProvider: true,
       referencesProvider: true,
+      renameProvider: true,
 
     }
   };
@@ -560,6 +562,114 @@ connection.onDocumentSymbol(async ({ textDocument }) => {
   }
 
   return items
+})
+
+function getRenameSourceDetails(
+  service: ResolvedService,
+  textDocumentId: TextDocumentIdentifier,
+  sourcePath: string,
+  position: Position
+) {
+  const isTypeScriptFile = sourcePath.match(tsSuffix)
+  if (isTypeScriptFile) {
+    const document = documents.get(textDocumentId.uri)
+    if (!document) return null
+    return {
+      document,
+      position,
+      sourcePath,
+      offset: document.offsetAt(position),
+    }
+  } else {
+    const meta = service.host.getMeta(sourcePath)
+    if (!meta) return null
+    if (!meta.transpiledDoc || !meta.sourcemapLines) return null
+
+    const document = meta.transpiledDoc
+    if (!document) return null
+
+    const mappedPosition = forwardMap(meta.sourcemapLines, position)
+
+    return {
+      document,
+      position: mappedPosition,
+      sourcePath: documentToSourcePath(meta.transpiledDoc),
+      offset: document.offsetAt(mappedPosition),
+    }
+  }
+}
+
+function remapLocationRename(service: ResolvedService, sourceFile: ts.SourceFile, loc: ts.RenameLocation) {
+  const start = sourceFile.getLineAndCharacterOfPosition(loc.textSpan.start)
+  const end = sourceFile.getLineAndCharacterOfPosition(loc.textSpan.start + loc.textSpan.length)
+
+  const sourceFileName = service.getSourceFileName(loc.fileName)
+  const meta = service.host.getMeta(sourceFileName)
+
+  if (meta?.sourcemapLines) {
+    return {
+      start: remapPosition(start, meta.sourcemapLines),
+      end: remapPosition(end, meta.sourcemapLines),
+      uri: pathToFileURL(sourceFileName).toString(),
+    }
+  }
+  
+  return {
+    start,
+    end,
+    uri: pathToFileURL(loc.fileName).toString(),
+  }
+}
+
+function createRenameLocationChanges(
+  service: ResolvedService,
+  program: ts.Program,
+  locations: readonly ts.RenameLocation[],
+  newName: string
+) {
+  const changes: Record<string, TextEdit[]> = {}
+
+  for (const loc of locations) {
+    const sourceFile = program.getSourceFile(loc.fileName)
+    if (!sourceFile) continue
+
+    const { start, end, uri } = remapLocationRename(service, sourceFile, loc)
+    const edit: TextEdit = {
+      range: { start, end },
+      newText: newName,
+    };
+
+    if (changes[uri]) {
+      changes[uri].push(edit)
+    } else {
+      changes[uri] = [edit]
+    }
+  }
+
+  return changes 
+}
+
+connection.onRenameRequest(async ({ textDocument, position, newName }) => {
+  const sourcePath = documentToSourcePath(textDocument)
+  assert(sourcePath)
+
+  const service = await ensureServiceForSourcePath(sourcePath)
+  if (!service) return
+
+  await updating(textDocument)
+
+  const mapped = getRenameSourceDetails(service, textDocument, sourcePath, position)
+  if (!mapped) return
+
+  const locations = service.findRenameLocations(mapped.sourcePath, mapped.offset, false, false, {})
+  if (!locations || !locations.length) return
+
+  const program = service.getProgram()
+  assert(program)
+
+  return {
+    changes: createRenameLocationChanges(service, program, locations, newName),
+  }
 })
 
 // TODO
