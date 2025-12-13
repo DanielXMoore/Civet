@@ -409,6 +409,7 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
   const completionOptions: GetCompletionsAtPositionOptions = {
     includeExternalModuleExports: completionConfiguration.autoImportSuggestions,
     includeInsertTextCompletions: true,
+    includeCompletionsForImportStatements: true,
   }
 
   if (context?.triggerKind) {
