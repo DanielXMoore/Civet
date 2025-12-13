@@ -296,7 +296,60 @@ function createCivetFileCompletions(
   })
 }
 
-function getCivetFileCompletions(document: TextDocument, sourcePath: string, position: Position) {
+function resolvePathAliasDir(
+  compilationSettings: ts.CompilerOptions,
+  importPath: string,
+): string | null {
+  const { baseUrl, paths } = compilationSettings
+  if (!paths) return null
+
+  const pathsBase = path.isAbsolute(baseUrl ?? '') ? baseUrl : null
+  if (!pathsBase) return null
+
+  const candidates: { resolvedDir: string, aliasPattern: string }[] = []
+
+  for (const [pattern, replacements] of Object.entries(paths)) {
+    if (pattern.endsWith('*')) {
+      const aliasPrefix = pattern.slice(0, -1)
+      if (importPath.startsWith(aliasPrefix)) {
+        const pathAfterAlias = importPath.slice(aliasPrefix.length)
+        for (const replacement of replacements) {
+          const replacementBase = replacement.endsWith('*') ? replacement.slice(0, -1) : replacement
+          const resolvedDir = path.resolve(pathsBase, replacementBase, pathAfterAlias)
+          if (tsSys.directoryExists(resolvedDir)) {
+            candidates.push({
+              aliasPattern: aliasPrefix,
+              resolvedDir,
+            })
+          }
+        }
+      }
+    } else if (importPath === pattern) {
+      for (const replacement of replacements) {
+        const resolvedDir = path.resolve(pathsBase, replacement)
+        if (tsSys.directoryExists(resolvedDir)) {
+          candidates.push({
+            resolvedDir,
+            aliasPattern: pattern,
+          })
+        }
+      }
+    }
+  }
+
+  const chosenCandidate = candidates
+    .sort((a, b) => b.aliasPattern.length - a.aliasPattern.length)
+    .at(0)
+
+  return chosenCandidate?.resolvedDir ?? null
+}
+
+function getCivetFileCompletions(
+  service: ResolvedService,
+  document: TextDocument,
+  sourcePath: string,
+  position: Position
+) {
   const currentLineText = document.getText({
     start: {
       character: 0,
@@ -319,9 +372,19 @@ function getCivetFileCompletions(document: TextDocument, sourcePath: string, pos
       const searchDir = path.resolve(sourceDir, importPath)
       const foundCivetFiles = findCivetFilesInDir(searchDir)
       if (foundCivetFiles.length) {
-        const fileCompletions = createCivetFileCompletions(foundCivetFiles, sourcePath, position)
-        return fileCompletions
-      }        
+        return createCivetFileCompletions(foundCivetFiles, sourcePath, position)
+      }
+    }
+    const isAliasedPath = !isRelativePath
+    if (isAliasedPath) {
+      const compilationSettings = service.host.getCompilationSettings()
+      const resolvedDir = resolvePathAliasDir(compilationSettings, importPath)
+      if (resolvedDir) {
+        const foundCivetFiles = findCivetFilesInDir(resolvedDir);
+        if (foundCivetFiles.length) {
+          return createCivetFileCompletions(foundCivetFiles, sourcePath, position)
+        }
+      }
     }
   }
 
@@ -371,7 +434,7 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
     importTriggerCharacters.includes(context.triggerCharacter)
 
   const civetFileCompletions = isImportCompletion
-    ? getCivetFileCompletions(document, sourcePath, position)
+    ? getCivetFileCompletions(service, document, sourcePath, position)
     : null
 
   if (isImportCompletion && !isCivetFile) return civetFileCompletions
@@ -401,7 +464,15 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
   const transpiledPath = documentToSourcePath(transpiledDoc)
   const completions = service.getCompletionsAtPosition(transpiledPath, p, completionOptions)
   if (!completions) return;
-  const convertedCompletions = convertCompletions(completions, transpiledDoc, sourcePath, position, sourcemapLines, isCivetFile)
+
+  const convertedCompletions = convertCompletions(
+    completions,
+    transpiledDoc,
+    sourcePath,
+    position,
+    sourcemapLines,
+    isCivetFile
+  );
 
   if (isCivetFile && civetFileCompletions) {
     return civetFileCompletions.concat(convertedCompletions)
