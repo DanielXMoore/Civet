@@ -1110,6 +1110,8 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
     }
     if (entry.insertText) {
       item.insertText = entry.insertText
+    } else {
+      item.insertText = completionContent
     }
     if (entry.filterText) {
       item.filterText = entry.filterText
