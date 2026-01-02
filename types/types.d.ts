@@ -54,6 +54,10 @@ declare module "@danielx/civet" {
      */
     filename?: string
     /**
+     * Output (transpiled) filename to record in inline source maps.
+     */
+    outputFilename?: string
+    /**
      * Whether to return a source map in addition to transpiled code.
      * If false (the default), `compile` just returns transpiled code.
      * If true (and `inlineMap` is false/unspecified),
