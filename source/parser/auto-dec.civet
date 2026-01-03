@@ -21,110 +21,103 @@ import {
 
 function findDecs(statements: ASTNode)
   declarations := gatherNodes statements, .type is "Declaration"
-  declarationNames := declarations.flatMap((d) => d.names)
+  declarationNames := declarations.flatMap .names
   globals := getConfig().globals or []
 
   return new Set globals ++ declarationNames
 
-function createConstLetDecs(statements, scopes, letOrConst: "let" | "const"): void {
-  function findVarDecs(statements, decs) {
-    const declarationNames = gatherRecursive statements, (node) =>
-        node.type is "Declaration" &&
-        node.children &&
-        node.children.length > 0 &&
-        node.children[0].token &&
-        node.children[0].token.startsWith('var') ||
-        node.type is "FunctionExpression"
-      .filter((node) => node.type is "Declaration")
-      .flatMap((node) => node.names)
+function createConstLetDecs(statements, scopes, letOrConst: "let" | "const"): void
+  function findVarDecs(statements, decs): Set<string>
+    declarationNames := gatherRecursive statements, (node) =>
+      node.type is "Declaration" and
+      node.children and
+      node.children# > 0 and
+      node.children[0].token and
+      node.children[0].token.startsWith("var") or
+      node.type is "FunctionExpression"
+    .filter .type is "Declaration"
+    .flatMap .names
+    new Set declarationNames
 
-    return new Set(declarationNames)
-  }
-
-  let declaredIdentifiers = findVarDecs(statements)
+  declaredIdentifiers .= findVarDecs statements
 
   function hasDec(name)
-    return declaredIdentifiers.has(name) or scopes.some .has name
+    declaredIdentifiers.has(name) or scopes.some .has name
 
-  function gatherBlockOrOther(statement) {
-    return gatherNodes(statement, (s) => s.type is "BlockStatement" or s.type is "AssignmentExpression" or s.type is "Declaration").flatMap((node) => {
-      if (node.type == "BlockStatement")
+  function gatherBlockOrOther(statement)
+    gatherNodes statement,
+      .type is "BlockStatement" or
+      .type is "AssignmentExpression" or
+      .type is "Declaration"
+    .flatMap (node) =>
+      if node.type is "BlockStatement"
         // bare blocks is not a safe position to insert let declaration
-        return node.bare ? gatherBlockOrOther(node.expressions) : node
-      else if (node.children and node.children.length)
-        return [...gatherBlockOrOther(node.children), node]
+        node.bare ? gatherBlockOrOther(node.expressions) : node
+      else if node.children and node.children#
+        [...gatherBlockOrOther(node.children), node]
       else
-        return []
-    })
-  }
+        []
 
-  let currentScope = new Set()
-  scopes.push(currentScope)
+  currentScope .= new Set
+  scopes.push currentScope
 
-  const fnNodes = gatherNodes(statements, isFunction)
-  const forNodes = gatherNodes(statements, (s) => s.type is "ForStatement")
+  fnNodes := gatherNodes statements, isFunction
+  forNodes := gatherNodes statements, .type is "ForStatement"
 
-  let targetStatements: StatementTuple[] = []
-  for (const statement of statements) {
-    const nodes = gatherBlockOrOther(statement)
-    let undeclaredIdentifiers = []
-    for (const node of nodes) {
-      if (node.type == "BlockStatement") {
-        let block = node
-        let fnNode = fnNodes.find((fnNode) => fnNode.block is block)
-        let forNode = forNodes.find((forNode) => forNode.block is block)
-        if (fnNode != null) {
-          scopes.push(new Set(fnNode.parameters.names))
+  targetStatements: StatementTuple[] .= []
+  for each statement of statements
+    nodes := gatherBlockOrOther statement
+    undeclaredIdentifiers .= []
+    for each node of nodes
+      if node.type is "BlockStatement"
+        block .= node
+        fnNode .= fnNodes.find .block is block
+        forNode .= forNodes.find .block is block
+        if fnNode?
+          scopes.push new Set fnNode.parameters.names
           createConstLetDecs(block.expressions, scopes, letOrConst)
           scopes.pop()
-        }
-        else if (forNode != null) {
-          scopes.push(new Set(forNode.declaration.names))
+        else if forNode?
+          scopes.push new Set forNode.declaration.names
           createConstLetDecs(block.expressions, scopes, letOrConst)
           scopes.pop()
-        }
         else
           createConstLetDecs(block.expressions, scopes, letOrConst)
         continue
-      }
       // Assignment and Declaration all use 'names'.
-      if (node.names == null) continue
-      let names = node.names.filter((name) => !hasDec(name))
-      if (node.type == "AssignmentExpression")
-        undeclaredIdentifiers.push(...names)
-      names.forEach((name) => currentScope.add(name))
-    }
+      continue unless node.names?
+      names := node.names.filter (name) => not hasDec name
+      if node.type is "AssignmentExpression"
+        undeclaredIdentifiers.push ...names
+      for each name of names
+        currentScope.add name
 
-    if (undeclaredIdentifiers.length > 0) {
-      let indent = statement[0]
-      // Is this statement a simple assingment like 'a = 1'?
-      let firstIdentifier = gatherNodes(statement[1], (node) => node.type == "Identifier")[0]
-      if (undeclaredIdentifiers.length == 1
-        and statement[1].type == 'AssignmentExpression'
-        and statement[1].names.length == 1
-        and statement[1].names[0] == undeclaredIdentifiers[0]
+    if undeclaredIdentifiers#
+      indent .= statement[0]
+      // Is this statement a simple assignment like 'a = 1'?
+      firstIdentifier .= gatherNodes(statement[1], .type is "Identifier")[0]
+      if (undeclaredIdentifiers# is 1
+        and statement[1].type is "AssignmentExpression"
+        and statement[1].names# is 1
+        and statement[1].names[0] is undeclaredIdentifiers[0]
         and firstIdentifier and firstIdentifier.names == undeclaredIdentifiers[0]
-        and gatherNodes(statement[1], (node) => node.type is "ObjectBindingPattern").length == 0)
-        statement[1].children.unshift([`${letOrConst} `])
-      else {
-        let tail = "\n"
+        and gatherNodes(statement[1], .type is "ObjectBindingPattern")# is 0)
+        statement[1].children.unshift [`${letOrConst} `]
+      else
+        tail .= "\n"
         // Does this statement start with a newline?
-        if (gatherNodes(indent, (node) => node.token and node.token.endsWith("\n")).length > 0)
+        if gatherNodes(indent, .token and .token.endsWith("\n"))#
           tail = undefined
         // Have to use 'let' instead of 'const' if the assignment is inside an expression
         targetStatements.push [indent, {
-          type: "Declaration",
-          children: ["let ", ...undeclaredIdentifiers.join(", ")],
-          names: undeclaredIdentifiers,
+          type: "Declaration"
+          children: ["let ", ...undeclaredIdentifiers.join(", ")]
+          names: undeclaredIdentifiers
         }, tail]
-      }
-    }
     targetStatements.push(statement)
-  }
 
   scopes.pop()
-  statements.splice(0, statements.length, ...targetStatements)
-}
+  statements.splice(0, statements#, ...targetStatements)
 
 // CoffeeScript compatible automatic var insertion
 function createVarDecs(block: BlockStatement, scopes, pushVar?): void
