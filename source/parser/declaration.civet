@@ -25,6 +25,7 @@ import {
   blockContainingStatement
   blockWithPrefix
   braceBlock
+  insertBlockStatements
   makeEmptyBlock
   replaceBlockExpression
 } from ./block.civet
@@ -49,6 +50,7 @@ import {
   makeLeftHandSideExpression
   makeNode
   parenthesizeExpression
+  replaceNode
   spliceChild
   trimFirstSpace
   updateParentPointers
@@ -185,16 +187,16 @@ function prependStatementExpressionBlock(initializer: Initializer, statement: AS
   {expression: exp} .= initializer
 
   // Handle nested statement expression
-  let ws
+  let ws: Whitespace
   if Array.isArray exp
     ws = exp[0]
     exp = exp[1]!
 
   return unless exp is like {type: "StatementExpression"}, {type: "SpreadElement", expression: {type: "StatementExpression"}}
 
-  pre: ASTNode[] := []
   statementExp := exp.statement
   blockStatement: StatementTuple := [ws || "", statementExp, ";"]
+  pre: StatementTuple[] := [blockStatement]
   let ref: ASTRef
 
   if statementExp.type is "IterationExpression"
@@ -214,7 +216,6 @@ function prependStatementExpressionBlock(initializer: Initializer, statement: AS
         makeNode
           type: "AssignmentExpression"
           children: [ref, " = ", resultNode]
-          parent: statement
 
       refDec :=
         type: "Declaration"
@@ -231,20 +232,21 @@ function prependStatementExpressionBlock(initializer: Initializer, statement: AS
     assignResults blockStatement, (resultNode) =>
       //@ts-ignore
       makeNode
-        type: "AssignmentExpression",
+        type: "AssignmentExpression"
         children: [ref, " = ", resultNode]
-        parent: statement
 
     refDec :=
-      type: "Declaration",
-      children: ["let ", ref],
+      type: "Declaration"
+      children: ["let ", ref]
 
     pre.unshift ["", refDec, ";"]
 
-  // insert statement before the declaration
-  //@ts-ignore
-  statement.children.unshift(...pre, blockStatement)
-  updateParentPointers blockStatement, statement
+  // Insert the statement from the statement expression
+  // (and any helper declarations) into the containing block
+  // just before declaration/assignment.
+  unless { block, index } := blockContainingStatement statement
+    throw new Error "Couldn't find block in prependStatementExpressionBlock"
+  insertBlockStatements block, index, ...pre
 
   return ref
 
@@ -423,42 +425,21 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
       { ref, statementDeclaration } := condition.expression as! { ref: ASTRef, statementDeclaration: boolean}
       return unless blockPrefix
 
-      newCondition :=
-        type: "ParenthesizedExpression"
-        children: ["(", ref, ")"]
-        expression: ref
-        parent: s
+      replaceNode s.condition, parenthesizeExpression(ref), s
 
-      // @ts-ignore
-      s.children = s.children.map (c) ->
-        if c is s.condition
-          newCondition
-        else
-          c
-
-      // @ts-ignore
-      s.condition = newCondition
-      updateParentPointers s
-
-      if statementDeclaration
-        // Hacky way to make sure the declaration is after the hoisted statement declaration
-        // TODO better unify this with hoistDec mechanics
-        block := makeEmptyBlock()
-        replaceBlockExpression(s.parent as BlockStatement, s, block)
-        block.expressions.push ["", s]
-        s.children.splice s.children.findIndex(.token is "switch"), 0, blockPrefix
-        s.parent = block
-      else
-        // wraps the entire switch statement
-        block := blockWithPrefix [["", [{
+      unless statementDeclaration
+        declStatement: StatementTuple := ["", [{
           type: "Declaration",
           children: ["let ", ...condition.expression.children],
-        }], ";"], ...blockPrefix], makeEmptyBlock()
-        updateParentPointers block, s.parent
+        }], ";"]
+        blockPrefix.unshift declStatement
 
-        replaceBlockExpression(s.parent as BlockStatement, s, block)
-        block.expressions.push ["", s]
-        s.parent = block
+      // Wrap switch in a block to properly scope declarations
+      block := blockWithPrefix blockPrefix, makeEmptyBlock()
+      updateParentPointers block, s.parent
+      replaceBlockExpression s.parent as BlockStatement, s, block
+      block.expressions.push ["", s]
+      s.parent = block
 
 // Convert FromClause into arguments for dynamic import
 function dynamizeFromClause(from)
