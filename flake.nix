@@ -19,7 +19,7 @@
           pname = "civet";
           src = ./.;
           description = "the Civet programming language";
-          yarnDepsHash = "sha256-pEpST+ZWDJYzIaxeb4ou8rLtNwgnKv0SdahHJ15bgn8=";
+          yarnDepsHash = "sha256-pZHDX6iVZVmiJ7e1h7qxLEa6B6l+xK8LyO9RdcGisbI=";
           extraIgnoreRules = ''
             lsp/
             civet.dev/
@@ -35,7 +35,7 @@
           src = ./lsp;
           entrypoint = "server.js";
           description = "the Civet language server";
-          yarnDepsHash = "sha256-JyAXj7L1ORT4486U/QYH48cEmfp/3tqVxfnyHoeGhk0=";
+          yarnDepsHash = "sha256-W2KzHy9mdc0q4zbIIYpMSeLS8HDybCIwP1E7RNi0nxk=";
         };
 
         vscode-extension = pkgs.vscode-utils.buildVscodeMarketplaceExtension {
