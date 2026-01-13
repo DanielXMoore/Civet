@@ -3,11 +3,14 @@ import type {
   ASTNodeObject
   BlockStatement
   FunctionNode
+  ObjectExpression
+  ParenthesizedExpression
   StatementTuple
 } from ./types.civet
 
 import {
   isToken
+  replaceNode
   startsWith
   updateParentPointers
 } from ./util.civet
@@ -63,6 +66,15 @@ function braceBlock(block: BlockStatement): void
     if implicitlyReturned
       processReturn block.parent as FunctionNode, true
 
+/** Undo any bracing done by braceBlock */
+function unbraceBlock(block: BlockStatement): void
+  return if block.bare
+  // " {" gets transformed into "{" in ThinArrowFunction
+  if block.children[0] is like " {", "{" and block.children.-1 is "}"
+    block.children.shift()
+    block.children.pop()
+    block.bare = true
+
 function duplicateBlock(block: BlockStatement): BlockStatement
   expressions := [...block.expressions]
   let children
@@ -94,23 +106,10 @@ function makeEmptyBlock(): BlockStatement
   }
 
 /**
-Like an empty block but can only be used inside another
-real block and won't be wrapped with braces.
-*/
-function makeBlockFragment(): BlockStatement
-  expressions: StatementTuple[] := []
-  return {
-    type: "BlockStatement",
-    children: expressions,
-    parent: undefined,
-    expressions,
-    bare: false,
-    root: false
-  }
-
-/**
  * Replace `child` with `replacement` inside the `block`.
- * Assumes a `StatementTuple[]` for `block.expressions`
+ * Assumes a `StatementTuple[]` for `block.expressions`.
+ * Preserves the indentation and delimiter of the StatementTuple
+ * containing `child`.
  */
 function replaceBlockExpression(node: BlockStatement, child: ASTNodeObject, replacement: ASTNodeObject): void
   found .= false
@@ -161,24 +160,89 @@ function hoistRefDecs(statements: StatementTuple[]): void
       return
 
 function insertHoistDec(block: BlockStatement, node: ASTNode | StatementTuple, dec: ASTNode): void
+  statement: StatementTuple := [ "", dec, ";" ]
+  insertBeforeInBlock block, node, statement
+
+/**
+ * Insert one or more statements into a block immediately before the given statement.
+ * The target can be a StatementTuple or the expression inside that tuple.
+ */
+function insertBeforeInBlock(block: BlockStatement, node: ASTNode | StatementTuple, ...statements: StatementTuple[]): void
+  index := findChildIndex block.expressions, node
+  if index < 0
+    throw new Error "insertBeforeInBlock couldn't find existing statement in block"
+
+  insertBlockStatements block, index, ...statements
+
+/**
+ * Insert one or more statements into a block at the given index,
+ * before the statement currently at that index.
+ * Moves indentation of that statement to the first inserted statement.
+ */
+function insertBlockStatements(block: BlockStatement, index: number, ...statements: StatementTuple[]): void
+  return unless statements#
   // NOTE: This is more accurately 'statements'
   { expressions } := block
-  index := findChildIndex expressions, node
-  if index < 0
-    throw new Error("Couldn't find expression in block for hoistable declaration.")
+  // Inserting just before this statement:
+  before := expressions[index]
+  // Move leading whitespace to before inserted statements
+  if statements[0][0] and before?[0] // join whitespace
+    statements[0][0] = [statements[0][0]] unless Array.isArray statements[0][0]
+    before[0] = [before[0]] unless Array.isArray before[0]
+    statements[0][0] = [...before[0], ...statements[0][0]]
+  else
+    statements[0][0] or= before?[0]
+  before[0] = ""
+  expressions.splice index, 0, ...statements
+  updateParentPointers block
 
-  statement := [ expressions[index][0], dec, ";" ] as StatementTuple
-  expressions[index][0] = ""
-  expressions.splice index, 0, statement
-
-  // hoistDec wasn't previously a child, so now needs parent pointers
-  updateParentPointers dec, block
+  // Add braces if block was previously just a bare statement
+  braceBlock block
 
 function processBlocks(statements: StatementTuple[]): void
-  insertSemicolon(statements)
+  insertSemicolon statements
 
-  for each { expressions } of gatherRecursive statements, .type is "BlockStatement"
-    processBlocks expressions
+  for each block of gatherRecursive statements, .type is "BlockStatement"
+    // Unwrap blocks that got wrapped in parentheses and possibly braces because
+    // they contained what might have been an object literal,
+    // but we haven't already wrapped them in `return` at this point,
+    // so they're used as statements not expressions
+    if block.unwrapObject and block.expressions# is 1 and
+       block.expressions[0][1] is like {
+         type: "ParenthesizedExpression"
+         implicit: true
+         expression: {
+           type: "ObjectExpression"
+         }
+       }
+      object := (block.expressions[0][1] as ParenthesizedExpression).expression as ObjectExpression
+      // Don't process `...spread` or `name: value` or `method() ...`
+      continue unless for every prop of object.properties
+        prop.type is "Property" and prop.implicitName
+      // Unwrap parentheses
+      block.expressions[0][1] =
+        (block.expressions[0][1] as ParenthesizedExpression).expression
+      // Unwrap braces
+      unbraceBlock block
+      // Remove implicit names added to props
+      for each prop, i of object.properties
+        // Remove implicit square brackets around e.g. template strings
+        if prop.name is like {type: "ComputedPropertyName", implicit: true}
+          replaceNode prop.name, prop.name.expression, prop
+        // Remove implicit commas between properties
+        if prop.delim?.implicit
+          if needsPrecedingSemicolon object.properties[i+1]
+            prop.delim.token = ";"
+          else
+            replaceNode prop.delim, undefined, prop
+            prop.delim = undefined
+        // Remove implicit `name: ` added to properties
+        colon := prop.children.indexOf ": "
+        continue if colon < 0
+        continue unless prop.children[colon-1] is prop.name
+        prop.children.splice colon-1, 2
+
+    processBlocks block.expressions
 
 /**
 * Automatic Semicolon Insertion (ASI):
@@ -187,7 +251,7 @@ function processBlocks(statements: StatementTuple[]): void
 * https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Lexical_grammar#automatic_semicolon_insertion
 */
 function insertSemicolon(statements: StatementTuple[]): void
-  l := statements.length
+  l := statements#
   for each s, i of statements
     if i < l - 1
       if needsPrecedingSemicolon(statements[i + 1][1])
@@ -262,8 +326,10 @@ export {
   getIndent
   blockContainingStatement
   hoistRefDecs
-  makeBlockFragment
+  insertBeforeInBlock
+  insertBlockStatements
   makeEmptyBlock
   processBlocks
   replaceBlockExpression
+  unbraceBlock
 }

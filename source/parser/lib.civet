@@ -109,7 +109,6 @@ import {
   bracedBlock
   duplicateBlock
   hoistRefDecs
-  makeBlockFragment
   makeEmptyBlock
   processBlocks
 } from ./block.civet
@@ -146,6 +145,7 @@ import {
 } from ./binding.civet
 import {
   getPrecedence
+  isShortCircuitOp
   precedenceCustomDefault
   precedenceStep
   processBinaryOpExpression
@@ -268,7 +268,7 @@ function isExpression(node: ASTNode): boolean
 
 function expressionizeBlock(blockOrExpression: ASTNode)
   if { expressions } := blockOrExpression
-    l := expressions.length
+    l := expressions#
     results := []
 
     for [ws, s, _delim], i of expressions
@@ -587,12 +587,15 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
       parts := []
       let ref
       // add ref to ensure object base evaluated only once
-      if prefix.length > 1 and glob.object.properties# > 1
+      if needsRef(prefix) and glob.object.properties# > 1
+        // unwrap unnecessary parentheses in ref assignment
+        if prefix is like [{ type: "ParenthesizedExpression", implicit: true }]
+          prefix = [ prefix[0].expression ]
         ref = makeRef()
         { refAssignment } := makeRefAssignment ref, prefix
         // First use of prefix assigns ref
         prefix = [ makeLeftHandSideExpression refAssignment ]
-      prefix = prefix.concat glob.dot
+      prefixDot .= [ ...prefix, glob.dot ]
 
       for part of glob.object.properties
         if part.type is "Error"
@@ -603,7 +606,7 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
             type: "Error"
             message: "Glob pattern cannot have method definition"
           continue
-        if part.value and part.value.type is not in ["CallExpression", "MemberExpression", "Identifier"] as (string?)[]
+        if part.value and part.value.type is not in ["CallExpression", "MemberExpression", "Identifier", "StringLiteral", "ComputedPropertyName"] as (string?)[]
           parts.push
             type: "Error"
             message: `Glob pattern must have call or member expression value, found ${JSON.stringify(part.value)}`
@@ -620,10 +623,23 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
         [name, value] = [value, name] if glob.reversed
 
         unless suppressPrefix // Don't prefix @ shorthand
-          value = prefix.concat trimFirstSpace value
+          if value.type is "StringLiteral"
+            value = [ ...prefix,
+              type: "Index"
+              children: [ "[", trimFirstSpace(value), "]" ]
+            ]
+          else if value.type is "ComputedPropertyName"
+            value = [ ...prefix,
+              type: "Index"
+              children: [ trimFirstSpace value ]
+            ]
+          else
+            value = [ ...prefixDot, trimFirstSpace value ]
           // Switch from refAssignment to ref
-          prefix = [ ref ] ++ glob.dot if ref?
-        if (wValue) value.unshift(wValue)
+          if ref?
+            prefix = [ ref ]
+            prefixDot = [ ...prefix, glob.dot ]
+        if (wValue) value.unshift wValue
         if part.type is "SpreadProperty"
           parts.push {
             type: part.type
@@ -781,27 +797,27 @@ function makeExpressionStatement(expression: ASTNode): ASTNode
   else
     expression
 
-// Look for last property access like `.foo` or `[computed]` or root Identifier,
-// before any calls like `(args)`, non-null assertions `!`, and optionals `?`.
-// The return value should have a `name` property (for "Identifier" and
-// "Index"), or have `type` of "Index" (for `[computed]`), or be undefined.
+/**
+Look for last property access like `.foo` or `[computed]` or root Identifier,
+before any calls like `(args)`, non-null assertions `!`, and optionals `?`.
+The return value should have a `name` property (for "Identifier",
+"PropertyAcess", and "Index"), or have `type` of "Index" (for `[computed]`),
+or be undefined.
+*/
 function lastAccessInCallExpression(exp)
-  return exp if exp.type is "Identifier"
-  let children, i
-  do
-    // Leaf node occurs e.g. for import.meta
-    return unless exp.children?
-    { children } = exp
-    i = children.length - 1
-    while (i >= 0 and (
+  while exp.type is "MemberExpression" or exp.type is "CallExpression"
+    { children } := exp
+    i .= children# - 1
+    while (i >= 0 and children[i] <? "object" and (
       children[i].type is "Call" ||
       children[i].type is "NonNullAssertion" ||
       children[i].type is "Optional"
     )) i--
     if (i < 0) return
     // Recurse into nested MemberExpression, e.g. from `x.y()`
-  while children[i].type is "MemberExpression" and (exp = children[i])
-  return children[i]
+    exp = children[i]
+  if exp.type is "Identifier" or exp.type is "PropertyAccess" or exp.type is "Index"
+    exp
 
 // Given a MethodDefinition, convert into a FunctionExpression.
 // Returns undefined if the method is a getter or setter.
@@ -828,6 +844,42 @@ function convertMethodToFunction(method)
     ]
     block
   }
+
+function convertFunctionToMethod(id, exp)
+  fnTokenIndex := exp.children.findIndex (c) -> c?.token?.startsWith("function")
+  // copy
+  children := exp.children.slice()
+  if exp.generator
+    // replace "function" and move generator ahead of id
+    children.splice(fnTokenIndex, 2, children[fnTokenIndex+1], id)
+  else
+    // replace "function" token with id
+    children.splice(fnTokenIndex, 1, id)
+
+  {
+    ...exp,
+    type: "MethodDefinition",
+    name: id.name,
+    signature: { ...exp.signature, id, name: id.name },
+    children
+  }
+
+function convertArrowFunctionToMethod(id, exp)
+  block := {...exp.block} // prepare for bracing
+  children := exp.children.filter((c) -> !(Array.isArray(c) && c[c.length-1]?.token?.includes("=>"))).map((c) -> c === exp.block ? block : c)
+  children.unshift(id)
+  exp = {
+    ...exp,
+    type: "MethodDefinition",
+    name: id.name,
+    signature: { ...exp.signature, id, name: id.name },
+    block,
+    children,
+    autoBind: true
+  }
+  block.parent = exp // needed by braceBlock
+  braceBlock(block)
+  exp
 
 // Convert NamedImports into equivalent ObjectExpression or ObjectBindingPattern
 function convertNamedImportsToObject(node, pattern?: boolean)
@@ -972,7 +1024,7 @@ function processAssignments(statements): void
   for each exp of gatherRecursiveAll statements, .type is "AssignmentExpression" or .type is "UpdateExpression"
     checkValidLHS exp.assigned
 
-    function extractAssignment(lhs)
+    function extractAssignment(lhs: ASTNodeObject)
       expr .= lhs
       while expr.type is "ParenthesizedExpression"
         expr = expr.expression
@@ -1021,19 +1073,19 @@ function processAssignments(statements): void
     continue unless exp.names is null
     let { lhs: $1, expression: $2 } = exp, tail = [], len = $1.length
 
-    let block?: BlockStatement
-    // Extract StatementExpression as block
-    if blockContainingStatement(exp) and !$1.-1?.-1?.special// can only prepend to assignments that are children of blocks
-      block = makeBlockFragment()
+    // Extract StatementExpression into containing block,
+    // if this assignment is at the statement level,
+    // the last operator isn't special, and
+    // no operator might shortcut
+    if blockContainingStatement(exp) and !$1.-1?.-1?.special and
+       not isShortCircuitOp($1.-1?.-1)
       if ref := prependStatementExpressionBlock(
         {type: "Initializer", expression: $2, children: [undefined, undefined, $2]}
-        block
+        exp
       )
-        exp.children = exp.children.map & is $2 ? ref : &
+        replaceNode $2, ref, exp
         // @ts-ignore
         $2 = ref
-      else
-        block = undefined
 
     // identifier=, xor=, ++=
     if $1.some &.-1.special
@@ -1089,7 +1141,7 @@ function processAssignments(statements): void
             c[1] = start
             c[2] = ", "
             if (end)
-              c[3] = [end, " - ", start]
+              c[3] = [makeLeftHandSideExpression(end), " - ", makeLeftHandSideExpression(start)]
             else
               c[3] = ["1/0"]
             c[4] = [", ...", $2]
@@ -1164,11 +1216,6 @@ function processAssignments(statements): void
       index := exp.children.indexOf($2)
       if (index < 0) throw new Error("Assertion error: exp not in AssignmentExpression")
       exp.children.splice(index + 1, 0, ...tail)
-
-    if block
-      replaceNode exp, block
-      block.expressions.push(["", exp])
-      exp.parent = block
 
 function unchainOptionalMemberExpression(exp: MemberExpression | CallExpression, ref: ASTRef, innerExp: (exp) => ASTNode)
   j .= 0
@@ -1524,6 +1571,16 @@ function processCoffeeClasses(statements: StatementTuple[]): void
         ...for each [, a] of autoBinds
           [indent, ["this.", a.name, " = this.", a.name, ".bind(this)"], ";"]
 
+    public_static_function_assignments := expressions.filter((&[1]?.type is "CoffeeClassPublic") && (&[1].assignment?.expression?.type is "FunctionExpression")).map &[1].assignment
+    for public_static_function_assignment of public_static_function_assignments
+      id := public_static_function_assignment.lhs[0][1]
+      replaceNode public_static_function_assignment, convertFunctionToMethod(id, public_static_function_assignment.expression)
+
+    public_static_arrow_function_assignments := expressions.filter((&[1]?.type is "CoffeeClassPublic") && (&[1].assignment?.expression?.type is "ArrowFunction")).map &[1].assignment
+    for public_static_arrow_function_assignment of public_static_arrow_function_assignments
+      id := public_static_arrow_function_assignment.lhs[0][1]
+      replaceNode public_static_arrow_function_assignment, convertArrowFunctionToMethod(id, public_static_arrow_function_assignment.expression)
+
     // In a CoffeeScript class, `x = y` makes a private variable x visible
     // only within the class scope only, implemented via IIFE wrapper
     privates := expressions.filter &[1]?.type is "CoffeeClassPrivate"
@@ -1876,76 +1933,59 @@ function reorderBindingRestProperty(props)
 
   return { children, names }
 
-function typeOfJSX(node, config) {
-  switch (node.type) {
-    case "JSXElement":
-      return typeOfJSXElement(node, config)
-    case "JSXFragment":
-      return typeOfJSXFragment(node, config)
-  }
-}
+function typeOfJSX(node, config)
+  switch node.type
+    when "JSXElement"
+      typeOfJSXElement node, config
+    when "JSXFragment"
+      typeOfJSXFragment node, config
 
-function typeOfJSXElement(node, config) {
-  if (config.solid) {
-    if (config.server and !config.client) {  // server only
+function typeOfJSXElement(node, config)
+  if config.solid
+    if config.server and not config.client  // server only
       return ["string"]
-    }
-    let { tag } = node
+    { tag } := node
     // "An intrinsic element always begins with a lowercase letter,
     // and a value-based element always begins with an uppercase letter."
     // [https://www.typescriptlang.org/docs/handbook/jsx.html]
-    const clientType =
+    clientType :=
       tag[0] is tag[0].toLowerCase() ?
-        [getHelperRef("IntrinsicElements"), '<"', tag, '">'] :
-        ['ReturnType<typeof ', tag, '>']
-    if (config.server) {  // isomorphic code for client + server
-      return ["string", " | ", clientType]
-    } else {  // client only (default)
+        [ getHelperRef("IntrinsicElements"), '<"', tag, '">' ] :
+        [ 'ReturnType<typeof ', tag, '>' ]
+    if config.server  // isomorphic code for client + server
+      return [ "string", " | ", clientType ]
+    else  // client only (default)
       return clientType
-    }
-  }
-}
 
-function typeOfJSXFragment(node, config) {
-  if (config.solid) {
-    let type = []
+function typeOfJSXFragment(node, config)
+  if config.solid
+    type .= []
     let lastType
-    for (let child of node.jsxChildren) {
-      switch (child.type) {
-        case "JSXText":
+    for child of node.jsxChildren
+      switch child.type
+        when "JSXText"
           // Solid combines multiple consecutive texts into one string
-          if (lastType !== "JSXText") {
-            type.push("string")
-          }
-          break
-        case "JSXElement":
-          type.push(typeOfJSXElement(child, config))
-          break
-        case "JSXFragment":
+          unless lastType is "JSXText"
+            type.push "string"
+        when "JSXElement"
+          type.push typeOfJSXElement child, config
+        when "JSXFragment"
           // Solid flattens fragments of fragments into one array.
-          type.push(...typeOfJSXFragment(child, config))
-          break
-        case "JSXChildExpression":
+          type.push ...typeOfJSXFragment child, config
+        when "JSXChildExpression"
           // Solid discards empty expressions
-          if (child.expression) {
-            type.push(["typeof ", child.expression])
-          }
-          break
-        default:
-          throw new Error(`unknown child in JSXFragment: ${JSON.stringify(child)}`)
-      }
+          if child.expression
+            type.push [ "typeof ", child.expression ]
+        else
+          throw new Error `unknown child in JSXFragment: ${JSON.stringify(child)}`
       lastType = child.type
-    }
     // Solid doesn't wrap single fragment child in an array
-    if (type.length is 1) {
+    if type# is 1
       return type[0]
-    } else {
-      type = type.flatMap((t) => [t, ", "])
+    else
+      type = type.flatMap [&, ", "]
       type.pop() // remove trailing comma
-      return ["[", type, "]"]
-    }
-  }
-}
+      return [ "[", type, "]" ]
 
 export {
   addPostfixStatement
@@ -1956,6 +1996,8 @@ export {
   blockWithPrefix
   braceBlock
   bracedBlock
+  convertArrowFunctionToMethod
+  convertFunctionToMethod
   convertNamedImportsToObject
   convertObjectToJSXAttributes
   convertWithClause

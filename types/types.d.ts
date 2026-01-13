@@ -26,6 +26,13 @@ declare module "@danielx/civet" {
     implicitReturns: boolean
     jsxCode: boolean
     objectIs: boolean
+    /** Array of names to treat as operators, or object mapping names to
+     * parsable operator behaviors such as "relational" or "same (+)" or
+     * "relational same (+)", or ""/undefined for default behavior.
+     * (Can also map to OperatorBehavior as defined in source/types.civet,
+     * but the details are subject to change.)
+     */
+    operators: string[] | Record<string, string | undefined>
     react: boolean
     solid: boolean
     client: boolean
@@ -41,25 +48,96 @@ declare module "@danielx/civet" {
     repl: boolean
   }>
   export type CompileOptions = {
+    /**
+     * If your Civet code comes from a file, provide it here. This gets used
+     * in sourcemaps and error messages.
+     */
     filename?: string
+    /**
+     * Output (transpiled) filename to record in inline source maps.
+     */
+    outputFilename?: string
+    /**
+     * Whether to return a source map in addition to transpiled code.
+     * If false (the default), `compile` just returns transpiled code.
+     * If true (and `inlineMap` is false/unspecified),
+     * `compile` returns an object `{code, sourceMap}` whose `code` property
+     * is transpiled code and `sourceMap` property is a `SourceMap` object.
+     */
     sourceMap?: boolean
+    /**
+     * Whether to inline a source map as a final comment in the transpiled code.
+     * Default is false.
+     */
     inlineMap?: boolean
+    /**
+     * Whether to return an AST of the parsed code instead of transpiled code.
+     * Default is false.
+     * If true, `compile` skips the `generate` step that turns the parsed AST
+     * into a code string, and just returns the AST itself.
+     * If "raw", `compile` also skips the `prune` step, which leaves some
+     * extra properties on the AST nodes (e.g. `parent` pointers) and
+     * preserves that `children` is always an array.
+     */
     ast?: boolean | "raw"
+    /**
+     * Whether Civet should convert TypeScript syntax to JavaScript.
+     * This mostly triggers the removal of type annotations, but some
+     * TypeScript features such as `enum` are also supported.
+     * Default is false.
+     */
     js?: boolean
+    /**
+     * If set to true, turns off the compiler cache of compiled subexpressions.
+     * This should not affect the compilation output,
+     * and can make the compiler exponentially slow.
+     * It is mainly for testing whether there is a bug in the compiler cache.
+     */
     noCache?: boolean
+    /**
+     * If specified, also writes data about compiler cache performance
+     * into the specified filename. Useful for debugging caching performance.
+     */
     hits?: string
+    /**
+     * If specified, also writes data about all parse branches considered by
+     * the compiler into the specified filename.
+     * Useful for debugging why something parsed the way it did.
+     */
     trace?: string
+    /**
+     * Initial parse options, e.g., read from a config file.
+     * They can still be overridden in the code by "civet" pragmas.
+     */
     parseOptions?: ParseOptions
-    /** Specifying an empty array will prevent ParseErrors from being thrown */
+    /**
+     * By default, `compile` will throw a `ParseErrors` containing all
+     * `ParseError`s encountered during compilation.
+     * If you specify an empty array, `compile` will not throw and instead
+     * will add to the array all `ParseError`s encountered.
+     */
     errors?: ParseError[]
-    /** Number of parallel threads to compile with (Node only) */
+    /**
+     * Number of parallel threads to compile with (Node only).
+     * Default is to use the environment variable `CIVET_THREADS`, or 0.
+     * If nonzero, spawns up to that many worker threads so that multiple
+     * calls to `compile` will end up running in parallel.
+     * If `CIVET_THREADS` is set to 0, the `threads` option is ignored.
+     */
     threads?: number
+    /**
+     * If false (the default), runs the compiler asynchronously and returns
+     * a Promise (for the transpiled string or `{code, sourceMap}` object).
+     * If true, runs the compiler synchronously and returns the result directly.
+     * Sync mode disables some features:
+     *   - parallel computation via `threads`
+     *   - comptime code can't return promises
+     */
+    sync?: boolean
   }
   export type GenerateOptions = Omit<CompileOptions, "sourceMap"> & {
     sourceMap?: undefined | SourceMap
   }
-  export type SyncCompileOptions = CompileOptions &
-    { parseOptions?: { comptime?: false } }
 
   export type SourceMapping = [number] | [number, number, number, number]
 
@@ -74,7 +152,7 @@ declare module "@danielx/civet" {
   }
 
   // TODO: Import ParseError class from Hera
-  export type ParseError = {
+  export class ParseError {
     name: "ParseError"
     message: string // filename:line:column header\nbody
     header: string
@@ -84,7 +162,8 @@ declare module "@danielx/civet" {
     column: number | string
     offset: number
   }
-  export type ParseErrors = {
+  export class ParseErrors {
+    constructor(errors: ParseError[])
     name: "ParseErrors"
     message: string
     errors: ParseError[]
@@ -97,7 +176,7 @@ declare module "@danielx/civet" {
       code: string,
       sourceMap: SourceMap,
     } : string
-  export function compile<const T extends CompileOptions>(source: string, options?: T):
+  export function compile<const T extends CompileOptions>(source: string | Buffer, options?: T):
     T extends { sync: true } ? CompileOutput<T> : Promise<CompileOutput<T>>
   /** Warning: No caching */
   export function parse(source: string, options?: CompileOptions & {startRule?: string}): CivetAST
@@ -105,6 +184,7 @@ declare module "@danielx/civet" {
   export function parseProgram<T extends CompileOptions>(source: string, options?: T):
     T extends { comptime: true } ? Promise<CivetAST> : CivetAST
   export function generate(ast: CivetAST, options?: GenerateOptions): string
+  export function decode(source: string | Buffer): string
 
   export const lib: {
     gatherRecursive(ast: CivetAST, predicate: (node: CivetAST) => boolean): CivetAST[]
@@ -117,6 +197,7 @@ declare module "@danielx/civet" {
     isCompileError: typeof isCompileError
     parse: typeof parse
     generate: typeof generate
+    decode: typeof decode
     SourceMap: typeof SourceMap
     ParseError: typeof ParseError
     ParseErrors: typeof ParseErrors
@@ -150,9 +231,10 @@ declare module "@danielx/civet/config" {
   export function loadConfig(
     path: string
   ): Promise<import("@danielx/civet").CompileOptions>
-  export default {
-    findInDir,
-    findConfig,
-    loadConfig,
+  const Config: {
+    findInDir: typeof findInDir,
+    findConfig: typeof findConfig,
+    loadConfig: typeof loadConfig,
   }
+  export default Config
 }

@@ -14,6 +14,8 @@ import {
   blockWithPrefix,
   braceBlock,
   bracedBlock,
+  convertArrowFunctionToMethod,
+  convertFunctionToMethod,
   convertNamedImportsToObject,
   convertObjectToJSXAttributes,
   convertWithClause,
@@ -89,6 +91,7 @@ export const state = {    // parser state
   forbidTrailingMemberProperty: [false],
   forbidNestedBinaryOp: [false],
   forbidNewlineBinaryOp: [false],
+  forbidImplicitFragment: [false],
   forbidPipeline: [false],
   JSXTagStack: [undefined],
 }
@@ -142,6 +145,12 @@ Object.defineProperties(state, {
       return s[s.length-1]
     },
   },
+  implicitFragmentForbidden: {
+    get() {
+      const {forbidImplicitFragment: s} = state
+      return s[s.length-1]
+    },
+  },
   pipelineForbidden: {
     get() {
       const {forbidPipeline: s} = state
@@ -156,15 +165,25 @@ Object.defineProperties(state, {
   },
 })
 
+function setOperatorBehavior(name, behavior) {
+  const existing = state.operators.get(name)
+  if (existing && behavior) { // merge behaviors
+    state.operators.set(name, {...existing, ...behavior})
+  } else { // no merge, in particular double undefined -> undefined
+    state.operators.set(name, behavior || existing)
+  }
+}
+
 export function getStateKey() {
   const stateInt =
-    ((state.currentIndent.level % 256) << 8) |
-    (state.classImplicitCallForbidden << 7) |
-    (state.indentedApplicationForbidden << 6) |
-    (state.bracedApplicationForbidden << 5) |
-    (state.trailingMemberPropertyForbidden << 4) |
-    (state.nestedBinaryOpForbidden << 3) |
-    (state.newlineBinaryOpForbidden << 2) |
+    ((state.currentIndent.level % 256) << 9) |
+    (state.classImplicitCallForbidden << 8) |
+    (state.indentedApplicationForbidden << 7) |
+    (state.bracedApplicationForbidden << 6) |
+    (state.trailingMemberPropertyForbidden << 5) |
+    (state.nestedBinaryOpForbidden << 4) |
+    (state.newlineBinaryOpForbidden << 3) |
+    (state.implicitFragmentForbidden << 2) |
     (state.pipelineForbidden << 1) |
     // This is slightly different than the rest of the state,
     // since it is affected by the directive prologue and may be hit
@@ -623,7 +642,9 @@ SingleLineBinaryOpRHS
 RHS
   # NOTE: Check for comptime block first, to avoid matching as function call
   ExpressionizedStatementWithTrailingCallExpressions
-  UnaryExpression
+  ForbidImplicitFragment UnaryExpression?:exp RestoreImplicitFragment ->
+    if (!exp) return $skip
+    return exp
 
 # https://262.ecma-international.org/#prod-UnaryExpression
 UnaryExpression
@@ -899,6 +920,7 @@ FatArrowBody
       implicitlyReturned: true,
     }
   # Otherwise, wrap block body in braces and insert returns
+  BracedObjectSingleLineStatements
   NoCommaBracedOrEmptyBlock
 
 # https://262.ecma-international.org/#prod-ConditionalExpression
@@ -959,8 +981,15 @@ PipelineExpressionBody
       ...rest.map(([nested, line]) => [nested, ...line]).flat()
     ]
 
-  # Otherwise allow for any not-dedented chain
-  ( NotDedented Pipe __ PipelineTailItem )+
+  # Otherwise allow for any not-dedented chain,
+  # assuming not-dedented binary operators are allowed
+  NewlineBinaryOpAllowed ( NotDedented Pipe __ PipelineTailItem )+ -> $2
+
+  # If binary operators need to be indented, and we didn't match above,
+  # still need to allow same-line pipelines
+  !NewlineBinaryOpAllowed PipelineExpressionBodySameLine ->
+    if (!$2.length) return $skip
+    return $2
 
 PipelineExpressionBodySameLine
   ( _? Pipe __ PipelineTailItem )*
@@ -984,7 +1013,9 @@ PipelineTailItem
     return makeAmpersandFunction({
       body: [" ", $1, ...$2],
     })
-  PipelineHeadItem -> $1
+  ForbidNewlineBinaryOp PipelineHeadItem? RestoreNewlineBinaryOp ->
+    if (!$2) return $skip
+    return $2
 
 # https://262.ecma-international.org/#prod-PrimaryExpression
 PrimaryExpression
@@ -1264,6 +1295,14 @@ NestedClassElement
 
 # https://262.ecma-international.org/#prod-ClassElement
 ClassElement
+  # CoffeeScript public static class variable: @identifier = Expression
+  # CoffeeScript private static class variable: identifier = Expression
+  CoffeeClassesEnabled Decorators?:decorators ( Declare _? )?:declare AccessModifier?:access ( Static _? )?:static_ ( Override _? )?:override ActualAssignment:assignment -> 
+    return {
+      type: static_ ? "CoffeeClassPublic" : "CoffeeClassPrivate",
+      children: [decorators, declare, access, static_, override, assignment],
+      assignment
+    }
   # NOTE: Combined optional static and Method/Field definition
   Decorators?:decorators ( Declare _? )?:declare AccessModifier?:access ( Static _? )?:static_ ( Override _? )?:override ClassElementDefinition:definition ->
     const ts = definition.ts || !!declare;
@@ -1333,42 +1372,10 @@ FieldDefinition
   CoffeeClassesEnabled ClassElementName:id _? Colon __ AssignmentExpression:exp ->
     switch (exp.type) {
       case "FunctionExpression": {
-        const fnTokenIndex = exp.children.findIndex(c => c?.token?.startsWith("function"))
-        // copy
-        const children = exp.children.slice()
-        if (exp.generator) {
-          // replace "function" and move generator ahead of id
-          children.splice(fnTokenIndex, 2, children[fnTokenIndex+1], id)
-        } else {
-          // replace "function" token with id
-          children.splice(fnTokenIndex, 1, id)
-        }
-        return {
-          ...exp,
-          type: "MethodDefinition",
-          name: id.name,
-          signature: { ...exp.signature, id, name: id.name },
-          children,
-        }
+        return convertFunctionToMethod(id, exp)
       }
       case "ArrowFunction": {
-        const block = {...exp.block} // prepare for bracing
-        const children = exp.children
-        .filter(c => !(Array.isArray(c) && c[c.length-1]?.token?.includes("=>")))
-        .map(c => c === exp.block ? block : c)
-        children.unshift(id)
-        exp = {
-          ...exp,
-          type: "MethodDefinition",
-          name: id.name,
-          signature: { ...exp.signature, id, name: id.name },
-          block,
-          children,
-          autoBind: true
-        }
-        block.parent = exp // needed by braceBlock
-        braceBlock(block)
-        return exp
+        return convertArrowFunctionToMethod(id, exp)
       }
       default:
         return {
@@ -1391,15 +1398,6 @@ FieldDefinition
       typeSuffix,
       children: $0,
       readonly,
-    }
-
-  # In a CoffeeScript class, `x = y` makes a private variable x visible
-  # only within the class scope only
-  CoffeeClassesEnabled ActualAssignment:assignment ->
-    return {
-      type: "CoffeeClassPrivate",
-      children: [ assignment ],
-      assignment,
     }
 
   ( Abstract _? )?:abstract ( Readonly _? )?:readonly ClassElementName:id TypeSuffix?:typeSuffix Initializer?:initializer ->
@@ -1525,9 +1523,9 @@ CallExpression
       children: [$1, ...$2, ...rest.flat()],
     })
   # Import declaration as an expression
-  Import _ NamedImports __ FromClause ->
+  Import _ DynamicImportContents __ FromClause ->
     return dynamizeImportDeclarationExpression($0)
-  FromClause:from __:fws Import:i _:iws NamedImports:imports ->
+  FromClause:from __:fws Import:i _:iws DynamicImportContents:imports ->
     return dynamizeImportDeclarationExpression([i, iws, imports, fws, from])
   # Dynamic import(), with optional parentheses when not used at top level.
   # (At top level, ImportDeclaration will match first.)
@@ -2047,7 +2045,7 @@ ParameterElement
 
 ParameterElementDelimiter
   _? Comma
-  &( __ [)}] )
+  &( __ [)\]}] )
   &EOS InsertComma -> $2
 
 # https://262.ecma-international.org/#prod-BindingIdentifier
@@ -2596,13 +2594,13 @@ FunctionExpression
 OperatorDeclaration
   # `operator {x, y} := ...` declaration while blessing
   Operator:op OperatorBehavior?:behavior _:w LexicalDeclaration:decl ->
-    decl.names.forEach((name) => state.operators.set(name, behavior))
+    decl.names.forEach((name) => setOperatorBehavior(name, behavior))
     if (behavior?.error) decl = prepend(behavior.error, decl)
     decl = prepend(trimFirstSpace(w), decl)
     return decl
   # `operator id(a, b) {...}` defines a function
   OperatorSignature:signature BracedBlock:block ->
-    state.operators.set(signature.id.name, signature.behavior)
+    setOperatorBehavior(signature.id.name, signature.behavior)
     return {
       ...signature,
       type: "FunctionExpression",
@@ -2614,10 +2612,10 @@ OperatorDeclaration
   # `operator id` alone blesses `id` as an operator
   Operator:op _:w1 Identifier:id OperatorBehavior?:behavior ( CommaDelimiter _? Identifier OperatorBehavior? )*:ids ->
     const children = []
-    state.operators.set(id.name, behavior)
+    setOperatorBehavior(id.name, behavior)
     if (behavior?.error) children.push(behavior.error)
     ids.forEach(([, , id2, behavior2]) => {
-      state.operators.set(id2.name, behavior2)
+      setOperatorBehavior(id2.name, behavior2)
       if (behavior2?.error) children.push(behavior2.error)
     })
     return {
@@ -2692,9 +2690,18 @@ OperatorAssociativity
     return { assoc }
 
 ThinArrowFunction
-  ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:returnType _? Arrow:arrow NoCommaBracedOrEmptyBlock:block ->
+  ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:returnType _?:ws ThinArrow:arrow ( BracedObjectSingleLineStatements / NoCommaBracedOrEmptyBlock ):block ->
     if (!async) async = []
     const generator = []
+
+    // Assuming there's anything before the arrow, use input whitespace `ws`
+    // instead of leading space from block generated by OpenBrace or braceBlock
+    if ((!parameters.implicit || returnType || ws) && !block.bare) {
+      const [ first, ...rest ] = block.children
+      if (first === " {" || first?.[0]?.token === " ") {
+        block = { ...block, children: [ first.slice(1), ...rest ] }
+      }
+    }
 
     return {
       type: "FunctionExpression",
@@ -2720,11 +2727,12 @@ ThinArrowFunction
         generator,
         parameters,
         returnType,
-        block
+        ws,
+        block,
       ],
     }
 
-Arrow
+ThinArrow
   "->" / "→" ->
     return { $loc, token: "->" }
 
@@ -2822,6 +2830,7 @@ ThenClause
 ThenBlock
   NoBlock EmptyBlock -> $2
   ImplicitNestedBlock
+  ObjectSingleLineStatements
   SingleLineStatements
 
 BracedThenClause
@@ -2868,6 +2877,7 @@ BlockOrEmptyStatement
 # NOTE: We allow if/else bodies to be empty, in which case they get a {} body
 # (`;` would also make sense, but TypeScript doesn't allow them.)
 BlockOrEmpty
+  ObjectSingleLineStatements
   Block
   NoBlock EmptyBlock -> $2
 
@@ -2979,6 +2989,24 @@ SingleLineStatements
       children,
       bare: true,
     }
+
+# NOTE: Special case where SingleLineStatements at least starts with an object
+# literal, which should potentially be unwrapped if not used as a value.
+ObjectSingleLineStatements
+  &( _? BracedObjectLiteral ) SingleLineStatements:block ->
+    if (block.bare && block.expressions.length === 1) {
+      const expression = block.expressions[0][1]
+      if (expression.type === "ParenthesizedExpression" &&
+          expression.implicit &&
+          expression.expression.type === "ObjectExpression") {
+        block = { ...block, unwrapObject: true }
+      }
+    }
+    return block
+
+BracedObjectSingleLineStatements
+  ObjectSingleLineStatements:block ->
+    return bracedBlock(block)
 
 PostfixedSingleLineStatements
   ( ( _? !EOS ) StatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) StatementListItem SemicolonDelimiter? )?:last ->
@@ -3646,8 +3674,8 @@ InlineObjectPropertyDelimiter
 
 ObjectPropertyDelimiter
   _? Comma
-  # Object closing delimits the property
-  &( __ "}" )
+  # Object closing delimits the property, as do end of array or parenthetical
+  &( __ [)\]}] )
   &EOS InsertComma ->
     return { ...$2, implicit: true }
 
@@ -3712,6 +3740,7 @@ PropertyDefinition
       name: id,
       names: id.names,
       value: id,
+      implicitName: true,
     }
 
   _?:ws MethodDefinition:def ->
@@ -3769,6 +3798,7 @@ PropertyDefinition
         name = {
           type: "ComputedPropertyName",
           children: [last.children[0], "(", refAssignment, ",", ref, ")", ...last.children.slice(-2)],
+          implicit: true,
         }
 
         value = {
@@ -3785,6 +3815,7 @@ PropertyDefinition
         name = {
           type: "ComputedPropertyName",
           children: last.children,
+          implicit: true,
         }
       }
     } else {
@@ -3801,6 +3832,7 @@ PropertyDefinition
       name,
       names: [],
       value,
+      implicitName: true,
     }
   # NOTE: basic identifiers are now part of the rule above
   #_?:ws IdentifierReference:id ->
@@ -3998,6 +4030,7 @@ MethodDefinition
 MethodModifier
   # NOTE: Merged get/set definitions
   GetOrSet:kind _?:ws &ClassElementName ->
+    if (!ws) ws = " "
     return {
       // no async or generator, because getters and setters can't be
       modifier: {
@@ -4580,7 +4613,7 @@ NoCommaStatement
   KeywordStatement
   VariableStatement
   IfStatement
-  IterationStatement
+  IterationActualStatement
   SwitchStatement
   TryStatement
   EmptyStatement
@@ -5433,7 +5466,7 @@ SingleLineExpressionWithIndentedApplicationForbidden
 # as arguments to implicit function calls.  This is useful in the context of
 # an `if` or `class` line where we don't want to treat the body as an object.
 ExpressionWithObjectApplicationForbidden
-  ForbidBracedApplication ForbidIndentedApplication Expression?:exp RestoreBracedApplication RestoreIndentedApplication ->
+  ForbidBracedApplication ForbidIndentedApplication ForbidImplicitFragment Expression?:exp RestoreBracedApplication RestoreIndentedApplication RestoreImplicitFragment ->
     if (exp) return exp
     return $skip
 
@@ -5556,6 +5589,25 @@ NewlineBinaryOpAllowed
     }
     if (state.newlineBinaryOpForbidden) return $skip
 
+AllowImplicitFragment
+  "" ->
+    state.forbidImplicitFragment.push(false)
+
+ForbidImplicitFragment
+  "" ->
+    state.forbidImplicitFragment.push(true)
+
+RestoreImplicitFragment
+  "" ->
+    state.forbidImplicitFragment.pop()
+
+ImplicitFragmentAllowed
+  "" ->
+    if (config.verbose) {
+      console.log("forbidImplicitFragment:", state.forbidImplicitFragment)
+    }
+    if (state.implicitFragmentForbidden) return $skip
+
 AllowPipeline
   "" ->
     state.forbidPipeline.push(false)
@@ -5576,10 +5628,10 @@ PipelineAllowed
     if (state.pipelineForbidden) return $skip
 
 AllowAll
-  AllowTrailingMemberProperty AllowBracedApplication AllowIndentedApplication AllowClassImplicitCall AllowNestedBinaryOp AllowNewlineBinaryOp AllowPipeline
+  AllowTrailingMemberProperty AllowBracedApplication AllowIndentedApplication AllowClassImplicitCall AllowNestedBinaryOp AllowNewlineBinaryOp AllowImplicitFragment AllowPipeline
 
 RestoreAll
-  RestoreTrailingMemberProperty RestoreBracedApplication RestoreIndentedApplication RestoreClassImplicitCall RestoreNestedBinaryOp RestoreNewlineBinaryOp RestorePipeline
+  RestoreTrailingMemberProperty RestoreBracedApplication RestoreIndentedApplication RestoreClassImplicitCall RestoreNestedBinaryOp RestoreNewlineBinaryOp RestoreImplicitFragment RestorePipeline
 
 # https://262.ecma-international.org/#prod-ExpressionStatement
 CommaExpressionStatement
@@ -5691,7 +5743,9 @@ MaybeNestedNonPipelineExpression
     if (!expression) return $skip
     if (!trailing) return expression
     return [ expression, trailing ]
-  NonPipelineExpression
+  ForbidImplicitFragment NonPipelineExpression?:expression RestoreImplicitFragment ->
+    if (!expression) return $skip
+    return expression
 
 MaybeNestedPostfixedExpression
   # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
@@ -5701,7 +5755,9 @@ MaybeNestedPostfixedExpression
     if (!expression) return $skip
     if (!trailing) return expression
     return [ expression, trailing ]
-  PostfixedExpression
+  ForbidImplicitFragment PostfixedExpression?:expression RestoreImplicitFragment ->
+    if (!expression) return $skip
+    return expression
 
 NestedPostfixedExpressionNoTrailing
   NestedBulletedArray
@@ -5718,7 +5774,9 @@ MaybeNestedExpression
     if (!expression) return $skip
     if (!trailing) return expression
     return [ expression, trailing ]
-  Expression
+  ForbidImplicitFragment Expression?:expression RestoreImplicitFragment ->
+    if (!expression) return $skip
+    return expression
 
 # MaybeNestedExpression but where expression needs to be output with
 # parentheses if indented, so that the expression starts on the same line.
@@ -5729,7 +5787,7 @@ MaybeParenNestedExpression
   &( _? PostfixStatement NoBlock ) -> ""
   # Not nested case
   !EOS Expression -> $2
-  # Avoid wrapping array/object return value in parentheses.
+  # Avoid double wrapping nested array/object return value in parentheses.
   &EOS ( ArrayLiteral / ObjectLiteral ) -> $2
   # Value after `return` needs to be wrapped in parentheses
   # if it starts on another line.
@@ -5755,7 +5813,7 @@ ImportDeclaration
     const errors = []
     if (behavior?.error) errors.push(behavior.error)
     imports.specifiers.forEach((spec) => {
-      state.operators.set(spec.binding.name, spec.behavior ?? behavior)
+      setOperatorBehavior(spec.binding.name, spec.behavior ?? behavior)
       if (spec.behavior?.error) errors.push(spec.behavior.error)
     })
     return {
@@ -5791,7 +5849,7 @@ ImportDeclaration
     const errors = []
     if (behavior?.error) errors.push(behavior.error)
     imports.specifiers.forEach((spec) => {
-      state.operators.set(spec.binding.name, spec.behavior ?? behavior)
+      setOperatorBehavior(spec.binding.name, spec.behavior ?? behavior)
       if (spec.behavior?.error) errors.push(spec.behavior.error)
     })
     return {
@@ -5870,6 +5928,21 @@ OperatorNamedImports
       specifiers,
     }
 
+# Allows { default, "foo bar" } because dynamic imports allow them;
+# forbids { type foo } because dynamic imports don't allow them
+DynamicNamedImports
+  OpenBrace DynamicImportSpecifier*:specifiers ( __ Comma )? __ CloseBrace ->
+    return {
+      type: "Declaration",
+      children: $0,
+      specifiers,
+    }
+
+DynamicImportContents
+  DynamicNamedImports
+  IdentifierName
+  Star
+
 # https://262.ecma-international.org/#prod-FromClause
 FromClause
   From __ ModuleSpecifier:module ->
@@ -5892,15 +5965,15 @@ ImportAssertion
 
 # https://devblogs.microsoft.com/typescript/announcing-typescript-3-8-beta/#type-only-imports-exports
 TypeAndImportSpecifier
-  ( __ TypeKeyword )? ImportSpecifier ->
-    if (!$1) return $2
-    return { ts: true, children: $0, binding: $2.binding }
+  __ TypeKeyword ImportSpecifier ->
+    return { ts: true, children: $0, binding: $3.binding }
+  ImportSpecifier
   # `operator id` blesses `id` as operator; doesn't make sense with `type`
   __:ws Operator OperatorImportSpecifier:spec ->
     if (spec.binding.type !== "Identifier") {
       throw new Error("Expected identifier after `operator`")
     }
-    state.operators.set(spec.binding.name, spec.behavior)
+    setOperatorBehavior(spec.binding.name, spec.behavior)
     return {
       ...spec,
       children: [
@@ -5937,6 +6010,19 @@ OperatorImportSpecifier
       behavior,
       children: [$1, $2, $3?.error, $4],
     }
+
+DynamicImportSpecifier
+  __ ( TypeKeyword __ &DynamicModuleExportName )?:ts DynamicModuleExportName:source ( ImportAsToken __ DynamicModuleExportName )?:binding ObjectPropertyDelimiter ->
+    return {
+      source,
+      binding: binding?.[2],
+      ts: !!ts, // true causes an error later
+      children: $0,
+    }
+
+DynamicModuleExportName
+  ModuleExportName
+  ComputedPropertyName
 
 ImportAsToken
   __ As
@@ -6540,6 +6626,8 @@ CoffeeSingleLineComment
   /#(?!##(?!#))([^\r\n]*)/ ->
     return { type: "Comment", $loc, token: `//${$1}` }
 
+# NOTE: ###...### is currently always enabled; just # needs a flag.
+# We could check for CoffeeCommentEnabled here.
 CoffeeMultiLineComment
   CoffeeHereCommentStart $/[^]*?###/ ->
     $2 = $2.slice(0, $2.length-3).replace(/\*\//g, "* /")
@@ -6552,6 +6640,7 @@ CoffeeHereCommentStart
 InlineComment
   /\/\*(?:(?!\*\/)[^\r\n])*\*\// ->
     return { $loc, token: $0 }
+  CoffeeMultiLineComment
 
 RestOfLine
   ( NonNewlineWhitespace / Comment )* EOL
@@ -6563,10 +6652,9 @@ TrailingComment
   _? SingleLineComment?
 
 # Non-newline "white space" (includes inline comments)
-# TODO: Allow for inline Coffee comments when enabled
 _
   # perf: assertion to exit early
-  /(?=[ \t\/\\])/ ( NonNewlineWhitespace / InlineComment )+ -> $2
+  /(?=[ \t\/\\#])/ ( NonNewlineWhitespace / InlineComment )+ -> $2
 
 NonNewlineWhitespace
   [ \t]+ ->
@@ -6949,7 +7037,7 @@ SingleQuote
 
 Star
   "*" ->
-    return { $loc, token: $1 }
+    return { $loc, token: $1, type: "Star" }
 
 Static
   "static" NonIdContinue ->
@@ -7060,18 +7148,23 @@ Yield
 ## JSX
 
 JSXImplicitFragment
-  JSXTag ( Nested ( JSXTag / JSXAngleChild ) )* ->
-    const jsx = $2.length === 0 ? $1 : {
+  # Always allow a single JSX tag.
+  # Implicit fragment can be explicitly forbidden; it also inherits
+  # forbidden status from binary ops on the following line.
+  JSXTag:first ( ImplicitFragmentAllowed NestedBinaryOpAllowed NewlineBinaryOpAllowed ( Nested ( JSXTag / JSXAngleChild ) )* )?:rest ->
+    rest = rest ? rest[3] : []
+    const jsx = rest.length === 0 ? first : {
       type: "JSXFragment",
       children: [
         "<>\n",
         state.currentIndent.token,
-        ...$0,
+        first,
+        ...rest,
         "\n",
         state.currentIndent.token,
         "</>",
       ],
-      jsxChildren: [$1].concat($2.map(([, tag]) => tag)),
+      jsxChildren: [ first, ...rest.map(([, tag]) => tag) ],
     }
     const type = typeOfJSX(jsx, config)
     return type ? [
@@ -7751,9 +7844,7 @@ JSXAngleChild
   CloseAngleBracket JSXCodeChild -> $2
 
 JSXCodeChild
-  InsertInlineOpenBrace:open JSXCodeChildExpression:expression InsertCloseBrace:close ->
-    if (!expression) return $skip
-    return [ open, expression, close ]  // omit >
+  InsertInlineOpenBrace JSXCodeChildExpression InsertCloseBrace
 
 JSXCodeChildExpression
   # First check for unindented expression (same line)
@@ -8813,6 +8904,7 @@ CivetOption
         break
       case "globals":
       case "symbols":
+      case "operators":
         value = value.split(',').filter(Boolean)
         break
     }
@@ -9049,6 +9141,7 @@ Reset
     state.forbidTrailingMemberProperty = [false]
     state.forbidNestedBinaryOp = [false]
     state.forbidNewlineBinaryOp = [false]
+    state.forbidImplicitFragment = [false]
     state.forbidPipeline = [false]
     state.JSXTagStack = [undefined]
 
@@ -9140,6 +9233,40 @@ Reset
           "jsxCodeSameLine",
         ]) {
           config[option] = b
+        }
+      }
+    })
+
+    // `operators` can be an array of operator names (strings), or
+    // an object mapping operator names to their behaviors as a parsable string
+    // or OperatorBehavior object.
+    Object.defineProperty(config, "operators", {
+      set(o) {
+        if (!o) return
+        if (typeof o !== "object") {
+          throw new Error("operators configuration must be an object or array")
+        }
+        if (Array.isArray(o)) {
+          o.forEach(name => {
+            if (typeof name !== "string") {
+              throw new Error("operators configuration array must contain only strings")
+            }
+            setOperatorBehavior(name, undefined) // default behavior
+          })
+        } else {
+          for (let [name, behavior] of Object.entries(o)) {
+            if (typeof behavior === "string") {
+              behavior = behavior.trim()
+              behavior = behavior ? parse(behavior, {
+                startRule: "OperatorBehavior",
+                filename: `operator config for ${name}`,
+              }) : undefined
+            }
+            if (behavior && typeof behavior !== "object") {
+              throw new Error("operators configuration object must have string or object values")
+            }
+            setOperatorBehavior(name, behavior)
+          }
         }
       }
     })

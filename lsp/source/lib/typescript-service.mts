@@ -47,8 +47,8 @@ try {
 }
 
 interface SourceMap {
-  lines: CivetSourceMap["lines"]
-  data: CivetSourceMap["data"]
+  lines?: CivetSourceMap["data"]["lines"]  // New format: direct lines access
+  data?: CivetSourceMap["data"]             // Old format: nested in data
 }
 
 // ts doesn't have this key in the type
@@ -390,18 +390,17 @@ function TSHost(
     return snapshot
   }
 
-  function createOrUpdateMeta(path: string, transpiledDoc: TextDocument, sourcemapLines?: SourceMap["lines"], parseErrors?: (Error | ParseError)[], fatal?: boolean) {
+  function createOrUpdateMeta(path: string, transpiledDoc: TextDocument, sourcemapLines?: SourceMap["lines"], parseErrors?: (Error | ParseError)[], fatal: boolean = false) {
     let meta = fileMetaData.get(path)
 
     if (!meta) {
-      meta = {
+      const newMeta: FileMeta = {
         sourcemapLines,
         transpiledDoc,
         parseErrors,
         fatal,
       }
-
-      fileMetaData.set(path, meta)
+      fileMetaData.set(path, newMeta)
     } else {
       meta.sourcemapLines = sourcemapLines
       meta.parseErrors = parseErrors
@@ -421,7 +420,7 @@ function TSHost(
 
     if (result) {
       const { code: transpiledCode, sourceMap, errors } = result
-      const sourceMapLines = sourceMap?.lines ?? sourceMap?.data.lines // older Civet
+      const sourceMapLines = sourceMap?.lines ?? sourceMap?.data?.lines // older Civet
       createOrUpdateMeta(sourcePath, transpiledDoc, sourceMapLines, errors, false)
       TextDocument.update(transpiledDoc, [{ text: transpiledCode }], version)
 
@@ -451,7 +450,7 @@ function TSHost(
   }
 }
 
-function TSService(projectURL = "./", logger: Console | RemoteConsole = console) {
+async function TSService(projectURL = "./", logger: Console | RemoteConsole = console) {
   logger.info("CIVET VSCODE PLUGIN " + version)
   logger.info("TYPESCRIPT " + typescriptVersion)
 
@@ -512,16 +511,19 @@ function TSService(projectURL = "./", logger: Console | RemoteConsole = console)
   }
 
   let civetConfig: CompileOptions = {}
-  CivetConfig.findConfig(projectPath).then(async (configPath) => {
+  try {
+    const configPath = await CivetConfig.findConfig(projectPath)
     if (configPath) {
       logger.info("Loading Civet config @ " + configPath)
       const config = await CivetConfig.loadConfig(configPath)
       logger.info("Found civet config!")
       civetConfig = config
-    } else logger.info("No Civet config found")
-  }).catch((e: unknown) => {
+    } else {
+      logger.info("No Civet config found")
+    }
+  } catch (e) {
     logger.error("Error loading Civet config " + e)
-  })
+  }
 
   return Object.assign({}, service, {
     host,

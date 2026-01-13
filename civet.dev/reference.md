@@ -1440,6 +1440,20 @@ operator combine arguments
 a combine b combine c
 </Playground>
 
+You can specify both precedence and associativity together in either order:
+
+<Playground>
+operator mult arguments tighter (+)
+a mult b mult c + d mult e mult f
+</Playground>
+
+Instead of declaring `operator`s in multiple files, you can declare global
+`operator`s (with custom precedence and associativity) in a project
+[configuration file](config#global-configuration-via-config-files).
+Within a Civet source file, you can redeclare with `operator` to override
+the precedence and/or associativity (but the default behavior is that
+specified in the configuration file).
+
 ### Operator Assignment
 
 Even without blessing a function as an `operator`, you can use it in
@@ -1960,6 +1974,14 @@ function mapConcatIter(f, a, b)
     f item
   for* item of b
     f item
+</Playground>
+
+Use `...x` to yield all items from another iterable `x` via `yield*`:
+
+<Playground>
+function concatIter(iters)
+  for* iter of iters
+    ...iter
 </Playground>
 
 ### Postfix Loop
@@ -3058,6 +3080,8 @@ You can also use `import` declarations as expressions, as a shorthand for
 urlPath := import {
   fileURLToPath, pathToFileURL
 } from url
+url := import * from url
+Foo := import default from Foo
 </Playground>
 
 ### Export Shorthand
@@ -3547,10 +3571,12 @@ loop
 <Playground>
 "civet coffeeClasses autoVar"
 class X
-  privateVar = 5
+  privateStaticVar = 5
+  @publicStaticVar = 6
   constructor: (@x) ->
   get: -> @x
   bound: => @x
+  @staticFunc: -> @publicStaticVar
 </Playground>
 
 ### IIFE Wrapper

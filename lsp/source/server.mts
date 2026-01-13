@@ -14,6 +14,7 @@ import {
   CompletionItemTag,
   Location,
   DiagnosticSeverity,
+  TextEdit,
 } from 'vscode-languageserver/node';
 
 import {
@@ -22,7 +23,7 @@ import {
 } from 'vscode-languageserver-textdocument';
 import TSService from './lib/typescript-service.mjs';
 import * as Previewer from "./lib/previewer.mjs";
-import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier, logTiming, WithResolvers, withResolvers } from './lib/util.mjs';
+import { convertNavTree, forwardMap, getCompletionItemKind, convertDiagnostic, remapPosition, parseKindModifier, logTiming, WithResolvers, withResolvers, type SourcemapLines } from './lib/util.mjs';
 import { asPlainTextWithLinks, tagsToMarkdown } from './lib/textRendering.mjs';
 import assert from "assert"
 import path from "node:path"
@@ -47,7 +48,8 @@ const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
-let hasDiagnosticRelatedInformationCapability = false;
+// let hasDiagnosticRelatedInformationCapability = false;
+// comment out unused variable
 
 // Mapping from abs file path -> path of nearest applicable project path (tsconfig.json base)
 const sourcePathToProjectPathMap = new Map<string, string>()
@@ -57,11 +59,12 @@ const sourcePathToProjectPathMap = new Map<string, string>()
 const projectPathToPendingPromiseMap = new Map<string, Promise<void>>()
 
 // Mapping from project path -> TSService instance operating on that base directory
-const projectPathToServiceMap = new Map<string, ReturnType<typeof TSService>>()
+type ResolvedService = Awaited<ReturnType<typeof TSService>>
+const projectPathToServiceMap = new Map<string, ResolvedService>()
 
 let rootUri: string | undefined, rootDir: string | undefined;
 
-const getProjectPathFromSourcePath = (sourcePath: string) => {
+const getProjectPathFromSourcePath = (sourcePath: string): string => {
   let projPath = sourcePathToProjectPathMap.get(sourcePath)
   if (projPath) return projPath
 
@@ -87,7 +90,7 @@ const getProjectPathFromSourcePath = (sourcePath: string) => {
   // Otherwise, check whether we're inside the root
   if (!projPath) {
     if (rootDir != null && sourcePath.startsWith(rootDir)) {
-      projPath = rootUri
+      projPath = rootUri ?? pathToFileURL(path.dirname(sourcePath) + "/").toString()
     } else {
       projPath = pathToFileURL(path.dirname(sourcePath) + "/").toString()
     }
@@ -103,7 +106,7 @@ const ensureServiceForSourcePath = async (sourcePath: string) => {
   let service = projectPathToServiceMap.get(projPath)
   if (service) return service
   logger.log("Spawning language server for project path: " + projPath)
-  service = TSService(projPath, connection.console)
+  service = await TSService(projPath, connection.console)
   const initP = service.loadPlugins()
   projectPathToPendingPromiseMap.set(projPath, initP)
   await initP
@@ -127,11 +130,12 @@ connection.onInitialize(async (params: InitializeParams) => {
   hasWorkspaceFolderCapability = !!(
     capabilities.workspace && !!capabilities.workspace.workspaceFolders
   );
-  hasDiagnosticRelatedInformationCapability = !!(
-    capabilities.textDocument &&
-    capabilities.textDocument.publishDiagnostics &&
-    capabilities.textDocument.publishDiagnostics.relatedInformation
-  );
+  // hasDiagnosticRelatedInformationCapability = !!(
+  //   capabilities.textDocument &&
+  //   capabilities.textDocument.publishDiagnostics &&
+  //   capabilities.textDocument.publishDiagnostics.relatedInformation
+  // );
+  // Removed unused diagnostic capability check
 
   const result: InitializeResult = {
     capabilities: {
@@ -147,6 +151,7 @@ connection.onInitialize(async (params: InitializeParams) => {
       definitionProvider: true,
       hoverProvider: true,
       referencesProvider: true,
+      renameProvider: true,
 
     }
   };
@@ -263,7 +268,13 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
   const completionOptions: GetCompletionsAtPositionOptions = {
     includeExternalModuleExports: completionConfiguration.autoImportSuggestions,
     includeInsertTextCompletions: true,
-    ...context,
+  }
+  
+  if (context?.triggerKind) {
+    completionOptions.triggerKind = context.triggerKind
+  }
+  if (context?.triggerCharacter) {
+    completionOptions.triggerCharacter = context.triggerCharacter
   }
 
   const sourcePath = documentToSourcePath(textDocument)
@@ -340,12 +351,12 @@ connection.onCompletionResolve(async (item) => {
     }, source, undefined, data)
   } catch (e) {
     logger.log("Failed to get completion details for " + name)
-    logger.log(e)
+    logger.log(String(e))
   }
   if (!detail) return item
 
   // getDetails from https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
-  const details = []
+  const details: string[] = []
   for (const action of detail.codeActions ?? []) {
     details.push(action.description)
   }
@@ -353,7 +364,7 @@ connection.onCompletionResolve(async (item) => {
   item.detail = details.join("\n\n")
 
   // getDocumentation from https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
-  const documentations = []
+  const documentations: string[] = []
   if (detail.documentation) {
     documentations.push(asPlainTextWithLinks(detail.documentation))
   }
@@ -411,7 +422,8 @@ connection.onDefinition(async ({ textDocument, position }) => {
   const program = service.getProgram()
   assert(program)
 
-  return definitions.map<Location | undefined>((definition) => {
+  const defs = definitions as readonly ts.DefinitionInfo[]
+  return defs.map((definition) => {
     let { fileName, textSpan } = definition
     // source file as it is known to TSServer
     const sourceFile = program.getSourceFile(fileName)
@@ -439,7 +451,7 @@ connection.onDefinition(async ({ textDocument, position }) => {
         end,
       }
     }
-  }).filter((d) => !!d) as Location[]
+  }).filter((d): d is Location => !!d)
 
 })
 
@@ -481,7 +493,8 @@ connection.onReferences(async ({ textDocument, position }) => {
   const program = service.getProgram()
   assert(program)
 
-  return references.map<Location | undefined>((reference) => {
+  const refs = references as readonly ts.ReferenceEntry[]
+  return refs.map((reference) => {
     let { fileName, textSpan } = reference
     // source file as it is known to TSServer
     const sourceFile = program.getSourceFile(fileName)
@@ -509,7 +522,7 @@ connection.onReferences(async ({ textDocument, position }) => {
         end,
       }
     }
-  }).filter((d) => !!d) as Location[]
+  }).filter((d): d is Location => !!d)
 });
 
 connection.onDocumentSymbol(async ({ textDocument }) => {
@@ -551,6 +564,114 @@ connection.onDocumentSymbol(async ({ textDocument }) => {
   return items
 })
 
+function getRenameSourceDetails(
+  service: ResolvedService,
+  textDocumentId: TextDocumentIdentifier,
+  sourcePath: string,
+  position: Position
+) {
+  const isTypeScriptFile = sourcePath.match(tsSuffix)
+  if (isTypeScriptFile) {
+    const document = documents.get(textDocumentId.uri)
+    if (!document) return null
+    return {
+      document,
+      position,
+      sourcePath,
+      offset: document.offsetAt(position),
+    }
+  } else {
+    const meta = service.host.getMeta(sourcePath)
+    if (!meta) return null
+    if (!meta.transpiledDoc || !meta.sourcemapLines) return null
+
+    const document = meta.transpiledDoc
+    if (!document) return null
+
+    const mappedPosition = forwardMap(meta.sourcemapLines, position)
+
+    return {
+      document,
+      position: mappedPosition,
+      sourcePath: documentToSourcePath(meta.transpiledDoc),
+      offset: document.offsetAt(mappedPosition),
+    }
+  }
+}
+
+function remapLocationRename(service: ResolvedService, sourceFile: ts.SourceFile, loc: ts.RenameLocation) {
+  const start = sourceFile.getLineAndCharacterOfPosition(loc.textSpan.start)
+  const end = sourceFile.getLineAndCharacterOfPosition(loc.textSpan.start + loc.textSpan.length)
+
+  const sourceFileName = service.getSourceFileName(loc.fileName)
+  const meta = service.host.getMeta(sourceFileName)
+
+  if (meta?.sourcemapLines) {
+    return {
+      start: remapPosition(start, meta.sourcemapLines),
+      end: remapPosition(end, meta.sourcemapLines),
+      uri: pathToFileURL(sourceFileName).toString(),
+    }
+  }
+  
+  return {
+    start,
+    end,
+    uri: pathToFileURL(loc.fileName).toString(),
+  }
+}
+
+function createRenameLocationChanges(
+  service: ResolvedService,
+  program: ts.Program,
+  locations: readonly ts.RenameLocation[],
+  newName: string
+) {
+  const changes: Record<string, TextEdit[]> = {}
+
+  for (const loc of locations) {
+    const sourceFile = program.getSourceFile(loc.fileName)
+    if (!sourceFile) continue
+
+    const { start, end, uri } = remapLocationRename(service, sourceFile, loc)
+    const edit: TextEdit = {
+      range: { start, end },
+      newText: newName,
+    };
+
+    if (changes[uri]) {
+      changes[uri].push(edit)
+    } else {
+      changes[uri] = [edit]
+    }
+  }
+
+  return changes 
+}
+
+connection.onRenameRequest(async ({ textDocument, position, newName }) => {
+  const sourcePath = documentToSourcePath(textDocument)
+  assert(sourcePath)
+
+  const service = await ensureServiceForSourcePath(sourcePath)
+  if (!service) return
+
+  await updating(textDocument)
+
+  const mapped = getRenameSourceDetails(service, textDocument, sourcePath, position)
+  if (!mapped) return
+
+  const locations = service.findRenameLocations(mapped.sourcePath, mapped.offset, false, false, {})
+  if (!locations || !locations.length) return
+
+  const program = service.getProgram()
+  assert(program)
+
+  return {
+    changes: createRenameLocationChanges(service, program, locations, newName),
+  }
+})
+
 // TODO
 documents.onDidClose(({ document }) => {
   logger.log("close " + document.uri)
@@ -565,29 +686,47 @@ let changeQueue = new Set<TextDocument>()
 let executeTimeout: Promise<void> | undefined
 const documentUpdateStatus = new Map<string, WithResolvers<boolean>>()
 async function executeQueue() {
-  // Cancel updating any other documents while running queue of primary changes
+  // Cancel any in-flight project-wide diagnostics update to avoid conflicts
   if (runningDiagnosticsUpdate) {
     runningDiagnosticsUpdate.isCanceled = true
   }
-  // Reset queue to allow accumulating jobs while this queue runs
-  const changed = changeQueue
-  changeQueue = new Set
-  logger.log("executeQueue " + changed.size)
-  // Run all jobs in queue (preventing livelock).
-  for (const document of changed) {
-    await updateDiagnosticsForDoc(document)
-    documentUpdateStatus.get(document.uri)?.resolve(true)
-    Promise.resolve()
-      // Wait for the document to be updated before removing it from the status map
-      .then(() => documentUpdateStatus.delete(document.uri))
+  const changed = Array.from(changeQueue);
+  changeQueue = new Set();
+  if (changed.length === 0) {
+    executeTimeout = undefined;
+    return;
   }
-  // Allow executeQueue() again, and run again if there are new jobs now.
-  // Otherwise, schedule update of all other documents.
+  logger.log(`executeQueue: Processing batch of ${changed.length} documents.`);
+
+  const docsByProject = new Map<string, { service: ResolvedService; docs: TextDocument[] }>();
+
+  // Group documents by their project path to ensure atomic updates per project.
+  for (const doc of changed) {
+    const sourcePath = documentToSourcePath(doc);
+    const projPath = getProjectPathFromSourcePath(sourcePath);
+    if (!docsByProject.has(projPath)) {
+      const service = await ensureServiceForSourcePath(sourcePath);
+      if (service) docsByProject.set(projPath, { service, docs: [] });
+    }
+    docsByProject.get(projPath)?.docs.push(doc);
+  }
+
+  for (const { service, docs } of docsByProject.values()) {
+    // Phase 1: Stage all changes within this project.
+    docs.forEach(doc => service.host.addOrUpdateDocument(doc));
+
+    // Phase 2: Analyze all staged documents within this project.
+    for (const doc of docs) {
+      await updateDiagnosticsForDoc(doc, service);
+      documentUpdateStatus.get(doc.uri)?.resolve(true);
+      Promise.resolve().then(() => documentUpdateStatus.delete(doc.uri));
+    }
+  }
   executeTimeout = undefined
   if (changeQueue.size) {
     scheduleExecuteQueue()
   } else {
-    scheduleUpdateDiagnostics(changed)
+    scheduleUpdateDiagnostics(new Set(changed));
   }
 }
 async function scheduleExecuteQueue() {
@@ -607,15 +746,21 @@ documents.onDidChangeContent(async ({ document }) => {
   scheduleExecuteQueue()
 });
 
-async function updateDiagnosticsForDoc(document: TextDocument) {
+async function updateDiagnosticsForDoc(document: TextDocument, service?: ResolvedService) {
   logger.log("Updating diagnostics for doc: " + document.uri)
   const sourcePath = documentToSourcePath(document)
   assert(sourcePath)
 
-  const service = await ensureServiceForSourcePath(sourcePath)
+  if (!service) {
+    service = await ensureServiceForSourcePath(sourcePath)
+  }
   if (!service) return
 
-  service.host.addOrUpdateDocument(document)
+  // When called from executeQueue, document is already staged.
+  // When called from updateProjectDiagnostics, we need to stage it.
+  if (arguments.length === 1) {
+    service.host.addOrUpdateDocument(document)
+  }
 
   // Non-transpiled
   if (sourcePath.match(tsSuffix)) {
@@ -638,12 +783,16 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
     return
   }
   const { sourcemapLines, transpiledDoc, parseErrors, fatal } = meta
+  if (!transpiledDoc) {
+    logger.log("no transpiledDoc for " + sourcePath)
+    return
+  }
 
   const transpiledPath = documentToSourcePath(transpiledDoc)
   const diagnostics: Diagnostic[] = [];
 
   if (parseErrors?.length) {
-    diagnostics.push(...parseErrors.map((e: Error | ParseError) => {
+    diagnostics.push(...parseErrors.map((e: Error & {line?: number, column?: number}) => {
       let start = { line: 0, character: 0 }, end = { line: 0, character: 10 }
       let message = e.message
       if (e.line != null && e.column != null) { // ParseError
@@ -673,7 +822,7 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
       ...logTiming(logger, "service.getSemanticDiagnostics", service.getSemanticDiagnostics)(transpiledPath),
       ...logTiming(logger, "service.getSuggestionDiagnostics", service.getSuggestionDiagnostics)(transpiledPath),
     ].forEach((diagnostic) => {
-      diagnostics.push(convertDiagnostic(diagnostic, transpiledDoc, sourcemapLines))
+      diagnostics.push(convertDiagnostic(diagnostic, transpiledDoc!, sourcemapLines))
     })
   }
 
@@ -689,36 +838,54 @@ async function updateDiagnosticsForDoc(document: TextDocument) {
 let runningDiagnosticsUpdate: { isCanceled: boolean } | undefined
 
 // Asynchronously update diagnostics for all the documents
-// other than the ones in skip list
-const updatePendingDiagnostics = async (
+// in a project, based on the service instance.
+const updateProjectDiagnostics = async (
   status: { isCanceled: boolean },
-  skipDocs: Set<TextDocument>
+  service: ResolvedService
 ) => {
-  await setTimeout(diagnosticsPropagationDelay)
-  if (status?.isCanceled) return
-  for (let doc of documents.all()) {
-    if (skipDocs.has(doc)) {
-      // We can skip this document because it was updated
-      // right after the content update
-      continue
+  const program = service.getProgram();
+  if (!program) return;
+
+  // A single, short delay before starting the update for a project.
+  await setTimeout(diagnosticsPropagationDelay);
+
+  for (const sourceFile of program.getSourceFiles()) {
+    if (status.isCanceled) return;
+
+    // We only send diagnostics for files the user actually has open,
+    // even though we're checking every file in the project for correctness.
+    const docUri = pathToFileURL(sourceFile.fileName).toString();
+    const doc = documents.get(docUri);
+    if (doc) {
+      await updateDiagnosticsForDoc(doc, service);
     }
-    updateDiagnosticsForDoc(doc)
-    await setTimeout(diagnosticsPropagationDelay)
-    if (status?.isCanceled) return
   }
 }
 
-// Schedule an update of diagnostics for all *other* documents
-// that weren't directly changed, but might depend on changed documents.
-// Skip documents passed in as a set (the already updated changed documents).
-function scheduleUpdateDiagnostics(skipDocs: Set<TextDocument>) {
+// Schedule an update of diagnostics for all projects affected by recent changes.
+function scheduleUpdateDiagnostics(changedDocs: Set<TextDocument>) {
   if (runningDiagnosticsUpdate) {
-    runningDiagnosticsUpdate.isCanceled = true
+    runningDiagnosticsUpdate.isCanceled = true;
   }
-  runningDiagnosticsUpdate = {
-    isCanceled: false
+  const status = { isCanceled: false };
+  runningDiagnosticsUpdate = status;
+
+  // Deduplicate by project path to avoid redundant updates.
+  const servicesToUpdate = new Set<ResolvedService>();
+  for (const doc of changedDocs) {
+    const sourcePath = documentToSourcePath(doc);
+    const projPath = getProjectPathFromSourcePath(sourcePath);
+    const service = projectPathToServiceMap.get(projPath);
+    if (service) {
+      servicesToUpdate.add(service);
+    }
   }
-  updatePendingDiagnostics(runningDiagnosticsUpdate, skipDocs)
+
+  // Trigger updates for each affected project.
+  for (const service of servicesToUpdate) {
+    // Don't await; let updates for different projects run in parallel.
+    updateProjectDiagnostics(status, service);
+  }
 }
 
 connection.onDidChangeWatchedFiles(_change => {
@@ -739,7 +906,7 @@ function documentToSourcePath(textDocument: TextDocumentIdentifier) {
   return fileURLToPath(textDocument.uri);
 }
 
-function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: any): CompletionItem[] {
+function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: SourcemapLines): CompletionItem[] {
   // Partial simulation of MyCompletionItem in
   // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
   const { entries } = completions;

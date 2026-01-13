@@ -4,10 +4,47 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.1 (2025-12-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.0...v0.11.1), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.1))
+* Don't unwrap statement expressions that might be short-circuited [[#1821](https://github.com/DanielXMoore/Civet/pull/1821)]
+
+## 0.11.0 (2025-11-03, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.7...v0.11.0), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.0))
+* Fix missing space in terse `get`/`set` definitions [[#1802](https://github.com/DanielXMoore/Civet/pull/1802)]
+* Dynamic `import` expressions support `*`, `default`; they and globs support strings and computed names [[#1806](https://github.com/DanielXMoore/Civet/pull/1806)]
+* Fix TypeScript type for `operator` option [[#1808](https://github.com/DanielXMoore/Civet/pull/1808)]
+* Fix expressionization of `if` in some cases, improve errors from threads [[#1809](https://github.com/DanielXMoore/Civet/pull/1809)]
+* Limit implicit JSX fragments to desired scenarios [[#1811](https://github.com/DanielXMoore/Civet/pull/1811)]
+* Spread `...x` makes `yield*` in `for*` loops, fix `for*` in one-line arrow functions [[#1812](https://github.com/DanielXMoore/Civet/pull/1812)]
+* Fix complex splice assignment by adding parentheses [[#1814](https://github.com/DanielXMoore/Civet/pull/1814)]
+* `if`, `else`, `->`, `=>` treat braced clause as object not block [[#1816](https://github.com/DanielXMoore/Civet/pull/1816)]
+  * BREAKING CHANGE: Braced blocks after `->`, `if`, `else` may now return objects in expression/implicit return context. Omit braces to avoid.
+
+## 0.10.7 (2025-09-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.6...v0.10.7), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.7))
+* Support Unicode BOM: UTF-8, UTF-16 LE and BE [[#1792](https://github.com/DanielXMoore/Civet/pull/1792)]
+* Fix access detection in braced expressions [[#1794](https://github.com/DanielXMoore/Civet/pull/1794)]
+* Fix errors in TypeScript types [[#1798](https://github.com/DanielXMoore/Civet/pull/1798)]
+* CLI passes SIGINT etc signals onto ESM scripts [[#1787](https://github.com/DanielXMoore/Civet/pull/1787)]
+* Fix `AutoPromise` wrapper in async functions with complex return types (e.g. OR) [[#1793](https://github.com/DanielXMoore/Civet/pull/1793)]
+* Global configuration of operators via `operators` [[#1799](https://github.com/DanielXMoore/Civet/pull/1799)]
+
+## 0.10.6 (2025-09-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.5...v0.10.6), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.6))
+* Comment and tidy up source mapping util [[#1758](https://github.com/DanielXMoore/Civet/pull/1758)]
+* Throw on esbuild emitDeclaration misconfiguration [[#1759](https://github.com/DanielXMoore/Civet/pull/1759)]
+* LSP: log to `connection.console` instead of stdio for Neovim compatibility [[#1764](https://github.com/DanielXMoore/Civet/pull/1764)]
+* LSP: Fix loading race condition by making `TSService` initialization async [[#1771](https://github.com/DanielXMoore/Civet/pull/1771)]
+* LSP: Option to disable language server for JS/TS files [[#1773](https://github.com/DanielXMoore/Civet/pull/1773)]
+* Fix typo in cheatsheet [[#1770](https://github.com/DanielXMoore/Civet/pull/1770)]
+* Fix REPL handling of blank lines on Node 24 [[#1769](https://github.com/DanielXMoore/Civet/pull/1769)]
+* LSP: fix and improve tests (for async TSService + removed hardcoded paths) [[#1774](https://github.com/DanielXMoore/Civet/pull/1774)]
+* LSP: Handle conflicts and race conditions by rearchitecting update queue for atomic project-based changes [[#1775](https://github.com/DanielXMoore/Civet/pull/1775)]
+* Fix source map's `sources` using unplugin with `outputExtension` [[#1782](https://github.com/DanielXMoore/Civet/pull/1782)]
+* CoffeeScript classes support static fields/methods [[#1776](https://github.com/DanielXMoore/Civet/pull/1776)]
+* LSP cleanup: improve type safety and resolve linter errors [[#1772](https://github.com/DanielXMoore/Civet/pull/1772)]
+* Allow implicit object literal to end by `)`/`]`/`}` [[#1786](https://github.com/DanielXMoore/Civet/pull/1786)]
+
 ## 0.10.5 (2025-06-30, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.4...v0.10.5), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.5))
 * `this` and `@` are valid types (within classes) [[#1743](https://github.com/DanielXMoore/Civet/pull/1743)]
 * Fix CoffeeScript comments getting treated as `length` shorthand [[#1750](https://github.com/DanielXMoore/Civet/pull/1750)]
-* update lsp typescript [[#1753](https://github.com/DanielXMoore/Civet/pull/1753)]
+* LSP: update TypeScript [[#1753](https://github.com/DanielXMoore/Civet/pull/1753)]
 
 ## 0.10.4 (2025-05-17, [diff](https://github.com/DanielXMoore/Civet/compare/v0.10.3...v0.10.4), [commits](https://github.com/DanielXMoore/Civet/commits/v0.10.4))
 * Fix implicit returns in IIFEs with "civet -implicitReturns" [[#1737](https://github.com/DanielXMoore/Civet/pull/1737)]
@@ -1116,7 +1153,7 @@ as well as a full diff and commit list.
 
 ## 0.5.56 (2023-01-24, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.55...v0.5.56), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.56))
 * `{x[y]}` shorthand for `{[y]: x[y]}` [[#284](https://github.com/DanielXMoore/Civet/pull/284)]
-* Require space in JSX after identifier or ...rest attribute [[#285](https://github.com/DanielXMoore/Civet/pull/285)]
+* Require space in JSX after identifier or `...rest` attribute [[#285](https://github.com/DanielXMoore/Civet/pull/285)]
 * `not instanceof`, `!<?`, reserve `not` [[#286](https://github.com/DanielXMoore/Civet/pull/286)]
 
 ## 0.5.55 (2023-01-24, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.54...v0.5.55), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.55))

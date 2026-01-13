@@ -45,8 +45,10 @@ and following ESM, require importing files with the correct extension.
 | [`jsxCodeNested`](reference#automatic-code-children) | treat indented JSX children as Civet code |
 | [`jsxCodeSameLine`](reference#automatic-code-children) | treat same-line JSX children as Civet code |
 | [`objectIs`](reference#object-is) | implement the `is` operator via `Object.is` |
+| [`operators=foo,bar`](reference#functions-as-infix-operators) | declare [`operator`s](reference#functions-as-infix-operators) global to the project |
 | [`repl`](reference#iife-wrapper) | wrap the program in an IIFE that exposes globals |
 | [`strict`](reference#strict) | enable JavaScript strict mode (equivalent to `"use strict"`) |
+| [`symbols=foo,bar`](reference#symbols) | declare well-known symbols so `:foo` refers to `Symbol.foo` |
 
 ## ECMAScript Compatibility
 
@@ -143,6 +145,34 @@ For example, the [directive](#local-configuration-via-directives)
     "objectIs": true,
     "implicitReturns": false,
     "tab": 2
+  }
+}
+```
+
+The `globals`, `symbols`, and `operators` options should be specified as an
+array of strings (not a comma-separated string).  For example:
+
+```js
+{
+  "parseOptions": {
+    "globals": ["React", "JSX"],
+    "operators": ["min", "max"]
+  }
+}
+```
+
+The `operators` option can also be an object mapping operator names to a
+string specifying [operator behavior](reference#functions-as-infix-operators).
+For example:
+
+```js
+{
+  "parseOptions": {
+    "operators": {
+      "dot": "looser (*)",
+      "mult": "arguments tighter (+)",
+      "normal": ""
+    }
   }
 }
 ```

@@ -76,3 +76,8 @@ Civet's [GitHub repo](https://github.com/DanielXMoore/Civet) is a [nix flake](ht
   cp result result.vsix # vscode requires the `.vsix` extension
   code --install-extension result.vsix
   ```
+- [Civet Discord Bot](https://github.com/DanielXMoore/civet-discord) transpiles ` ```civet ... ``` ` code in your Discord server
+
+## Tooling
+
+- [YavaScript](https://github.com/suchipi/yavascript) is a standalone script runner supporting Civet (no Node required)
