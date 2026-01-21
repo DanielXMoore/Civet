@@ -4,6 +4,19 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.2 (2026-01-21, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.1...v0.11.2), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.2))
+* VSCode extension supports rename-symbol [[#1823](https://github.com/DanielXMoore/Civet/pull/1823)]
+* Fix scoping of unwrapped statement expressions [[#1833](https://github.com/DanielXMoore/Civet/pull/1833)]
+* Fix when pipelines can continue without indentation [[#1834](https://github.com/DanielXMoore/Civet/pull/1834)]
+  * BREAKING CHANGE: Binary operators can no longer be indented at the same level as pipeline (`|>`)
+* Inline sourcemaps use new `outputFilename` option, set by CLI [[#1830](https://github.com/DanielXMoore/Civet/pull/1830)]
+* `->` preserves return value whitespace/comment; support CoffeeScript comment blocks `###...###` anywhere `/*...*/` works [[#1831](https://github.com/DanielXMoore/Civet/pull/1831)]
+* unplugin supports `?worker` imports in Vite 7 [[#1839](https://github.com/DanielXMoore/Civet/pull/1839)]
+* Fix expressionized statement followed by binary operator [[#1836](https://github.com/DanielXMoore/Civet/pull/1836)]
+* Fix tight binary XOR `^` treated as named binding pattern [[#1837](https://github.com/DanielXMoore/Civet/pull/1837)]
+* Infer partial object/array types from initializers [[#1838](https://github.com/DanielXMoore/Civet/pull/1838)]
+* unplugin fix Vite HMR with `?query` [[#1840](https://github.com/DanielXMoore/Civet/pull/1840)]
+
 ## 0.11.1 (2025-12-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.0...v0.11.1), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.1))
 * Don't unwrap statement expressions that might be short-circuited [[#1821](https://github.com/DanielXMoore/Civet/pull/1821)]
 
