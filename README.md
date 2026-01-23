@@ -46,6 +46,9 @@ civet < source.civet > output.ts
 civet source.civet ...args...
 # Execute a .civet source file in node
 node --import @danielx/civet/register source.civet
+# Type check entire project, which requires TypeScript installed
+npm install -g typescript
+civet --typecheck
 ```
 
 ![image](https://user-images.githubusercontent.com/18894/184558519-b675a903-7490-43ba-883e-0d8addacd4b9.png)

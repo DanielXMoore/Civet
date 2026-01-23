@@ -230,7 +230,7 @@ interface PluginOptions {
 }
 ```
 
-- `emitDeclaration`: Whether to generate `.d.ts` type definition files from the Civet source, which is useful for building libraries. Default: `false`. (Requires installing `typescript`.)
+- `emitDeclaration`: Whether to generate `.d.ts` type definition files from the Civet source, which is useful for building libraries. (Requires installing `typescript`.) Default: `false`.
 - `declarationExtension`: Output filename extension for `.d.ts` files. Default: `".civet.d.ts"`.
 - `typecheck`: Whether to run type checking on the generated code. (Requires installing `typescript`.) Default: `false`.
   - Specifying `true` aborts the build (with an error code) on TypeScript errors.
