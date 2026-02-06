@@ -38,13 +38,8 @@ const { version } = pkg
 // HACK to get __dirname working in tests with ts-node
 // ts-node needs everything to be modules for .civet files to work
 // and modules don't have __dirname
-var dir: string
-try {
-  dir = __dirname
-} catch (e) {
-  //@ts-ignore
-  dir = fileURLToPath(import.meta.url)
-}
+const dir =
+  typeof __dirname !== "undefined" ? __dirname : fileURLToPath(import.meta.url);
 
 interface SourceMap {
   lines: CivetSourceMap["lines"]
