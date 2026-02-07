@@ -27,7 +27,8 @@ const {
 } = ts
 
 import { createRequire } from "module"
-import { fileURLToPath, pathToFileURL } from "url"
+import { fileURLToPath } from "url"
+import { URI } from "vscode-uri"
 import { TextDocument } from "vscode-languageserver-textdocument"
 
 // Import version from package.json
@@ -38,13 +39,8 @@ const { version } = pkg
 // HACK to get __dirname working in tests with ts-node
 // ts-node needs everything to be modules for .civet files to work
 // and modules don't have __dirname
-var dir: string
-try {
-  dir = __dirname
-} catch (e) {
-  //@ts-ignore
-  dir = fileURLToPath(import.meta.url)
-}
+const dir =
+  typeof __dirname !== "undefined" ? __dirname : fileURLToPath(import.meta.url);
 
 interface SourceMap {
   lines?: CivetSourceMap["data"]["lines"]  // New format: direct lines access
@@ -227,7 +223,7 @@ function TSHost(
      * This accepts both `.civet` and `.ts` adding the transpiled targets to `scriptFileNames`.
      */
     addOrUpdateDocument(doc: TextDocument): void {
-      const path = fileURLToPath(doc.uri)
+      const path = URI.parse(doc.uri).fsPath
       // Clear any cached snapshot for this document
       snapshotMap.delete(path)
 
@@ -432,7 +428,7 @@ function TSHost(
   function initTranspiledDoc(path: string) {
     // Create an empty document, it will be updated on-demand when `getScriptSnapshot` is called
     // `path` must be the in the format that TypeScript Language Service expects
-    const uri = pathToFileURL(path).toString()
+    const uri = URI.file(path).toString()
     const transpiledDoc = TextDocument.create(uri, "none", -1, "")
     // Add transpiled doc
     pathMap.set(path, transpiledDoc)
@@ -454,7 +450,7 @@ async function TSService(projectURL = "./", logger: Console | RemoteConsole = co
   logger.info("CIVET VSCODE PLUGIN " + version)
   logger.info("TYPESCRIPT " + typescriptVersion)
 
-  const projectPath = fileURLToPath(projectURL)
+  const projectPath = projectURL.startsWith("file:") ? URI.parse(projectURL).fsPath : path.resolve(projectURL)
   const tsConfigPath = `${projectPath}tsconfig.json`
   const { config } = readConfigFile(tsConfigPath, sys.readFile)
 
@@ -538,7 +534,7 @@ async function TSService(projectURL = "./", logger: Console | RemoteConsole = co
       // One day it would be nice to load plugins that could be transpiled but that is a whole can of worms.
       // VSCode Node versions, esm loaders, etc.
       const pluginFiles = civetFiles.filter(file => file.endsWith("plugin.mjs"))
-        .map(file => pathToFileURL(file).toString())
+        .map(file => URI.file(file).toString())
 
       for (const filePath of pluginFiles) {
         logger.info("Loading plugin " + filePath)
