@@ -125,6 +125,13 @@ Compile several .civet source files to .js:
 civet --js -c *.civet -o .js
 ```
 
+Include inline sourcemaps so that `node --enable-source-maps`
+gives correct stack traces:
+
+```sh
+civet -c --inline-map *.civet
+```
+
 To see all command-line options:
 
 ```sh
