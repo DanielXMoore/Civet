@@ -11,6 +11,7 @@ import {
   TextDocumentIdentifier,
   DocumentSymbol,
   CompletionItem,
+  CompletionItemKind,
   CompletionItemTag,
   Location,
   DiagnosticSeverity,
@@ -119,6 +120,8 @@ const ensureServiceForSourcePath = async (sourcePath: string) => {
 const diagnosticsDelay = 16;  // ms delay for primary updated file
 const diagnosticsPropagationDelay = 100;  // ms delay for other files
 
+const importTriggerCharacters = ['/', '"', "'"]
+
 connection.onInitialize(async (params: InitializeParams) => {
   const capabilities = params.capabilities;
 
@@ -142,7 +145,8 @@ connection.onInitialize(async (params: InitializeParams) => {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       // Tell the client that this server supports code completion.
       completionProvider: {
-        resolveProvider: true
+        resolveProvider: true,
+        triggerCharacters: importTriggerCharacters,
       },
       // documentLinkProvider: {
       //   resolveProvider: true
@@ -192,6 +196,7 @@ connection.onInitialized(() => {
 
 const updating = (document: { uri: string }) => documentUpdateStatus.get(document.uri)?.promise
 const tsSuffix = /\.[cm]?[jt]s$|\.json|\.[jt]sx/
+const civetFileExtension = '.civet'
 
 connection.onHover(async ({ textDocument, position }) => {
   // logger.log("hover"+ position)
@@ -250,6 +255,142 @@ connection.onHover(async ({ textDocument, position }) => {
   };
 })
 
+function extractImportPath(lineText: string): string | null {
+  const importOrFromMatcher = /(?:^|[\s;])(?:import|from)\s+(['"])([^'"]*?)(['"])$/
+  const matchedImport = lineText.match(importOrFromMatcher)
+  if (!matchedImport) return null
+
+  const [_matchedStatement, _startQuote, importPath, _endQuote] = matchedImport
+  return importPath
+}
+
+function findCivetFilesInDir(searchDir: string): string[] {
+  try {
+    return tsSys
+      .readDirectory(searchDir, [civetFileExtension], undefined, undefined, 1)
+      .map(f => path.basename(f))
+  } catch {
+    return []
+  }
+}
+
+function createCivetFileCompletions(
+  files: string[],
+  sourcePath: string,
+  position: Position
+): CompletionItem[] {
+  return files.map((file) => {
+    return {
+      label: file,
+      kind: CompletionItemKind.File,
+      insertText: file,
+      sortText: `${0}_${file}`,
+      data: {
+        sourcePath,
+        position,
+        name: file,
+        source: undefined,
+        data: undefined,
+      } satisfies CompletionItemData,
+    }
+  })
+}
+
+function resolvePathAliasDir(
+  compilationSettings: ts.CompilerOptions,
+  importPath: string,
+): string | null {
+  const { baseUrl, paths } = compilationSettings
+  if (!paths) return null
+
+  const pathsBase = path.isAbsolute(baseUrl ?? '') ? baseUrl : null
+  if (!pathsBase) return null
+
+  const candidates: { resolvedDir: string, aliasPattern: string }[] = []
+
+  for (const [pattern, replacements] of Object.entries(paths)) {
+    if (pattern.endsWith('*')) {
+      const aliasPrefix = pattern.slice(0, -1)
+      if (importPath.startsWith(aliasPrefix)) {
+        const pathAfterAlias = importPath.slice(aliasPrefix.length)
+        for (const replacement of replacements) {
+          const replacementBase = replacement.endsWith('*') ? replacement.slice(0, -1) : replacement
+          const resolvedDir = path.resolve(pathsBase, replacementBase, pathAfterAlias)
+          if (tsSys.directoryExists(resolvedDir)) {
+            candidates.push({
+              aliasPattern: aliasPrefix,
+              resolvedDir,
+            })
+          }
+        }
+      }
+    } else if (importPath === pattern) {
+      for (const replacement of replacements) {
+        const resolvedDir = path.resolve(pathsBase, replacement)
+        if (tsSys.directoryExists(resolvedDir)) {
+          candidates.push({
+            resolvedDir,
+            aliasPattern: pattern,
+          })
+        }
+      }
+    }
+  }
+
+  const chosenCandidate = candidates
+    .sort((a, b) => b.aliasPattern.length - a.aliasPattern.length)
+    .at(0)
+
+  return chosenCandidate?.resolvedDir ?? null
+}
+
+function getCivetFileCompletions(
+  service: ResolvedService,
+  document: TextDocument,
+  sourcePath: string,
+  position: Position
+) {
+  const currentLineText = document.getText({
+    start: {
+      character: 0,
+      line: position.line,
+    },
+    end: {
+      character: 0,
+      line: Math.min(position.line + 1, document.lineCount - 1),
+    },
+  })
+  
+  const afterClosingQuoteIndex = Math.min(position.character + 1, currentLineText.length)
+  const importLineText = currentLineText.slice(0, afterClosingQuoteIndex)
+  const importPath = extractImportPath(importLineText)
+
+  if (importPath) {
+    const isRelativePath = importPath.startsWith('./') || importPath.startsWith('../')
+    if (isRelativePath) {
+      const sourceDir = path.dirname(sourcePath)
+      const searchDir = path.resolve(sourceDir, importPath)
+      const foundCivetFiles = findCivetFilesInDir(searchDir)
+      if (foundCivetFiles.length) {
+        return createCivetFileCompletions(foundCivetFiles, sourcePath, position)
+      }
+    }
+    const isAliasedPath = !isRelativePath
+    if (isAliasedPath) {
+      const compilationSettings = service.host.getCompilationSettings()
+      const resolvedDir = resolvePathAliasDir(compilationSettings, importPath)
+      if (resolvedDir) {
+        const foundCivetFiles = findCivetFilesInDir(resolvedDir);
+        if (foundCivetFiles.length) {
+          return createCivetFileCompletions(foundCivetFiles, sourcePath, position)
+        }
+      }
+    }
+  }
+
+  return null
+}
+
 // This handler provides the initial list of the completion items.
 connection.onCompletion(async ({ textDocument, position, context: _context }) => {
   const completionConfiguration = {
@@ -268,8 +409,9 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
   const completionOptions: GetCompletionsAtPositionOptions = {
     includeExternalModuleExports: completionConfiguration.autoImportSuggestions,
     includeInsertTextCompletions: true,
+    includeCompletionsForImportStatements: true,
   }
-  
+
   if (context?.triggerKind) {
     completionOptions.triggerKind = context.triggerKind
   }
@@ -284,10 +426,22 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
 
   logger.log("completion " + sourcePath + " " + position)
 
+  const document = documents.get(textDocument.uri)
+  assert(document)
+  
+  const isCivetFile = path.extname(sourcePath) === civetFileExtension
+  const isImportCompletion =
+    context.triggerCharacter &&
+    importTriggerCharacters.includes(context.triggerCharacter)
+
+  const civetFileCompletions = isImportCompletion
+    ? getCivetFileCompletions(service, document, sourcePath, position)
+    : null
+
+  if (isImportCompletion && !isCivetFile) return civetFileCompletions
+  
   await updating(textDocument)
   if (sourcePath.match(tsSuffix)) { // non-transpiled
-    const document = documents.get(textDocument.uri)
-    assert(document)
     const p = document.offsetAt(position)
     const completions = service.getCompletionsAtPosition(sourcePath, p, completionOptions)
     if (!completions) return
@@ -312,7 +466,19 @@ connection.onCompletion(async ({ textDocument, position, context: _context }) =>
   const completions = service.getCompletionsAtPosition(transpiledPath, p, completionOptions)
   if (!completions) return;
 
-  return convertCompletions(completions, transpiledDoc, sourcePath, position, sourcemapLines)
+  const convertedCompletions = convertCompletions(
+    completions,
+    transpiledDoc,
+    sourcePath,
+    position,
+    sourcemapLines,
+    isCivetFile
+  );
+
+  if (isCivetFile && civetFileCompletions) {
+    return civetFileCompletions.concat(convertedCompletions)
+  }
+  return convertedCompletions
 });
 
 type CompletionItemData = {
@@ -906,16 +1072,25 @@ function documentToSourcePath(textDocument: TextDocumentIdentifier) {
   return fileURLToPath(textDocument.uri);
 }
 
-function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: SourcemapLines): CompletionItem[] {
+function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: SourcemapLines, showFileExtensions?: boolean): CompletionItem[] {
   // Partial simulation of MyCompletionItem in
   // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
   const { entries } = completions;
 
   const items: CompletionItem[] = [];
   for (const entry of entries) {
+    const completionKind = getCompletionItemKind(entry.kind)
+    const isFileCompletion = completionKind === CompletionItemKind.File
+
+    const defaultContent = entry.name || (entry.insertText ?? '')
+
+    const completionContent = showFileExtensions && isFileCompletion && path.extname(entry.name) === ''
+      ? `${defaultContent}${entry.kindModifiers?.toString()}`
+      : defaultContent
+
     const item: CompletionItem = {
-      label: entry.name || (entry.insertText ?? ''),
-      kind: getCompletionItemKind(entry.kind),
+      label: completionContent,
+      kind: completionKind,
       data: {
         sourcePath, position,
         name: entry.name, source: entry.source, data: entry.data,
@@ -936,6 +1111,8 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
     }
     if (entry.insertText) {
       item.insertText = entry.insertText
+    } else {
+      item.insertText = completionContent
     }
     if (entry.filterText) {
       item.filterText = entry.filterText
