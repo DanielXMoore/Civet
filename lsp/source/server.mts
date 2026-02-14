@@ -120,7 +120,6 @@ const ensureServiceForSourcePath = async (sourcePath: string) => {
 const diagnosticsDelay = 16;  // ms delay for primary updated file
 const diagnosticsPropagationDelay = 100;  // ms delay for other files
 
-const importTriggerCharacters = ['/', '"', "'"]
 
 connection.onInitialize(async (params: InitializeParams) => {
   const capabilities = params.capabilities;
@@ -351,63 +350,31 @@ function getCurrentLineText(document: TextDocument, position: Position): string 
 }
 
 // If this matches, we're most likely near an opportunity for filename completion
-const _fromHeuristicMatcher = /(?:^|\b|})from[\W]/
-function likelyFromStatement(text: string): boolean {
-  return _fromHeuristicMatcher.test(text)
+const _importStatementHeuristicMatcher = /(?:^|\b|})(from|import|require)[\W]/
+function likelyImportStatement(text: string): boolean {
+  return _importStatementHeuristicMatcher.test(text)
 }
 
 // Try to get what's been typed already, in a permissive way.
-const _fromPathExtractor = /(?:^|\b|})from(?:[ \t]+)(('(?<path>[^']*)'?)|("(?<path>[^"]*)"?)|(?<path>[^ ;\t]*))/
+// const _fromPathExtractor = /(?:^|\b|})(from|import|require)(?:[ \t]+)(('(?<path>[^']*)'?)|("(?<path>[^"]*)"?)|(?<path>[^ ;\t]*))/
+// @ts-expect-error ts(1501): The \d flag should be allowed for ESNext these days
+const _importPathExtractor = /(?:^|\b|})(?<statement>from|import|require)(?:[ \t]*)(?:[\(][ \t]*)?(('(?<path>[^']*)'?)|("(?<path>[^"]*)"?)|(?<path>[^ ;\t]*))/gd
 /** 
- * Assuming there is a single "from" import within this string,
- * extract the import path (which may be incomplete, still being keystroked)
- * @returns A string that may be a partial or full path.
+ * Loosely parse a line that contains an import statement, and
+ * return the result closest to the cursor. For path string and imports completion.
+ * @returns null if there's no match, or { statement, path } string.
  */
-function extractImportPath(text: string): string | null {
-  const match = text.match(_fromPathExtractor)
-  return match?.groups?.path ?? null
-}
-function getCivetFileCompletions(
-  service: ResolvedService,
-  document: TextDocument,
-  sourcePath: string,
-  position: Position
-) {
-  const currentLineText = document.getText({
-    start: {
-      character: 0,
-      line: position.line,
-    },
-    end: {
-      character: 0,
-      line: Math.min(position.line + 1, document.lineCount - 1),
-    },
-  })
-  
-  const afterClosingQuoteIndex = Math.min(position.character + 1, currentLineText.length)
-  const importLineText = currentLineText.slice(0, afterClosingQuoteIndex)
-  const importPath = extractImportPath(importLineText)
+function extractImportPath(text: string, cursorOffset: number) {
+  type _D = RegExpExecArray & {
+    groups: { statement: string, path: ('from'|'import'|'require') }
+    indices: { groups: { statement: [number, number], path: [number, number] } }
+  }
+  const matches = text.matchAll(_importPathExtractor) as RegExpStringIterator<_D>
 
-  if (importPath) {
-    const isRelativePath = importPath.startsWith('./') || importPath.startsWith('../')
-    if (isRelativePath) {
-      const sourceDir = path.dirname(sourcePath)
-      const searchDir = path.resolve(sourceDir, importPath)
-      const foundCivetFiles = findCivetFilesInDir(searchDir)
-      if (foundCivetFiles.length) {
-        return createCivetFileCompletions(foundCivetFiles, sourcePath, position)
-      }
-    }
-    const isAliasedPath = !isRelativePath
-    if (isAliasedPath) {
-      const compilationSettings = service.host.getCompilationSettings()
-      const resolvedDir = resolvePathAliasDir(compilationSettings, importPath)
-      if (resolvedDir) {
-        const foundCivetFiles = findCivetFilesInDir(resolvedDir);
-        if (foundCivetFiles.length) {
-          return createCivetFileCompletions(foundCivetFiles, sourcePath, position)
-        }
-      }
+  for (const match of matches) {
+    const pathIndices = match.indices.groups.path
+    if (cursorOffset >= pathIndices[0] && cursorOffset <= pathIndices[1]) {
+      return match.groups
     }
   }
 
@@ -450,30 +417,51 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
   // Gather Civet file completions ("from" statement)
   const lineText = getCurrentLineText(document, position)
   let civetFileCompletions: CompletionItem[] = []
-  if (likelyFromStatement(lineText)) {
-    const importPath = extractImportPath(lineText) ?? ''
-    const isRelativePath = importPath.startsWith('./') || importPath.startsWith('../')
-
-    let relativeCompletionItems: CompletionItem[] = []
-    let pathAliasCompletionItems: CompletionItem[] = []
-
-    // Get relative suggestions
-    if (isRelativePath) {
-      const sourceDir = path.dirname(sourcePath)
-      const searchDir = path.resolve(sourceDir, importPath.substring(0, importPath.lastIndexOf('/')))
-      const relativeCivetFiles = findCivetFilesInDir(searchDir)
-      relativeCompletionItems = createCivetFileCompletions(relativeCivetFiles, sourcePath, position)
-
-    }
-    // Get suggestions from path alias
-    if (!isRelativePath) {
-      const compilationSettings = service.host.getCompilationSettings()
-      const aliasDir = resolvePathAliasDir(compilationSettings, importPath)
-      const pathAliasCivetFiles = !aliasDir ? [] : findCivetFilesInDir(aliasDir)
-      pathAliasCompletionItems = createCivetFileCompletions(pathAliasCivetFiles, sourcePath, position) 
-    }
-    civetFileCompletions = relativeCompletionItems.concat(pathAliasCompletionItems)
+  const show = { 
+    civetFiles: false, // Civet files from relative paths
+    aliasPaths: false, // Civet files from path alias
+    otherFilePaths: false, // Other files, found later
+    otherCompletions: true, // Other suggestions, including exports
   }
+  let importPath = ''
+  if (likelyImportStatement(lineText)) {
+    const {statement, path} = extractImportPath(lineText, position.character) || { path: ''}
+    
+
+    // TS may have other suggestions besides path completions, but
+    // they're not so useful when we know we're looking for a pathname
+    if (statement === 'from' || statement === 'require') { show.otherCompletions = false }
+    if (statement) { show.otherFilePaths = true } // Find non-Civet files, too
+
+    importPath = path
+
+    const isRelativePath = importPath.startsWith('./') || importPath.startsWith('../')
+    show.civetFiles = isRelativePath
+    show.aliasPaths = !isRelativePath
+  }
+  let relativeCompletionItems: CompletionItem[] = []
+  let pathAliasCompletionItems: CompletionItem[] = []
+
+  // Get relative suggestions
+  if (show.civetFiles) {
+    const sourceDir = path.dirname(sourcePath)
+    const searchDir = path.resolve(sourceDir, importPath.substring(0, importPath.lastIndexOf('/')))
+    //const searchDir = path.resolve(sourceDir, importPath.substring(0, importPath.lastIndexOf('/')))
+    console.log(searchDir)
+    const relativeCivetFiles = findCivetFilesInDir(searchDir)
+    relativeCompletionItems = createCivetFileCompletions(relativeCivetFiles, sourcePath, position)
+
+  }
+  // Get suggestions from path alias
+  if (show.aliasPaths) {
+    const compilationSettings = service.host.getCompilationSettings()
+    const aliasDir = resolvePathAliasDir(compilationSettings, importPath)
+    const pathAliasCivetFiles = !aliasDir ? [] : findCivetFilesInDir(aliasDir)
+    pathAliasCompletionItems = createCivetFileCompletions(pathAliasCivetFiles, sourcePath, position) 
+  }
+  civetFileCompletions = relativeCompletionItems.concat(pathAliasCompletionItems)
+
+  // TODO: use "show" flags for logic below
   let result = civetFileCompletions
 
   const isCivetFile = path.extname(sourcePath) === civetFileExtension
