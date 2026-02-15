@@ -342,76 +342,24 @@ function resolvePathAliasDir(
   return chosenCandidate?.resolvedDir ?? null
 }
 
-const _lineEnding = /[\n\r]+$/g
-/** Get the content of the current line (with the trailing newline removed.) */
-function getCurrentLineText(document: TextDocument, position: Position): string {
-  return document.getText({
-    start: { character: 0, line: position.line     },
-    end:   { character: 0, line: position.line + 1 },
-  }).replace(_lineEnding, '');  
-}
-
-// If this matches, we should try to offer completions for import paths.
-const _importStatementHeuristicMatcher = /(?:^|\b|})(from|import|require)[\W]/
-function likelyImportStatement(text: string): boolean {
-  return _importStatementHeuristicMatcher.test(text)
-}
-
-// \d flag is available in ESNext, ES2022
-const _importPathExtractor = /(?:^|\b|}|\s)(?<statement>from|import|require)(?:[ \t]*)(?:[\(][ \t]*)?(?:(?:(?<qt>')(?<path>[^']*)(?<endqt>'?)|(?:(?<qt>")(?<path>[^"]*)(?<endqt>")?)|(?<path>[^ ;\t]*)))/gd
-/** 
- * Permissively parse a line that contains an import statement, with 
- * a match of named groups for the parts of a statement closest to the cursor.
- * @returns null if there's no match, or a RegExpExecArray with
- * indices and these groups: { statement, path, qt, endqt }
- */
-function extractImportPath(text: string, cursorOffset: number) {
-  type _D = RegExpExecArray & {
-    groups: { statement: string, path: ('from'|'import'|'require'), qt: string, endqt: string }
-    indices: { groups: { statement: [number, number], path: [number, number], qt: [number, number], endqt: [number, number] } }
-  }
-  const matches = text.matchAll(_importPathExtractor) as RegExpStringIterator<_D>
-
-  for (const match of matches) {
-    const pathIndices = match.indices.groups.path
-    if (cursorOffset >= pathIndices[0] && cursorOffset <= pathIndices[1]) {
-      return match.groups
-    }
-  }
-
-  return null
-}
-
-// This handler provides the initial list of the completion items.
-connection.onCompletion(async ({ textDocument, position, context }) => {
-
-  await updating(textDocument)
-
-  const document = documents.get(textDocument.uri)
-  assert(document)
-
-  const sourcePath = documentToSourcePath(textDocument)
-  assert(sourcePath)
-  const service = await ensureServiceForSourcePath(sourcePath)
-  if (!service) return
-  
-  logger.log("completion " + sourcePath + " " + position)
-
-  // Gather Civet file completions ("from" statement)
+function getCivetFileCompletions(
+  service: ResolvedService,
+  document: TextDocument,
+  sourcePath: string,
+  position: Position
+) {
+// Gather Civet file completions ("from" statement)
   const lineText = getCurrentLineText(document, position)
   let civetFileCompletions: CompletionItem[] = []
   const show = { 
-    relative: false,   // Civet files from relative paths
-    alias: false,      // Civet files from path alias
-    otherPaths: false, // Other files, found by TypeScript
+    relative:           false, // Civet files from relative paths
+    alias:              false, // Civet files from path alias
+    otherPaths:         false, // Other files, found by TypeScript
     otherLspCompletions: true, // Other suggestions, including exports
   }
   let importPath = ''
   let cursorOffsetAdjustment = 0
-  if (
-    likelyImportStatement(lineText)
-    && context?.triggerCharacter !== '.' // Avoid influencing replacement text when typing file extension
-  ) {
+  if (likelyImportStatement(lineText)) {
     const {statement, path, qt, endqt } = extractImportPath(lineText, position.character) || { path: ''}
     // logger.log(JSON.stringify(extractImportPath(lineText, position.character) || { path: ''}))
 
@@ -451,11 +399,74 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
 
   civetFileCompletions = relativeCompletionItems.concat(pathAliasCompletionItems)
 
+  const heuristics = { show, cursorOffsetAdjustment }
+  return { civetFileCompletions, heuristics }
+}
+
+const _lineEnding = /[\n\r]+$/g
+/** Get the content of the current line (with the trailing newline removed.) */
+function getCurrentLineText(document: TextDocument, position: Position): string {
+  return document.getText({
+    start: { character: 0, line: position.line     },
+    end:   { character: 0, line: position.line + 1 },
+  }).replace(_lineEnding, '');  
+}
+
+// If this matches, we should try to offer completions for import paths.
+const _importStatementHeuristicMatcher = /(?:^|\b|})(from|import|require)[\W]/
+function likelyImportStatement(text: string): boolean {
+  return _importStatementHeuristicMatcher.test(text)
+}
+
+// \d flag is available in ESNext, ES2022
+const _importPathExtractor = /(?:^|\b|}|\s)(?<statement>from|import|require)(?:[ \t]*)(?:[\(][ \t]*)?(?:(?:(?<qt>')(?<path>[^']*)(?<endqt>'?)|(?:(?<qt>")(?<path>[^"]*)(?<endqt>")?)|(?<path>[^ ;\t]*)))/gd
+/** 
+ * Permissively parse a line that contains an import statement, with 
+ * a match of named groups for the parts of a statement closest to the cursor.
+ * @returns null if there's no match, or a RegExpExecArray with
+ * indices and these groups: { statement, path, qt, endqt }
+ */
+function extractImportPath(lineText: string, cursorOffset: number) {
+  type _ImportPathMatchResult = RegExpExecArray & {
+    groups: { statement: string, path: ('from'|'import'|'require'), qt: string, endqt: string }
+    indices: { groups: { statement: [number, number], path: [number, number], qt: [number, number], endqt: [number, number] } }
+  }
+  const matches = lineText.matchAll(_importPathExtractor) as RegExpStringIterator<_ImportPathMatchResult>
+
+  for (const match of matches) {
+    const pathIndices = match.indices.groups.path
+    if (cursorOffset >= pathIndices[0] && cursorOffset <= pathIndices[1]) {
+      return match.groups
+    }
+  }
+
+  return null
+}
+
+// This handler provides the initial list of the completion items.
+connection.onCompletion(async ({ textDocument, position, context }) => {
+
+  await updating(textDocument)
+
+  const document = documents.get(textDocument.uri)
+  assert(document)
+
+  const sourcePath = documentToSourcePath(textDocument)
+  assert(sourcePath)
+  const service = await ensureServiceForSourcePath(sourcePath)
+  if (!service) return
+  
+  logger.log("completion " + sourcePath + " " + position)
+
+  const { civetFileCompletions, heuristics } = getCivetFileCompletions(
+    service, document, sourcePath, position
+  )
+
   // Options for the downstream TS LSP
   const completionOptions: GetCompletionsAtPositionOptions = {
-    includeCompletionsForImportStatements: show.otherPaths,
-    includeCompletionsForModuleExports:    show.otherLspCompletions,
-    includeCompletionsWithSnippetText:     show.otherLspCompletions,
+    includeCompletionsForImportStatements: heuristics.show.otherPaths,
+    includeCompletionsForModuleExports:    heuristics.show.otherLspCompletions,
+    includeCompletionsWithSnippetText:     heuristics.show.otherLspCompletions,
     
     allowIncompleteCompletions: true,
     includeCompletionsWithInsertText: true,
@@ -492,7 +503,7 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
   // … Adjust the virtual cursor, on a case-per-case basis, to access better completions.
   //  0: Default, when sourcemap cursor position is already perfect.
   // -1: Gets inside closing quotes for import file completion.
-  p += cursorOffsetAdjustment
+  p += heuristics.cursorOffsetAdjustment
   // logger.log([
   //   transpiledDoc.getText().slice(0, p),
   //   transpiledDoc.getText().slice(p)
