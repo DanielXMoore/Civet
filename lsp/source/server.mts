@@ -270,7 +270,6 @@ function findCivetFilesInDir(searchDir: string): string[] {
   }
 }
 
-
 function createCivetFileCompletions(
   files: string[],
   sourcePath: string,
@@ -289,7 +288,7 @@ function createCivetFileCompletions(
         source: undefined,
         data: undefined,
         labelDetails: { description: file }
-      } // satisfies CompletionItemData,
+      }
     }
   })
 }
@@ -342,13 +341,25 @@ function resolvePathAliasDir(
   return chosenCandidate?.resolvedDir ?? null
 }
 
+const _lineEnding = /[\n\r]+$/g
+/** Get the content of the current line (with the trailing newline removed.) */
+function getCurrentLineText(document: TextDocument, position: Position): string {
+  return document.getText({
+    start: { character: 0, line: position.line     },
+    end:   { character: 0, line: position.line + 1 },
+  }).replace(_lineEnding, '');  
+}
+
+// For import/from/require path completion.
+// Get Civet files if any, and some heuristics for downstream
+// completions.
 function getCivetFileCompletions(
   service: ResolvedService,
   document: TextDocument,
   sourcePath: string,
   position: Position
 ) {
-// Gather Civet file completions ("from" statement)
+
   const lineText = getCurrentLineText(document, position)
   let civetFileCompletions: CompletionItem[] = []
   const show = { 
@@ -403,19 +414,10 @@ function getCivetFileCompletions(
   return { civetFileCompletions, heuristics }
 }
 
-const _lineEnding = /[\n\r]+$/g
-/** Get the content of the current line (with the trailing newline removed.) */
-function getCurrentLineText(document: TextDocument, position: Position): string {
-  return document.getText({
-    start: { character: 0, line: position.line     },
-    end:   { character: 0, line: position.line + 1 },
-  }).replace(_lineEnding, '');  
-}
 
-// If this matches, we should try to offer completions for import paths.
-const _importStatementHeuristicMatcher = /(?:^|\b|})(from|import|require)[\W]/
+const _looksLikeAnImport = /(?:^|\b|})(from|import|require)[\W]/
 function likelyImportStatement(text: string): boolean {
-  return _importStatementHeuristicMatcher.test(text)
+  return _looksLikeAnImport.test(text)
 }
 
 // \d flag is available in ESNext, ES2022
@@ -428,11 +430,12 @@ const _importPathExtractor = /(?:^|\b|}|\s)(?<statement>from|import|require)(?:[
  */
 function extractImportPath(lineText: string, cursorOffset: number) {
   type _ImportPathMatchResult = RegExpExecArray & {
-    groups: { statement: string, path: ('from'|'import'|'require'), qt: string, endqt: string }
+    groups: { statement: ('from'|'import'|'require'), path: string, qt: string, endqt: string }
     indices: { groups: { statement: [number, number], path: [number, number], qt: [number, number], endqt: [number, number] } }
   }
   const matches = lineText.matchAll(_importPathExtractor) as RegExpStringIterator<_ImportPathMatchResult>
 
+  // Find the match where the cursorOffset is within the 'path' group
   for (const match of matches) {
     const pathIndices = match.indices.groups.path
     if (cursorOffset >= pathIndices[0] && cursorOffset <= pathIndices[1]) {
@@ -444,7 +447,7 @@ function extractImportPath(lineText: string, cursorOffset: number) {
 }
 
 // This handler provides the initial list of the completion items.
-connection.onCompletion(async ({ textDocument, position, context }) => {
+connection.onCompletion(async ({ textDocument, position /*, context*/ }) => {
 
   await updating(textDocument)
 
@@ -500,7 +503,7 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
   if (sourcemapLines) { position = forwardMap(sourcemapLines, position); logger.log('remapped') }
   let p = transpiledDoc.offsetAt(position)
   
-  // … Adjust the virtual cursor, on a case-per-case basis, to access better completions.
+  // … Adjust the cursor position, on a case-per-case basis, to access better completions.
   //  0: Default, when sourcemap cursor position is already perfect.
   // -1: Gets inside closing quotes for import file completion.
   p += heuristics.cursorOffsetAdjustment
@@ -528,17 +531,8 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
 
 });
 
-type CompletionItemData = {
-  sourcePath: string
-  position: Position
-  name: string
-  source: string | undefined
-  data: ts.CompletionEntryData | undefined
-}
-
 connection.onCompletionResolve(async (item) => {
-  let { sourcePath, position, name, source, data } =
-    item.data as CompletionItemData & { kindModifiers?: string }
+  let { sourcePath, position, name, source, data } = item.data
   const service = await ensureServiceForSourcePath(sourcePath)
   if (!service) return item
 
@@ -1144,7 +1138,7 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
         sourcePath, position,
         name: entry.name, source: entry.source, data: entry.data,
         kindModifiers: entry.kindModifiers,
-      } satisfies CompletionItemData | { kindModifiers?: string },
+      }
     }
 
     // 
@@ -1202,11 +1196,10 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
   return items
 }
 
-
 /*
   References:
   - Completion trigger characters used by the TS language server: '.', '"', '\'', '/', '@', '<'
     https://github.com/typescript-language-server/typescript-language-server/blob/e91bd52a47c05ffd/src/lsp-server.ts#L193
-  - Similarly: signatureHelpProvider triggers: '(', ',', '<', and re-trigger ')'
+  - SignatureHelpProvider triggers: '(', ',', '<', and re-trigger ')'
     https://github.com/typescript-language-server/typescript-language-server/blob/e91bd52a47c05ffd946e0abd27f242eb631b7604/src/lsp-server.ts#L234-L237
 */
