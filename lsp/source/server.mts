@@ -262,15 +262,16 @@ connection.onHover(async ({ textDocument, position }) => {
 
 // Helpers for completing import paths.
 
-// … Pre-check
 const _looksLikeAnImport = /(?:^|\b|})(from|import|require)[\W]/
 function likelyImportStatement(text: string): boolean { return _looksLikeAnImport.test(text) }
 
 // … Extract information about an import statement under the cursor
 const _importPathExtractor = /(?:^|\b|}|\s)(?<statement>from|import|require)(?:[ \t]*)(?:[\(][ \t]*)?(?:(?:(?<qt>')(?<path>[^']*)(?<endqt>'?)|(?:(?<qt>")(?<path>[^"]*)(?<endqt>")?)|(?<path>[^ ;\t]*)))/gd
 function extractImportPath(lineText: string, cursorOffset: number) {
+
   // Get all import|from|require statements in the line
   const matches = lineText.matchAll(_importPathExtractor) as _ImportPathMatchIterator
+  
   // See if there's a match whose path group spans over the cursor
   for (const match of matches) {
     // Return that whole match, including quotes and the statement type
@@ -278,6 +279,7 @@ function extractImportPath(lineText: string, cursorOffset: number) {
       && cursorOffset <= match.indices.groups.path[1] ) {
         return match.groups
   }}
+  
   // Otherwise, return null. (No file paths to complete.)
   return null
 }
@@ -376,16 +378,12 @@ function getCurrentLineText(document: TextDocument, position: Position): string 
   }).replace(_lineEnding, '');  
 }
 
-// For import/from/require path completion.
-// Get Civet files if any, and some heuristics for downstream
-// completions.
 function getCivetFileCompletions(
   service: ResolvedService,
   document: TextDocument,
   sourcePath: string,
   position: Position
 ) {
-
   const lineText = getCurrentLineText(document, position)
   let civetFileCompletions: CompletionItem[] = []
   const show = { 
@@ -394,8 +392,9 @@ function getCivetFileCompletions(
     otherPaths:         false, // Other files, found by TypeScript
     otherLspCompletions: true, // Other suggestions, including exports
   }
-  let importPath = ''
   let cursorOffsetAdjustment = 0
+  let importPath = ''
+  
   if (likelyImportStatement(lineText)) {
     const {statement, path, qt, endqt } = extractImportPath(lineText, position.character) || { path: ''}
     // logger.log(JSON.stringify(extractImportPath(lineText, position.character) || { path: ''}))
@@ -403,7 +402,7 @@ function getCivetFileCompletions(
     if (statement) { show.otherPaths = true }
     if (statement === 'from' || statement === 'require') {  show.otherLspCompletions = false }
     
-    // Hardcode special-case cursor offset, to be applied after sourcemap.
+    // Hardcode special-case cursor offset
     //
     //     Source:      import a from ./a|
     //     Transpiled:  import a from './a'|
@@ -1182,7 +1181,6 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
         item.tags = [CompletionItemTag.Deprecated]
       }
     }
-    
 
     items.push(item);
   }
