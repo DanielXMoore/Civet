@@ -262,28 +262,29 @@ connection.onHover(async ({ textDocument, position }) => {
 
 // Helpers for completing import paths.
 
-// … Quick pre-check
+// … Pre-check
 const _looksLikeAnImport = /(?:^|\b|})(from|import|require)[\W]/
 function likelyImportStatement(text: string): boolean { return _looksLikeAnImport.test(text) }
 
-// … General matcher with groups
+// … Extract information about an import statement under the cursor
 const _importPathExtractor = /(?:^|\b|}|\s)(?<statement>from|import|require)(?:[ \t]*)(?:[\(][ \t]*)?(?:(?:(?<qt>')(?<path>[^']*)(?<endqt>'?)|(?:(?<qt>")(?<path>[^"]*)(?<endqt>")?)|(?<path>[^ ;\t]*)))/gd
+function extractImportPath(lineText: string, cursorOffset: number) {
+  // Get all import|from|require statements in the line
+  const matches = lineText.matchAll(_importPathExtractor) as _ImportPathMatchIterator
+  // See if there's a match whose path group spans over the cursor
+  for (const match of matches) {
+    // Return that whole match, including quotes and the statement type
+    if ( cursorOffset >= match.indices.groups.path[0]
+      && cursorOffset <= match.indices.groups.path[1] ) {
+        return match.groups
+  }}
+  // Otherwise, return null. (No file paths to complete.)
+  return null
+}
 type _ImportPathMatchIterator = RegExpStringIterator< RegExpExecArray & {
   groups: { statement: ('from'|'import'|'require'), path: string, qt: '"'|"'"|undefined , endqt: '"'|"'"|undefined }
   indices: { groups: { statement: [number, number], path: [number, number], qt: [number, number], endqt: [number, number] } }
 }>
-function extractImportPath(lineText: string, cursorOffset: number) {
-  const matches = lineText.matchAll(_importPathExtractor) as _ImportPathMatchIterator
-
-  // Find the relevant match (where the cursor overlaps the 'path' group)
-  for (const match of matches) {
-    const pathIndices = match.indices.groups.path
-    if (cursorOffset >= pathIndices[0] && cursorOffset <= pathIndices[1]) {
-      return match.groups
-    }
-  }
-  return null
-}
 
 function findCivetFilesInDir(searchDir: string): string[] {
   try {
