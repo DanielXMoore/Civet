@@ -260,6 +260,31 @@ connection.onHover(async ({ textDocument, position }) => {
   };
 })
 
+// Helpers for completing import paths.
+
+// … Quick pre-check
+const _looksLikeAnImport = /(?:^|\b|})(from|import|require)[\W]/
+function likelyImportStatement(text: string): boolean { return _looksLikeAnImport.test(text) }
+
+// … General matcher with groups
+const _importPathExtractor = /(?:^|\b|}|\s)(?<statement>from|import|require)(?:[ \t]*)(?:[\(][ \t]*)?(?:(?:(?<qt>')(?<path>[^']*)(?<endqt>'?)|(?:(?<qt>")(?<path>[^"]*)(?<endqt>")?)|(?<path>[^ ;\t]*)))/gd
+type _ImportPathMatchIterator = RegExpStringIterator< RegExpExecArray & {
+  groups: { statement: ('from'|'import'|'require'), path: string, qt: '"'|"'"|undefined , endqt: '"'|"'"|undefined }
+  indices: { groups: { statement: [number, number], path: [number, number], qt: [number, number], endqt: [number, number] } }
+}>
+function extractImportPath(lineText: string, cursorOffset: number) {
+  const matches = lineText.matchAll(_importPathExtractor) as _ImportPathMatchIterator
+
+  // Find the relevant match (where the cursor overlaps the 'path' group)
+  for (const match of matches) {
+    const pathIndices = match.indices.groups.path
+    if (cursorOffset >= pathIndices[0] && cursorOffset <= pathIndices[1]) {
+      return match.groups
+    }
+  }
+  return null
+}
+
 function findCivetFilesInDir(searchDir: string): string[] {
   try {
     return tsSys
@@ -412,38 +437,6 @@ function getCivetFileCompletions(
 
   const heuristics = { show, cursorOffsetAdjustment }
   return { civetFileCompletions, heuristics }
-}
-
-
-const _looksLikeAnImport = /(?:^|\b|})(from|import|require)[\W]/
-function likelyImportStatement(text: string): boolean {
-  return _looksLikeAnImport.test(text)
-}
-
-// \d flag is available in ESNext, ES2022
-const _importPathExtractor = /(?:^|\b|}|\s)(?<statement>from|import|require)(?:[ \t]*)(?:[\(][ \t]*)?(?:(?:(?<qt>')(?<path>[^']*)(?<endqt>'?)|(?:(?<qt>")(?<path>[^"]*)(?<endqt>")?)|(?<path>[^ ;\t]*)))/gd
-/** 
- * Permissively parse a line that contains an import statement, with 
- * a match of named groups for the parts of a statement closest to the cursor.
- * @returns null if there's no match, or a RegExpExecArray with
- * indices and these groups: { statement, path, qt, endqt }
- */
-function extractImportPath(lineText: string, cursorOffset: number) {
-  type _ImportPathMatchResult = RegExpExecArray & {
-    groups: { statement: ('from'|'import'|'require'), path: string, qt: string, endqt: string }
-    indices: { groups: { statement: [number, number], path: [number, number], qt: [number, number], endqt: [number, number] } }
-  }
-  const matches = lineText.matchAll(_importPathExtractor) as RegExpStringIterator<_ImportPathMatchResult>
-
-  // Find the match where the cursorOffset is within the 'path' group
-  for (const match of matches) {
-    const pathIndices = match.indices.groups.path
-    if (cursorOffset >= pathIndices[0] && cursorOffset <= pathIndices[1]) {
-      return match.groups
-    }
-  }
-
-  return null
 }
 
 // This handler provides the initial list of the completion items.
