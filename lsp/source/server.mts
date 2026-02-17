@@ -35,7 +35,7 @@ import ts, {
   ScriptElementKindModifier,
   SemicolonPreference,
 } from 'typescript';
-import { fileURLToPath, pathToFileURL } from 'url';
+import { URI } from 'vscode-uri';
 import { setTimeout } from 'timers/promises';
 
 // Create a connection for the server, using Node's IPC as a transport.
@@ -72,7 +72,7 @@ const getProjectPathFromSourcePath = (sourcePath: string): string => {
   let dirname = sourcePath
   while (dirname.includes("node_modules")) {
     if (path.basename(path.dirname(dirname)) === "node_modules") {
-      projPath = pathToFileURL(dirname + "/").toString()
+      projPath = URI.file(dirname + "/").toString()
       break
     } else {
       dirname = path.dirname(dirname) // go up one level
@@ -83,7 +83,7 @@ const getProjectPathFromSourcePath = (sourcePath: string): string => {
   if (!projPath) {
     const tsConfigPath = findConfigFile(sourcePath, tsSys.fileExists, 'tsconfig.json')
     if (tsConfigPath) {
-      projPath = pathToFileURL(path.dirname(tsConfigPath) + "/").toString()
+      projPath = URI.file(path.dirname(tsConfigPath) + "/").toString()
     }
   }
 
@@ -92,7 +92,7 @@ const getProjectPathFromSourcePath = (sourcePath: string): string => {
     if (rootDir != null && sourcePath.startsWith(rootDir)) {
       projPath = rootUri ?? pathToFileURL(path.dirname(sourcePath) + "/").toString()
     } else {
-      projPath = pathToFileURL(path.dirname(sourcePath) + "/").toString()
+      projPath = URI.file(path.dirname(sourcePath) + "/").toString()
     }
   }
 
@@ -171,7 +171,7 @@ connection.onInitialize(async (params: InitializeParams) => {
     rootUri = rootDir = undefined
   } else {
     rootUri = baseDir + "/"
-    rootDir = fileURLToPath(rootUri)
+    rootDir = URI.parse(rootUri).fsPath
   }
 
   logger.log("Init " + rootDir)
@@ -331,7 +331,7 @@ connection.onCompletionResolve(async (item) => {
 
   let document
   if (sourcePath.match(tsSuffix)) { // non-transpiled
-    document = documents.get(pathToFileURL(sourcePath).toString())
+    document = documents.get(URI.file(sourcePath).toString())
     assert(document)
   } else {
     // use transpiled doc; forward source mapping already done
@@ -445,7 +445,7 @@ connection.onDefinition(async ({ textDocument, position }) => {
     }
 
     return {
-      uri: pathToFileURL(rawSourceName).toString(),
+      uri: URI.file(rawSourceName).toString(),
       range: {
         start,
         end,
@@ -516,7 +516,7 @@ connection.onReferences(async ({ textDocument, position }) => {
     }
 
     return {
-      uri: pathToFileURL(rawSourceName).toString(),
+      uri: URI.file(rawSourceName).toString(),
       range: {
         start,
         end,
@@ -849,12 +849,14 @@ const updateProjectDiagnostics = async (
   // A single, short delay before starting the update for a project.
   await setTimeout(diagnosticsPropagationDelay);
 
-  for (const sourceFile of program.getSourceFiles()) {
+  const projectFiles = program.getSourceFiles();
+  for (const sourceFile of projectFiles) {
     if (status.isCanceled) return;
 
-    // We only send diagnostics for files the user actually has open,
-    // even though we're checking every file in the project for correctness.
-    const docUri = pathToFileURL(sourceFile.fileName).toString();
+    // We only need to send diagnostics for files the user has open
+    // TypeScript is analyzing all files in memory anyway
+    const rawFileName = service.getSourceFileName(sourceFile.fileName);
+    const docUri = URI.file(rawFileName).toString();
     const doc = documents.get(docUri);
     if (doc) {
       await updateDiagnosticsForDoc(doc, service);
@@ -903,7 +905,7 @@ connection.listen();
 // Utils
 
 function documentToSourcePath(textDocument: TextDocumentIdentifier) {
-  return fileURLToPath(textDocument.uri);
+  return URI.parse(textDocument.uri).fsPath;
 }
 
 function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: SourcemapLines): CompletionItem[] {
