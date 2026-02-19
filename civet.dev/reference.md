@@ -2004,7 +2004,7 @@ keys = (key for key in object)
 keys = for key in object then key
 </Playground>
 
-Declaration initializers do not need to be wrapper in parentheses:
+Declarations do not need parenthesis wrapping:
 
 <Playground>
 keys := key for key in object
@@ -2013,7 +2013,18 @@ keys := key for key in object
 Postfix loops can also use spreads and/or multiple items:
 
 <Playground>
-smash := key, ...value for key, value in object
+coords := x, y for {x, y} of points
+function flat(array)
+  ...item for item of array
+</Playground>
+
+However, multiple items won't work in contexts where a comma has meaning,
+and spreads won't work in contexts where `...` has meaning,
+such as array literals. Wrap in parentheses in these cases.
+
+<Playground>
+[a, b, ...key for key in object]
+[(x, y for {x, y} of points)]
 </Playground>
 
 ### When Condition

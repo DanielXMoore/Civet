@@ -1392,7 +1392,7 @@ FieldDefinition
     }
 
   # NOTE: Added readonly semantic equivalent of const field assignment
-  InsertReadonly:readonly ClassElementName:id TypeSuffix?:typeSuffix __ ConstAssignment:ca MaybeNestedExpression ->
+  InsertReadonly:readonly ClassElementName:id TypeSuffix?:typeSuffix __ ConstAssignment:ca MaybeNestedPostfixedCommaExpression ->
     // Adjust position to space before assignment to make TypeScript remapping happier
     readonly.children[0].$loc = {
       pos: ca.$loc.pos - 1,
@@ -4553,19 +4553,22 @@ PostfixedNoCommaStatement
     return statement
 
 PostfixedExpression
-  # If there's a postfix, allow the expression to be spread and use commas,
-  # e.g. to splat into for loop
-  ActualPostfixedExpression
-  # If no postfix, forbid spread
-  Expression
-
-ActualPostfixedExpression
-  CommaExpressionSpread:expression ( _? PostfixStatement ):post ->
+  # Loops allow spreads before the postfix
+  AssignmentExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ->
+    return attachPostfixStatementAsExpression(expression, [ws, post])
+  # Ifs just allow expressions
+  Expression:expression ( _? PostfixStatement ):post ->
     return attachPostfixStatementAsExpression(expression, post)
+  Expression
 
 # Expression with postfixes *or* comma operators (mixing seems ambiguous)
 PostfixedCommaExpression
-  ActualPostfixedExpression
+  # Loops allow commas and spreads before the postfix
+  CommaExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ->
+    return attachPostfixStatementAsExpression(expression, [ws, post])
+  # Ifs just allow expressions
+  Expression:expression ( _? PostfixStatement ):post ->
+    return attachPostfixStatementAsExpression(expression, post)
   CommaExpression
 
 PostfixStatement
@@ -5766,6 +5769,18 @@ MaybeNestedPostfixedExpression
     if (!expression) return $skip
     return expression
 
+MaybeNestedPostfixedCommaExpression
+  # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
+  # the second case, where they get checked by PrimaryExpression,
+  # which then allows for trailing binary operators etc.
+  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested PostfixedCommaExpression )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
+    if (!expression) return $skip
+    if (!trailing) return expression
+    return [ expression, trailing ]
+  ForbidImplicitFragment PostfixedCommaExpression?:expression RestoreImplicitFragment ->
+    if (!expression) return $skip
+    return expression
+
 NestedPostfixedExpressionNoTrailing
   NestedBulletedArray
   NestedImplicitObjectLiteral
@@ -6138,7 +6153,7 @@ ExportDeclaration
     ]
   # NOTE: This covers all forms that can be directly export defaulted in TS.
   # NOTE: Using Expression to allow If/Switch expressions
-  Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedExpression ):declaration ->
+  Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedPostfixedExpression ):declaration ->
     return { type: "ExportDeclaration", declaration, ts: declaration.ts, children: $0 }
   Export __ ExportFromClause:exports __ FromClause ->
     return { type: "ExportDeclaration", ts: exports.ts, children: $0 }
@@ -6238,7 +6253,7 @@ LexicalDeclaration
   # NOTE: Added const/let shorthands
   # NOTE: Using Expression to allow for If/SwitchExpressions
   # NOTE: Using PostfixExpression to allow postfix if/unless/for
-  Loc:loc ( BindingPattern / BindingIdentifier ) TypeSuffix? __ ( ConstAssignment / LetAssignment ):assign MaybeNestedPostfixedExpression ->
+  Loc:loc ( BindingPattern / BindingIdentifier ) TypeSuffix? __ ( ConstAssignment / LetAssignment ):assign MaybeNestedPostfixedCommaExpression ->
     return processAssignmentDeclaration(
       { $loc: loc, token: assign.decl }, // like InsertConst or InsertLet
       ...$0.slice(1)
