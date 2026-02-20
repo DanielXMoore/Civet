@@ -1398,7 +1398,7 @@ FieldDefinition
     }
 
   # NOTE: Added readonly semantic equivalent of const field assignment
-  InsertReadonly:readonly ClassElementName:id TypeSuffix?:typeSuffix __ ConstAssignment:ca MaybeNestedExpression ->
+  InsertReadonly:readonly ClassElementName:id TypeSuffix?:typeSuffix __ ConstAssignment:ca MaybeNestedPostfixedCommaExpression ->
     // Adjust position to space before assignment to make TypeScript remapping happier
     readonly.children[0].$loc = {
       pos: ca.$loc.pos - 1,
@@ -4559,18 +4559,25 @@ PostfixedNoCommaStatement
     return statement
 
 PostfixedExpression
-  Expression:expression ( _? PostfixStatement )?:post ->
-    if (post) return attachPostfixStatementAsExpression(expression, post)
-    return expression
+  # Loops allow spreads before the postfix
+  AssignmentExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ->
+    return attachPostfixStatementAsExpression(expression, [ws, post])
+  # Ifs just allow expressions
+  Expression:expression ( _? PostfixStatement ):post ->
+    return attachPostfixStatementAsExpression(expression, post)
+  Expression
 
 # Expression with postfixes *or* comma operators (mixing seems ambiguous)
+# Note that postfixed loops do allow commas though, for accumulating multiple
+# items per iteration
 PostfixedCommaExpression
-  PostfixedExpression:expression ( ( _? PostfixStatement ) / ( CommaDelimiter AssignmentExpression )* ):post ->
-    if (!post.length) return $1
-    if (post.length === 2 && !Array.isArray(post[1])) {
-      return attachPostfixStatementAsExpression(expression, post)
-    }
-    return $0
+  # Loops allow commas and spreads before the postfix
+  CommaExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ->
+    return attachPostfixStatementAsExpression(expression, [ws, post])
+  # Ifs just allow expressions
+  Expression:expression ( _? PostfixStatement ):post ->
+    return attachPostfixStatementAsExpression(expression, post)
+  CommaExpression
 
 PostfixStatement
   /(?=for|if|loop|unless|until|while)/ _PostfixStatement -> $2
@@ -5770,6 +5777,18 @@ MaybeNestedPostfixedExpression
     if (!expression) return $skip
     return expression
 
+MaybeNestedPostfixedCommaExpression
+  # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
+  # the second case, where they get checked by PrimaryExpression,
+  # which then allows for trailing binary operators etc.
+  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested PostfixedCommaExpression )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
+    if (!expression) return $skip
+    if (!trailing) return expression
+    return [ expression, trailing ]
+  ForbidImplicitFragment PostfixedCommaExpression?:expression RestoreImplicitFragment ->
+    if (!expression) return $skip
+    return expression
+
 NestedPostfixedExpressionNoTrailing
   NestedBulletedArray
   NestedImplicitObjectLiteral
@@ -6142,7 +6161,7 @@ ExportDeclaration
     ]
   # NOTE: This covers all forms that can be directly export defaulted in TS.
   # NOTE: Using Expression to allow If/Switch expressions
-  Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedExpression ):declaration ->
+  Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedPostfixedExpression ):declaration ->
     return { type: "ExportDeclaration", declaration, ts: declaration.ts, children: $0 }
   Export __ ExportFromClause:exports __ FromClause ->
     return { type: "ExportDeclaration", ts: exports.ts, children: $0 }
@@ -6242,7 +6261,7 @@ LexicalDeclaration
   # NOTE: Added const/let shorthands
   # NOTE: Using Expression to allow for If/SwitchExpressions
   # NOTE: Using PostfixExpression to allow postfix if/unless/for
-  Loc:loc ( BindingPattern / BindingIdentifier ) TypeSuffix? __ ( ConstAssignment / LetAssignment ):assign MaybeNestedPostfixedExpression ->
+  Loc:loc ( BindingPattern / BindingIdentifier ) TypeSuffix? __ ( ConstAssignment / LetAssignment ):assign MaybeNestedPostfixedCommaExpression ->
     return processAssignmentDeclaration(
       { $loc: loc, token: assign.decl }, // like InsertConst or InsertLet
       ...$0.slice(1)
@@ -6292,7 +6311,7 @@ LexicalBinding
 
 # https://262.ecma-international.org/#prod-Initializer
 Initializer
-  __ Equals MaybeNestedExpression:expression -> {
+  __ Equals MaybeNestedPostfixedExpression:expression -> {
     type: "Initializer",
     expression,
     children: $0,

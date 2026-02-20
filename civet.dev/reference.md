@@ -1990,6 +1990,43 @@ function concatIter(iters)
 console.log item for item of array
 </Playground>
 
+Assignments go inside the loop:
+
+<Playground>
+copy[key] = value for key, value in object
+</Playground>
+
+If you want to assign the loop expression to a variable,
+wrap it in parentheses or use a non-postfix loop:
+
+<Playground>
+keys = (key for key in object)
+keys = for key in object then key
+</Playground>
+
+Declarations do not need parenthesis wrapping:
+
+<Playground>
+keys := key for key in object
+</Playground>
+
+Postfix loops can also use spreads and/or multiple items:
+
+<Playground>
+coords := x, y for {x, y} of points
+function flat(array)
+  ...item for item of array
+</Playground>
+
+However, multiple items won't work in contexts where a comma has meaning,
+and spreads won't work in contexts where `...` has meaning,
+such as array literals. Wrap in parentheses in these cases.
+
+<Playground>
+[a, b, ...key for key in object]
+[(x, y for {x, y} of points)]
+</Playground>
+
 ### When Condition
 
 `for` loops can have a `when` condition to filter iterations.
