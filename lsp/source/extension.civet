@@ -1,4 +1,5 @@
 import type { ExtensionContext } from 'vscode'
+import { regenerateTextmate } from './regenerateTextmate.civet'
 
 * as path from path
 * as vscode from vscode
@@ -14,6 +15,8 @@ import type { ExtensionContext } from 'vscode'
 let client: LanguageClient
 
 export function activate(context: ExtensionContext)
+  regenerateTextmate(false)
+    .catch((err) -> console.warn "Civet: initial grammar regen failed", err)
   activateClient context
   activateCommands context
 
@@ -65,10 +68,23 @@ function activateClient(context: ExtensionContext)
   // Start the client. This will also launch the server
   client.start()
 
-  // Watch for changes to tsconfig.json, package.json, and civetconfig and restart the server
-  workspace.createFileSystemWatcher("**/{tsconfig,package,🐈,civetconfig,civet.config}.{json,yaml,yml,civet,js}").onDidChange =>
-    await client?.stop()
-    await client.start()
+  // Watch for config changes → regenerate grammar then restart LS
+  grammarWatcher := workspace.createFileSystemWatcher("**/{tsconfig,package,🐈,civetconfig,civet.config}.{json,yaml,yml,civet,js}")
+
+  restartAndRegen := async =>
+    // 1. Regenerate TextMate grammar from new config
+    result := await regenerateTextmate(false)
+    // 2. Check the `modified` flag, if the grammar file actually changed, restart the client
+    if result.modified
+      await client?.stop()
+      await client.start()
+
+  grammarWatcher.onDidChange restartAndRegen
+  grammarWatcher.onDidCreate restartAndRegen
+  grammarWatcher.onDidDelete restartAndRegen
+
+  // Keep watcher alive for the lifetime of the extension
+  context.subscriptions.push grammarWatcher
 
 function activateCommands(context: ExtensionContext)
   commandDisposable := vscode.commands.registerCommand "civet.action.restartServer", =>
@@ -77,8 +93,13 @@ function activateCommands(context: ExtensionContext)
 
   context.subscriptions.push commandDisposable
 
+  context.subscriptions.push vscode.commands.registerCommand "civet.action.regenerateGrammar", =>
+    regenerateTextmate(true) // show output when run by a user
+
 export function deactivate()
   if (!client)
     return
 
   return client.stop()
+
+export { regenerateTextmate } from './regenerateTextmate.civet'
