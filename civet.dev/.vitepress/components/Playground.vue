@@ -165,7 +165,7 @@ function handleTextareaKeydown(event: KeyboardEvent) {
       value = `${value.slice(0, position)}\t${value.slice(position)}`
     }
     selectionStart +=
-      lineStarts.filter(position => position <= selectionStart).length - 1
+      lineStarts.filter(position => position < selectionStart).length
     selectionEnd +=
       lineStarts.filter(position => position < selectionEnd).length
   }
