@@ -1,4 +1,4 @@
----
+-:--
 title: Reference
 aside: false
 ---
@@ -1544,6 +1544,27 @@ sleep() unless
   (or)
     coffee
     relaxed
+</Playground>
+
+Array items can have a postfix `if`, with the `else` case
+implicitly being `undefined`:
+
+<Playground>
+[a, b if c, d unless e]
+</Playground>
+
+Function arguments that are either parenthesized or indented
+can have a postfix `if`:
+
+<Playground>
+f(a, b if c)
+f a,
+  b if c
+f
+  a
+  b if c
+// Postfix for whole call:
+f a, b if c
 </Playground>
 
 ### Switch
