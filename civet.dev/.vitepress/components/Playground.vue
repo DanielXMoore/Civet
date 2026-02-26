@@ -96,6 +96,82 @@ async function compile() {
   fixTextareaSize();
 }
 
+function updateTextarea(
+  textarea: HTMLTextAreaElement,
+  value: string,
+  selectionStart: number,
+  selectionEnd = selectionStart
+) {
+  textarea.value = userCode.value = value
+  textarea.setSelectionRange(selectionStart, selectionEnd)
+}
+
+function handleTextareaKeydown(event: KeyboardEvent) {
+  const textarea = event.target as HTMLTextAreaElement | null
+  if (!textarea) return
+
+  // Escape exits the textarea to enable keyboard navigation via tab
+  if (event.key === 'Escape') {
+    textarea.blur()
+    return
+  }
+
+  // Enable insertion and indentation by tab
+  if (event.key !== 'Tab') return
+  event.preventDefault()
+  let {value, selectionStart, selectionEnd} = textarea
+
+  // No selection
+  if (selectionStart === selectionEnd) {
+    if (event.shiftKey) {
+      // Unindent current line
+      const lineStart = value.lastIndexOf('\n', selectionStart - 1) + 1
+      if (value[lineStart] !== '\t') return
+      updateTextarea(textarea,
+        `${value.slice(0, lineStart)}${value.slice(lineStart + 1)}`,
+        Math.max(lineStart, selectionStart - 1))
+    } else {
+      // Normal tab insertion
+      updateTextarea(textarea,
+        `${value.slice(0, selectionStart)}\t${value.slice(selectionStart)}`,
+        selectionStart + 1)
+    }
+    return
+  }
+
+  // Multi-line indentation
+  let index = value.lastIndexOf('\n', selectionStart - 1) + 1
+  const lineStarts = [index]
+  while (true) {
+    index = value.indexOf('\n', index)
+    if (index < 0 || index >= selectionEnd - 1) break
+    index++
+    lineStarts.push(index)
+  }
+
+  if (event.shiftKey) {
+    // Shift-Tab dedents
+    for (let i = lineStarts.length - 1; i >= 0; i--) {
+      const position = lineStarts[i]
+      if (value[position] !== '\t') continue
+      value = `${value.slice(0, position)}${value.slice(position + 1)}`
+      if (position < selectionStart) selectionStart--
+      if (position < selectionEnd) selectionEnd--
+    }
+  } else {
+    // Tab indents
+    for (let i = lineStarts.length - 1; i >= 0; i--) {
+      const position = lineStarts[i]
+      value = `${value.slice(0, position)}\t${value.slice(position)}`
+    }
+    selectionStart +=
+      lineStarts.filter(position => position < selectionStart).length
+    selectionEnd +=
+      lineStarts.filter(position => position < selectionEnd).length
+  }
+  updateTextarea(textarea, value, selectionStart, selectionEnd)
+}
+
 function fixTextareaSize() {
   if (textareaEl.value && inputHtmlEl.value) {
     textareaEl.value.style.height = `${inputHtmlEl.value.clientHeight}px`;
@@ -141,11 +217,12 @@ const playgroundUrl = computed(() => {
 <template>
   <div v-if="props.compileAtStart && loading">Loading playground...</div>
   <div v-else :class="{ wrapper: true,  ligatures: ligatures}">
-    <div class="col scroll" @click="textareaEl?.focus()">
+    <div class="col scroll" @click="textareaEl?.focus()" style="tab-size: 4">
       <div class="code code--user">
         <textarea
           :value="userCode"
           :onInput="(e: any) => (userCode = e.target.value)"
+          @keydown="handleTextareaKeydown"
           ref="textareaEl"
           resize="false"
           spellcheck="false"
