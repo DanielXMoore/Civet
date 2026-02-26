@@ -4,6 +4,22 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.3 (2026-02-25, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.2...v0.11.3), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.3))
+* Fix REPL continuation prompt to `...`, clarifying indentation [[#1843](https://github.com/DanielXMoore/Civet/pull/1843)]
+* Don't treat `package.js/civet` as config [[#1844](https://github.com/DanielXMoore/Civet/pull/1844)]
+  * BREAKING CHANGE: Civet can no longer be configured from a default export of `package.js` or `package.civet`
+* Make typescript an optional peer dep, bundle @typescript/vfs [[#1842](https://github.com/DanielXMoore/Civet/pull/1842)]
+* Tests for CLI output filename generation [[#1847](https://github.com/DanielXMoore/Civet/pull/1847)]
+* `>` closes type arguments; forbid binary `x> y` [[#1848](https://github.com/DanielXMoore/Civet/pull/1848)]
+  * BREAKING CHANGE: `x> y` no longer compares; use `x>y` or `x > y`
+* LSP: ensure immediate updates for opened dependent files on change [[#1779](https://github.com/DanielXMoore/Civet/pull/1779)]
+* Spreads and multiple items in parenthesized postfix loops, postfixes in declarations [[#1849](https://github.com/DanielXMoore/Civet/pull/1849)]
+* Syntax highlighting for import/export shorthands and `for` keywords [[#1580](https://github.com/DanielXMoore/Civet/pull/1580)]
+* Implicit `async`, `AutoPromise`, `function*` propagate to overloads [[#1852](https://github.com/DanielXMoore/Civet/pull/1852)]
+* Postfix support in parenthesized or indented function arguments [[#1853](https://github.com/DanielXMoore/Civet/pull/1853)]
+  * BREAKING CHANGE: Function application with a postfix on the last indented argument now applies the postfix to the argument, not the whole function application.
+* Website playground: tab key insert tabs or indents, escape key defocuses [[#1626](https://github.com/DanielXMoore/Civet/pull/1626)]
+
 ## 0.11.2 (2026-01-21, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.1...v0.11.2), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.2))
 * VSCode extension supports rename-symbol [[#1823](https://github.com/DanielXMoore/Civet/pull/1823)]
 * Fix scoping of unwrapped statement expressions [[#1833](https://github.com/DanielXMoore/Civet/pull/1833)]
