@@ -120,7 +120,6 @@ const ensureServiceForSourcePath = async (sourcePath: string) => {
 const diagnosticsDelay = 16;  // ms delay for primary updated file
 const diagnosticsPropagationDelay = 100;  // ms delay for other files
 
-
 connection.onInitialize(async (params: InitializeParams) => {
   const capabilities = params.capabilities;
 
@@ -145,11 +144,9 @@ connection.onInitialize(async (params: InitializeParams) => {
       // Tell the client that this server supports code completion.
       completionProvider: {
 
-        // Respond to the same trigger characters as the TS extension 
-        // triggerCharacters: ['.', '"', '\'', '/', '@', '<'],
-        
-        // Respond to all available trigger characters
-        triggerCharacters: ['.', '"', "'", '`', '/', '@', '<', '#', ' '],
+        // TS extension's triggerCharacters: ['.', '"', '\'', '/', '@', '<']
+        // We'll also respond to space to handle e.g. `import module`
+        triggerCharacters: ['.', '"', "'", '/', '@', '<', ' '],
 
         resolveProvider: true,
       },
@@ -262,16 +259,21 @@ connection.onHover(async ({ textDocument, position }) => {
 
 // Helpers for completing import paths.
 
-const _looksLikeAnImport = /(?:^|\b|})(from|import|require)[\W]/
-function likelyImportStatement(text: string): boolean { return _looksLikeAnImport.test(text) }
+const looksLikeImportContext = /\b(from|import|require)\s*$/
+function likelyImportContext(text: string): boolean { return looksLikeImportContext.test(text) }
 
 // … Extract information about an import statement under the cursor
-const _importPathExtractor = /(?:^|\b|}|\s)(?<statement>from|import|require)(?:[ \t]*)(?:[\(][ \t]*)?(?:(?:(?<qt>')(?<path>[^']*)(?<endqt>'?)|(?:(?<qt>")(?<path>[^"]*)(?<endqt>")?)|(?<path>[^ ;\t]*)))/gd
-function extractImportPath(lineText: string, cursorOffset: number) {
+const importPathExtractor = /\b(?<statement>from|import|require)\b[ \t]*(?:[\(][ \t]*)?(?:(?<qt>')(?<path>[^']*)(?<endqt>'?)|(?<qt>")(?<path>[^"]*)(?<endqt>")?|(?<path>[^;"'\s=>]*))/gd
 
+type ImportPathMatchIterator = RegExpStringIterator< RegExpExecArray & {
+  groups: { statement: ('from'|'import'|'require'), path: string, qt: '"'|"'"|undefined , endqt: '"'|"'"|undefined }
+  indices: { groups: { statement: [number, number], path: [number, number], qt: [number, number], endqt: [number, number] } }
+}>
+
+function extractImportPath(lineText: string, cursorOffset: number) {
   // Get all import|from|require statements in the line
-  const matches = lineText.matchAll(_importPathExtractor) as _ImportPathMatchIterator
-  
+  const matches = lineText.matchAll(importPathExtractor) as ImportPathMatchIterator
+
   // See if there's a match whose path group spans over the cursor
   for (const match of matches) {
     // Return that whole match, including quotes and the statement type
@@ -279,14 +281,8 @@ function extractImportPath(lineText: string, cursorOffset: number) {
       && cursorOffset <= match.indices.groups.path[1] ) {
         return match.groups
   }}
-  
-  // Otherwise, return null. (No file paths to complete.)
-  return null
+  return // undefined means no match
 }
-type _ImportPathMatchIterator = RegExpStringIterator< RegExpExecArray & {
-  groups: { statement: ('from'|'import'|'require'), path: string, qt: '"'|"'"|undefined , endqt: '"'|"'"|undefined }
-  indices: { groups: { statement: [number, number], path: [number, number], qt: [number, number], endqt: [number, number] } }
-}>
 
 function findCivetFilesInDir(searchDir: string): string[] {
   try {
@@ -315,7 +311,6 @@ function createCivetFileCompletions(
         name: file,
         source: undefined,
         data: undefined,
-        labelDetails: { description: file }
       }
     }
   })
@@ -324,12 +319,10 @@ function createCivetFileCompletions(
 function resolvePathAliasDir(
   compilationSettings: ts.CompilerOptions,
   importPath: string,
-): string | null {
+): string | undefined {
   const { baseUrl, paths } = compilationSettings
-  if (!paths) return null
-
-  const pathsBase = path.isAbsolute(baseUrl ?? '') ? baseUrl : null
-  if (!pathsBase) return null
+  if (!paths) return
+  if (!(baseUrl && path.isAbsolute(baseUrl))) return
 
   const candidates: { resolvedDir: string, aliasPattern: string }[] = []
 
@@ -340,7 +333,7 @@ function resolvePathAliasDir(
         const pathAfterAlias = importPath.slice(aliasPrefix.length)
         for (const replacement of replacements) {
           const replacementBase = replacement.endsWith('*') ? replacement.slice(0, -1) : replacement
-          const resolvedDir = path.resolve(pathsBase, replacementBase, pathAfterAlias)
+          const resolvedDir = path.resolve(baseUrl, replacementBase, pathAfterAlias)
           if (tsSys.directoryExists(resolvedDir)) {
             candidates.push({
               aliasPattern: aliasPrefix,
@@ -351,7 +344,7 @@ function resolvePathAliasDir(
       }
     } else if (importPath === pattern) {
       for (const replacement of replacements) {
-        const resolvedDir = path.resolve(pathsBase, replacement)
+        const resolvedDir = path.resolve(baseUrl, replacement)
         if (tsSys.directoryExists(resolvedDir)) {
           candidates.push({
             resolvedDir,
@@ -366,16 +359,16 @@ function resolvePathAliasDir(
     .sort((a, b) => b.aliasPattern.length - a.aliasPattern.length)
     .at(0)
 
-  return chosenCandidate?.resolvedDir ?? null
+  return chosenCandidate?.resolvedDir
 }
 
-const _lineEnding = /[\n\r]+$/g
+const lineEnding = /[\n\r]+$/g
 /** Get the content of the current line (with the trailing newline removed.) */
 function getCurrentLineText(document: TextDocument, position: Position): string {
   return document.getText({
     start: { character: 0, line: position.line     },
     end:   { character: 0, line: position.line + 1 },
-  }).replace(_lineEnding, '');  
+  }).replace(lineEnding, '');  
 }
 
 function getCivetFileCompletions(
@@ -395,28 +388,32 @@ function getCivetFileCompletions(
   let cursorOffsetAdjustment = 0
   let importPath = ''
   
-  if (likelyImportStatement(lineText)) {
-    const {statement, path, qt, endqt } = extractImportPath(lineText, position.character) || { path: ''}
-    // logger.log(JSON.stringify(extractImportPath(lineText, position.character) || { path: ''}))
+  const extracted = extractImportPath(lineText, position.character)
+  // logger.log(JSON.stringify(extracted || { path: '' }))
+  if (extracted != null) {
+    const { statement, path: pathText, qt, endqt } = extracted
 
-    if (statement) { show.otherPaths = true }
-    if (statement === 'from' || statement === 'require') {  show.otherLspCompletions = false }
-    
-    // Hardcode special-case cursor offset
-    //
-    //     Source:      import a from ./a|
-    //     Transpiled:  import a from './a'|
-    //     Adjusted:    import a from './a|'
-    //
-    if (!qt || qt !== endqt) { cursorOffsetAdjustment = -1 }
+    // require needs quotes to trigger completions
+    if (statement !== 'require' || qt) {
+      show.otherPaths = true
+      if (statement === 'from' || statement === 'require') {
+        show.otherLspCompletions = false
+      }
 
-    importPath = path
+      // Hardcode special-case cursor offset
+      //
+      //     Source:      import a from ./a|
+      //     Transpiled:  import a from "./a"|
+      //     Adjusted:    import a from "./a|"
+      //
+      if (!qt || qt !== endqt) cursorOffsetAdjustment = -1
 
-    const isRelativePath = importPath.startsWith('./') || importPath.startsWith('../')
-    show.relative = isRelativePath
-    show.alias = !isRelativePath
+      importPath = pathText
+      show.relative = importPath.startsWith('./') || importPath.startsWith('../')
+      show.alias = importPath.length > 0 && !show.relative
+    }
   }
-  
+
   let relativeCompletionItems: CompletionItem[] = []
   if (show.relative) {
     const sourceDir = path.dirname(sourcePath)
@@ -440,19 +437,25 @@ function getCivetFileCompletions(
 }
 
 // This handler provides the initial list of the completion items.
-connection.onCompletion(async ({ textDocument, position /*, context*/ }) => {
-
-  await updating(textDocument)
+connection.onCompletion(async ({ textDocument, position, context }) => {
 
   const document = documents.get(textDocument.uri)
   assert(document)
+
+  // Fast path for space trigger
+  const linePrefix = getCurrentLineText(document, position).slice(0, position.character)
+  if (context?.triggerCharacter === ' ' && !likelyImportContext(linePrefix)) {
+    return []
+  }
+
+  await updating(textDocument)
 
   const sourcePath = documentToSourcePath(textDocument)
   assert(sourcePath)
   const service = await ensureServiceForSourcePath(sourcePath)
   if (!service) return
   
-  logger.log("completion " + sourcePath + " " + position)
+  logger.log("completion " + sourcePath + " " + (position.line+1) + ":" + position.character)
 
   const { civetFileCompletions, heuristics } = getCivetFileCompletions(
     service, document, sourcePath, position
@@ -460,13 +463,19 @@ connection.onCompletion(async ({ textDocument, position /*, context*/ }) => {
 
   // Options for the downstream TS LSP
   const completionOptions: GetCompletionsAtPositionOptions = {
-    includeCompletionsForImportStatements: heuristics.show.otherPaths,
+    includeCompletionsForImportStatements: heuristics.show.otherPaths || likelyImportContext(linePrefix),
     includeCompletionsForModuleExports:    heuristics.show.otherLspCompletions,
     includeCompletionsWithSnippetText:     heuristics.show.otherLspCompletions,
     
     allowIncompleteCompletions: true,
     includeCompletionsWithInsertText: true,
     useLabelDetailsInCompletionEntries: true,
+  }
+  if (context?.triggerKind) {
+    completionOptions.triggerKind = context.triggerKind
+  }
+  if (context?.triggerCharacter) {
+    completionOptions.triggerCharacter = context.triggerCharacter as ts.CompletionsTriggerCharacter
   }
   
   if (sourcePath.match(tsSuffix)) {
@@ -1134,15 +1143,13 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
       }
     }
 
-    // 
-    // if (entry.sourceDisplay) {
-    //   item.labelDetails = { description: Previewer.plain(entry.sourceDisplay) }
-    // } else if (entry.source && entry.hasAction) {
-    //   item.labelDetails = { description: rootDir ? path.relative(rootDir, entry.source) : entry.source }
-    // }
+    if (entry.sourceDisplay) {
+      item.labelDetails = { description: Previewer.plain(entry.sourceDisplay) }
+    } else if (entry.source && entry.hasAction) {
+      item.labelDetails = { description: rootDir ? path.relative(rootDir, entry.source) : entry.source }
+    }
     if (entry.labelDetails) {
-      // item.labelDetails = { ...item.labelDetails, ...entry.labelDetails }
-      item.labelDetails = { ...entry.labelDetails } //, ...item.labelDetails }
+      item.labelDetails = { ...item.labelDetails, ...entry.labelDetails }
     }
 
     if (entry.isRecommended) {
