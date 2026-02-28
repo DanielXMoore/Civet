@@ -1120,6 +1120,29 @@ function documentToSourcePath(textDocument: TextDocumentIdentifier) {
   return URI.parse(textDocument.uri).fsPath;
 }
 
+// https://github.com/typescript-language-server/typescript-language-server/blob/e91bd52a47c05ffd946e0abd27f242eb631b7604/src/completion.ts#L188
+const fileExtensionKindModifiers = new Set<string>([
+  ScriptElementKindModifier.dtsModifier,
+  ScriptElementKindModifier.tsModifier,
+  ScriptElementKindModifier.tsxModifier,
+  ScriptElementKindModifier.jsModifier,
+  ScriptElementKindModifier.jsxModifier,
+  ScriptElementKindModifier.jsonModifier,
+  ScriptElementKindModifier.dmtsModifier,
+  ScriptElementKindModifier.mtsModifier,
+  ScriptElementKindModifier.mjsModifier,
+  ScriptElementKindModifier.dctsModifier,
+  ScriptElementKindModifier.ctsModifier,
+  ScriptElementKindModifier.cjsModifier,
+])
+
+function getFileExtensionModifier(kindModifiers: Set<string>): string {
+  for (const modifier of kindModifiers) {
+    if (fileExtensionKindModifiers.has(modifier)) return modifier
+  }
+  return ''
+}
+
 function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: SourcemapLines, showFileExtensions?: boolean): CompletionItem[] {
   // Partial simulation of MyCompletionItem in
   // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
@@ -1127,18 +1150,12 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
 
   const items: CompletionItem[] = [];
   for (const entry of entries) {
-    const completionKind = getCompletionItemKind(entry.kind)
-    const isFileCompletion = completionKind === CompletionItemKind.File
+    const kind = getCompletionItemKind(entry.kind)
 
-    const defaultContent = entry.name || (entry.insertText ?? '')
-
-    let completionContent = showFileExtensions && isFileCompletion && path.extname(entry.name) === ''
-      ? `${defaultContent}${entry.kindModifiers?.toString()}`
-      : defaultContent
-
+    // https://github.com/typescript-language-server/typescript-language-server/blob/e91bd52a47c05ffd946e0abd27f242eb631b7604/src/completion.ts#L106
     const item: CompletionItem = {
-      label: completionContent,
-      kind: completionKind,
+      label: entry.name || (entry.insertText ?? ''),
+      kind,
       data: {
         sourcePath, position,
         name: entry.name, source: entry.source, data: entry.data,
@@ -1158,11 +1175,7 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
     if (entry.isRecommended) {
       item.preselect = entry.isRecommended
     }
-    if (entry.insertText) {
-      item.insertText = entry.insertText
-    } else {
-      item.insertText = completionContent
-    }
+    item.insertText = entry.insertText || item.label
     if (entry.filterText) {
       item.filterText = entry.filterText
     }
@@ -1184,6 +1197,13 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
     }
     if (entry.kindModifiers) {
       const kindModifiers = parseKindModifier(entry.kindModifiers)
+      if (kind === CompletionItemKind.File && showFileExtensions) {
+        const extension = getFileExtensionModifier(kindModifiers)
+        if (!entry.name.toLowerCase().endsWith(extension)) {
+          item.label += extension
+          item.insertText += extension
+        }
+      }
       if (kindModifiers.has(ScriptElementKindModifier.optionalModifier)) {
         item.label += '?'
       }
