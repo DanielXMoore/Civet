@@ -297,13 +297,14 @@ function findCivetFilesInDir(searchDir: string): string[] {
 function createCivetFileCompletions(
   files: string[],
   sourcePath: string,
-  position: Position
+  position: Position,
+  closingQuoteSuffix: "'" | '"' | '' = '',
 ): CompletionItem[] {
   return files.map((file) => {
     return {
       label: file,
       kind: CompletionItemKind.File,
-      insertText: file,
+      insertText: `${file}${closingQuoteSuffix}`,
       sortText: `${0}_${file}`,
       data: {
         sourcePath,
@@ -387,6 +388,7 @@ function getCivetFileCompletions(
   }
   let cursorOffsetAdjustment = 0
   let importPath = ''
+  let closingQuoteSuffix: "'" | '"' | undefined
   
   const extracted = extractImportPath(lineText, position.character)
   // logger.log(JSON.stringify(extracted || { path: '' }))
@@ -407,6 +409,7 @@ function getCivetFileCompletions(
       //     Adjusted:    import a from "./a|"
       //
       if (!qt || qt !== endqt) cursorOffsetAdjustment = -1
+      if (qt && qt !== endqt) closingQuoteSuffix = qt
 
       importPath = pathText
       show.relative = importPath.startsWith('./') || importPath.startsWith('../')
@@ -419,7 +422,7 @@ function getCivetFileCompletions(
     const sourceDir = path.dirname(sourcePath)
     const searchDir = path.resolve(sourceDir, importPath.substring(0, importPath.lastIndexOf('/')))
     const relativeCivetFiles = findCivetFilesInDir(searchDir)
-    relativeCompletionItems = createCivetFileCompletions(relativeCivetFiles, sourcePath, position)
+    relativeCompletionItems = createCivetFileCompletions(relativeCivetFiles, sourcePath, position, closingQuoteSuffix)
   }
   
   let pathAliasCompletionItems: CompletionItem[] = []
@@ -427,7 +430,7 @@ function getCivetFileCompletions(
     const compilationSettings = service.host.getCompilationSettings()
     const aliasDir = resolvePathAliasDir(compilationSettings, importPath)
     const pathAliasCivetFiles = !aliasDir ? [] : findCivetFilesInDir(aliasDir)
-    pathAliasCompletionItems = createCivetFileCompletions(pathAliasCivetFiles, sourcePath, position) 
+    pathAliasCompletionItems = createCivetFileCompletions(pathAliasCivetFiles, sourcePath, position, closingQuoteSuffix) 
   }
 
   civetFileCompletions = relativeCompletionItems.concat(pathAliasCompletionItems)
