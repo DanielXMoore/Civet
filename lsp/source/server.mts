@@ -298,13 +298,12 @@ function createCivetFileCompletions(
   files: string[],
   sourcePath: string,
   position: Position,
-  closingQuoteSuffix: "'" | '"' | '' = '',
 ): CompletionItem[] {
   return files.map((file) => {
     return {
       label: file,
       kind: CompletionItemKind.File,
-      insertText: `${file}${closingQuoteSuffix}`,
+      insertText: file,
       sortText: `${0}_${file}`,
       data: {
         sourcePath,
@@ -372,6 +371,32 @@ function getCurrentLineText(document: TextDocument, position: Position): string 
   }).replace(lineEnding, '');  
 }
 
+function appendClosingQuoteToPathCompletions(
+  completions: CompletionItem[],
+  closingQuoteSuffix: "'" | '"' | undefined,
+): CompletionItem[] {
+  if (!closingQuoteSuffix) return completions
+
+  for (const completion of completions) {
+    if (completion.kind !== CompletionItemKind.File && completion.kind !== CompletionItemKind.Module) {
+      continue
+    }
+    if (completion.textEdit &&
+        !completion.textEdit.newText.endsWith(closingQuoteSuffix)) {
+      completion.textEdit.newText += closingQuoteSuffix
+    }
+    if (typeof completion.label === 'string') {
+      completion.insertText ??= completion.label
+    }
+    if (typeof completion.insertText === 'string' &&
+        !completion.insertText.endsWith(closingQuoteSuffix)) {
+      completion.insertText += closingQuoteSuffix
+    }
+  }
+
+  return completions
+}
+
 function getCivetFileCompletions(
   service: ResolvedService,
   document: TextDocument,
@@ -422,7 +447,7 @@ function getCivetFileCompletions(
     const sourceDir = path.dirname(sourcePath)
     const searchDir = path.resolve(sourceDir, importPath.substring(0, importPath.lastIndexOf('/')))
     const relativeCivetFiles = findCivetFilesInDir(searchDir)
-    relativeCompletionItems = createCivetFileCompletions(relativeCivetFiles, sourcePath, position, closingQuoteSuffix)
+    relativeCompletionItems = createCivetFileCompletions(relativeCivetFiles, sourcePath, position)
   }
   
   let pathAliasCompletionItems: CompletionItem[] = []
@@ -430,13 +455,13 @@ function getCivetFileCompletions(
     const compilationSettings = service.host.getCompilationSettings()
     const aliasDir = resolvePathAliasDir(compilationSettings, importPath)
     const pathAliasCivetFiles = !aliasDir ? [] : findCivetFilesInDir(aliasDir)
-    pathAliasCompletionItems = createCivetFileCompletions(pathAliasCivetFiles, sourcePath, position, closingQuoteSuffix) 
+    pathAliasCompletionItems = createCivetFileCompletions(pathAliasCivetFiles, sourcePath, position) 
   }
 
   civetFileCompletions = relativeCompletionItems.concat(pathAliasCompletionItems)
 
   const heuristics = { show, cursorOffsetAdjustment }
-  return { civetFileCompletions, heuristics }
+  return { civetFileCompletions, heuristics, closingQuoteSuffix }
 }
 
 // This handler provides the initial list of the completion items.
@@ -460,7 +485,7 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
   
   logger.log("completion " + sourcePath + " " + (position.line+1) + ":" + position.character)
 
-  const { civetFileCompletions, heuristics } = getCivetFileCompletions(
+  const { civetFileCompletions, heuristics, closingQuoteSuffix } = getCivetFileCompletions(
     service, document, sourcePath, position
   )
 
@@ -477,14 +502,20 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
   if (context?.triggerKind) {
     completionOptions.triggerKind = context.triggerKind
   }
+  const isSpaceImport =
+    context?.triggerCharacter === ' ' && likelyImportContext(linePrefix)
   if (context?.triggerCharacter) {
     completionOptions.triggerCharacter = context.triggerCharacter as ts.CompletionsTriggerCharacter
+
+    if (isSpaceImport) {
+      // Civet recovers incomplete `import ` as `import ""` for TS.
+      // Treat this as if the user typed `"` so TS returns module path completions.
+      completionOptions.triggerCharacter = '"' as ts.CompletionsTriggerCharacter
+    }
   }
   
   if (sourcePath.match(tsSuffix)) {
-
     // Non-transpiled files
-
     const p = document.offsetAt(position)
     const tslCompletions = service.getCompletionsAtPosition(sourcePath, p, completionOptions)
     const completions = tslCompletions
@@ -494,9 +525,10 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
         true, // Show file extensions (and use them in path completions)
       ) : []
 
-    return civetFileCompletions.concat(completions)
-    
-  } 
+    return appendClosingQuoteToPathCompletions(
+      civetFileCompletions.concat(completions),
+      closingQuoteSuffix)
+  }
 
   // Civet files
   
@@ -512,10 +544,16 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
   //  0: Default, when sourcemap cursor position is already perfect.
   // -1: Gets inside closing quotes for import file completion.
   p += heuristics.cursorOffsetAdjustment
+  if (isSpaceImport) {
+    // If we're at `import ` followed by EOF, sourcemapping is a bit wonky,
+    // and we start on the left of the implicit "" instead of the right.
+    // So now we've gone one step left when we need to go one step right.
+    if (transpiledDoc.getText().slice(p, p + 3) === ' ""') p += 2
+  }
   // logger.log([
   //   transpiledDoc.getText().slice(0, p),
   //   transpiledDoc.getText().slice(p)
-  // ].join(`<[${cursorOffsetAdjustment}]|>`))
+  // ].join(`<[${heuristics.cursorOffsetAdjustment}]|>`))
 
   // … Get completions from TS
   const transpiledPath = documentToSourcePath(transpiledDoc)
@@ -523,16 +561,18 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
     transpiledPath, p, completionOptions)
   const completions = tslCompletions 
     ? convertCompletions(
-      tslCompletions, 
-      transpiledDoc, 
-      sourcePath, 
+      tslCompletions,
+      transpiledDoc,
+      sourcePath,
       position,
       sourcemapLines,
       true,
     ) : []
 
   // … Return.
-  return civetFileCompletions.concat(completions)
+  return appendClosingQuoteToPathCompletions(
+    civetFileCompletions.concat(completions),
+    closingQuoteSuffix)
 
 });
 
