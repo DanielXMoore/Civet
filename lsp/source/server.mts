@@ -11,6 +11,7 @@ import {
   TextDocumentIdentifier,
   DocumentSymbol,
   CompletionItem,
+  CompletionItemKind,
   CompletionItemTag,
   Location,
   DiagnosticSeverity,
@@ -142,7 +143,12 @@ connection.onInitialize(async (params: InitializeParams) => {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       // Tell the client that this server supports code completion.
       completionProvider: {
-        resolveProvider: true
+
+        // TS extension's triggerCharacters: ['.', '"', '\'', '/', '@', '<']
+        // We'll also respond to space to handle e.g. `import module`
+        triggerCharacters: ['.', '"', "'", '/', '@', '<', ' '],
+
+        resolveProvider: true,
       },
       // documentLinkProvider: {
       //   resolveProvider: true
@@ -192,6 +198,7 @@ connection.onInitialized(() => {
 
 const updating = (document: { uri: string }) => documentUpdateStatus.get(document.uri)?.promise
 const tsSuffix = /\.[cm]?[jt]s$|\.json|\.[jt]sx/
+const civetFileExtension = '.civet'
 
 connection.onHover(async ({ textDocument, position }) => {
   // logger.log("hover"+ position)
@@ -250,82 +257,287 @@ connection.onHover(async ({ textDocument, position }) => {
   };
 })
 
-// This handler provides the initial list of the completion items.
-connection.onCompletion(async ({ textDocument, position, context: _context }) => {
-  const completionConfiguration = {
-    useCodeSnippetsOnMethodSuggest: false,
-    pathSuggestions: true,
-    autoImportSuggestions: true,
-    nameSuggestions: true,
-    importStatementSuggestions: true,
+// Helpers for completing import paths.
+
+const looksLikeImportContext = /\b(from|import|require)\s*$/
+function likelyImportContext(text: string): boolean { return looksLikeImportContext.test(text) }
+
+// … Extract information about an import statement under the cursor
+const importPathExtractor = /\b(?<statement>from|import|require)\b[ \t]*(?:[\(][ \t]*)?(?:(?<qt>')(?<path>[^']*)(?<endqt>'?)|(?<qt>")(?<path>[^"]*)(?<endqt>")?|(?<path>[^;"'\s=>]*))/gd
+
+type ImportPathMatchIterator = RegExpStringIterator< RegExpExecArray & {
+  groups: { statement: ('from'|'import'|'require'), path: string, qt: '"'|"'"|undefined , endqt: '"'|"'"|undefined }
+  indices: { groups: { statement: [number, number], path: [number, number], qt: [number, number], endqt: [number, number] } }
+}>
+
+function extractImportPath(lineText: string, cursorOffset: number) {
+  // Get all import|from|require statements in the line
+  const matches = lineText.matchAll(importPathExtractor) as ImportPathMatchIterator
+
+  // See if there's a match whose path group spans over the cursor
+  for (const match of matches) {
+    // Return that whole match, including quotes and the statement type
+    if ( cursorOffset >= match.indices.groups.path[0]
+      && cursorOffset <= match.indices.groups.path[1] ) {
+        return match.groups
+  }}
+  return // undefined means no match
+}
+
+function findCivetFilesInDir(searchDir: string): string[] {
+  try {
+    return tsSys
+      .readDirectory(searchDir, [civetFileExtension], undefined, undefined, 1)
+      .map(f => path.basename(f))
+  } catch {
+    return []
+  }
+}
+
+function createCivetFileCompletions(
+  files: string[],
+  sourcePath: string,
+  position: Position,
+  closingQuoteSuffix: "'" | '"' | '' = '',
+): CompletionItem[] {
+  return files.map((file) => {
+    return {
+      label: file,
+      kind: CompletionItemKind.File,
+      insertText: `${file}${closingQuoteSuffix}`,
+      sortText: `${0}_${file}`,
+      data: {
+        sourcePath,
+        position,
+        name: file,
+        source: undefined,
+        data: undefined,
+      }
+    }
+  })
+}
+
+function resolvePathAliasDir(
+  compilationSettings: ts.CompilerOptions,
+  importPath: string,
+): string | undefined {
+  const { baseUrl, paths } = compilationSettings
+  if (!paths) return
+  if (!(baseUrl && path.isAbsolute(baseUrl))) return
+
+  const candidates: { resolvedDir: string, aliasPattern: string }[] = []
+
+  for (const [pattern, replacements] of Object.entries(paths)) {
+    if (pattern.endsWith('*')) {
+      const aliasPrefix = pattern.slice(0, -1)
+      if (importPath.startsWith(aliasPrefix)) {
+        const pathAfterAlias = importPath.slice(aliasPrefix.length)
+        for (const replacement of replacements) {
+          const replacementBase = replacement.endsWith('*') ? replacement.slice(0, -1) : replacement
+          const resolvedDir = path.resolve(baseUrl, replacementBase, pathAfterAlias)
+          if (tsSys.directoryExists(resolvedDir)) {
+            candidates.push({
+              aliasPattern: aliasPrefix,
+              resolvedDir,
+            })
+          }
+        }
+      }
+    } else if (importPath === pattern) {
+      for (const replacement of replacements) {
+        const resolvedDir = path.resolve(baseUrl, replacement)
+        if (tsSys.directoryExists(resolvedDir)) {
+          candidates.push({
+            resolvedDir,
+            aliasPattern: pattern,
+          })
+        }
+      }
+    }
   }
 
-  const context = _context as {
-    triggerKind?: GetCompletionsAtPositionOptions["triggerKind"],
-    triggerCharacter?: GetCompletionsAtPositionOptions["triggerCharacter"]
+  const chosenCandidate = candidates
+    .sort((a, b) => b.aliasPattern.length - a.aliasPattern.length)
+    .at(0)
+
+  return chosenCandidate?.resolvedDir
+}
+
+const lineEnding = /[\n\r]+$/g
+/** Get the content of the current line (with the trailing newline removed.) */
+function getCurrentLineText(document: TextDocument, position: Position): string {
+  return document.getText({
+    start: { character: 0, line: position.line     },
+    end:   { character: 0, line: position.line + 1 },
+  }).replace(lineEnding, '');  
+}
+
+function getCivetFileCompletions(
+  service: ResolvedService,
+  document: TextDocument,
+  sourcePath: string,
+  position: Position
+) {
+  const lineText = getCurrentLineText(document, position)
+  let civetFileCompletions: CompletionItem[] = []
+  const show = { 
+    relative:           false, // Civet files from relative paths
+    alias:              false, // Civet files from path alias
+    otherPaths:         false, // Other files, found by TypeScript
+    otherLspCompletions: true, // Other suggestions, including exports
+  }
+  let cursorOffsetAdjustment = 0
+  let importPath = ''
+  let closingQuoteSuffix: "'" | '"' | undefined
+  
+  const extracted = extractImportPath(lineText, position.character)
+  // logger.log(JSON.stringify(extracted || { path: '' }))
+  if (extracted != null) {
+    const { statement, path: pathText, qt, endqt } = extracted
+
+    // require needs quotes to trigger completions
+    if (statement !== 'require' || qt) {
+      show.otherPaths = true
+      if (statement === 'from' || statement === 'require') {
+        show.otherLspCompletions = false
+      }
+
+      // Hardcode special-case cursor offset
+      //
+      //     Source:      import a from ./a|
+      //     Transpiled:  import a from "./a"|
+      //     Adjusted:    import a from "./a|"
+      //
+      if (!qt || qt !== endqt) cursorOffsetAdjustment = -1
+      if (qt && qt !== endqt) closingQuoteSuffix = qt
+
+      importPath = pathText
+      show.relative = importPath.startsWith('./') || importPath.startsWith('../')
+      show.alias = importPath.length > 0 && !show.relative
+    }
   }
 
-  const completionOptions: GetCompletionsAtPositionOptions = {
-    includeExternalModuleExports: completionConfiguration.autoImportSuggestions,
-    includeInsertTextCompletions: true,
+  let relativeCompletionItems: CompletionItem[] = []
+  if (show.relative) {
+    const sourceDir = path.dirname(sourcePath)
+    const searchDir = path.resolve(sourceDir, importPath.substring(0, importPath.lastIndexOf('/')))
+    const relativeCivetFiles = findCivetFilesInDir(searchDir)
+    relativeCompletionItems = createCivetFileCompletions(relativeCivetFiles, sourcePath, position, closingQuoteSuffix)
   }
   
-  if (context?.triggerKind) {
-    completionOptions.triggerKind = context.triggerKind
+  let pathAliasCompletionItems: CompletionItem[] = []
+  if (show.alias) {
+    const compilationSettings = service.host.getCompilationSettings()
+    const aliasDir = resolvePathAliasDir(compilationSettings, importPath)
+    const pathAliasCivetFiles = !aliasDir ? [] : findCivetFilesInDir(aliasDir)
+    pathAliasCompletionItems = createCivetFileCompletions(pathAliasCivetFiles, sourcePath, position, closingQuoteSuffix) 
   }
-  if (context?.triggerCharacter) {
-    completionOptions.triggerCharacter = context.triggerCharacter
+
+  civetFileCompletions = relativeCompletionItems.concat(pathAliasCompletionItems)
+
+  const heuristics = { show, cursorOffsetAdjustment }
+  return { civetFileCompletions, heuristics }
+}
+
+// This handler provides the initial list of the completion items.
+connection.onCompletion(async ({ textDocument, position, context }) => {
+
+  const document = documents.get(textDocument.uri)
+  assert(document)
+
+  // Fast path for space trigger
+  const linePrefix = getCurrentLineText(document, position).slice(0, position.character)
+  if (context?.triggerCharacter === ' ' && !likelyImportContext(linePrefix)) {
+    return []
   }
+
+  await updating(textDocument)
 
   const sourcePath = documentToSourcePath(textDocument)
   assert(sourcePath)
   const service = await ensureServiceForSourcePath(sourcePath)
   if (!service) return
+  
+  logger.log("completion " + sourcePath + " " + (position.line+1) + ":" + position.character)
 
-  logger.log("completion " + sourcePath + " " + position)
+  const { civetFileCompletions, heuristics } = getCivetFileCompletions(
+    service, document, sourcePath, position
+  )
 
-  await updating(textDocument)
-  if (sourcePath.match(tsSuffix)) { // non-transpiled
-    const document = documents.get(textDocument.uri)
-    assert(document)
+  // Options for the downstream TS LSP
+  const completionOptions: GetCompletionsAtPositionOptions = {
+    includeCompletionsForImportStatements: heuristics.show.otherPaths || likelyImportContext(linePrefix),
+    includeCompletionsForModuleExports:    heuristics.show.otherLspCompletions,
+    includeCompletionsWithSnippetText:     heuristics.show.otherLspCompletions,
+    
+    allowIncompleteCompletions: true,
+    includeCompletionsWithInsertText: true,
+    useLabelDetailsInCompletionEntries: true,
+  }
+  if (context?.triggerKind) {
+    completionOptions.triggerKind = context.triggerKind
+  }
+  if (context?.triggerCharacter) {
+    completionOptions.triggerCharacter = context.triggerCharacter as ts.CompletionsTriggerCharacter
+  }
+  
+  if (sourcePath.match(tsSuffix)) {
+
+    // Non-transpiled files
+
     const p = document.offsetAt(position)
-    const completions = service.getCompletionsAtPosition(sourcePath, p, completionOptions)
-    if (!completions) return
-    return convertCompletions(completions, document, sourcePath, position)
-  }
+    const tslCompletions = service.getCompletionsAtPosition(sourcePath, p, completionOptions)
+    const completions = tslCompletions
+      ? convertCompletions(
+        tslCompletions, document, sourcePath, position, 
+        undefined, // No sourcemap
+        true, // Show file extensions (and use them in path completions)
+      ) : []
 
-  // need to sourcemap the line/columns
+    return civetFileCompletions.concat(completions)
+    
+  } 
+
+  // Civet files
+  
+  // … Sourcemap the line/columns
   const meta = service.host.getMeta(sourcePath)
-  if (!meta) return
+  if (!meta) return civetFileCompletions
   const { sourcemapLines, transpiledDoc } = meta
-  if (!transpiledDoc) return
+  if (!transpiledDoc) return civetFileCompletions
+  if (sourcemapLines) { position = forwardMap(sourcemapLines, position); logger.log('remapped') }
+  let p = transpiledDoc.offsetAt(position)
+  
+  // … Adjust the cursor position, on a case-per-case basis, to access better completions.
+  //  0: Default, when sourcemap cursor position is already perfect.
+  // -1: Gets inside closing quotes for import file completion.
+  p += heuristics.cursorOffsetAdjustment
+  // logger.log([
+  //   transpiledDoc.getText().slice(0, p),
+  //   transpiledDoc.getText().slice(p)
+  // ].join(`<[${cursorOffsetAdjustment}]|>`))
 
-  // Map input hover position into output TS position
-  // Don't map for files that don't have a sourcemap (plain .ts for example)
-  if (sourcemapLines) {
-    position = forwardMap(sourcemapLines, position)
-    logger.log('remapped')
-  }
-
-  const p = transpiledDoc.offsetAt(position)
+  // … Get completions from TS
   const transpiledPath = documentToSourcePath(transpiledDoc)
-  const completions = service.getCompletionsAtPosition(transpiledPath, p, completionOptions)
-  if (!completions) return;
+  const tslCompletions = service.getCompletionsAtPosition(
+    transpiledPath, p, completionOptions)
+  const completions = tslCompletions 
+    ? convertCompletions(
+      tslCompletions, 
+      transpiledDoc, 
+      sourcePath, 
+      position,
+      sourcemapLines,
+      true,
+    ) : []
 
-  return convertCompletions(completions, transpiledDoc, sourcePath, position, sourcemapLines)
+  // … Return.
+  return civetFileCompletions.concat(completions)
+
 });
 
-type CompletionItemData = {
-  sourcePath: string
-  position: Position
-  name: string
-  source: string | undefined
-  data: ts.CompletionEntryData | undefined
-}
-
 connection.onCompletionResolve(async (item) => {
-  let { sourcePath, position, name, source, data } =
-    item.data as CompletionItemData
+  let { sourcePath, position, name, source, data } = item.data
   const service = await ensureServiceForSourcePath(sourcePath)
   if (!service) return item
 
@@ -908,20 +1120,47 @@ function documentToSourcePath(textDocument: TextDocumentIdentifier) {
   return URI.parse(textDocument.uri).fsPath;
 }
 
-function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: SourcemapLines): CompletionItem[] {
+// https://github.com/typescript-language-server/typescript-language-server/blob/e91bd52a47c05ffd946e0abd27f242eb631b7604/src/completion.ts#L188
+const fileExtensionKindModifiers = new Set<string>([
+  ScriptElementKindModifier.dtsModifier,
+  ScriptElementKindModifier.tsModifier,
+  ScriptElementKindModifier.tsxModifier,
+  ScriptElementKindModifier.jsModifier,
+  ScriptElementKindModifier.jsxModifier,
+  ScriptElementKindModifier.jsonModifier,
+  ScriptElementKindModifier.dmtsModifier,
+  ScriptElementKindModifier.mtsModifier,
+  ScriptElementKindModifier.mjsModifier,
+  ScriptElementKindModifier.dctsModifier,
+  ScriptElementKindModifier.ctsModifier,
+  ScriptElementKindModifier.cjsModifier,
+])
+
+function getFileExtensionModifier(kindModifiers: Set<string>): string {
+  for (const modifier of kindModifiers) {
+    if (fileExtensionKindModifiers.has(modifier)) return modifier
+  }
+  return ''
+}
+
+function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: SourcemapLines, showFileExtensions?: boolean): CompletionItem[] {
   // Partial simulation of MyCompletionItem in
   // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
   const { entries } = completions;
 
   const items: CompletionItem[] = [];
   for (const entry of entries) {
+    const kind = getCompletionItemKind(entry.kind)
+
+    // https://github.com/typescript-language-server/typescript-language-server/blob/e91bd52a47c05ffd946e0abd27f242eb631b7604/src/completion.ts#L106
     const item: CompletionItem = {
       label: entry.name || (entry.insertText ?? ''),
-      kind: getCompletionItemKind(entry.kind),
+      kind,
       data: {
         sourcePath, position,
         name: entry.name, source: entry.source, data: entry.data,
-      } satisfies CompletionItemData,
+        kindModifiers: entry.kindModifiers,
+      }
     }
 
     if (entry.sourceDisplay) {
@@ -936,9 +1175,7 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
     if (entry.isRecommended) {
       item.preselect = entry.isRecommended
     }
-    if (entry.insertText) {
-      item.insertText = entry.insertText
-    }
+    item.insertText = entry.insertText || item.label
     if (entry.filterText) {
       item.filterText = entry.filterText
     }
@@ -960,6 +1197,13 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
     }
     if (entry.kindModifiers) {
       const kindModifiers = parseKindModifier(entry.kindModifiers)
+      if (kind === CompletionItemKind.File && showFileExtensions) {
+        const extension = getFileExtensionModifier(kindModifiers)
+        if (!entry.name.toLowerCase().endsWith(extension)) {
+          item.label += extension
+          item.insertText += extension
+        }
+      }
       if (kindModifiers.has(ScriptElementKindModifier.optionalModifier)) {
         item.label += '?'
       }
@@ -973,3 +1217,11 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
 
   return items
 }
+
+/*
+  References:
+  - Completion trigger characters used by the TS language server: '.', '"', '\'', '/', '@', '<'
+    https://github.com/typescript-language-server/typescript-language-server/blob/e91bd52a47c05ffd/src/lsp-server.ts#L193
+  - SignatureHelpProvider triggers: '(', ',', '<', and re-trigger ')'
+    https://github.com/typescript-language-server/typescript-language-server/blob/e91bd52a47c05ffd946e0abd27f242eb631b7604/src/lsp-server.ts#L234-L237
+*/
