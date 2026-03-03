@@ -5906,7 +5906,7 @@ ImportDeclaration
       type: "ImportDeclaration",
       children: [imp, $0.slice(1)],
     }
-  ( ( Import __ ) / ImpliedImport ):i Operator OperatorBehavior?:behavior __:ws1 OperatorNamedImports:imports __:ws2 FromClause:from ->
+  ( ( Import SameLineOrIndentedFurther ) / ImpliedImport ):i Operator OperatorBehavior?:behavior SameLineOrIndentedFurther:ws1 OperatorNamedImports:imports SameLineOrIndentedFurther:ws2 FromClause:from ->
     const errors = []
     if (behavior?.error) errors.push(behavior.error)
     imports.specifiers.forEach((spec) => {
@@ -5920,7 +5920,7 @@ ImportDeclaration
       imports,
       from,
     }
-  Import __ ( TypeKeyword __ )?:t ImportClause:imports __ FromClause:from ->
+  Import SameLineOrIndentedFurther ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports __ FromClause:from ->
     return {
       type: "ImportDeclaration",
       children: $0,
@@ -5928,11 +5928,26 @@ ImportDeclaration
       from,
       ts: !!t,
     }
-  Import __ ModuleSpecifier:module -> { type: "ImportDeclaration", children: $0, module }
+  Import SameLineOrIndentedFurther ModuleSpecifier:module -> { type: "ImportDeclaration", children: $0, module }
+  # NOTE: Robust parsing for better LSP completions
+  Import:i _?:ws UnclosedSingleLineStringLiteral?:unclosed &EOS ->
+    return {
+      type: "ImportDeclaration",
+      children: [
+        i, ws,
+        ...unclosed ?? [
+          {
+            type: "Error",
+            message: `Expected module or import clause after "import"`,
+          },
+          '""' // act like an empty string to let TypeScript do completions
+        ],
+      ],
+    }
   # NOTE: Added import shorthand
   # NOTE: Not adding $loc to source map here yet because it will point to the start of the identifier
   # the proper place may be to use the From location
-  ImpliedImport:i ( TypeKeyword __ )?:t ImportClause:imports __:w FromClause:from ->
+  ImpliedImport:i ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports SameLineOrIndentedFurther:w FromClause:from ->
     // Map implied import location to `from`
     // The pos and length adjustment better match how tsc outputs to include the space before `from` with the `from` token
     i.$loc = {
@@ -5942,7 +5957,7 @@ ImportDeclaration
     const children = [i, t, imports, w, from]
     return { type: "ImportDeclaration", ts: !!t, children, imports, from }
   # NOTE: from ... import ... reverse syntax
-  FromClause:from __:fws Import:i __:iws Operator OperatorBehavior?:behavior __:ows OperatorNamedImports:imports ->
+  FromClause:from SameLineOrIndentedFurther:fws Import:i SameLineOrIndentedFurther:iws Operator OperatorBehavior?:behavior SameLineOrIndentedFurther:ows OperatorNamedImports:imports ->
     const errors = []
     if (behavior?.error) errors.push(behavior.error)
     imports.specifiers.forEach((spec) => {
@@ -5956,7 +5971,7 @@ ImportDeclaration
       imports,
       from,
     }
-  FromClause:from __:fws Import:i __:iws ( TypeKeyword __ )?:t ImportClause:imports ->
+  FromClause:from SameLineOrIndentedFurther:fws Import:i SameLineOrIndentedFurther:iws ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports ->
     return {
       type: "ImportDeclaration",
       children: [ i, iws, t, imports, fws, from ],
@@ -6042,8 +6057,16 @@ DynamicImportContents
 
 # https://262.ecma-international.org/#prod-FromClause
 FromClause
-  From __ ModuleSpecifier:module ->
-    if (!Array.isArray(module)) return $0
+  # NOTE: Robust parsing with missing module for better LSP completions
+  From SameLineOrIndentedFurther ( ModuleSpecifier / UnclosedSingleLineStringLiteral )?:module ->
+    module ??= [
+      {
+        type: "Error",
+        message: "Expected module specifier after `from`",
+      },
+      '""' // act like an empty string to let TypeScript do completions
+    ]
+    if (!Array.isArray(module)) return [ $1, $2, module ]
     return [ $1, $2, ...module ]
 
 # https://github.com/tc39/proposal-import-assertions
@@ -6173,15 +6196,16 @@ ModuleSpecifier
     }
 
 UnprocessedModuleSpecifier
-  StringLiteral
+  SingleLineStringLiteral
   UnquotedSpecifier
 
 UnquotedSpecifier
   # Currently allowing most non-whitespace characters
   # Forbidding ; (statement separator), = (assignment), > (function arrow)
+  # Forbidding quotes so that unbalanced quoted strings don't match
   # It may make sense to restrict this to only allow characters that are valid in a module specifier
   # Also consider URLs
-  /[^;"\s=>]+/:spec ->
+  /[^;"'\s=>]+/:spec ->
     return { $loc, token: `"${spec}"` }
 
 # https://262.ecma-international.org/#prod-ImportedBinding
@@ -6466,6 +6490,7 @@ DecimalIntegerLiteral
   /(?:0|[1-9](?:_[0-9]|[0-9])*)/
 
 # https://262.ecma-international.org/#prod-StringLiteral
+# but modified to allow literal newlines which get translated to \n
 # NOTE: This includes unprocessed double-quoted strings.  If you might want to
 # accept a template literal in the form of a CoffeeScript double-quoted string
 # interpolation, be sure to check TemplateLiteral before StringLiteral.
@@ -6491,6 +6516,30 @@ DoubleStringCharacters
 SingleStringCharacters
   /(?:\\.|[^'])*/ ->
     return { $loc, token: $0 }
+
+# StringLiteral but without literal newlines, used for module names
+SingleLineStringLiteral
+  $( DoubleQuote /(?:\\.|[^"\n])*/ DoubleQuote ) / $( SingleQuote /(?:\\.|[^'\n])*/ SingleQuote ) ->
+    return {
+      type: "StringLiteral",
+      token: $1,
+      $loc,
+    }
+
+# SingleLineStringLiteral but with no closing quote, for generating errors
+UnclosedSingleLineStringLiteral
+  ( $( DoubleQuote /(?:\\.|[^"\n])*/ ) / $( SingleQuote /(?:\\.|[^'\n])*/ ) ) &EOS ->
+    return [
+      {
+        type: "StringLiteral",
+        token: $1 + $1[0],
+        $loc,
+      },
+      {
+        type: "Error",
+        message: "Unclosed string literal",
+      },
+    ]
 
 TripleDoubleStringContents
   CoffeeInterpolationEnabled ( CoffeeTripleDoubleStringCharacters / CoffeeStringSubstitution )* -> $2
