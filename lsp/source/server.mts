@@ -259,7 +259,7 @@ connection.onHover(async ({ textDocument, position }) => {
 
 // Helpers for completing import paths.
 
-const looksLikeImportContext = /\b(from|import|require)\s*$/
+const looksLikeImportContext = /\b(from|import|require)(\s+['"]?)?$/
 function likelyImportContext(text: string): boolean { return looksLikeImportContext.test(text) }
 
 // … Extract information about an import statement under the cursor
@@ -472,7 +472,8 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
 
   // Fast path for space trigger
   const linePrefix = getCurrentLineText(document, position).slice(0, position.character)
-  if (context?.triggerCharacter === ' ' && !likelyImportContext(linePrefix)) {
+  const isLikelyImportContext = likelyImportContext(linePrefix)
+  if (context?.triggerCharacter === ' ' && !isLikelyImportContext) {
     return []
   }
 
@@ -491,7 +492,7 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
 
   // Options for the downstream TS LSP
   const completionOptions: GetCompletionsAtPositionOptions = {
-    includeCompletionsForImportStatements: heuristics.show.otherPaths || likelyImportContext(linePrefix),
+    includeCompletionsForImportStatements: heuristics.show.otherPaths || isLikelyImportContext,
     includeCompletionsForModuleExports:    heuristics.show.otherLspCompletions,
     includeCompletionsWithSnippetText:     heuristics.show.otherLspCompletions,
     
@@ -502,12 +503,10 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
   if (context?.triggerKind) {
     completionOptions.triggerKind = context.triggerKind
   }
-  const isSpaceImport =
-    context?.triggerCharacter === ' ' && likelyImportContext(linePrefix)
   if (context?.triggerCharacter) {
     completionOptions.triggerCharacter = context.triggerCharacter as ts.CompletionsTriggerCharacter
 
-    if (isSpaceImport) {
+    if (context?.triggerCharacter === ' ' && isLikelyImportContext) {
       // Civet recovers incomplete `import ` as `import ""` for TS.
       // Treat this as if the user typed `"` so TS returns module path completions.
       completionOptions.triggerCharacter = '"' as ts.CompletionsTriggerCharacter
@@ -544,11 +543,17 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
   //  0: Default, when sourcemap cursor position is already perfect.
   // -1: Gets inside closing quotes for import file completion.
   p += heuristics.cursorOffsetAdjustment
-  if (isSpaceImport) {
+  if (isLikelyImportContext) {
     // If we're at `import ` followed by EOF, sourcemapping is a bit wonky,
     // and we start on the left of the implicit "" instead of the right.
     // So now we've gone one step left when we need to go one step right.
-    if (transpiledDoc.getText().slice(p, p + 3) === ' ""') p += 2
+    const start = transpiledDoc.positionAt(p)
+    const quoteRangeText = transpiledDoc.getText({
+      start,
+      end: { line: start.line, character: start.character + 3 },
+    })
+    const match = quoteRangeText.match(/^( ?)(""|'')/)
+    if (match) p += match[1].length + 1
   }
   // logger.log([
   //   transpiledDoc.getText().slice(0, p),
