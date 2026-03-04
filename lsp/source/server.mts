@@ -544,9 +544,8 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
   // -1: Gets inside closing quotes for import file completion.
   p += heuristics.cursorOffsetAdjustment
   if (isLikelyImportContext) {
-    // If we're at `import ` followed by EOF, sourcemapping is a bit wonky,
-    // and we start on the left of the implicit "" instead of the right.
-    // So now we've gone one step left when we need to go one step right.
+    // When we type `import` at EOF, sourcemapping is a bit wonky,
+    // and we end up to the left of the quotes instead of inside them.
     const start = transpiledDoc.positionAt(p)
     const quoteRangeText = transpiledDoc.getText({
       start,
