@@ -1045,11 +1045,12 @@ async function updateDiagnosticsForDoc(document: TextDocument, service?: Resolve
           severity: DiagnosticSeverity.Error,
           range: {
             start: { line: 0, character: 0 },
-            end: { line: 0, character: Math.min(1, diagDocument.getText().length) },
+            end: { line: 0, character: 1 },
           },
           message,
           source: 'civet',
         })
+        break
       }
     }
 
