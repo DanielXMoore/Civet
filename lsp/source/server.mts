@@ -1014,13 +1014,51 @@ async function updateDiagnosticsForDoc(document: TextDocument, service?: Resolve
     service.host.addOrUpdateDocument(document)
   }
 
+  const getTypeScriptDiagnostics = (
+    filePath: string,
+    diagDocument: TextDocument,
+    sourcemapLines?: SourcemapLines,
+  ): Diagnostic[] => {
+    const diagnostics: Diagnostic[] = []
+    const diagnosticMethods = [
+      "getSyntacticDiagnostics",
+      "getSemanticDiagnostics",
+      "getSuggestionDiagnostics",
+    ] as const
+
+    for (const method of diagnosticMethods) {
+      try {
+        const fn = service[method].bind(service)
+        const tsDiagnostics = logTiming(logger, `service.${method}`, fn)(filePath)
+        diagnostics.push(...tsDiagnostics.map((diagnostic) =>
+          convertDiagnostic(diagnostic, diagDocument, sourcemapLines)))
+      } catch (error) {
+        const errorMessage = error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : String(error)
+        const message = `TypeScript ${method} failed for ${filePath}: ${errorMessage}`
+        logger.error(message)
+        if (error instanceof Error && error.stack) {
+          logger.error(error.stack)
+        }
+        diagnostics.push({
+          severity: DiagnosticSeverity.Error,
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: Math.min(1, diagDocument.getText().length) },
+          },
+          message,
+          source: 'civet',
+        })
+      }
+    }
+
+    return diagnostics
+  }
+
   // Non-transpiled
   if (sourcePath.match(tsSuffix)) {
-    const diagnostics: Diagnostic[] = [
-      ...logTiming(logger, "service.getSyntacticDiagnostics", service.getSyntacticDiagnostics)(sourcePath),
-      ...logTiming(logger, "service.getSemanticDiagnostics", service.getSemanticDiagnostics)(sourcePath),
-      ...logTiming(logger, "service.getSuggestionDiagnostics", service.getSuggestionDiagnostics)(sourcePath),
-    ].map((diagnostic) => convertDiagnostic(diagnostic, document))
+    const diagnostics = getTypeScriptDiagnostics(sourcePath, document)
 
     return connection.sendDiagnostics({
       uri: document.uri,
@@ -1069,13 +1107,7 @@ async function updateDiagnosticsForDoc(document: TextDocument, service?: Resolve
     }).filter(x => !!x))
   }
   if (!fatal) {
-    [
-      ...logTiming(logger, "service.getSyntacticDiagnostics", service.getSyntacticDiagnostics)(transpiledPath),
-      ...logTiming(logger, "service.getSemanticDiagnostics", service.getSemanticDiagnostics)(transpiledPath),
-      ...logTiming(logger, "service.getSuggestionDiagnostics", service.getSuggestionDiagnostics)(transpiledPath),
-    ].forEach((diagnostic) => {
-      diagnostics.push(convertDiagnostic(diagnostic, transpiledDoc!, sourcemapLines))
-    })
+    diagnostics.push(...getTypeScriptDiagnostics(transpiledPath, transpiledDoc, sourcemapLines))
   }
 
   connection.sendDiagnostics({
