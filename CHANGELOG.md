@@ -4,6 +4,14 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.4 (2026-03-07, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.3...v0.11.4), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.4))
+* LSP file completions [[#1854](https://github.com/DanielXMoore/Civet/pull/1854)]
+* LSP file completion from empty `import/from` via robust parsing; restrict to single-line module names [[#1855](https://github.com/DanielXMoore/Civet/pull/1855)]
+  * BREAKING CHANGE: `import`s must now be properly indented, and module names can no longer have actual newlines in them.
+* LSP handling of TypeScript crashing [[#1857](https://github.com/DanielXMoore/Civet/pull/1857)]
+* LSP completion at end of file [[#1856](https://github.com/DanielXMoore/Civet/pull/1856)]
+* LSP completions from `foo.` via robust parsing [[#1560](https://github.com/DanielXMoore/Civet/pull/1560)]
+
 ## 0.11.3 (2026-02-25, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.2...v0.11.3), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.3))
 * Fix REPL continuation prompt to `...`, clarifying indentation [[#1843](https://github.com/DanielXMoore/Civet/pull/1843)]
 * Don't treat `package.js/civet` as config [[#1844](https://github.com/DanielXMoore/Civet/pull/1844)]
