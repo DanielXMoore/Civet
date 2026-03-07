@@ -2864,8 +2864,9 @@ function f(callback: ->)
   callback()
 </Playground>
 
-Arrow types can use an `async` prefix as shorthand for `Promise`
-return types:
+Arrow types can use an `async` prefix as shorthand for to wrap the return type
+in a `Promise` (actually an `AutoPromise` helper, which works even for
+types that are already wrapped in `Promise`).
 
 <Playground>
 function f(callback: async =>)
@@ -2873,12 +2874,14 @@ function f(callback: async =>)
 </Playground>
 
 Similarly, `async` functions (except generators) get their return type
-automatically wrapped in `Promise`:
+automatically wrapped in `AutoPromise`, so you don't need to manually
+add `Promise` to the return type:
 
 <Playground>
 function f(): number
-  await fetch 'https://civet.dev'
-  .status
+  fetch 'https://civet.dev'
+  |> await
+  |> .status
 </Playground>
 
 ::: info
