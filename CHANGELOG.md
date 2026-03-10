@@ -4,6 +4,9 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.5 (2026-03-10, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.4...v0.11.5), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.5))
+* Fix unplugin on Node 25 [[#1859](https://github.com/DanielXMoore/Civet/pull/1859)]
+
 ## 0.11.4 (2026-03-07, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.3...v0.11.4), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.4))
 * LSP file completions [[#1854](https://github.com/DanielXMoore/Civet/pull/1854)]
 * LSP file completion from empty `import/from` via robust parsing; restrict to single-line module names [[#1855](https://github.com/DanielXMoore/Civet/pull/1855)]
