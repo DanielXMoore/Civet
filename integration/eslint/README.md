@@ -16,6 +16,16 @@ typescript-eslint if you haven't already:
 npm install -D eslint-plugin-civet @danielx/civet eslint @eslint/js typescript-eslint
 ```
 
+## `civetlint`
+
+This package provides a `civetlint` binary that runs ESLint with a
+Civet-aware loader, enabling two features:
+
+1. You can write ESLint configuration in `eslint.config.civet`
+   with Civet syntax.
+2. It falls back to a default config corresponding to the "simple usage"
+   examples below, so you can skip providing config altogether.
+
 ## Simple Usage with typescript-eslint
 
 Here is a sample `eslint.config.mjs` (ESM mode):
@@ -28,6 +38,8 @@ export default [
   ...civetPlugin.configs.jsRecommended,
   // Rules from tseslint.configs.strict
   ...civetPlugin.configs.strict,
+  // Rules from tseslint.configs.stylistic
+  ...civetPlugin.configs.stylistic,
 ]
 ```
 
