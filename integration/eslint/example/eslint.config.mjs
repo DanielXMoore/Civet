@@ -1,6 +1,12 @@
+// civetlint will use eslint.config.civet, not this file.
+// We provide this in case you want copy/pastable JavaScript configuration,
+// e.g. if you're using eslint directly instead of civetlint.
+
 //import civetPlugin from "eslint-plugin-civet"
 import tsCivetPlugin from "eslint-plugin-civet/ts"
 //import js from "@eslint/js"
+
+console.log("Using eslint.config.mjs")
 
 export default [
   //--- Simple version, TypeScript:
