@@ -1,5 +1,11 @@
 # Civet eslint plugin changelog
 
+## v0.1.0 (2026-03-27)
+* [[#1869](https://github.com/DanielXMoore/Civet/pull/1869)]:
+  `civetlint` script wrapping `eslint` supporting
+  * Configuration via `eslint.config.civet`
+  * Reasonable default configuration
+
 ## v0.0.5 (2024-08-26)
 * [[#1378](https://github.com/DanielXMoore/Civet/pull/1378)]:
   * Support Node 22+ (switch to `import...with`)
