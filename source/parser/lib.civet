@@ -33,6 +33,8 @@ import type {
   IterationStatement
   Label
   LabelledStatement
+  Literal
+  LiteralContentNode
   MemberExpression
   MethodDefinition
   NormalCatchParameter
@@ -217,6 +219,64 @@ function adjustIndexAccess(dot: AccessStart): AccessStart
       (node) => ({ ...node, token: "[" })
 
   return dot
+
+function rewriteModuleSpecifier(module: ASTLeaf): ASTLeaf
+function rewriteModuleSpecifier(module: Literal): Literal
+function rewriteModuleSpecifier(module: ASTLeaf | Literal): ASTLeaf | Literal
+  switch module.type
+    when "Literal"
+      return module unless module.subtype is "StringLiteral"
+      child := module.children.0 as ASTLeaf
+      rewritten := rewriteModuleSpecifier child
+      return module if rewritten is child
+      return {
+        ...module
+        raw: rewritten.token
+        children:
+          module.children.map (&: LiteralContentNode) is child ? rewritten : &
+      }
+
+  { token } .= module
+  config := getConfig()
+  if config.rewriteTsImports
+    // Workaround to fix:
+    // https://github.com/microsoft/TypeScript/issues/42151
+    // import t.ts
+    // "An import path cannot end with a '.ts' extension. Consider importing './t.js' instead."
+    // convert .[mc]?ts to .[mc]?js
+    token = token.replace(/\.([mc])?ts(['"])$/, ".$1js$2")
+  if config.rewriteCivetImports
+    token = token.replace(/\.civet(['"])$/,
+      `${config.rewriteCivetImports.replace(/\$/g, '$$')}$1`)
+
+  return module if token is module.token
+  { ...module, token, input: module.token }
+
+function rewriteDynamicImportCall(call: Call): Call
+  i := call.args.findIndex (arg) =>
+    not isWhitespaceOrEmpty(arg) and not isComma(arg)
+  return call if i < 0
+
+  firstArg := call.args[i]
+  target := firstArg?.type is "Argument" ? firstArg.expression : firstArg
+  return call unless target?.type is "Literal"
+  rewrittenArg .= rewriteModuleSpecifier(target)
+  return call if rewrittenArg is target
+
+  if firstArg?.type is "Argument"
+    rewrittenArg = {
+      ...firstArg
+      expression: rewrittenArg
+      children: firstArg.children.map & is firstArg.expression ? rewrittenArg : &
+    }
+
+  args := call.args[..]
+  args[i] = rewrittenArg
+  {
+    ...call
+    args
+    children: call.children.map & is call.args ? args : &
+  }
 
 // Negate expression inside condition
 function negateCondition(condition)
@@ -2056,6 +2116,8 @@ export {
   processUnaryExpression
   processUnaryNestedExpression
   quoteString
+  rewriteDynamicImportCall
+  rewriteModuleSpecifier
   reorderBindingRestProperty
   replaceNode
   replaceNodes
