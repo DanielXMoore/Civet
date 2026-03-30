@@ -2,13 +2,20 @@
 
 set -euo pipefail
 
-# Translate CIVET_THREADS into Mocha's --parallel
-# In particular, CIVET_THREADS Workers don't work within Mocha
+# Enable parallel mocha by default using available CPU count.
+# Set CIVET_THREADS=N to override, or CIVET_THREADS=0 to disable.
+# Note: CIVET_THREADS refers to Mocha --parallel workers (separate processes),
+# not Node.js worker_threads, which don't work within Mocha.
+threads="${CIVET_THREADS:-$(node -e 'process.stdout.write(String(require("os").cpus().length))')}"
 args=""
-if [ "${CIVET_THREADS:-0}" != 0 ]; then
-  args="--parallel -j $CIVET_THREADS"
-  export CIVET_THREADS=
+if [ "$threads" != "0" ]; then
+  args="--parallel -j $threads"
 fi
+export CIVET_THREADS=
 
-c8 mocha $args "$@"
+if [ "${CIVET_COVERAGE:-0}" = "1" ]; then
+  c8 mocha $args "$@"
+else
+  node_modules/.bin/mocha $args "$@"
+fi
 tsc --noEmit
