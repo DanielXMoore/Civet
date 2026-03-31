@@ -14,12 +14,6 @@ children use the npm-installed version, not the local build.
 
 **Real fix:** Yarn Berry's `workspace:*` protocol handles this correctly. See `upgrade-yarn.md`.
 
-## `yarn install` requires `--ignore-engines`
-
-`lsp/package.json` declares `"node": ">=23.0.0"` but CI and local environments often run Node 20.
-Pass `--ignore-engines` when running `yarn install` until that engine constraint is relaxed or
-the environment is upgraded.
-
 ## Benign "Workspaces can only be enabled in private projects" warning
 
 Yarn 1 emits this warning twice when it loads workspace package manifests that contain a
