@@ -37,16 +37,15 @@ function compileWithCache(source, options) {
   }
 
   const compiled = heraCompile(source, options);
-  const toCache = compiled;
   ensureCacheDir();
   try {
     const tmpPath = cachePath + '.tmp.' + process.pid;
-    fs.writeFileSync(tmpPath, toCache);
+    fs.writeFileSync(tmpPath, compiled);
     fs.renameSync(tmpPath, cachePath);
   } catch {
     // ignore write failure — soft failure
   }
-  return toCache;
+  return compiled;
 }
 
 // CJS hook (for require() of .hera files)
