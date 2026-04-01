@@ -1096,11 +1096,23 @@ function processAssignments(statements): void
         else
           pre.push(["(", lhs, ", "])
           post.push(")")
-        // Use refs to avoid duplicating side-effectful computed indices
+        // Use refs to avoid duplicating side-effectful member access and indices
         { assigned } := expr
         if assigned?.type is "MemberExpression"
           anyRef .= false
-          outerChildren := assigned.children.map (child) =>
+
+          // Check if the base object (first child) needs a ref (e.g. (f())[b++])
+          base := assigned.children[0]
+          baseRef := needsRef base
+          if baseRef
+            anyRef = true
+            { refAssignment } := makeRefAssignment baseRef, base
+            innerBase := makeLeftHandSideExpression refAssignment
+            assigned.children[0] = innerBase
+            innerBase.parent = assigned
+
+          outerChildren := assigned.children.map (child, i) =>
+            return baseRef if i is 0 and baseRef
             return child unless child?.type is "Index"
             ref := needsRef child.expression
             return child unless ref
@@ -1114,6 +1126,44 @@ function processAssignments(statements): void
               children: ["[", ref, "]"]
               expression: ref
             }
+          return { ...assigned, children: outerChildren } if anyRef
+        else if assigned?.type is "CallExpression"
+          { children } := assigned
+          // Find last PropertyAccess or Index (terminal member access)
+          j .= children.length - 1
+          j-- while j >= 0 and children[j]?.type is not like "PropertyAccess", "Index"
+          return assigned if j <= 0
+
+          anyRef .= false
+          outerChildren .= children.slice()
+
+          // Cache the base (everything before terminal access) if it has side effects
+          baseSlice := children.slice 0, j
+          baseRef := needsRef baseSlice
+          if baseRef
+            anyRef = true
+            { refAssignment } := makeRefAssignment baseRef, baseSlice
+            innerBase := makeLeftHandSideExpression refAssignment
+            children.splice 0, j, innerBase
+            innerBase.parent = assigned
+            outerChildren = [baseRef, ...outerChildren.slice(j)]
+            j = 1  // terminal is now at index 1 after splice
+
+          // Cache the terminal Index expression if it has side effects
+          terminal := children[j]
+          if terminal?.type is "Index"
+            ref := needsRef terminal.expression
+            if ref
+              anyRef = true
+              { refAssignment } := makeRefAssignment ref, terminal.expression
+              replaceNode terminal.expression, refAssignment, terminal
+              terminal.expression = refAssignment
+              refAssignment.parent = terminal
+              outerChildren[outerChildren.length - 1] = {
+                type: "Index"
+                children: ["[", ref, "]"]
+                expression: ref
+              }
           return { ...assigned, children: outerChildren } if anyRef
         return assigned
 
