@@ -5,7 +5,8 @@
 Open `civet/lsp/` in another VSCode window.
 
 ```bash
-yarn
+# From the repository root (pnpm workspace)
+pnpm install
 ```
 
 ## Overview
