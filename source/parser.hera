@@ -95,6 +95,8 @@ export const state = {    // parser state
   forbidNewlineBinaryOp: [false],
   forbidImplicitFragment: [false],
   forbidPipeline: [false],
+  forbidJSXTextParenClose: [false],
+  insideJSXAngleChild: 0,
   JSXTagStack: [undefined],
 }
 
@@ -1121,9 +1123,11 @@ OptimizedParenthesizedExpression
 # https://262.ecma-international.org/#prod-ParenthesizedExpression
 ParenthesizedExpression
   # NOTE: Currently ignoring early error checking in https://262.ecma-international.org/#prod-CoverParenthesizedExpressionAndArrowParameterList
-  OpenParen:open AllowAll ( PostfixedCommaExpression __ CloseParen )? RestoreAll ->
-    if (!$3) return $skip
-    const [expression, ws, close] = $3
+  # NOTE: ForbidJSXTextParenCloseIfInAngleChild prevents ) from being consumed
+  # as JSX text when inside a > angle child, so >(x && <p>text) parses correctly
+  OpenParen:open ForbidJSXTextParenCloseIfInAngleChild AllowAll ( PostfixedCommaExpression __ CloseParen )? RestoreAll RestoreJSXTextParenCloseIfInAngleChild ->
+    if (!$4) return $skip
+    const [expression, ws, close] = $4
     if (expression.type === "ParenthesizedExpression" && expression.implicit) {
       return {
         ...expression,
@@ -5733,6 +5737,43 @@ PipelineAllowed
     }
     if (state.pipelineForbidden) return $skip
 
+ForbidJSXTextParenClose
+  "" ->
+    state.forbidJSXTextParenClose.push(true)
+
+RestoreJSXTextParenClose
+  "" ->
+    state.forbidJSXTextParenClose.pop()
+
+JSXTextParenCloseAllowed
+  "" ->
+    const {forbidJSXTextParenClose: s} = state
+    if (s[s.length-1]) return $skip
+
+# Marks that we've entered a JSX > angle child code expression,
+# allowing ParenthesizedExpression to know it should forbid ) in JSX text
+EnterJSXAngleChild
+  "" ->
+    state.insideJSXAngleChild++
+
+LeaveJSXAngleChild
+  "" ->
+    state.insideJSXAngleChild--
+
+# Used in ParenthesizedExpression: when inside a JSX angle child, forbid ) in
+# JSX text so that parenthesized expressions like >(x && <p>text) parse correctly
+ForbidJSXTextParenCloseIfInAngleChild
+  "" ->
+    if (state.insideJSXAngleChild > 0) {
+      state.forbidJSXTextParenClose.push(true)
+    }
+
+RestoreJSXTextParenCloseIfInAngleChild
+  "" ->
+    if (state.insideJSXAngleChild > 0) {
+      state.forbidJSXTextParenClose.pop()
+    }
+
 AllowAll
   AllowTrailingMemberProperty AllowBracedApplication AllowIndentedApplication AllowClassImplicitCall AllowNestedBinaryOp AllowNewlineBinaryOp AllowImplicitFragment AllowPipeline
 
@@ -7861,8 +7902,9 @@ JSXNestedChildren
     }
     return $skip
   # NOTE: Empty JSXNestedChildren can be from newline or unmatched close brace
-  # (e.g. when used in an attribute) or a following closing tag.
-  &( JSXEOS / "}" / JSXClosingElement / JSXClosingFragment ) ->
+  # (e.g. when used in an attribute) or a following closing tag,
+  # or a ) closing a parenthesized expression containing JSX.
+  &( JSXEOS / "}" / ")" / JSXClosingElement / JSXClosingFragment ) ->
     return { children: [], jsxChildren: [] }
 
 # NOTE: Special variations of EOS and Nested that forbid end-of-line JS
@@ -7936,11 +7978,19 @@ JSXText
   # NOTE: additionally excluding newlines to leave the next indentation;
   # leading whitespace will actually be consumed by JSXChildren or
   # JSXNestedChildren (where it's used for indentation).
-  [^{}<>\r\n]+ ->
+  # NOTE: when inside a > code child expression, also exclude ) to allow
+  # parenthesized expressions like >(x && <p>text) to parse correctly
+  !JSXTextParenCloseAllowed [^{}<>)\r\n]+:text ->
     return {
       type: "JSXText",
-      token: $0,
-      $loc,
+      token: text,
+      $loc: text.$loc,
+    }
+  JSXTextParenCloseAllowed [^{}<>\r\n]+:text ->
+    return {
+      type: "JSXText",
+      token: text,
+      $loc: text.$loc,
     }
 
 # https://facebook.github.io/jsx/#prod-JSXChildExpression
@@ -7999,7 +8049,9 @@ JSXCodeChild
 
 JSXCodeChildExpression
   # First check for unindented expression (same line)
-  !JSXEOS ForbidNewlineBinaryOp JSXChildExpression?:expression RestoreNewlineBinaryOp ->
+  # NOTE: EnterJSXAngleChild increments a counter so that ParenthesizedExpression
+  # can forbid ) in JSX text, allowing >(x && <p>text) to parse correctly
+  !JSXEOS ForbidNewlineBinaryOp EnterJSXAngleChild JSXChildExpression?:expression LeaveJSXAngleChild RestoreNewlineBinaryOp ->
     if (!expression) return $skip
     return expression
   # Next check for indented block, which we wrap in an expressionized `do`
@@ -9294,6 +9346,8 @@ Reset
     state.forbidNewlineBinaryOp = [false]
     state.forbidImplicitFragment = [false]
     state.forbidPipeline = [false]
+    state.forbidJSXTextParenClose = [false]
+    state.insideJSXAngleChild = 0
     state.JSXTagStack = [undefined]
 
     state.operators = new Map
