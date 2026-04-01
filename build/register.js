@@ -29,8 +29,9 @@ const civetVersion = findPackageVersion(civetSourceResolved);
 const cacheDir = path.resolve(__dirname, '../.cache/build');
 
 function getCachePath(parts) {
-  const key = crypto.createHash('sha1').update(parts.join('\0')).digest('hex');
-  return path.join(cacheDir, key + '.mjs');
+  const hash = crypto.createHash('sha1');
+  for (const part of parts) hash.update(part).update('\0');
+  return path.join(cacheDir, hash.digest('hex') + '.mjs');
 }
 
 function compileWithCache(type, source, filename) {
