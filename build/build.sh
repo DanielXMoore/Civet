@@ -42,5 +42,5 @@ rm "$out"/cli.js
 
 # create browser build for docs
 if [ "${CIVET_SELF_BUILD:-}" != "1" ] && [ "${CIVET_NO_BROWSER:-}" != "1" ]; then
-  terser "$out"/browser.js --compress --mangle --ecma 2015 --output civet.dev/public/__civet.js
+  ./node_modules/.bin/terser "$out"/browser.js --compress --mangle --ecma 2015 --output civet.dev/public/__civet.js
 fi

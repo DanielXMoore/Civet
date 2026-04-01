@@ -19,17 +19,28 @@ and then show the various ways that they can be specified.
 
 ## Import Options
 
+| Configuration         | What it enables |
+|-----------------------|------------------------------------------|
+| `rewrite-civet-imports=.ext` | Rewrite `import "file.civet"` to `import "file.ext"` |
+| `-rewrite-ts-imports` | disable rewriting `.ts` → `.js` in imports to avoid [this issue](https://github.com/microsoft/TypeScript/issues/42151) (useful in environments supporting direct imports of `.ts`) |
+
 TypeScript only allows importing `.ts` files as `.js`;
 see [this issue](https://github.com/microsoft/TypeScript/issues/42151).
 As a workaround,
 Civet automatically rewrites imports to `.ts` into imports to `.js`.
 Some environments, such as Deno, allow importing `.ts` directly,
 and following ESM, require importing files with the correct extension.
+`rewrite-ts-imports` allows you to disable the rewriting of `.ts` to `.js`,
+or rewrite to a different extension.
 
-| Configuration         | What it enables |
-|-----------------------|------------------------------------------|
-| `rewrite-civet-imports=.ext` | Rewrite `import "file.civet"` to `import "file.ext"` |
-| `-rewrite-ts-imports` | disable rewriting `.ts` → `.js` in imports to avoid [this issue](https://github.com/microsoft/TypeScript/issues/42151) (useful in environments supporting direct imports of `.ts`) |
+We generally encourage importing `.civet` files with a `.civet` extension.
+But when you're building multiple `.civet` files without bundling,
+you'll probably want those extensions rewritten to your output extension.
+`rewrite-civet-imports` provides this functionality.
+
+These rewrites apply to normal `import`/`export` module specifiers and to
+dynamic `import(...)` calls whose argument is a plain string literal.
+Template literals and other computed specifiers are left unchanged.
 
 ## Language Options
 

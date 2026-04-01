@@ -67,6 +67,8 @@ import {
   processUnaryExpression,
   processUnaryNestedExpression,
   quoteString,
+  rewriteDynamicImportCall,
+  rewriteModuleSpecifier,
   reorderBindingRestProperty,
   replaceNodes,
   skipImplicitArguments,
@@ -972,7 +974,8 @@ TrailingPostfix
 FatArrowBody
   # If same-line single expression, avoid wrapping in braces
   # NOTE: Skip expressionized statements, so they get braced instead
-  !EOS !( _? ExpressionizedStatement ) NonPipelineExpression:exp !TrailingDeclaration !TrailingPipe !TrailingPostfix !SemicolonDelimiter ->
+  # NOTE: Skip declarations (e.g. `{ foo } from bar`), so they get braced instead
+  !EOS !( _? ExpressionizedStatement ) !( _? Declaration ) NonPipelineExpression:exp !TrailingDeclaration !TrailingPipe !TrailingPostfix !SemicolonDelimiter ->
     // Ensure object literal is wrapped in parens
     exp = makeExpressionStatement(exp)
     const expressions = [["", exp]]
@@ -1609,10 +1612,11 @@ CallExpression
     return dynamizeImportDeclarationExpression([i, iws, imports, fws, from])
   # Dynamic import(), with optional parentheses when not used at top level.
   # (At top level, ImportDeclaration will match first.)
-  "import" ArgumentsWithTrailingCallExpressions CallExpressionRest*:rest ->
+  "import" ArgumentsWithTrailingCallExpressions:argsWithTrailing CallExpressionRest*:rest ->
+    const [args, ...trailing] = argsWithTrailing
     return processCallMemberExpression({
       type: "CallExpression",
-      children: [$1, ...$2, ...rest.flat()],
+      children: [$1, rewriteDynamicImportCall(args), ...trailing, ...rest.flat()],
     })
 
   MemberExpression:member CallExpressionRest*:rest AllowedTrailingCallExpressions?:trailing ->
@@ -6187,23 +6191,7 @@ ModuleExportName
 # https://262.ecma-international.org/#prod-ModuleSpecifier
 ModuleSpecifier
   UnprocessedModuleSpecifier:module ImportAssertion?:assertion ->
-    let { token } = module
-    if (config.rewriteTsImports) {
-      // Workaround to fix:
-      // https://github.com/microsoft/TypeScript/issues/42151
-      // import t.ts
-      // "An import path cannot end with a '.ts' extension. Consider importing './t.js' instead."
-      // convert .[mc]?ts to .[mc]?js
-      token = token.replace(/\.([mc])?ts(['"])$/, ".$1js$2")
-    }
-    if (config.rewriteCivetImports) {
-      token = token.replace(/\.civet(['"])$/,
-        `${config.rewriteCivetImports.replace(/\$/g, '$$')}$1`)
-    }
-
-    if (token !== module.token) {
-      module = { ...module, token, input: module.token }
-    }
+    module = rewriteModuleSpecifier(module)
 
     return {
       type: "ModuleSpecifier",
@@ -7674,7 +7662,7 @@ JSXShorthandString
   # NOTE: TemplateLiteral must be before StringLiteral,
   # so that CoffeeScript interpolated strings get checked first.
   StringLiteral
-  OpenBrace PostfixedExpression Whitespace? CloseBrace
+  OpenBrace PostfixedExpression __ CloseBrace
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeName
 JSXAttributeName
@@ -7696,7 +7684,7 @@ JSXAttributeValue
   # https://facebook.github.io/jsx/#prod-JSXDoubleStringCharacters
   # https://facebook.github.io/jsx/#prod-JSXSingleStringCharacters
   # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
-  OpenBrace PostfixedExpression Whitespace? CloseBrace
+  OpenBrace PostfixedExpression __ CloseBrace
   JSXElement
   JSXFragment
   InsertInlineOpenBrace:open InlineJSXAttributeValue:value InsertCloseBrace:close &JSXAttributeSpace ->
@@ -7766,7 +7754,7 @@ InlineJSXCallExpression
       type: "CallExpression",
       children: [
         $1,
-        args,
+        rewriteDynamicImportCall(args),
         ...rest.flat()
       ],
     })
