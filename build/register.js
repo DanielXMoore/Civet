@@ -28,17 +28,24 @@ const civetVersion = findPackageVersion(civetSourceResolved);
 
 const cacheDir = path.resolve(__dirname, '../.cache/build');
 
-function getCachePath(parts) {
-  const hash = crypto.createHash('sha1');
-  for (const part of parts) hash.update(part).update('\0');
-  return path.join(cacheDir, hash.digest('hex') + '.mjs');
-}
-
 function compileWithCache(type, source, filename) {
-  const parts = type === 'hera'
-    ? [heraVersion, civetVersion, source, filename, 'hera-cjs']
-    : [civetVersion, source, filename, 'civet-cjs'];
-  const p = getCachePath(parts);
+  let p;
+  if (type === 'civet') {
+    // Match esm-hook.mjs cache key exactly so CJS→ESM escalation hits cache
+    const key = crypto.createHash('sha1')
+      .update(civetVersion).update('\0')
+      .update(source).update('\0')
+      .update(filename).update('\0civet')
+      .digest('hex');
+    p = path.join(cacheDir, key + '.mjs');
+  } else {
+    // hera-cjs: separate key (different compile options than ESM hook)
+    const hash = crypto.createHash('sha1');
+    for (const part of [heraVersion, civetVersion, source, filename, 'hera-cjs']) {
+      hash.update(part).update('\0');
+    }
+    p = path.join(cacheDir, hash.digest('hex') + '.mjs');
+  }
 
   try { return fs.readFileSync(p, 'utf8'); } catch {}
 
