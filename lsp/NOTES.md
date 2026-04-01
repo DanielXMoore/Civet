@@ -4,7 +4,8 @@ Publishing VSCode Extension
 May require setting up credentials: https://code.visualstudio.com/api/working-with-extensions/publishing-extension
 
 ```bash
-yarn vsce-publish
+# From `lsp/` (run `pnpm install` from the repository root first)
+pnpm run vsce-publish
 ```
 
 Publishing Open VSX Extension

@@ -63,8 +63,14 @@ export default async function vitePressConfig() {
             const code = lines.slice(1, -1).join('\n');
             const { tsCode } = compileCivet(code, civet, raw ? null : prettier,
               { comptime });
-            const inputHtml = highlighter.codeToHtml(code, { lang: 'coffee' });
-            const outputHtml = highlighter.codeToHtml(tsCode, { lang: 'tsx' });
+            const inputHtml = highlighter.codeToHtml(code, {
+              lang: 'coffee',
+              theme: 'one-dark-pro',
+            });
+            const outputHtml = highlighter.codeToHtml(tsCode, {
+              lang: 'tsx',
+              theme: 'one-dark-pro',
+            });
 
             return `<Playground b64-code="${b64.encode(code)}"${raw ? " raw" : ""}${comptime ? " comptime" : ""}>
               <template #input>${inputHtml}</template>
