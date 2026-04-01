@@ -39,14 +39,14 @@ so maybe brush up on those depending on your pre-existing experience.
 Civet gets built by the following simple commands:
 
 ```sh
-yarn
-yarn build
+pnpm install
+pnpm build
 ```
 
 To use multiple cores while building:
 
 ```sh
-CIVET_THREADS=4 yarn build
+CIVET_THREADS=4 pnpm build
 ```
 
 ## Testing
@@ -54,13 +54,13 @@ CIVET_THREADS=4 yarn build
 You can run all tests via
 
 ```sh
-yarn test
+pnpm test
 ```
 
 To use multiple cores while testing:
 
 ```sh
-CIVET_THREADS=4 yarn test
+CIVET_THREADS=4 pnpm test
 ```
 
 A useful trick when developing is to pick one test and add
@@ -76,7 +76,7 @@ testCase.only """
 
 In particular, if you're fixing a bug or adding a feature, a good approach is
 to add a broken test, and temporarily add `.only`, so that you can repeatedly
-run the test via `yarn test`. (You do not need to `yarn build` in between.)
+run the test via `pnpm test`. (You do not need to `pnpm build` in between.)
 With only one test running, you can reasonably add `console.log` and other
 debugging statements to figure out what's going on.
 
@@ -84,7 +84,7 @@ debugging statements to figure out what's going on.
 
 A useful trick is to add a `debugger` statement inside a rule handler in
 `source/parser.hera`, or use the `DebugHere` rule to an expansion,
-and then run Node in debug mode via `yarn test --inspect-brk`.
+and then run Node in debug mode via `pnpm test --inspect-brk`.
 You can attach a debugger as follows:
 
 1. In Chrome, open up dev tools.
@@ -100,7 +100,7 @@ You can attach a debugger as follows:
 
    Alternatively, turn on
    [Auto Attach](https://code.visualstudio.com/docs/nodejs/nodejs-debugging#_auto-attach)
-   and just run `yarn test --inspect` from the VSCode Terminal.
+   and just run `pnpm test --inspect` from the VSCode Terminal.
    You should immediately arrive at your breakpoint.
 
 Then you can step through the parser and see what is going on in practice
@@ -122,7 +122,7 @@ minimal a test case as possible.
 ## CLI
 
 A quick way to experiment with the parser (after building it with
-`yarn build`) is to run the CLI in compilation mode:
+`pnpm build`) is to run the CLI in compilation mode:
 
 ```sh
 dist/civet -c
@@ -193,11 +193,11 @@ relevant channel (e.g. `#compiler` for questions about the parser).
 
 ## Releasing to NPM
 
-1. Increment `version` in `package.json` (e.g. by running `yarn version`)
+1. Increment `version` in `package.json` (e.g. by running `pnpm version patch`, or `minor` / `major` as appropriate)
 2. Run `npm publish`, which will:
-   * `yarn build` to build for release
-   * `yarn test` to make sure nothing is broken
-   * `yarn changelog --release` to update `CHANGELOG.md`
+   * `pnpm build` to build for release
+   * `pnpm test` to make sure nothing is broken
+   * `pnpm changelog --release` to update `CHANGELOG.md`
      and (ask to) create a release commit and tag it
    * Submit files to NPM (usually requiring 2FA)
 3. `git push --follow-tags` to push new commit and tag

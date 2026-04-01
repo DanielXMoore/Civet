@@ -292,7 +292,7 @@ You can also add `.js` and `.ts` extensions if you want to mix and match! Even `
 Execute the tests
 
 ```bash
-yarn test
+pnpm test
 ```
 
 Step 4: Enjoy!
