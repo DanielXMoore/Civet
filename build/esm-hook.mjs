@@ -3,22 +3,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const _require = createRequire(import.meta.url);
-const { getCachePath, readCache, writeCache } = _require('./cache-utils.js');
+const { getCachePath, readCache, writeCache, civetCompile, heraCompile } = _require('./cache-utils.js');
 const baseURL = pathToFileURL(process.cwd() + '/').href;
 
-let cacheDir;
-let civetCompile;
-let civetVersion;
-let heraCompile;
-let heraVersion;
-
-export function initialize({ civetSource, civetVersion: cv, cacheDir: cd }) {
-  cacheDir = cd;
-  civetVersion = cv;
-  civetCompile = _require(civetSource).compile;
-  heraCompile = _require('@danielx/hera/dist/main.js').compile;
-  heraVersion = _require('@danielx/hera/package.json').version;
-}
 
 export function resolve(specifier, context, next) {
   const parentURL = context.parentURL ?? baseURL;
@@ -38,9 +25,7 @@ export async function load(url, context, next) {
   const filename = fileURLToPath(url);
   const source = readFileSync(filename, 'utf8');
 
-  const p = format === 'hera'
-    ? getCachePath({ type: 'hera', heraVersion, civetVersion, source, filename, cacheDir })
-    : getCachePath({ type: 'civet', civetVersion, source, filename, cacheDir });
+  const p = getCachePath({ type: format, source, filename });
 
   const cached = readCache(p);
   if (cached) return { format: 'module', source: cached, shortCircuit: true };

@@ -4,36 +4,49 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
+const { compile: heraCompile } = require('@danielx/hera/dist/main.js');
+const heraVersion = require('@danielx/hera/package.json').version;
+
+const civetSourceRaw = process.env.CIVET_SOURCE ?? './node_modules/@danielx/civet';
+const civetSourceResolved = civetSourceRaw.startsWith('.')
+  ? require.resolve(path.resolve(process.cwd(), civetSourceRaw))
+  : require.resolve(civetSourceRaw);
+
+const civetSourceMtime = fs.statSync(civetSourceResolved).mtime.getTime().toString();
+const { compile: civetCompile } = require(civetSourceResolved);
+
+function findPackageVersion(resolvedPath) {
+  let dir = path.dirname(resolvedPath);
+  while (true) {
+    try { return require(path.join(dir, 'package.json')).version; } catch {}
+    const parent = path.dirname(dir);
+    if (parent === dir) return 'unknown';
+    dir = parent;
+  }
+}
+const civetVersion = findPackageVersion(civetSourceResolved);
+
+const cacheDir = path.resolve(__dirname, '../.cache/build');
+
+
 /**
  * Compute cache file path for a compiled source file.
- *
- * type 'civet'    — ESM civet (shared key between CJS hook and ESM hook)
- * type 'hera'     — ESM hera  (ESM hook, module:true compilation)
- * type 'hera-cjs' — CJS hera  (CJS hook, different compile options)
  */
-function getCachePath({ type, civetVersion, heraVersion = '', source, filename, cacheDir }) {
-  let key;
+function getCachePath({ type, source, filename }) {
+  const hash = crypto.createHash('sha1');
+  const parts = [civetVersion, civetSourceMtime, source, filename];
   if (type === 'civet') {
-    key = crypto.createHash('sha1')
-      .update(civetVersion).update('\0')
-      .update(source).update('\0')
-      .update(filename).update('\0civet')
-      .digest('hex');
-  } else if (type === 'hera') {
-    key = crypto.createHash('sha1')
-      .update(heraVersion).update('\0')
-      .update(civetVersion).update('\0')
-      .update(source).update('\0')
-      .update(filename).update('\0hera')
-      .digest('hex');
-  } else {
-    // hera-cjs
-    const hash = crypto.createHash('sha1');
-    for (const part of [heraVersion, civetVersion, source, filename, 'hera-cjs']) {
+    for (const part of parts) {
       hash.update(part).update('\0');
     }
-    key = hash.digest('hex');
+  } else if (type === 'hera') {
+    for (const part of [heraVersion, ...parts]) {
+      hash.update(part).update('\0');
+    }
+  } else {
+    throw new Error(`Invalid type: ${type}`);
   }
+  const key = hash.digest('hex');
   return path.join(cacheDir, key + '.mjs');
 }
 
@@ -50,4 +63,4 @@ function writeCache(p, content) {
   } catch {}
 }
 
-module.exports = { getCachePath, readCache, writeCache };
+module.exports = { getCachePath, readCache, writeCache, civetCompile, heraCompile };
