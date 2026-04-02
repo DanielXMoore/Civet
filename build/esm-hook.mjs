@@ -3,9 +3,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const _require = createRequire(import.meta.url);
-const { getCachePath, readCache, writeCache, civetCompile, heraCompile } = _require('./cache-utils.js');
+const { compileWithCache } = _require('./cache-utils.js');
 const baseURL = pathToFileURL(process.cwd() + '/').href;
-
 
 export function resolve(specifier, context, next) {
   const parentURL = context.parentURL ?? baseURL;
@@ -25,19 +24,6 @@ export async function load(url, context, next) {
   const filename = fileURLToPath(url);
   const source = readFileSync(filename, 'utf8');
 
-  const p = getCachePath({ type: format, source, filename });
-
-  const cached = readCache(p);
-  if (cached) return { format: 'module', source: cached, shortCircuit: true };
-
-  let js;
-  if (format === 'hera') {
-    const civetOutput = heraCompile(source, { filename, module: true });
-    js = await civetCompile(civetOutput, { filename, js: true, inlineMap: true });
-  } else {
-    js = await civetCompile(source, { filename, js: true, inlineMap: true });
-  }
-
-  writeCache(p, js);
+  const js = await compileWithCache(source, filename);
   return { format: 'module', source: js, shortCircuit: true };
 }
