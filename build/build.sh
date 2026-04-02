@@ -8,9 +8,9 @@ civet_bin="${CIVET_BIN:-civet}"
 rm -rf "$out"
 mkdir "$out"
 
-# DEFAULT_EXTENSIONS from Vite (kept in sync with vite/src/constants.ts)
+# tree-shake needed constants from Vite
 if [ "${CIVET_SELF_BUILD:-}" != "1" ]; then
-  echo 'export const DEFAULT_EXTENSIONS = [".mjs",".js",".mts",".ts",".jsx",".tsx",".json"]' >./source/unplugin/constants.mjs
+  node -e 'import("./node_modules/vite/dist/node/constants.js").then((c)=>console.log(`export const DEFAULT_EXTENSIONS = ${JSON.stringify(c.DEFAULT_EXTENSIONS)}`))' >./source/unplugin/constants.mjs
 fi
 
 # types (these get used for type checking during esbuild, so must go first)
