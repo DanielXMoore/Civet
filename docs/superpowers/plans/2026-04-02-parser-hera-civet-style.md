@@ -8,6 +8,8 @@
 
 **Tech Stack:** Civet, Hera PEG grammar, Node.js/Mocha test suite
 
+**Note on line numbers:** Line numbers in each task are approximate starting points — they will drift as earlier tasks are completed. Use the named grammar rules as the authoritative anchors when locating sections in the file.
+
 **Style guide:** `docs/superpowers/specs/2026-04-02-parser-hera-civet-style-guide.md`
 
 **Key rules (summary):**
