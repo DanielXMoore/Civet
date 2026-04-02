@@ -1,9 +1,9 @@
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const _require = createRequire(import.meta.url);
+const { getCachePath, readCache, writeCache } = _require('./cache-utils.js');
 const baseURL = pathToFileURL(process.cwd() + '/').href;
 
 let cacheDir;
@@ -31,23 +31,6 @@ export function resolve(specifier, context, next) {
   return next(specifier, context);
 }
 
-function getCachePath(key) {
-  return `${cacheDir}/${key}.mjs`;
-}
-
-function readCache(p) {
-  try { return readFileSync(p, 'utf8'); } catch {}
-}
-
-function writeCache(p, content) {
-  try { mkdirSync(cacheDir, { recursive: true }); } catch {}
-  try {
-    const tmp = p + '.tmp.' + process.pid;
-    writeFileSync(tmp, content);
-    renameSync(tmp, p);
-  } catch {}
-}
-
 export async function load(url, context, next) {
   const { format } = context;
   if (format !== 'hera' && format !== 'civet') return next(url, context);
@@ -55,20 +38,10 @@ export async function load(url, context, next) {
   const filename = fileURLToPath(url);
   const source = readFileSync(filename, 'utf8');
 
-  const key = format === 'hera'
-    ? createHash('sha1')
-        .update(heraVersion).update('\0')
-        .update(civetVersion).update('\0')
-        .update(source).update('\0')
-        .update(filename).update('\0hera')
-        .digest('hex')
-    : createHash('sha1')
-        .update(civetVersion).update('\0')
-        .update(source).update('\0')
-        .update(filename).update('\0civet')
-        .digest('hex');
+  const p = format === 'hera'
+    ? getCachePath({ type: 'hera', heraVersion, civetVersion, source, filename, cacheDir })
+    : getCachePath({ type: 'civet', civetVersion, source, filename, cacheDir });
 
-  const p = getCachePath(key);
   const cached = readCache(p);
   if (cached) return { format: 'module', source: cached, shortCircuit: true };
 
