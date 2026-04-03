@@ -1,0 +1,261 @@
+import assert from assert
+
+{ dirname, resolve, createRequire, default: shimDefault } from ../../source/browser-shim.civet
+
+describe "browser-shim", ->
+  describe "dirname", ->
+    it "returns the directory part of a path", ->
+      result := dirname "/foo/bar/baz.js"
+      assert.equal result, "/foo/bar"
+
+    it "handles root-level path", ->
+      result := dirname "/baz.js"
+      assert.equal result, "/"
+
+    it "handles path with no slash", ->
+      result := dirname "file.js"
+      assert.equal result, "."
+
+    it "handles empty string", ->
+      result := dirname ""
+      assert.equal result, "."
+
+    it "handles trailing slash", ->
+      result := dirname "/foo/bar/"
+      assert.equal result, "/foo/bar"
+
+  describe "resolve", ->
+    it "returns the path unchanged", ->
+      assert.equal resolve("/some/path"), "/some/path"
+
+    it "returns relative path unchanged", ->
+      assert.equal resolve("relative/path"), "relative/path"
+
+    it "returns empty string unchanged", ->
+      assert.equal resolve(""), ""
+
+  describe "createRequire", ->
+    it "returns a function", ->
+      req := createRequire "/some/path"
+      assert.equal typeof req, "function"
+
+    it "returned function throws ReferenceError", ->
+      req := createRequire "/some/path"
+      assert.throws
+        -> req "some-module"
+        ReferenceError
+
+    it "error message mentions comptime", ->
+      req := createRequire "/some/path"
+      assert.throws
+        -> req "some-module"
+        /comptime/
+
+    it "returns a new function on each call", ->
+      req1 := createRequire "/path/one"
+      req2 := createRequire "/path/two"
+      assert.notEqual req1, req2
+
+  describe "default export", ->
+    it "exports dirname", ->
+      assert.equal shimDefault.dirname, dirname
+
+    it "exports resolve", ->
+      assert.equal shimDefault.resolve, resolve
+
+    it "exports createRequire", ->
+      assert.equal shimDefault.createRequire, createRequire
+
+{ runScript, runScripts, autoRunScripts } from ../../source/browser.civet
+
+function makeScript(opts: {
+  src?: string
+  dataSrc?: string
+  id?: string
+  innerHTML?: string
+  type?: string
+}): HTMLScriptElement
+  attrs: Record<string, string> := {}
+  if opts.dataSrc then attrs["data-src"] = opts.dataSrc
+  {
+    src: opts.src ?? ""
+    id: opts.id ?? ""
+    innerHTML: opts.innerHTML ?? ""
+    type: opts.type ?? "text/civet"
+    getAttribute: (name: string) => attrs[name] ?? null
+    hasAttribute: (name: string) => name in attrs
+    nodeType: 1
+    tagName: "SCRIPT"
+  } as unknown as HTMLScriptElement
+
+async function withMockFetch(
+  responseCode: string
+  fn: (fetchedUrls: string[]) => Promise<void>
+): Promise<void>
+  origFetch := (globalThis as any).fetch
+  fetchedUrls: string[] := []
+  ;(globalThis as any).fetch = async (url: string) =>
+    fetchedUrls.push url
+    { text: async () => responseCode }
+  try
+    await fn fetchedUrls
+  finally
+    if origFetch is undefined
+      delete (globalThis as any).fetch
+    else
+      (globalThis as any).fetch = origFetch
+
+function withMockObserver(
+  fn: (observed: Array<[any, any]>, MockObserver: any) => void
+): void
+  observed: Array<[any, any]> := []
+  origObserver := (globalThis as any).MutationObserver
+  class MockObserver
+    constructor(@callback: Function)
+    observe(target: any, opts: any)
+      observed.push [target, opts]
+    disconnect() {}
+  ;(globalThis as any).MutationObserver = MockObserver
+  try
+    fn observed, MockObserver
+  finally
+    (globalThis as any).MutationObserver = origObserver
+
+describe "browser", ->
+  let origWindow: typeof globalThis.window
+  let evalledCode: string[]
+  let mockWindow: any
+
+  beforeEach ->
+    origWindow = (globalThis as any).window
+    evalledCode = []
+    mockWindow =
+      document:
+        querySelectorAll: (_sel: string) => []
+      eval: (code: string) =>
+        evalledCode.push code
+        undefined
+      addEventListener: (_event: string, _handler: () => void) => undefined
+    (globalThis as any).window = mockWindow
+
+  afterEach ->
+    (globalThis as any).window = origWindow
+
+  describe "runScript", ->
+    it "compiles inline script content and evals it", ->
+      @timeout 10000
+      script := makeScript { innerHTML: "x := 42" }
+      await runScript script
+      assert evalledCode.length > 0, "eval should have been called"
+      assert.equal typeof evalledCode[0], "string"
+
+    it "uses script id as filename when present", ->
+      @timeout 10000
+      script := makeScript { innerHTML: "y := 1", id: "my-script" }
+      await runScript script
+      assert evalledCode.length > 0
+
+    it "uses provided name as filename fallback", ->
+      @timeout 10000
+      script := makeScript { innerHTML: "z := 2" }
+      await runScript script, "<script>0"
+      assert evalledCode.length > 0
+
+    it "compiled output is a non-empty string", ->
+      @timeout 10000
+      script := makeScript { innerHTML: "a := 'hello'" }
+      await runScript script
+      assert evalledCode[0].length > 0
+
+    it "fetches remote src when script.src is set", ->
+      @timeout 10000
+      await withMockFetch "remoteVar := 99", async (fetchedUrls) ->
+        script := makeScript { src: "https://example.com/script.civet" }
+        await runScript script
+        assert fetchedUrls.includes "https://example.com/script.civet"
+        assert evalledCode.length > 0
+
+    it "fetches data-src when present", ->
+      @timeout 10000
+      await withMockFetch "dataSrcVar := 7", async (fetchedUrls) ->
+        script := makeScript { dataSrc: "https://example.com/data.civet" }
+        await runScript script
+        assert fetchedUrls.includes "https://example.com/data.civet"
+        assert evalledCode.length > 0
+
+  describe "runScripts", ->
+    it "queries for script[type='text/civet'] elements", ->
+      @timeout 10000
+      queriedSelectors: string[] := []
+      mockWindow.document.querySelectorAll = (sel: string) =>
+        queriedSelectors.push sel
+        []
+      await runScripts()
+      assert queriedSelectors.some (s) => s.includes "text/civet"
+
+    it "accepts a custom type selector", ->
+      @timeout 10000
+      queriedSelectors: string[] := []
+      mockWindow.document.querySelectorAll = (sel: string) =>
+        queriedSelectors.push sel
+        []
+      await runScripts "text/mycivet"
+      assert queriedSelectors.some (s) => s.includes "text/mycivet"
+
+    it "does nothing when no scripts found", ->
+      mockWindow.document.querySelectorAll = (_sel: string) => []
+      await runScripts()
+      assert.equal evalledCode.length, 0
+
+    it "compiles and evals found scripts", ->
+      @timeout 10000
+      script := makeScript { innerHTML: "runScriptsVar := 42" }
+      mockWindow.document.querySelectorAll = (_sel: string) => [script]
+      await runScripts()
+      assert evalledCode.length > 0, "eval should have been called for the found script"
+
+  describe "autoRunScripts", ->
+    it "returns a MutationObserver", ->
+      withMockObserver (observed, MockObserver) ->
+        root1 := { nodeType: 1 } as unknown as HTMLElement
+        observer := autoRunScripts [root1]
+        assert observer instanceof MockObserver
+
+    it "observes each provided root element", ->
+      withMockObserver (observed) ->
+        root1 := { nodeType: 1 } as unknown as HTMLElement
+        root2 := { nodeType: 1 } as unknown as HTMLElement
+        autoRunScripts [root1, root2]
+        assert.equal observed.length, 2
+        assert observed.some ([t]) => t is root1
+        assert observed.some ([t]) => t is root2
+
+    it "always sets childList: true in observer options", ->
+      withMockObserver (observed) ->
+        root := { nodeType: 1 } as unknown as HTMLElement
+        autoRunScripts [root], { subtree: true }
+        assert observed[0][1].childList, "childList should be true"
+        assert observed[0][1].subtree, "extra options should be preserved"
+
+    it "mutation callback runs scripts on added SCRIPT nodes", ->
+      @timeout 10000
+      let capturedCallback: Function | null = null
+      origObserver := (globalThis as any).MutationObserver
+      class MockObserver
+        constructor(cb: Function)
+          capturedCallback = cb
+        observe(_target: any, _opts: any) {}
+        disconnect() {}
+      ;(globalThis as any).MutationObserver = MockObserver
+      try
+        root := { nodeType: 1 } as unknown as HTMLElement
+        autoRunScripts [root]
+        assert capturedCallback?, "callback should have been captured"
+        scriptNode := makeScript { innerHTML: "mutated := true" }
+        mutation :=
+          type: "childList"
+          addedNodes: [scriptNode]
+        await capturedCallback [mutation]
+        assert evalledCode.length > 0, "should have evaled the added script"
+      finally
+        (globalThis as any).MutationObserver = origObserver
