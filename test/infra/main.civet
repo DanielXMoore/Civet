@@ -1,0 +1,201 @@
+import assert from assert
+import { compile, decode, isCompileError, ParseError, ParseErrors, parse, parseProgram, generate, prune, sourcemap, SourceMap } from ../../source/main.civet
+
+function extractInlineSourceMap(code: string)
+  match := (code as string).match /sourceMappingURL=data:application\/json;base64,([A-Za-z0-9+/=]+)/
+  return undefined unless match
+  JSON.parse Buffer.from(match[1], "base64").toString("utf8")
+
+describe "decode", ->
+  it "returns string as-is", ->
+    result := decode "hello"
+    assert.equal result, "hello"
+
+  it "handles UTF-8 Buffer without BOM", ->
+    buf := Buffer.from "hello world", "utf8"
+    assert.equal decode(buf), "hello world"
+
+  it "strips UTF-8 BOM (EF BB BF)", ->
+    bom := Buffer.from [0xEF, 0xBB, 0xBF]
+    buf := Buffer.concat [bom, Buffer.from("hello", "utf8")]
+    assert.equal decode(buf), "hello"
+
+  it "strips UTF-16 LE BOM (FF FE)", ->
+    bom := Buffer.from [0xFF, 0xFE]
+    buf := Buffer.concat [bom, Buffer.from("hi", "utf16le")]
+    assert.equal decode(buf), "hi"
+
+  it "handles UTF-16 BE BOM (FE FF)", ->
+    text := "hi"
+    leBytes := Buffer.from text, "utf16le"
+    // Swap byte pairs to produce UTF-16 BE encoding
+    beBytes := Buffer.alloc leBytes.length
+    for i of [0..leBytes.length - 2] by 2
+      beBytes[i] = leBytes[i + 1]
+      beBytes[i + 1] = leBytes[i]
+    bom := Buffer.from [0xFE, 0xFF]
+    assert.equal decode(Buffer.concat [bom, beBytes]), text
+
+describe "ParseErrors", ->
+  it "is an Error subclass with name and joined message", ->
+    errors := [
+      { message: "first error", name: "ParseError" } as any
+      { message: "second error", name: "ParseError" } as any
+    ]
+    err := new ParseErrors errors
+    assert err instanceof Error
+    assert err instanceof ParseErrors
+    assert.equal err.name, "ParseErrors"
+    assert err.message.includes "first error"
+    assert err.message.includes "second error"
+    assert.strictEqual err.errors, errors
+
+describe "isCompileError", ->
+  it "returns true for ParseErrors instance", ->
+    err := new ParseErrors [{ message: "e", name: "ParseError" } as any]
+    assert isCompileError err
+
+  it "returns true for ParseError (single) instance", ->
+    // ParseError (singular) is thrown directly by parseProgram; catch it
+    let singleError: any
+    try
+      await compile ">>> invalid <<<"
+    catch err
+      singleError = err
+    assert singleError?, "expected compile to throw a ParseError"
+    assert singleError instanceof ParseError, "expected a ParseError instance"
+    assert isCompileError singleError
+
+  it "returns false for generic Error and non-errors", ->
+    assert.equal isCompileError(new Error "regular"), false
+    assert.equal isCompileError({}), false
+    assert.equal isCompileError("string"), false
+    assert.equal isCompileError(null), false
+
+describe "compile basic API", ->
+  it "compiles simple Civet to a string with const declaration", ->
+    result := await compile "x := 1"
+    assert typeof result is "string"
+    assert (result as string).includes "const x"
+
+  it "compiles with js: true option", ->
+    result := await compile "x := 1", js: true
+    assert typeof result is "string"
+    assert (result as string).includes "const x"
+
+  it "compiles empty string", ->
+    result := await compile ""
+    assert typeof result is "string"
+
+  it "compiles unicode source", ->
+    result := await compile "café := '☕'"
+    assert typeof result is "string"
+
+  it "returns { code, sourceMap } object when sourceMap: true", ->
+    result := await compile "x := 1", sourceMap: true
+    assert typeof result is "object"
+    assert (result as any).code.includes "const x"
+    assert (result as any).sourceMap?, "should have sourceMap property"
+
+  it "inlines source map comment when inlineMap: true", ->
+    result := await compile "x := 1", { inlineMap: true, filename: "test.civet" }
+    assert typeof result is "string"
+    assert (result as string).includes "sourceMappingURL"
+
+  it "inlineMap with js: true uses .jsx output filename in source map", ->
+    result := await compile "x := 1", { inlineMap: true, js: true, filename: "test.civet" }
+    mapData := extractInlineSourceMap result as string
+    assert mapData?, "should have valid source map data"
+    assert.equal mapData.file, "test.civet.jsx"
+
+  it "inlineMap default (no js) uses .tsx output filename in source map", ->
+    result := await compile "x := 1", { inlineMap: true, filename: "test.civet" }
+    mapData := extractInlineSourceMap result as string
+    assert mapData?, "should have valid source map data"
+    assert.equal mapData.file, "test.civet.tsx"
+
+  it "inlineMap with outputFilename uses that filename in source map", ->
+    result := await compile "x := 1",
+      inlineMap: true
+      filename: "test.civet"
+      outputFilename: "custom.js"
+    mapData := extractInlineSourceMap result as string
+    assert mapData?, "should have valid source map data"
+    assert.equal mapData.file, "custom.js"
+
+  it "returns AST when ast: true", ->
+    result := await compile "x := 1", ast: true
+    assert typeof result is "object"
+    assert result?, "AST should not be null/undefined"
+
+  it "returns raw AST when ast: 'raw'", ->
+    result := await compile "x := 1", ast: "raw"
+    assert typeof result is "object"
+    assert result?, "raw AST should not be null/undefined"
+
+  it "accepts filename option", ->
+    result := await compile "x := 1", filename: "myfile.civet"
+    assert typeof result is "string"
+
+  it "enables coffeeCompat for .coffee files without civet pragma", ->
+    // CoffeeScript existential `x?` compiles differently in compat mode
+    result := await compile "x?", filename: "test.coffee"
+    assert typeof result is "string"
+    // coffeeCompat enables parsing of CoffeeScript-specific syntax
+    assert (result as string).length > 0
+
+  it "compiles sync when sync: true", ->
+    result := compile "x := 1", sync: true
+    // sync: true bypasses Promise wrapping, returning the string directly
+    assert typeof result is "string"
+    assert.equal typeof (result as any)?.then, "undefined", "result should not be a Promise"
+
+  it "noCache option works", ->
+    result := await compile "x := 1", noCache: true
+    assert typeof result is "string"
+    assert (result as string).includes "const x"
+
+describe "compile error handling", ->
+  it "throws a compile error for invalid syntax by default", ->
+    caught .= false
+    try
+      await compile "::invalid syntax :::"
+    catch err
+      caught = true
+      assert isCompileError(err), "expected a compile error, got: " + err
+    assert caught, "should have thrown a compile error"
+
+  it "throws a compile error for syntax that fails to parse", ->
+    caught .= false
+    try
+      await compile ">>> this is not valid <<<"
+    catch err
+      caught = true
+      assert isCompileError(err), "expected a compile error, got: " + err
+    assert caught, "should have thrown"
+
+describe "compile with Buffer input", ->
+  it "compiles Buffer input as UTF-8", ->
+    result := await compile Buffer.from("y := 2", "utf8")
+    assert (result as string).includes "const y"
+
+  it "compiles Buffer with UTF-8 BOM", ->
+    bom := Buffer.from [0xEF, 0xBB, 0xBF]
+    buf := Buffer.concat [bom, Buffer.from("z := 3", "utf8")]
+    result := await compile buf
+    assert (result as string).includes "const z"
+
+describe "exported APIs", ->
+  it "exports core functions and classes", ->
+    assert typeof parse is "function"
+    assert typeof parseProgram is "function"
+    assert typeof generate is "function"
+    assert typeof prune is "function"
+    assert typeof SourceMap is "function"
+    assert typeof sourcemap is "object"
+
+  it "default export has compile, parse, and isCompileError", ->
+    { default: civet } := await import("../../source/main.civet")
+    assert typeof civet.compile is "function"
+    assert typeof civet.parse is "function"
+    assert typeof civet.isCompileError is "function"
