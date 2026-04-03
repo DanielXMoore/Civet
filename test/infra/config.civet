@@ -1,5 +1,15 @@
 assert from assert
-{ findConfig, loadConfig } from ../../source/config.civet
+os from os
+{ join } from path
+fs from fs/promises
+{ findConfig, findInDir, loadConfig } from ../../source/config.civet
+
+async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void>
+  dir := await fs.mkdtemp join(os.tmpdir(), "civet-config-test-")
+  try
+    await fn dir
+  finally
+    await fs.rm dir, { recursive: true, force: true }
 
 describe "loading config", ->
   it "should load from civetconfig.json", ->
@@ -11,3 +21,177 @@ describe "loading config", ->
   it "should load specified custom files", ->
     customConfig := await loadConfig("test/infra/config/customconfig.civet")
     assert.equal customConfig.someConfig, "heyy"
+
+describe "findConfig", ->
+  it "returns undefined when no config file exists", ->
+    await withTempDir async (dir) ->
+      result := await findInDir(dir)
+      assert.equal result, undefined
+
+  it "finds config in a parent directory", ->
+    await withTempDir async (dir) ->
+      await fs.writeFile join(dir, "civetconfig.json"), "{}"
+      subdir := join dir, "src", "nested"
+      await fs.mkdir subdir, { recursive: true }
+      result := await findConfig(subdir)
+      assert result, "should find config in parent"
+      assert result!.endsWith("civetconfig.json"), "should be the civetconfig.json"
+
+  it "finds config in .config subdirectory", ->
+    await withTempDir async (dir) ->
+      configSubdir := join dir, ".config"
+      await fs.mkdir configSubdir
+      await fs.writeFile join(configSubdir, "civetconfig.json"), "{}"
+      result := await findConfig(dir)
+      assert result, "should find config in .config subdir"
+      assert result!.endsWith("civetconfig.json"), "path should end with civetconfig.json"
+      assert result!.includes(".config"), "path should contain .config"
+
+describe "findInDir", ->
+  it "returns undefined for empty directory", ->
+    await withTempDir async (dir) ->
+      result := await findInDir(dir)
+      assert.equal result, undefined
+
+  it "finds civetconfig.json", ->
+    await withTempDir async (dir) ->
+      await fs.writeFile join(dir, "civetconfig.json"), "{}"
+      result := await findInDir(dir)
+      assert result, "should find civetconfig.json"
+      assert result!.endsWith("civetconfig.json")
+
+  it "finds dotfile variant .civetconfig.json", ->
+    await withTempDir async (dir) ->
+      await fs.writeFile join(dir, ".civetconfig.json"), "{}"
+      result := await findInDir(dir)
+      assert result, "should find .civetconfig.json"
+      assert result!.endsWith(".civetconfig.json")
+
+  it "does not treat package.civet or package.js as config", ->
+    await withTempDir async (dir) ->
+      await Promise.all [
+        fs.writeFile join(dir, "package.civet"), "export default {}"
+        fs.writeFile join(dir, "package.js"), "export default {}"
+      ]
+      result := await findInDir(dir)
+      assert.equal result, undefined
+
+  it "finds civet.config.yaml", ->
+    await withTempDir async (dir) ->
+      await fs.writeFile join(dir, "civet.config.yaml"), "jsOutput: true\n"
+      result := await findInDir(dir)
+      assert result, "should find civet.config.yaml"
+      assert result!.endsWith("civet.config.yaml")
+
+describe "loadConfig", ->
+  it "loads plain JSON config", ->
+    await withTempDir async (dir) ->
+      configPath := join dir, "civetconfig.json"
+      await fs.writeFile configPath, '{"jsOutput": true}'
+      config := await loadConfig(configPath)
+      assert.equal config.jsOutput, true
+
+  it "loads package.json with civetConfig key", ->
+    await withTempDir async (dir) ->
+      configPath := join dir, "package.json"
+      await fs.writeFile configPath, JSON.stringify
+        name: "my-package"
+        civetConfig: { jsOutput: true }
+      config := await loadConfig(configPath)
+      assert.equal config.jsOutput, true
+
+  it "returns empty object for package.json without civetConfig key", ->
+    await withTempDir async (dir) ->
+      configPath := join dir, "package.json"
+      await fs.writeFile configPath, JSON.stringify { name: "my-package", version: "1.0.0" }
+      config := await loadConfig(configPath)
+      assert.deepEqual config, {}
+
+  it "throws on malformed JSON config", ->
+    await withTempDir async (dir) ->
+      configPath := join dir, "civetconfig.json"
+      await fs.writeFile configPath, "{ not valid json }"
+      await assert.rejects
+        -> loadConfig(configPath)
+        /Error parsing JSON config file/
+
+  it "loads YAML config", ->
+    await withTempDir async (dir) ->
+      configPath := join dir, "civet.config.yaml"
+      await fs.writeFile configPath, "jsOutput: true\n"
+      config := await loadConfig(configPath)
+      assert.equal config.jsOutput, true
+
+  it "loads YAML config with civetConfig key", ->
+    await withTempDir async (dir) ->
+      configPath := join dir, "civet.config.yaml"
+      await fs.writeFile configPath, "civetConfig:\n  jsOutput: true\n"
+      config := await loadConfig(configPath)
+      assert.equal config.jsOutput, true
+
+  it "loads .yml config", ->
+    await withTempDir async (dir) ->
+      configPath := join dir, "civet.config.yml"
+      await fs.writeFile configPath, "jsOutput: true\n"
+      config := await loadConfig(configPath)
+      assert.equal config.jsOutput, true
+
+  it "throws on malformed YAML config", ->
+    await withTempDir async (dir) ->
+      configPath := join dir, "civet.config.yaml"
+      await fs.writeFile configPath, "key: [\n  unclosed\n"
+      await assert.rejects
+        -> loadConfig(configPath)
+        /Error parsing YAML config file/
+
+  it "loads JS config file", ->
+    await withTempDir async (dir) ->
+      configPath := join dir, "civet.config.js"
+      await fs.writeFile configPath, "export default { jsOutput: true }"
+      config := await loadConfig(configPath)
+      assert.equal config.jsOutput, true
+
+  it "throws on broken JS config file", ->
+    await withTempDir async (dir) ->
+      configPath := join dir, "civet.config.js"
+      await fs.writeFile configPath, "throw new Error('boom')"
+      await assert.rejects
+        -> loadConfig(configPath)
+        /Error running Civet config file/
+
+  for each [label, value] of [
+    ["array", "[]"]
+    ["null", "null"]
+    ["string", "'hello'"]
+  ]
+    it `throws when config exports ${label}`, ->
+      await withTempDir async (dir) ->
+        configPath := join dir, "civet.config.js"
+        await fs.writeFile configPath, `export default ${value}`
+        await assert.rejects
+          -> loadConfig(configPath)
+          /must export an object/
+
+  it "strips comptime from parseOptions in config", ->
+    await withTempDir async (dir) ->
+      configPath := join dir, "civetconfig.json"
+      await fs.writeFile configPath, JSON.stringify
+        parseOptions: { comptime: true, coffeeCompat: true }
+      config := await loadConfig(configPath)
+      assert.equal config.parseOptions?.comptime, undefined
+      assert.equal config.parseOptions?.coffeeCompat, true
+
+  it "loads empty JSON config object", ->
+    await withTempDir async (dir) ->
+      configPath := join dir, "civetconfig.json"
+      await fs.writeFile configPath, "{}"
+      config := await loadConfig(configPath)
+      assert.deepEqual config, {}
+
+  it "throws on malformed Civet config file", ->
+    await withTempDir async (dir) ->
+      configPath := join dir, "civetconfig.civet"
+      await fs.writeFile configPath, "::invalid civet syntax :::"
+      await assert.rejects
+        -> loadConfig(configPath)
+        /Error compiling Civet config file/
