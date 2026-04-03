@@ -97,6 +97,10 @@ export type CompilerOptions
   errors?: ParseError[]
   /** Number of parallel threads to compile with (Node only) */
   threads?: number
+  /** Origin source filename when chaining sourcemaps (overrides sources[0] from originSourceMap) */
+  originFilename?: string
+  /** Base64-encoded upstream sourcemap to chain with Civet's output map */
+  originSourceMap?: string
 
 type CompileOutput<T extends CompilerOptions> =
   T extends { ast: true } ? BlockStatement : T extends { sourceMap: true } ? { code: string, sourceMap: ReturnType<typeof SourceMap> } : string
@@ -123,13 +127,10 @@ export function decode(src: string | Buffer): string
 export function compile<const T extends CompilerOptions>(src: string | Buffer, options?: T): T extends { sync: true } ? CompileOutput<T> : Promise<CompileOutput<T>>
   src = decode src
 
-  // Strip any inline sourcemap from the .civet source and save for chaining
-  let upstreamSourceMap: ReturnType<typeof SourceMap.parseWithLines> | undefined
+  // Strip any inline sourcemap from the .civet source; save base64 for chaining
+  let inlineOriginSourceMap: string | undefined
   src = src.replace smRegexp, (_match: string, sm: string) =>
-    try
-      upstreamSourceMap = SourceMap.parseWithLines sm
-    catch
-      // ignore malformed upstream sourcemap
+    inlineOriginSourceMap = sm
     ""
 
   // `CIVET_THREADS=0` (including in browser build) forces no threads
@@ -143,12 +144,18 @@ export function compile<const T extends CompilerOptions>(src: string | Buffer, o
       else
         workerPool = new WorkerPool threads
       // Prevent worker from recursively spawning its own worker
-      return workerPool.run 'compile', src, {...options, threads: 0}
+      return workerPool.run 'compile', src, {
+        ...options
+        threads: 0
+        originSourceMap: options?.originSourceMap ?? inlineOriginSourceMap
+      }
 
   unless options
     options = {} as T
   else
     options = {...options}
+
+  options.originSourceMap ??= inlineOriginSourceMap
 
   // Handle undefined parseOptions, and avoid mutating the original object
   options.parseOptions = {...options.parseOptions}
@@ -226,13 +233,15 @@ export function compile<const T extends CompilerOptions>(src: string | Buffer, o
       code := generate ast, options
       checkErrors()
 
-      // Chain with upstream sourcemap if the .civet source had an inline sourcemap
-      if upstreamSourceMap?
-        options.sourceMap.lines = SourceMap.composeLines upstreamSourceMap.lines, options.sourceMap.lines
-        if upstreamSourceMap.sources?.[0]
-          options.sourceMap.sourceFilenameOverride = upstreamSourceMap.sources[0]
-        if upstreamSourceMap.sourcesContent?.[0]
-          options.sourceMap.sourceContentOverride = upstreamSourceMap.sourcesContent[0]
+      // Chain with upstream sourcemap if provided via options or stripped from inline comment
+      if options.originSourceMap?
+        try
+          upstream := SourceMap.parseWithLines options.originSourceMap
+          options.sourceMap.lines = SourceMap.composeLines upstream.lines, options.sourceMap.lines
+          options.sourceMap.originFilename = options.originFilename ?? upstream.sources?.[0]
+          options.sourceMap.originContent = upstream.sourcesContent?.[0]
+        catch
+          // ignore malformed upstream sourcemap
 
       if options.inlineMap
         //@ts-ignore
