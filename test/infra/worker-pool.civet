@@ -1,0 +1,125 @@
+assert from assert
+{ WorkerPool } from ../../source/worker-pool.civet
+
+describe "WorkerPool", ->
+  pool: WorkerPool .= undefined!
+
+  afterEach ->
+    if pool
+      pool.setThreads 0
+      await new Promise (r) => setTimeout r, 50
+
+  it "creates a pool with specified thread count", ->
+    pool = new WorkerPool 2
+    assert.equal pool.threads, 2
+    assert.equal pool.spawned, 0
+    assert.equal pool.idle.length, 0
+    assert.deepEqual pool.todo, []
+
+  it "creates a pool with zero threads", ->
+    pool = new WorkerPool 0
+    assert.equal pool.threads, 0
+
+  it "runs a compile job and returns result", ->
+    @timeout 10000
+    pool = new WorkerPool 1
+    result := await pool.run "compile", "x := 1", {}
+    assert result, "should get a result"
+    assert.equal typeof result, "string"
+    assert (result as string).includes("x"), "compiled output should contain variable"
+
+  it "runs multiple jobs sequentially with one worker", ->
+    @timeout 15000
+    pool = new WorkerPool 1
+    results := await Promise.all [
+      pool.run "compile", "a := 1", {}
+      pool.run "compile", "b := 2", {}
+      pool.run "compile", "c := 3", {}
+    ]
+    assert.equal results.length, 3
+    for result of results
+      assert result, "each result should be a string"
+      assert.equal typeof result, "string"
+
+  it "runs jobs concurrently with multiple workers", ->
+    @timeout 15000
+    pool = new WorkerPool 3
+    results := await Promise.all [
+      pool.run "compile", "x := 1", {}
+      pool.run "compile", "y := 2", {}
+      pool.run "compile", "z := 3", {}
+    ]
+    assert.equal results.length, 3
+    for result of results
+      assert result, "each concurrent result should be a string"
+      assert.equal typeof result, "string"
+
+  it "queues jobs when all workers are busy", ->
+    @timeout 20000
+    pool = new WorkerPool 1
+    results := await Promise.all [
+      pool.run "compile", "a := 10", {}
+      pool.run "compile", "b := 20", {}
+    ]
+    assert.equal results.length, 2
+    assert results[0], "first queued job should succeed"
+    assert results[1], "second queued job should succeed"
+    assert.equal typeof results[0], "string"
+    assert.equal typeof results[1], "string"
+
+  it "rejects with an error on invalid Civet code", ->
+    @timeout 10000
+    pool = new WorkerPool 1
+    try
+      await pool.run "compile", "???invalid civet???", {}
+      assert.fail "should have thrown"
+    catch err
+      assert err instanceof Error, "should reject with an Error"
+
+  it "continues working after an error", ->
+    @timeout 15000
+    pool = new WorkerPool 1
+    try
+      await pool.run "compile", "???invalid???", {}
+    catch
+    result := await pool.run "compile", "ok := true", {}
+    assert result, "pool should still work after an error"
+    assert.equal typeof result, "string"
+
+  it "setThreads reduces idle workers", ->
+    @timeout 15000
+    pool = new WorkerPool 3
+    await Promise.all [
+      pool.run "compile", "a := 1", {}
+      pool.run "compile", "b := 2", {}
+      pool.run "compile", "c := 3", {}
+    ]
+    pool.setThreads 1
+    assert.equal pool.threads, 1
+    assert.equal pool.spawned, 1, "spawned should be exactly 1 after setThreads(1)"
+
+  it "setThreads to zero terminates all idle workers", ->
+    @timeout 15000
+    pool = new WorkerPool 2
+    await Promise.all [
+      pool.run "compile", "a := 1", {}
+      pool.run "compile", "b := 2", {}
+    ]
+    pool.setThreads 0
+    assert.equal pool.spawned, 0
+    assert.equal pool.idle.length, 0
+
+  it "handles a single job with a single worker", ->
+    @timeout 10000
+    pool = new WorkerPool 1
+    result := await pool.run "compile", "single := 42", {}
+    assert (result as string)?.includes("42"), "should compile correctly"
+
+  it "increments jobId for each job", ->
+    @timeout 10000
+    pool = new WorkerPool 1
+    assert.equal pool.jobId, 0
+    await pool.run "compile", "x := 1", {}
+    assert.equal pool.jobId, 1
+    await pool.run "compile", "y := 2", {}
+    assert.equal pool.jobId, 2
