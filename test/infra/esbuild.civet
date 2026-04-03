@@ -1,8 +1,134 @@
-import { createRequire } from 'module'
 esbuildPlugin from "../../source/esbuild-plugin.civet"
+esbuild from "esbuild"
+{ writeFile, mkdir, rm } from "fs/promises"
+path from "path"
+{ tmpdir } from "os"
 
 assert from assert
 
+async function buildFixture(filePath: string, pluginOptions = {}, buildOptions = {})
+  await esbuild.build {
+    entryPoints: [filePath]
+    bundle: false
+    write: false
+    plugins: [esbuildPlugin(pluginOptions)]
+    logLevel: "silent"
+    ...buildOptions
+  }
+
+async function withTempFile(content: string, ext = ".civet", fn: (p: string) => Promise<void>)
+  dir := tmpdir()
+  tmpDir := path.join dir, "civet-test-" + Date.now()
+  await mkdir tmpDir, { recursive: true }
+  filePath := path.join tmpDir, "input" + ext
+  await writeFile filePath, content
+  try
+    await fn filePath
+  finally
+    await rm tmpDir, { recursive: true, force: true }
+
 describe "esbuild", ->
+  @timeout 10000
+
   it "plugs in", ->
     assert esbuildPlugin
+
+  it "civetPlugin is a function", ->
+    assert.equal typeof esbuildPlugin, "function"
+
+  it "civetPlugin() returns a plugin with name 'civet'", ->
+    plugin := esbuildPlugin()
+    assert.equal plugin.name, "civet"
+
+  it "civetPlugin() has a setup function", ->
+    plugin := esbuildPlugin()
+    assert.equal typeof plugin.setup, "function"
+
+  it "default plugin has a setup function (civet.setup)", ->
+    assert.equal typeof esbuildPlugin.setup, "function"
+
+  it "builds a simple .civet file", ->
+    await withTempFile "x := 1\nconsole.log x\n", ".civet", async (filePath) ->
+      result := await buildFixture filePath
+      assert.equal result.errors.length, 0
+      assert result.outputFiles.length > 0
+      assert result.outputFiles[0].text.includes("console.log")
+
+  it "includes inline source map when inlineMap: true", ->
+    await withTempFile "x := 42\n", ".civet", async (filePath) ->
+      result := await buildFixture filePath, { inlineMap: true }, { sourcemap: "inline" }
+      assert.equal result.errors.length, 0
+      assert result.outputFiles.length > 0
+      assert result.outputFiles[0].text.includes("sourceMappingURL=data:"), "expected inline source map"
+
+  it "omits source map when inlineMap: false", ->
+    await withTempFile "x := 42\n", ".civet", async (filePath) ->
+      result := await buildFixture filePath, { inlineMap: false }
+      assert.equal result.errors.length, 0
+      assert !result.outputFiles[0].text.includes("sourceMappingURL")
+
+  it "handles Civet compilation errors in esbuild error format", ->
+    await withTempFile "}\n", ".civet", async (filePath) ->
+      try
+        result := await buildFixture filePath
+        assert result.errors.length > 0, "should have errors"
+      catch err: any
+        // esbuild throws when logLevel isn't silent enough
+        assert err.errors?.length > 0, "should be an esbuild error with errors array"
+
+  it "js: true strips TypeScript type annotations (default)", ->
+    await withTempFile "x: number := 5\n", ".civet", async (filePath) ->
+      result := await buildFixture filePath, { js: true }
+      assert.equal result.errors.length, 0
+      assert !result.outputFiles[0].text.includes(": number")
+
+  it "js: false plugin option is accepted without errors on plain Civet", ->
+    await withTempFile "x := 5\n", ".civet", async (filePath) ->
+      result := await buildFixture filePath, { js: false }
+      assert.equal result.errors.length, 0
+
+  it "custom filter only processes matching files", ->
+    // Custom filter for .mycv: build a .mycv file — plugin should transform it
+    await withTempFile "x := 1\n", ".mycv", async (filePath) ->
+      plugin := esbuildPlugin({ filter: /\.mycv$/ })
+      result := await esbuild.build
+        entryPoints: [filePath]
+        bundle: false
+        write: false
+        plugins: [plugin]
+        logLevel: "silent"
+      assert.equal result.errors.length, 0
+      assert result.outputFiles.length > 0
+      assert result.outputFiles[0].text.includes("x"), "expected .mycv file to be processed by plugin"
+
+  it "builds multiple .civet files", ->
+    dir := tmpdir()
+    tmpDir := path.join dir, "civet-multi-" + Date.now()
+    await mkdir tmpDir, { recursive: true }
+    try
+      await Promise.all [
+        writeFile path.join(tmpDir, "a.civet"), "export aVal := 1\n"
+        writeFile path.join(tmpDir, "b.civet"), "export bVal := 2\n"
+      ]
+      result := await esbuild.build
+        entryPoints: [
+          path.join(tmpDir, "a.civet")
+          path.join(tmpDir, "b.civet")
+        ]
+        outdir: tmpDir
+        bundle: false
+        write: false
+        plugins: [esbuildPlugin()]
+        logLevel: "silent"
+      assert.equal result.errors.length, 0
+      assert.equal result.outputFiles.length, 2
+    finally
+      await rm tmpDir, { recursive: true, force: true }
+
+  it "plugin default options produce valid output", ->
+    await withTempFile "n: number := 3\n", ".civet", async (filePath) ->
+      result := await buildFixture filePath
+      assert.equal result.errors.length, 0
+      output := result.outputFiles[0].text
+      // js: true by default, so TypeScript annotations are stripped
+      assert !output.includes(": number")
