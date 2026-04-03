@@ -1,12 +1,12 @@
-import * as shiki from 'shiki';
+import { getSingletonHighlighter } from 'shiki';
 import type { Highlighter } from 'shiki';
 
 let highlighter: Highlighter | null = null;
 
 export async function getHighlighter() {
   if (!highlighter) {
-    highlighter = await shiki.getHighlighter({
-      theme: 'one-dark-pro',
+    highlighter = await getSingletonHighlighter({
+      themes: ['one-dark-pro'],
       langs: ['coffee', 'tsx'],
     });
   }

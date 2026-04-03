@@ -35,7 +35,7 @@ export default {
 ```
 
 This directory has a similar [`jest.config.mjs`](jest.config.mjs)
-that enables local testing via `yarn test`.
+that enables local testing via `pnpm test`.
 
 ### package.json script
 
@@ -61,4 +61,4 @@ you need something like this:
 ```
 
 This directory has a similar [`package.json`](package.json)
-that enables local testing via `yarn test`.
+that enables local testing via `pnpm test`.

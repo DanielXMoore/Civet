@@ -33,6 +33,8 @@ import type {
   IterationStatement
   Label
   LabelledStatement
+  Literal
+  LiteralContentNode
   MemberExpression
   MethodDefinition
   NormalCatchParameter
@@ -217,6 +219,64 @@ function adjustIndexAccess(dot: AccessStart): AccessStart
       (node) => ({ ...node, token: "[" })
 
   return dot
+
+function rewriteModuleSpecifier(module: ASTLeaf): ASTLeaf
+function rewriteModuleSpecifier(module: Literal): Literal
+function rewriteModuleSpecifier(module: ASTLeaf | Literal): ASTLeaf | Literal
+  switch module.type
+    when "Literal"
+      return module unless module.subtype is "StringLiteral"
+      child := module.children.0 as ASTLeaf
+      rewritten := rewriteModuleSpecifier child
+      return module if rewritten is child
+      return {
+        ...module
+        raw: rewritten.token
+        children:
+          module.children.map (&: LiteralContentNode) is child ? rewritten : &
+      }
+
+  { token } .= module
+  config := getConfig()
+  if config.rewriteTsImports
+    // Workaround to fix:
+    // https://github.com/microsoft/TypeScript/issues/42151
+    // import t.ts
+    // "An import path cannot end with a '.ts' extension. Consider importing './t.js' instead."
+    // convert .[mc]?ts to .[mc]?js
+    token = token.replace(/\.([mc])?ts(['"])$/, ".$1js$2")
+  if config.rewriteCivetImports
+    token = token.replace(/\.civet(['"])$/,
+      `${config.rewriteCivetImports.replace(/\$/g, '$$')}$1`)
+
+  return module if token is module.token
+  { ...module, token, input: module.token }
+
+function rewriteDynamicImportCall(call: Call): Call
+  i := call.args.findIndex (arg) =>
+    not isWhitespaceOrEmpty(arg) and not isComma(arg)
+  return call if i < 0
+
+  firstArg := call.args[i]
+  target := firstArg?.type is "Argument" ? firstArg.expression : firstArg
+  return call unless target?.type is "Literal"
+  rewrittenArg .= rewriteModuleSpecifier(target)
+  return call if rewrittenArg is target
+
+  if firstArg?.type is "Argument"
+    rewrittenArg = {
+      ...firstArg
+      expression: rewrittenArg
+      children: firstArg.children.map & is firstArg.expression ? rewrittenArg : &
+    }
+
+  args := call.args[..]
+  args[i] = rewrittenArg
+  {
+    ...call
+    args
+    children: call.children.map & is call.args ? args : &
+  }
 
 // Negate expression inside condition
 function negateCondition(condition)
@@ -1006,8 +1066,25 @@ function makeGetterMethod(name, ws, value, returnType, block?: BlockStatement, k
   }
 
 function processBindingPatternLHS(lhs, tail): void
-  // Expand AtBindings first before gathering splices
+  // Expand AtBindingProperty (@x shorthand in object patterns) to x: this.x
   adjustAtBindings lhs, true
+  // In assignment (non-binding) context, @x can be used directly as this.x
+  // since member expressions are valid assignment targets (unlike in let/const/param bindings)
+  for each atBinding of gatherRecursiveAll lhs, .type is "AtBinding"
+    { ref } := atBinding
+    thisExpr := ["this.", ref.id]
+    atBinding.type = undefined
+    atBinding.children = thisExpr
+    // Update blockPrefixes that use this ref as a rest identifier (e.g. [...@x, y] = z)
+    for each nodeWithPrefix of gatherRecursiveAll lhs, (n) => n.blockPrefix
+      { blockPrefix } := nodeWithPrefix
+      blockPrefix.children = blockPrefix.children.map (c) => c is ref ? thisExpr : c
+  // Also handle AtBindings inside blockPrefixes (e.g. post-rest @x in [a, ..., @x] = y)
+  for each nodeWithPrefix of gatherRecursiveAll lhs, (n) => n.blockPrefix
+    { blockPrefix } := nodeWithPrefix
+    for each atBinding of gatherRecursiveAll blockPrefix, .type is "AtBinding"
+      atBinding.type = undefined
+      atBinding.children = ["this.", atBinding.ref.id]
   [splices, thisAssignments] := gatherBindingCode lhs
   subbindings := gatherSubbindings lhs
   simplifyBindingProperties lhs
@@ -1105,6 +1182,8 @@ function processAssignments(statements): void
     // Walk from left to right the minimal number of parens are added and enclose all destructured assignments
     // TODO: Could validate some lhs ecmascript rules here if we wanted to
     wrapped .= false
+    // If already inside explicit parentheses, no need to add more to disambiguate from block
+    insideParens := exp.parent?.type is "ParenthesizedExpression"
     i .= 0
     while i < len
       lastAssignment := $1[i++]
@@ -1113,7 +1192,7 @@ function processAssignments(statements): void
 
       if lhs.type is like "ObjectExpression", "ObjectBindingPattern"
         // Wrap with parens to distinguish from braced blocks
-        unless wrapped
+        unless wrapped or insideParens
           wrapped = true
           lhs.children.splice(0, 0, "(")
           tail.push(")")
@@ -2056,6 +2135,8 @@ export {
   processUnaryExpression
   processUnaryNestedExpression
   quoteString
+  rewriteDynamicImportCall
+  rewriteModuleSpecifier
   reorderBindingRestProperty
   replaceNode
   replaceNodes
