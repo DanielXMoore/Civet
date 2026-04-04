@@ -1,7 +1,9 @@
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const { compileWithCache } = require('./cache-utils.js');
 
 if (require.extensions) {
   require.extensions['.hera'] = function(module, filename) {

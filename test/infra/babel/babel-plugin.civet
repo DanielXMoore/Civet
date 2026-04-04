@@ -1,0 +1,104 @@
+// Tests for source/babel-plugin.civet
+
+import assert from assert
+import * as babel from "@babel/core"
+import * as babelParser from "@babel/parser"
+babelPlugin from "../../../source/babel-plugin.civet"
+
+// Minimal AST stub returned by mock parse functions
+fakeAST := { type: "File", program: { type: "Program", body: [], directives: [], sourceType: "script" }, errors: [] }
+
+// Real parse wrapper used for integration-style tests
+realParse := (src, opts) -> babelParser.parse(src, { ...opts, sourceType: "module" })
+
+describe "babel-plugin", ->
+  describe "plugin factory", ->
+    it "exports a function", ->
+      assert.equal typeof babelPlugin, "function"
+
+    it "returns an object with parserOverride", ->
+      result := babelPlugin(null, {})
+      assert.equal typeof result, "object"
+      assert.equal typeof result.parserOverride, "function"
+
+    it "works with no civetOptions argument", ->
+      result := babelPlugin(null, undefined)
+      assert.equal typeof result.parserOverride, "function"
+
+  describe "parserOverride: .civet files", ->
+    it "compiles simple civet code to JS and parses the result", ->
+      { parserOverride } := babelPlugin(null, {})
+      ast := parserOverride("x := 1\n", { sourceFileName: "input.civet" }, realParse)
+      assert ast, "should return an AST"
+      assert.equal ast.type, "File"
+
+    it "handles arrow functions", ->
+      { parserOverride } := babelPlugin(null, {})
+      ast := parserOverride("add := (a, b) -> a + b\n", { sourceFileName: "fn.civet" }, realParse)
+      assert ast, "should return an AST"
+      assert.equal ast.type, "File"
+
+    it "forces js:true even when civetOptions omit it", ->
+      compiledSrc .= ""
+      { parserOverride } := babelPlugin(null, { js: false })
+      // x: number := 1 compiles to `const x: number = 1` in TS mode but `const x = 1` in JS mode
+      parserOverride("x: number := 1\n", { sourceFileName: "t.civet" }, (src) -> compiledSrc = src; fakeAST)
+      assert !compiledSrc.includes(": number"), "type annotation should be stripped (js:true forced)"
+
+    it "sets inlineMap true by default", ->
+      compiledSrc .= ""
+      { parserOverride } := babelPlugin(null, {})
+      parserOverride("x := 1\n", { sourceFileName: "t.civet" }, (src) -> compiledSrc = src; fakeAST)
+      assert compiledSrc.includes("sourceMappingURL"), "should embed inline source map"
+
+    it "allows caller to pass civetOptions including inlineMap", ->
+      compiledSrc .= ""
+      { parserOverride } := babelPlugin(null, { inlineMap: true })
+      parserOverride("x := 1\n", { sourceFileName: "t.civet" }, (src) -> compiledSrc = src; fakeAST)
+      assert compiledSrc.includes("sourceMappingURL"), "explicit inlineMap:true should embed source map"
+
+    it "embeds the source filename in the inline source map", ->
+      compiledSrc .= ""
+      { parserOverride } := babelPlugin(null, {})
+      parserOverride("y := 2\n", { sourceFileName: "myFile.civet" }, (src) -> compiledSrc = src; fakeAST)
+      match := compiledSrc.match(/sourceMappingURL=data:application\/json;base64,(.+)/)
+      assert match, "should embed inline source map"
+      sourceMap := JSON.parse(Buffer.from(match[1], "base64").toString("utf8"))
+      assert sourceMap.sources?.some((s) -> s.includes("myFile.civet")), "source map should reference myFile.civet"
+
+  describe "parserOverride: non-.civet files", ->
+    for extension of [".ts", ".js", ".tsx"]
+      do (extension) ->
+        it `passes code through unchanged for ${extension} files`, ->
+          { parserOverride } := babelPlugin(null, {})
+          receivedSrc .= ""
+          input := `const x = 1;`
+          parserOverride(input, { sourceFileName: `input${extension}` }, (src) -> receivedSrc = src; fakeAST)
+          assert.equal receivedSrc, input
+
+  describe "parserOverride: error handling", ->
+    it "throws on invalid civet syntax", ->
+      { parserOverride } := babelPlugin(null, {})
+      assert.throws ->
+        parserOverride("if (", { sourceFileName: "bad.civet" }, -> fakeAST)
+
+  describe "integration: @babel/core transform API", ->
+    it "transforms simple civet via babel transform", ->
+      result := babel.transformSync("x := 42\n", {
+        filename: "test.civet"
+        plugins: [[babelPlugin, {}]]
+        configFile: false
+        babelrc: false
+      })
+      assert result, "transform should succeed"
+      assert result.code !== null
+
+    it "transform of non-civet file is a no-op", ->
+      result := babel.transformSync("const z = 99;", {
+        filename: "plain.js"
+        plugins: [[babelPlugin, {}]]
+        configFile: false
+        babelrc: false
+      })
+      assert result, "transform should succeed"
+      assert result.code?.includes("99"), "code should pass through"
