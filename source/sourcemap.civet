@@ -19,13 +19,15 @@ export type SourceMapJSON =
   /** The name of the output file. */
   file: string
   /** The list of source files. */
-  sources: string[]
+  sources?: string[]
   /** The mappings between generated code and source files. */
   mappings: string
   /** The list of names. */
   names: string[]
   /** The list of source contents. */
-  sourcesContent: string[]
+  sourcesContent?: string[]
+
+export type SourceMapJSONWithLines = SourceMapJSON & lines: SourceMapLines
 
 // Utility function to create a line/column lookup table for an input string
 export function locationTable(input: string): number[]
@@ -61,7 +63,7 @@ export class SourceMap
   srcColumn: number
   srcTable: number[]
 
-  @(@source: string)
+  @(@source: string, @sourceFileName: string)
     @lines = [[]]
     @line = 0
     @colOffset = 0 // relative to previous entry
@@ -87,10 +89,10 @@ export class SourceMap
       .join(",")
     .join(";")
 
-  json(srcFileName: string, outFileName: string)
+  json(outFileName: string)
     version: 3
     file: outFileName
-    sources: [srcFileName]
+    sources: [@sourceFileName]
     mappings: @renderMappings()
     names: []
     sourcesContent: [@source]
@@ -98,11 +100,11 @@ export class SourceMap
       JSON.stringify this
 
   /** Generate a comment with the source mapping URL. */
-  comment(srcFileName: string, outFileName: string)
+  comment(outFileName: string)
     // NOTE: be sure to keep comment split up so as not to trigger tools from confusing it with the actual sourceMappingURL
-    `//${'#'} sourceMappingURL=data:application/json;base64,${base64Encode JSON.stringify(@json(srcFileName, outFileName))}`
+    `//${'#'} sourceMappingURL=data:application/json;base64,${base64Encode JSON.stringify @json outFileName}`
 
-  updateSourceMap(outputStr: string, inputPos?: number, colOffset=0)
+  updateSourceMap(outputStr: string, inputPos?: number, colOffset=0): void
     outLines := outputStr.split(EOL)
 
     let srcLine: number, srcCol: number
@@ -131,14 +133,20 @@ export class SourceMap
       else if l != 0
         @lines[@line].push [l]
 
-    return
+  /** Compose this source map with an upstream source map, modifying this */
+  compose(upstreamMap: string | SourceMapJSON | SourceMapJSONWithLines): void
+    if upstreamMap <? "string" or "lines" not in upstreamMap
+      upstreamMap = SourceMap.parseWithLines upstreamMap
+    @lines = SourceMap.composeLines (upstreamMap as SourceMapJSONWithLines).lines, @lines
+    @source = upstreamMap.sourcesContent[0] if upstreamMap.sourcesContent
+    @sourceFileName = upstreamMap.sources[0] if upstreamMap.sources
 
   /**
   Remap a string with compiled code and a source map to use a new source map
   referencing upstream source files.
   This modifies the upstream map in place.
   */
-  @remap := (codeWithSourceMap: string, upstreamMap: SourceMap, sourcePath: string, targetPath: string) =>
+  @remap := (codeWithSourceMap: string, upstreamMap: SourceMap, targetPath: string) =>
     let sourceMapText?: string
     codeWithoutSourceMap := codeWithSourceMap.replace smRegexp, (_match, sm) =>
       sourceMapText = sm
@@ -146,10 +154,11 @@ export class SourceMap
 
     if sourceMapText
       parsed := @parseWithLines sourceMapText
+      // Opposite of `compose` method:
       composedLines := @composeLines upstreamMap.lines, parsed.lines
       upstreamMap.lines = composedLines
 
-    remappedCodeWithSourceMap := `${codeWithoutSourceMap}\n${upstreamMap.comment(sourcePath, targetPath)}`
+    remappedCodeWithSourceMap := `${codeWithoutSourceMap}\n${upstreamMap.comment targetPath}`
     return remappedCodeWithSourceMap
 
   /**
@@ -176,10 +185,13 @@ export class SourceMap
         return [colDelta, sourceFileIndex, upstreamLine, upstreamCol, entry[4]]
 
   /**
-  Parse a base64 encoded source map string into a SourceMapJSON object with lines.
-  */
-  @parseWithLines := (base64encodedJSONstr: string) =>
-    json: SourceMapJSON := JSON.parse Buffer.from(base64encodedJSONstr, "base64").toString("utf8")
+   * Parse a possibly-base64-encoded source map
+   * into a SourceMapJSON object with lines.
+   */
+  @parseWithLines := (json: string | SourceMapJSON): SourceMapJSONWithLines =>
+    if json <? "string"
+      json = JSON.parse Buffer.from(json, "base64").toString("utf8")
+      |> as SourceMapJSON
     sourceLine .= 0
     sourceColumn .= 0
 

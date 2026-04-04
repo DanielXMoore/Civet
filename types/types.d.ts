@@ -71,6 +71,10 @@ declare module "@danielx/civet" {
      */
     inlineMap?: boolean
     /**
+     * Upstream source map to chain with Civet's generated source map.
+     */
+    upstreamSourceMap?: string | object
+    /**
      * Whether to return an AST of the parsed code instead of transpiled code.
      * Default is false.
      * If true, `compile` skips the `generate` step that turns the parsed AST
@@ -145,7 +149,9 @@ declare module "@danielx/civet" {
     constructor(source: string)
     updateSourceMap?(outputStr: string, inputPos: number): void
     json(srcFileName: string, outFileName: string): unknown
+    compose(upstreamMap: string | object): void
     source: string
+    sourceFileName: string
     lines: SourceMapping[][]
     /** @deprecated */
     data: { lines: SourceMapping[][] }
