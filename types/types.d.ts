@@ -149,7 +149,8 @@ declare module "@danielx/civet" {
     constructor(source: string, sourceFileName: string)
     updateSourceMap?(outputStr: string, inputPos: number): void
     json(outFileName: string): unknown
-    compose(upstreamMap: string | object): void
+    composeUpstream(upstreamMap: string | object): void
+    composeDownstream(downstreamMap: string | object): void
     source: string
     sourceFileName: string
     lines: SourceMapping[][]
