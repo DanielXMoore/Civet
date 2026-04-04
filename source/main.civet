@@ -2,7 +2,7 @@ import { parse, parseProgram, ParseError, getConfig, getStateKey } from ./parser
 import generate, { prune } from ./generate.civet
 import * as lib from ./parser/lib.civet
 import * as sourcemap from ./sourcemap.civet
-{ SourceMap } := sourcemap
+import { SourceMap, smRegexp, type SourceMapJSON } from ./sourcemap.civet
 export { parse, parseProgram, ParseError, generate, prune, lib, sourcemap, SourceMap }
 import type { BlockStatement } from ./parser/types.civet
 export type { ASTError, BlockStatement } from ./parser/types.civet
@@ -97,6 +97,8 @@ export type CompilerOptions
   errors?: ParseError[]
   /** Number of parallel threads to compile with (Node only) */
   threads?: number
+  /** Upstream sourcemap to chain with Civet's source map */
+  upstreamSourceMap?: string | SourceMapJSON
 
 type CompileOutput<T extends CompilerOptions> =
   T extends { ast: true } ? BlockStatement : T extends { sourceMap: true } ? { code: string, sourceMap: ReturnType<typeof SourceMap> } : string
@@ -128,7 +130,7 @@ export function compile<const T extends CompilerOptions>(src: string | Buffer, o
     threads := parseInt options?.threads ?? process.env.CIVET_THREADS, 10
     if threads is 0 // explicit 0 terminates existing threads
       workerPool?.setThreads 0
-    else if not isNaN(threads) and threads > 0 and not options.sync
+    else if not isNaN(threads) and threads > 0 and not options?.sync
       if workerPool?
         workerPool.setThreads threads
       else
@@ -144,6 +146,11 @@ export function compile<const T extends CompilerOptions>(src: string | Buffer, o
   // Handle undefined parseOptions, and avoid mutating the original object
   options.parseOptions = {...options.parseOptions}
 
+  // Strip inline sourcemap from the .civet source; save base64 for chaining
+  src = src.replace smRegexp, (_match: string, sm: string) =>
+    options.upstreamSourceMap ?= sm
+    ""
+
   filename := options.filename or "unknown"
 
   if filename.endsWith('.coffee') and not /^(#![^\r\n]*(\r\n|\n|\r))?\s*['"]civet/.test src
@@ -151,7 +158,7 @@ export function compile<const T extends CompilerOptions>(src: string | Buffer, o
 
   {hits, trace, noCache} := options
 
-  let events: CacheEvents | undefined
+  let events: CacheEvents?
   unless noCache
     events = makeCache {
       hits: !!hits
@@ -213,20 +220,20 @@ export function compile<const T extends CompilerOptions>(src: string | Buffer, o
 
     if options.sourceMap or options.inlineMap
       //@ts-ignore sourceMap option for generate
-      options.sourceMap = new SourceMap src
+      options.sourceMap = new SourceMap src, filename
       code := generate ast, options
       checkErrors()
 
+      // Compose with upstream sourcemap if provided via options or stripped from inline comment
+      if options.upstreamSourceMap?
+        options.sourceMap.composeUpstream options.upstreamSourceMap
+
       if options.inlineMap
-        //@ts-ignore
         outputFilename := options.outputFilename ??
           (options.js ? filename + '.jsx' : filename + '.tsx')
-        return `${code}\n${options.sourceMap.comment filename, outputFilename}`
+        return `${code}\n${options.sourceMap.comment outputFilename}`
       else
-        return {
-          code,
-          sourceMap: options.sourceMap
-        }
+        return { code, options.sourceMap }
 
     result := generate ast, options
 
@@ -234,7 +241,7 @@ export function compile<const T extends CompilerOptions>(src: string | Buffer, o
     if options!.errors?.length
       delete options.errors
       //@ts-ignore sourceMap option for generate
-      options.sourceMap = new SourceMap src
+      options.sourceMap = new SourceMap src, filename
       generate ast, options
       checkErrors()
 
