@@ -146,7 +146,7 @@ declare module "@danielx/civet" {
   export type SourceMapping = [number] | [number, number, number, number]
 
   export class SourceMap {
-    constructor(source: string)
+    constructor(source: string, sourceFileName: string)
     updateSourceMap?(outputStr: string, inputPos: number): void
     json(srcFileName: string, outFileName: string): unknown
     compose(upstreamMap: string | object): void
