@@ -74,7 +74,7 @@ interface Transpiler {
   compile(path: string, source: string): {
     code: string,
     sourceMap?: SourceMap
-    errors?: Error[]
+    errors?: (Error | ParseError)[]
   } | undefined
 }
 
@@ -557,18 +557,19 @@ async function TSService(projectURL = "./", logger: Console | RemoteConsole = co
   }
 
   function transpileCivet(path: string, source: string) {
-    const errors: Error[] = [],
-      result = Civet.compile(source, {
-        ...civetConfig,
-        filename: path,
-        sourceMap: true,
-        errors,
-        // We don't process comptime in LSP so don't need async yet
-        sync: true,
-        comptime: false,
-      })
+    const errors: ParseError[] = []
+    // `Civet` may be resolved from the project at runtime, so TS loses `sync: true` narrowing.
+    const result = Civet.compile(source, {
+      ...civetConfig,
+      filename: path,
+      sourceMap: true,
+      errors,
+      // We don't process comptime in LSP so don't need async yet
+      sync: true,
+      comptime: false,
+    }) as { code: string; sourceMap: CivetSourceMap }
 
-    return Object.assign(result, { errors })
+    return { ...result, errors }
   }
 }
 

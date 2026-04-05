@@ -19,13 +19,15 @@ import vs, {
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import assert from 'assert';
-import type { SourcemapLines, SourceMapping } from '@danielx/civet/ts-diagnostic';
+import type { SourceMapping } from '@danielx/civet';
 import {
   flattenDiagnosticMessageText,
   remapRange,
 } from '@danielx/civet/ts-diagnostic';
 
-export type { SourcemapLines, SourceMapping } from '@danielx/civet/ts-diagnostic';
+/** Same shape as Civet's source map `lines` table; defined here because the `ts-diagnostic` subpath has no type exports. */
+export type SourcemapLines = SourceMapping[][];
+export type { SourceMapping };
 
 export {
   flattenDiagnosticMessageText,
@@ -320,9 +322,9 @@ export function forwardMap(sourcemapLines: SourcemapLines, position: Position) {
     foundLine = -1,
     foundOffset = -1
 
-  sourcemapLines.forEach((line: SourcemapLines[number], i) => {
+  sourcemapLines.forEach((line: SourcemapLines[number], i: number) => {
     col = 0
-    line.forEach((mapping) => {
+    line.forEach((mapping: SourceMapping) => {
       col += mapping[0]
 
       if (isFourTuple(mapping)) {
