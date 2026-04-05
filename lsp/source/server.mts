@@ -13,6 +13,7 @@ import {
   CompletionItem,
   CompletionItemKind,
   CompletionItemTag,
+  CompletionList,
   Location,
   DiagnosticSeverity,
   TextEdit,
@@ -543,6 +544,28 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
   //  0: Default, when sourcemap cursor position is already perfect.
   // -1: Gets inside closing quotes for import file completion.
   p += heuristics.cursorOffsetAdjustment
+
+  // When @ is typed as a trigger character in Civet, it maps to `this.` in TypeScript.
+  // The forwardMap may place the cursor inside `this` (e.g. between 't' and 'h') because
+  // `@` alone transpiles to `this` (without a dot), giving only one sourcemap entry.
+  // We need to position after `this` or `this.` to get proper member completions.
+  if (context?.triggerCharacter === '@') {
+    const text = transpiledDoc.getText()
+    // p may be up to 3 chars inside `this` (length 4), so search up to 3 back
+    const searchStart = Math.max(0, p - 3)
+    const beforeP = text.slice(searchStart, p + 1)
+    const thisIdx = beforeP.lastIndexOf('this')
+    if (thisIdx !== -1) {
+      const thisEnd = searchStart + thisIdx + 4  // position right after 'this'
+      if (thisEnd >= p) {
+        // Cursor is inside or at end of 'this'; advance to after 'this' or 'this.'
+        p = text[thisEnd] === '.' ? thisEnd + 1 : thisEnd
+        // Use '.' as trigger so TypeScript provides member completions
+        completionOptions.triggerCharacter = '.' as ts.CompletionsTriggerCharacter
+      }
+    }
+  }
+
   if (isLikelyImportContext) {
     // When we type `import` at EOF, sourcemapping is a bit wonky,
     // and we end up to the left of the quotes instead of inside them.
@@ -574,9 +597,17 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
     ) : []
 
   // … Return.
-  return appendClosingQuoteToPathCompletions(
+  const items = appendClosingQuoteToPathCompletions(
     civetFileCompletions.concat(completions),
     closingQuoteSuffix)
+
+  // When @ is the trigger, return isIncomplete so VS Code re-fetches completions
+  // as the user types more characters (e.g. @bar), rather than filtering the
+  // initial list which was based on the incomplete @ → `this` transpilation.
+  if (context?.triggerCharacter === '@') {
+    return CompletionList.create(items, true)
+  }
+  return items
 
 });
 
@@ -1253,6 +1284,13 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
       item.preselect = entry.isRecommended
     }
     item.insertText = entry.insertText || item.label
+    // In Civet, @ is shorthand for `this.`. TypeScript's "ThisProperty" completions
+    // return `this.member` as insertText for `this`-adjacent cursor positions.
+    // Strip the `this.` prefix so accepting a completion on `@` gives `@member`,
+    // not `@this.member`.
+    if (sourcemapLines && entry.source === 'ThisProperty/' && item.insertText.startsWith('this.')) {
+      item.insertText = item.insertText.slice('this.'.length)
+    }
     if (entry.filterText) {
       item.filterText = entry.filterText
     }
