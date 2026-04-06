@@ -1,11 +1,7 @@
 try { require('node:module').enableCompileCache() } catch {}
 esbuild := require "esbuild"
-HeraPlugin := require "@danielx/hera/esbuild-plugin"
 path := require "path"
-
-heraPlugin := HeraPlugin
-  module: true
-  language: "civet"
+{ compileWithCache } := require "./cache-utils.js"
 
 outDir := process.env.CIVET_DIST || "dist"
 out := (rel: string) => path.join outDir, rel
@@ -13,17 +9,13 @@ out := (rel: string) => path.join outDir, rel
 selfBuild := process.env.CIVET_SELF_BUILD is "1"
 civetDist := selfBuild ? "../dist" : "../node_modules/@danielx/civet/dist"
 civetUnplugin := require(`${civetDist}/unplugin/esbuild.js`).default
-civetPlugin := civetUnplugin
-  ts: "civet"
-  cache: true
-  config: null
 civetPluginEmit := civetUnplugin
   ts: 'civet'
   emitDeclaration: true
   declarationExtension: ".d.ts"
   config: null
 
-{access} := require "fs/promises"
+{access, readFile} := require "fs/promises"
 
 watch := process.argv.includes '--watch'
 build :=
@@ -40,6 +32,19 @@ exists := (p) ->
     true
   .catch ->
     false
+
+// Use the shared disk-backed compiler cache for normal build-time source loads.
+buildCachePlugin := {
+  name: 'civet-build-cache'
+  setup(build)
+    build.onLoad { filter: /\.(?:civet|hera)$/ }, (args) =>
+      source := await readFile args.path, 'utf8'
+      return {
+        contents: compileWithCache(source, args.path)
+        loader: 'js'
+        resolveDir: path.dirname(args.path)
+      }
+}
 
 extensionResolverPlugin := (extensions) => {
   name: "extension-resolve"
@@ -92,7 +97,7 @@ for name of ["cli", "esbuild-plugin"]
     outfile: out `${name}.js`
     plugins: [
       rewriteCivetImports
-      civetPlugin
+      buildCachePlugin
     ]
     external: [
       '../package.json'
@@ -119,7 +124,7 @@ for name of ["config", "babel-plugin"]
       outExtension: ".js": if format is "esm" then ".mjs" else ".js"
       plugins: [
         rewriteCivetImports
-        civetPlugin
+        buildCachePlugin
       ]
       footer:
         // Rewrite default export as CJS exports object,
@@ -137,7 +142,7 @@ for name of ["esm", "node-worker"]
     outfile: out `${name}.mjs`
     plugins: [
       rewriteCivetImports
-      civetPlugin
+      buildCachePlugin
     ]
   }).catch -> process.exit 1
 
@@ -150,8 +155,7 @@ for esm of [false, true]
     outfile: out `main.${if esm then 'mjs' else 'js'}`
     plugins: [
       resolveExtensions
-      heraPlugin
-      civetPlugin
+      buildCachePlugin
     ]
     define: unless esm
       "import.meta.url": '""' // avoid warning; eliminated by `dropLabels`
@@ -182,8 +186,7 @@ build({
   minify
   plugins: [
     resolveExtensions
-    heraPlugin
-    civetPlugin
+    buildCachePlugin
   ]
 }).catch -> process.exit 1
 
@@ -197,7 +200,7 @@ build({
   target: "esNext"
   outfile: out 'bun-civet.mjs'
   plugins: [
-    civetPlugin
+    buildCachePlugin
   ]
 }).catch -> process.exit 1
 
@@ -232,7 +235,7 @@ for format of ["esm", "cjs"]
     plugins: [
       rewriteCivetImports
       // only run TypeScript once
-      if format is "esm" then civetPluginEmit else civetPlugin
+      if format is "esm" then civetPluginEmit else buildCachePlugin
     ]
   }).catch -> process.exit 1
 
@@ -248,6 +251,6 @@ for format of ["esm", "cjs"]
     outdir: outDir
     outExtension: ".js": if format is "esm" then ".mjs" else ".js"
     plugins: [
-      civetPlugin
+      buildCachePlugin
     ]
   }).catch -> process.exit 1
