@@ -1,5 +1,6 @@
 /**
- * Shared disk cache for the build-time Civet and Hera loaders (register.js / esm-hook.mjs).
+ * Shared disk cache for the build-time Civet and Hera loaders
+ * (register.js / esm-hook.mjs when testing, esbuild.civet when building).
  * Compiled output is stored in .cache/build/ keyed by a SHA1 of the compiler version(s),
  * civet mtime, source text, and filename, so cache entries are automatically invalidated
  * when any of those change.
