@@ -4,6 +4,23 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.6 (2026-04-06, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.5...v0.11.6), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.6))
+* Allow class fields with the same name as modifiers [[#1861](https://github.com/DanielXMoore/Civet/pull/1861)]
+* Support TypeScript 6+ [[#1865](https://github.com/DanielXMoore/Civet/pull/1865)]
+* unplugin support for `#` in paths [[#1867](https://github.com/DanielXMoore/Civet/pull/1867)]
+* `eslint.config.civet` support via `civetlint`, ESM query support [[#1869](https://github.com/DanielXMoore/Civet/pull/1869)]
+* Fix emitDeclaration builds in ESM unplugin output. [[#1871](https://github.com/DanielXMoore/Civet/pull/1871)]
+* Sourcemap sources should be relative to outdir [[#1872](https://github.com/DanielXMoore/Civet/pull/1872)]
+* Fix double-wrapping of assignment expressions inside explicit parentheses [[#1880](https://github.com/DanielXMoore/Civet/pull/1880)]
+* Rewrite .ts/.civet in dynamic imports with string literals [[#1877](https://github.com/DanielXMoore/Civet/pull/1877)]
+* Claude Code config [[#1894](https://github.com/DanielXMoore/Civet/pull/1894)]
+* Claude Code debugging [[#1895](https://github.com/DanielXMoore/Civet/pull/1895)]
+* Chain sourcemaps in Civet input [[#1896](https://github.com/DanielXMoore/Civet/pull/1896)]
+* Fix CLI tests on Windows [[#1925](https://github.com/DanielXMoore/Civet/pull/1925)]
+* Use .cache/build when building [[#1927](https://github.com/DanielXMoore/Civet/pull/1927)]
+* Fix sourcemap composition by allowing inexact match [[#1926](https://github.com/DanielXMoore/Civet/pull/1926)]
+* Release scripts: CI changelog verification, pnpm release [[#1928](https://github.com/DanielXMoore/Civet/pull/1928)]
+
 ## 0.11.5 (2026-03-10, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.4...v0.11.5), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.5))
 * Fix unplugin on Node 25 [[#1859](https://github.com/DanielXMoore/Civet/pull/1859)]
 
