@@ -1,6 +1,9 @@
 assert from assert
 path from path
 { parseArgs, makeOutputFilename, type Options, type ParsedArgs } from ../source/cli.civet
+{ cli, version } from ../source/cli.civet
+{ writeFile, mkdir, rm, readFile } from fs/promises
+{ tmpdir } from os
 
 function argsParse(args: string | string[], parsed: ParsedArgs): Promise<void>
   args = args.split /\s+/ if args <? 'string'
@@ -224,8 +227,9 @@ describe 'CLI parseArgs', ->
     inputFilename := 'src/lib/something.lib.civet'
     {filenames, options} := await parseArgs ['-c', '-o', '.ts', inputFilename], true
     expectedPath := path.parse inputFilename
-    delete expectedPath.base
+    expectedPath.base = ""
     expectedPath.ext = '.ts'
+
     outputFilename := makeOutputFilename filenames[0], options
     assert.equal outputFilename, path.normalize path.format expectedPath
     assert.doesNotMatch outputFilename, /\.civet/
@@ -429,3 +433,198 @@ describe 'CLI makeOutputFilename', ->
     assert.equal path.extname(result), '.ts'
     assert.equal path.dirname(result), 'build'
     assert.doesNotMatch result, /\.civet/
+
+function captureProcess(fn: => Promise<unknown>): Promise<{exitCode: number?, stdOut: string, stdErr: string}>
+  orig := {
+    stdout: process.stdout.write
+    stderr: process.stderr.write
+    exit: process.exit
+  }
+
+  stdOutChunks: string[] := []
+  process.stdout.write = (chunk: any) =>
+    stdOutChunks.push Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk)
+    true
+
+  stdErrChunks: string[] := []
+  process.stderr.write = (chunk: any) =>
+    stdErrChunks.push Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk)
+    true
+
+  let exitCode : number?
+  exit := {}
+  process.exit = (code?: number) =>
+    exitCode = code
+    throw exit
+
+  try
+    await fn()
+  catch err: any
+    throw err unless err is exit
+  finally
+    if exitCode is undefined
+      code := process.exitCode
+      exitCode = switch code
+        <? "string"
+          Number(code)
+        else
+          code ?? undefined
+
+    process.exit = orig.exit
+    process.stdout.write = orig.stdout
+    process.stderr.write = orig.stderr
+
+  {
+    exitCode
+    stdOut: stdOutChunks.join('')
+    stdErr: stdErrChunks.join('')
+  }
+
+describe "CLI version()", ->
+  it "returns a non-empty semver string", ->
+    v := await version()
+
+    assert /^\d+\.\d+\.\d+/.test(v), "version looks like semver: " + v
+
+describe "CLI --version flag", ->
+  it "prints version to stdout and exits 0", ->
+    { exitCode, stdOut } := await captureProcess =>
+      await cli ['--version']
+
+    assert /\d+\.\d+\.\d+/.test(stdOut.trim()), "stdout contains version: " + stdOut
+    assert.equal exitCode, 0
+
+describe "CLI --help flag", ->
+  it "prints help text to stderr and exits 0", ->
+    { exitCode, stdErr } := await captureProcess =>
+      await cli ['--help']
+
+    assert stdErr.includes('Usage'), "help contains 'Usage'"
+    assert stdErr.includes('--compile'), "help mentions --compile"
+    assert.equal exitCode, 0
+
+describe "CLI --eval --compile", ->
+  it "compiles Civet code to stdout", ->
+    { stdOut } := await captureProcess =>
+      await cli ['-c', '--no-config', '--eval', 'x := 1']
+
+    assert stdOut.includes('x'), "compiled output contains variable: " + stdOut
+
+  it "--js strips TypeScript type annotations", ->
+    { stdOut } := await captureProcess =>
+      await cli ['-c', '--no-config', '--js', '--eval', 'x: number := 5']
+
+    assert !stdOut.includes(': number'), "type annotation stripped from output"
+
+describe "CLI --ast", ->
+  it "outputs valid JSON AST for eval code", ->
+    { stdOut } := await captureProcess =>
+      await cli ['--ast', '--no-config', '--eval', 'x := 1']
+    parsed := JSON.parse stdOut
+
+    assert.equal typeof parsed, "object"
+
+describe "CLI readFiles (via compile)", ->
+  let tmpDir: string
+
+  beforeEach ->
+    tmpDir = path.join tmpdir(), "civet-cli-rf-" + Date.now()
+    await mkdir tmpDir, { recursive: true }
+
+  afterEach ->
+    await rm tmpDir, { recursive: true, force: true }
+
+  it "reads and compiles a real .civet file", ->
+    inputFile := path.join tmpDir, "example.civet"
+    await writeFile inputFile, "z := 99\n"
+
+    { stdOut } := await captureProcess =>
+      await cli ['-c', '--no-config', '-o', '-', inputFile]
+
+    assert stdOut.includes('z'), "compiled file output contains variable: " + stdOut
+
+  it "reports error for missing file via stderr", ->
+    { stdErr, exitCode } := await captureProcess =>
+      await cli ['-c', '--no-config', '/nonexistent/missing-file.civet']
+
+    assert.equal exitCode, 1
+    assert stdErr.length > 0, "stderr had output for missing file"
+
+describe "CLI compile to file", ->
+  let tmpDir: string
+
+  beforeEach ->
+    tmpDir = path.join tmpdir(), "civet-cli-compile-" + Date.now()
+    await mkdir tmpDir, { recursive: true }
+
+  afterEach ->
+    await rm tmpDir, { recursive: true, force: true }
+
+  it "writes .civet.tsx output file by default", ->
+    inputFile := path.join tmpDir, "foo.civet"
+    await writeFile inputFile, "x := 1\n"
+
+    await cli ['-c', '--no-config', inputFile]
+
+    content := await readFile inputFile + ".tsx", 'utf8'
+    assert content.includes('x'), "output file contains variable"
+
+  it "respects -o .js extension override", ->
+    inputFile := path.join tmpDir, "bar.civet"
+    await writeFile inputFile, "y := 2\n"
+
+    await cli ['-c', '--no-config', '-o', '.js', inputFile]
+
+    expectedOut := path.join tmpDir, "bar.js"
+    content := await readFile expectedOut, 'utf8'
+    assert content.includes('y'), "output .js file contains variable"
+
+  it "respects -o dir/ redirect", ->
+    subDir := path.join tmpDir, "out"
+    await mkdir subDir, { recursive: true }
+    inputFile := path.join tmpDir, "baz.civet"
+    await writeFile inputFile, "w := 3\n"
+
+    await cli ['-c', '--no-config', '-o', subDir + '/', inputFile]
+
+    expectedOut := path.join subDir, "baz.civet.tsx"
+    content := await readFile expectedOut, 'utf8'
+    assert content.includes('w'), "output in dir contains variable"
+
+  it "creates output directory if it does not exist", ->
+    inputFile := path.join tmpDir, "qux.civet"
+    await writeFile inputFile, "v := 4\n"
+    newDir := path.join tmpDir, "new-dir"
+
+    await cli ['-c', '--no-config', '-o', newDir + '/', inputFile]
+
+    expectedOut := path.join newDir, "qux.civet.tsx"
+    content := await readFile expectedOut, 'utf8'
+    assert content.includes('v'), "output in new dir contains variable"
+
+describe "CLI error handling", ->
+  let tmpDir: string
+
+  beforeEach ->
+    tmpDir = path.join tmpdir(), "civet-cli-err-" + Date.now()
+    await mkdir tmpDir, { recursive: true }
+
+  afterEach ->
+    await rm tmpDir, { recursive: true, force: true }
+
+  it "prints error for invalid Civet syntax and sets non-zero exit code", ->
+    inputFile := path.join tmpDir, "bad.civet"
+    await writeFile inputFile, "}\n"
+
+    { stdErr, exitCode } := await captureProcess =>
+      await cli ['-c', '--no-config', inputFile]
+
+    assert.equal exitCode, 1
+    assert stdErr.length > 0, "stderr had compile error output"
+
+  it "prints error for unknown CLI flag", ->
+    { exitCode, stdErr } := await captureProcess =>
+      await cli ['--unknown-xyz-flag-abc', '--eval', 'x := 1']
+
+    assert.equal exitCode, 1
+    assert stdErr.toLowerCase().includes('invalid'), "stderr mentions invalid argument: " + stdErr
