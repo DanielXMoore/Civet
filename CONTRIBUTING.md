@@ -194,10 +194,13 @@ relevant channel (e.g. `#compiler` for questions about the parser).
 ## Releasing to NPM
 
 1. Increment `version` in `package.json` (e.g. by running `pnpm version patch`, or `minor` / `major` as appropriate)
-2. Run `npm publish`, which will:
-   * `pnpm build` to build for release
-   * `pnpm test` to make sure nothing is broken
-   * `pnpm changelog --release` to update `CHANGELOG.md`
-     and (ask to) create a release commit and tag it
-   * Submit files to NPM (usually requiring 2FA)
-3. `git push --follow-tags` to push new commit and tag
+2. Run `pnpm release` to update `CHANGELOG.md` and (after confirmation) create a release commit and tag it
+3. `git push --follow-tags` to push the new commit and tag
+4. CI will then release with OIDC trusted publishing
+
+Internally, `pnpm publish` will:
+
+* `pnpm build` to build for release
+* `pnpm test:coverage` to make sure nothing is broken
+* `pnpm changelog --verify` to confirm `CHANGELOG.md` is already up to date
+* `npm publish`
