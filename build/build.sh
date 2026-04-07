@@ -4,6 +4,10 @@ set -euo pipefail
 out="${CIVET_DIST:-dist}"
 civet_bin="${CIVET_BIN:-civet}"
 
+# Default to up to 4 compiler threads during builds.
+# Set CIVET_THREADS=N to override, or CIVET_THREADS=0 to disable.
+export CIVET_THREADS="${CIVET_THREADS:-$(node -e 'const cpus = require("os").cpus().length; process.stdout.write(String(Math.min(cpus, 4)))')}"
+
 # clean build
 rm -rf "$out"
 mkdir "$out"
