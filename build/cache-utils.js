@@ -68,8 +68,7 @@ function compileWithCache(source, filename, module = true) {
 
   let js;
   if (type === 'hera') {
-    // TODO: Eventually compose the sourcemaps for more accurate remapping
-    const civetOutput = heraCompile(source, { filename, module });
+    const civetOutput = heraCompile(source, { filename, module, inlineMap: true });
     js = civetCompile(civetOutput, { filename, js: true, inlineMap: true, sync: true });
   } else {
     js = civetCompile(source, { filename, js: true, inlineMap: true, sync: true });
