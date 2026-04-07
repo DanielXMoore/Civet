@@ -8,6 +8,9 @@ civet_bin="${CIVET_BIN:-civet}"
 # Set CIVET_THREADS=N to override, or CIVET_THREADS=0 to disable.
 export CIVET_THREADS="${CIVET_THREADS:-$(node -e 'const cpus = require("os").cpus().length; process.stdout.write(String(Math.min(cpus, 4)))')}"
 
+# Use sourcemaps so errors have correct line numbers.
+export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--enable-source-maps"
+
 # clean build
 rm -rf "$out"
 mkdir "$out"

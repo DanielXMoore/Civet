@@ -13,6 +13,9 @@ if [ "$threads" != "0" ]; then
 fi
 export CIVET_THREADS=
 
+# Use sourcemaps so errors have correct line numbers.
+export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--enable-source-maps"
+
 if [ "${CIVET_COVERAGE:-0}" = "1" ]; then
   c8 mocha $args "$@"
 else
