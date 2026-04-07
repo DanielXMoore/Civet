@@ -1280,7 +1280,6 @@ as well as a full diff and commit list.
 ## 0.5.69 (2023-02-11, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.68...v0.5.69), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.69))
 *  Allow assignments and update operators within assignments and update operators ++/-- [[#353](https://github.com/DanielXMoore/Civet/pull/353)]
 * Support for labeling statements [[#354](https://github.com/DanielXMoore/Civet/pull/354)]
-* Support for labeling statements [[#354](https://github.com/DanielXMoore/Civet/pull/354)]
 * Cleanup flag stacks, re-allow stuff inside parens/brackets/braces [[#356](https://github.com/DanielXMoore/Civet/pull/356)]
 * Prevent `case:` from implicit object literal [[#357](https://github.com/DanielXMoore/Civet/pull/357)]
 * Allow newline before type inside parens [[#358](https://github.com/DanielXMoore/Civet/pull/358)]
