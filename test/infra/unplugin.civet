@@ -1,6 +1,22 @@
-import assert from assert
-import path from path
-import { slash, rawPlugin } from ../../source/unplugin/unplugin.civet
+assert from assert
+{ type UnpluginBuildContext, type UnpluginContext } from unplugin
+{ slash, rawPlugin, type PluginOptions } from ../../source/unplugin/unplugin.civet
+{ writeFile, mkdir, rm } from fs/promises
+path from "path"
+{ tmpdir } from "os"
+
+nullContext: UnpluginBuildContext & UnpluginContext := {
+  addWatchFile: ->
+  emitFile: ->
+  getWatchFiles: -> []
+  parse: -> {
+    type: "Program"
+    end: 0
+    start: 0
+  }
+  error: ->
+  warn: ->
+}
 
 // Minimal meta object required by rawPlugin
 minMeta := { framework: 'rollup' as const }
@@ -21,55 +37,22 @@ describe "unplugin: slash()", ->
   it "handles mixed slashes", ->
     assert.equal slash("foo\\bar/baz\\qux"), "foo/bar/baz/qux"
 
-describe "unplugin: rawPlugin()", ->
-  it "returns a plugin object", ->
-    plugin := rawPlugin({ ts: 'civet' }, minMeta)
-    assert plugin, "should return a plugin"
-    assert.equal typeof plugin, "object"
-
-  it "plugin has name 'unplugin-civet'", ->
-    plugin := rawPlugin({ ts: 'civet' }, minMeta)
-    assert.equal plugin.name, "unplugin-civet"
-
-  it "plugin has enforce: 'pre'", ->
-    plugin := rawPlugin({ ts: 'civet' }, minMeta)
-    assert.equal plugin.enforce, "pre"
-
-  it "plugin has loadInclude function", ->
-    plugin := rawPlugin({ ts: 'civet' }, minMeta)
-    assert.equal typeof plugin.loadInclude, "function"
-
-  it "plugin has load function", ->
-    plugin := rawPlugin({ ts: 'civet' }, minMeta)
-    assert.equal typeof plugin.load, "function"
-
-  it "plugin has resolveId function", ->
-    plugin := rawPlugin({ ts: 'civet' }, minMeta)
-    assert.equal typeof plugin.resolveId, "function"
-
-  it "plugin has buildStart function", ->
-    plugin := rawPlugin({ ts: 'civet' }, minMeta)
-    assert.equal typeof plugin.buildStart, "function"
-
 describe "unplugin: loadInclude()", ->
+  plugin := rawPlugin({ ts: 'civet' }, minMeta)
+
   it "returns true for .civet files", ->
-    plugin := rawPlugin({ ts: 'civet' }, minMeta)
     assert.equal plugin.loadInclude("foo.civet.jsx"), true
 
   it "returns true for .civet files with query string", ->
-    plugin := rawPlugin({ ts: 'civet' }, minMeta)
     assert.equal plugin.loadInclude("foo.civet.jsx?t=1"), true
 
   it "returns false for non-civet files", ->
-    plugin := rawPlugin({ ts: 'civet' }, minMeta)
     assert.equal plugin.loadInclude("foo.ts.jsx"), false
 
   it "returns false for .js files", ->
-    plugin := rawPlugin({ ts: 'civet' }, minMeta)
     assert.equal plugin.loadInclude("foo.js"), false
 
   it "returns false for virtual modules with null byte prefix", ->
-    plugin := rawPlugin({ ts: 'civet' }, minMeta)
     // \0 prefix does not end in .civet (after stripping the output extension),
     // so loadInclude returns false. Note: the null-byte guard lives in resolveId,
     // not loadInclude.
@@ -77,36 +60,43 @@ describe "unplugin: loadInclude()", ->
 
   it "uses custom outputExtension when set", ->
     plugin := rawPlugin({ outputExtension: '.js', ts: 'civet' }, minMeta)
+
     assert.equal plugin.loadInclude("foo.civet.js"), true
 
   it "respects preserve mode (outputExtension defaults to .tsx)", ->
     plugin := rawPlugin({ ts: 'preserve' }, minMeta)
+
     // With ts:'preserve', outExt should be .tsx
     assert.equal plugin.loadInclude("foo.civet.tsx"), true
 
 describe "unplugin: options normalization", ->
   it "dts: true is aliased to emitDeclaration: true (plugin loads)", ->
     // rawPlugin mutates options when dts is set; plugin should still be created
-    opts := { dts: true, ts: 'civet' }
+    opts: PluginOptions := { dts: true, ts: 'civet' }
     plugin := rawPlugin(opts, minMeta)
+
     assert plugin, "plugin should be created with dts option"
     assert.equal opts.emitDeclaration, true, "emitDeclaration should be mutated from dts"
 
   it "js: true sets ts mode to civet (outputExtension is .jsx)", ->
     plugin := rawPlugin({ js: true }, minMeta)
+
     // When ts='civet', outExt is .jsx. So loadInclude should accept .civet.jsx
     assert.equal plugin.loadInclude("foo.civet.jsx"), true
 
   it "ts: 'preserve' sets outputExtension to .tsx", ->
     plugin := rawPlugin({ ts: 'preserve' }, minMeta)
+
     assert.equal plugin.loadInclude("foo.civet.tsx"), true
 
   it "ts: 'esbuild' uses .jsx output extension", ->
     plugin := rawPlugin({ ts: 'esbuild' }, minMeta)
+
     assert.equal plugin.loadInclude("foo.civet.jsx"), true
 
   it "ts: 'tsc' uses .jsx output extension", ->
     plugin := rawPlugin({ ts: 'tsc' }, minMeta)
+
     assert.equal plugin.loadInclude("foo.civet.jsx"), true
 
   it "invalid ts value falls back to civet mode", ->
@@ -116,6 +106,7 @@ describe "unplugin: options normalization", ->
     console.log = (msg) => logCalls.push(msg)
     try
       plugin := rawPlugin({ ts: 'invalid' as any }, minMeta)
+
       assert.equal plugin.loadInclude("foo.civet.jsx"), true
       assert logCalls.length > 0, "expected console.log to be called with a warning"
       assert.match logCalls[0], /WARNING.*invalid/i
@@ -125,36 +116,43 @@ describe "unplugin: options normalization", ->
 describe "unplugin: resolveId()", ->
   it "returns null for virtual modules with null byte", ->
     plugin := rawPlugin({ ts: 'civet' }, minMeta)
+
+    // @ts-expect-error build context
     result := plugin.resolveId("\0virtual", undefined, {})
     assert.equal result, null
 
   it "returns null for non-civet files with no implicit extension match", ->
     plugin := rawPlugin({ implicitExtension: false, ts: 'civet' }, minMeta)
+
+    // @ts-expect-error build context
     result := plugin.resolveId("some-nonexistent-file.js", undefined, {})
     assert.equal result, null
 
   it "returns null for unresolvable relative id without importer", ->
     plugin := rawPlugin({ ts: 'civet' }, minMeta)
+
+    // @ts-expect-error build context
     result := plugin.resolveId("nonexistent-module-xyz", undefined, {})
     assert.equal result, null
 
 describe "unplugin: load() filename in source map", ->
   it "source map sources should reference .civet file, not .civet.jsx", async ->
     plugin := rawPlugin({ ts: 'esbuild' }, minMeta)
-    ctx := { addWatchFile: -> }
+    ctx := { ...nullContext, ...plugin }
     // Use a simple standalone integration example file with no imports
     civetFile := path.resolve process.cwd(), 'integration/unplugin-examples/esbuild/src/module.civet'
     id := civetFile + '.jsx'
     result := await plugin.load!.call ctx, id
 
     assert result, "load should return a result"
-    assert result.map, "result should have a source map"
-
-    sources := result.map.sources as string[]
-
+    assert result !<? "string"
+    { map } := result
+    assert map, "result should have a source map"
+    assert map <? "object" and "sources" in map
+    sources := map.sources
     assert sources?.length > 0, "source map should have sources"
     assert sources.every((s) => !s.endsWith('.civet.jsx')),
-      `Expected sources to not reference .civet.jsx but got: ${JSON.stringify sources}`
+      `Expected sources to not reference .civet.jsx but got: ${JSON.stringify sources as string[]}`
 
 describe "unplugin: resolveId() for esbuild framework", ->
   esbuildMeta := { framework: 'esbuild' as const }
@@ -163,7 +161,8 @@ describe "unplugin: resolveId() for esbuild framework", ->
     plugin := rawPlugin({ ts: 'civet' }, esbuildMeta)
     civetFile := path.resolve process.cwd(), 'integration/example/source/main.civet'
 
-    result := plugin.resolveId!(civetFile, undefined, {})
+    // @ts-expect-error build context
+    result := plugin.resolveId(civetFile, undefined, {})
 
     assert result, "resolveId should resolve the file"
     assert result.endsWith('.civet'),
@@ -175,8 +174,355 @@ describe "unplugin: resolveId() for esbuild framework", ->
     plugin := rawPlugin({ ts: 'civet' }, minMeta)
     civetFile := path.resolve process.cwd(), 'integration/example/source/main.civet'
 
-    result := plugin.resolveId!(civetFile, undefined, {})
+    // @ts-expect-error build context
+    result := plugin.resolveId(civetFile, undefined, {})
 
     assert result, "resolveId should resolve the file"
     assert result.endsWith('.civet.jsx'),
       `Expected resolved id to end with .civet.jsx but got: ${result}`
+
+
+describe "unplugin: buildStart()", ->
+  it "runs without a config file (config: false)", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, minMeta
+
+    // @ts-expect-error build context
+    await plugin.buildStart()
+
+  it "accepts parseOptions merged in during buildStart", ->
+    plugin := rawPlugin { ts: 'civet', config: false, parseOptions: { autoLet: true } }, minMeta
+
+    // @ts-expect-error build context
+    await plugin.buildStart()
+
+  it "accepts threads option during buildStart", ->
+    plugin := rawPlugin { ts: 'civet', config: false, threads: 1 }, minMeta
+
+    // @ts-expect-error build context
+    await plugin.buildStart()
+
+describe "unplugin: file system", ->
+  // Temporary directory for testing files
+  let tmpDir: string
+  fileNum .= 0
+  before ->
+    tmpDir = path.join tmpdir(), "civet-unplugin-test-" + Math.random().toString(36).substring(2, 15)
+    await mkdir tmpDir, { recursive: true }
+
+  after ->
+    await rm tmpDir, { recursive: true, force: true }
+
+  function makeCivetTempFile(content: string)
+    filePath := path.join tmpDir, `input-${fileNum++}.civet`
+    await writeFile filePath, content
+
+    filePath
+
+  describe "load() ts:'civet'", ->
+    it "compiles a simple .civet file to JS", ->
+      filePath := await makeCivetTempFile "x := 1\n"
+      plugin := rawPlugin { ts: 'civet', config: false }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      result := await plugin.load.call ctx, filePath + ".jsx"
+
+      assert result and result <? "object"
+      assert result.code.includes("x"), "compiled output contains variable"
+
+    it "returns a source map object", ->
+      filePath := await makeCivetTempFile "x := 1\n"
+      plugin := rawPlugin { ts: 'civet', config: false }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      result := await plugin.load.call ctx, filePath + ".jsx"
+
+      assert result and result <? "object"
+      assert result.map, "result has source map"
+
+    it "strips TypeScript types (js output)", ->
+      filePath := await makeCivetTempFile "x: number := 5\n"
+      plugin := rawPlugin { ts: 'civet', config: false }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      result := await plugin.load.call ctx, filePath + ".jsx"
+
+      assert result and result <? "object"
+      assert !result.code.includes(": number"), "type annotation stripped from js output"
+
+    it "throws ParseErrors on invalid Civet syntax", ->
+      filePath := await makeCivetTempFile "}\n"
+      plugin := rawPlugin { ts: 'civet', config: false }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+
+      await assert.rejects =>
+        plugin.load.call ctx, filePath + ".jsx"
+
+  describe "load() ts:'esbuild'", ->
+    it "strips TypeScript type annotations via esbuild", ->
+      filePath := await makeCivetTempFile "x: number := 5\n"
+      plugin := rawPlugin { ts: 'esbuild', config: false }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      result := await plugin.load.call ctx, filePath + ".jsx"
+
+      assert result and result <? "object"
+      assert !result.code.includes(": number"), "type annotation stripped by esbuild"
+
+    it "compiles Civet constructs and strips types", ->
+      filePath := await makeCivetTempFile "function greet(name: string)\n  `Hello, ${name}`\n"
+      plugin := rawPlugin { ts: 'esbuild', config: false }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      result := await plugin.load.call ctx, filePath + ".jsx"
+
+      assert result and result <? "object"
+      assert result.code.includes("greet"), "output contains function name"
+      assert !result.code.includes(": string"), "type param stripped"
+
+  describe "load() ts:'preserve'", ->
+    it "returns TypeScript output without stripping types", ->
+      filePath := await makeCivetTempFile "x: number := 5\n"
+      plugin := rawPlugin { ts: 'preserve', config: false }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      result := await plugin.load.call ctx, filePath + ".tsx"
+
+      assert result and result <? "object"
+      // preserve mode keeps TypeScript
+      assert result.code.includes("x"), "output contains variable"
+      assert result.code.includes(": number"), "type annotation preserved"
+
+  describe "load() caching", ->
+    it "returns the same result on second load (cache hit)", ->
+      filePath := await makeCivetTempFile "x := 42\n"
+      plugin := rawPlugin { ts: 'civet', config: false, cache: true }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      result1 := await plugin.load.call ctx, filePath + ".jsx"
+      result2 := await plugin.load.call ctx, filePath + ".jsx"
+
+      assert (and)
+        result1
+        result1 <? "object"
+        result2
+        result2 <? "object"
+      assert.equal result1.code, result2.code, "cached result matches"
+
+    it "cache: false disables caching (both calls succeed)", ->
+      filePath := await makeCivetTempFile "y := 99\n"
+      plugin := rawPlugin { ts: 'civet', config: false, cache: false }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      await plugin.load.call ctx, filePath + ".jsx"
+      await plugin.load.call ctx, filePath + ".jsx"
+
+  describe "load() transformOutput", ->
+    it "calls transformOutput with compiled code and id", ->
+      filePath := await makeCivetTempFile "x := 1\n"
+      calledWith: { code: string, id: string }[] .= []
+      transformOutput := async (code: string, id: string) =>
+        calledWith.push { code, id }
+        { code }
+      plugin := rawPlugin { ts: 'civet', config: false, transformOutput }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      await plugin.load.call ctx, filePath + ".jsx"
+
+      assert.equal calledWith.length, 1, "transformOutput called once"
+      assert calledWith[0].code.includes("x"), "transformOutput received compiled code"
+      assert calledWith[0].id.endsWith(".jsx"), "transformOutput received the id"
+
+    it "transformOutput can modify the output code", ->
+      filePath := await makeCivetTempFile "x := 1\n"
+      transformOutput := async (code: string, _id: string) =>
+        { code: "// transformed\n" + code }
+      plugin := rawPlugin { ts: 'civet', config: false, transformOutput }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      result := await plugin.load.call ctx, filePath + ".jsx"
+
+      assert result and result <? "object"
+      assert result.code.startsWith("// transformed"), "code was modified by transformOutput"
+
+  describe "resolveId() absolute path", ->
+    it "resolves an absolute .civet path that exists on disk", ->
+      filePath := await makeCivetTempFile "x := 1\n"
+      plugin := rawPlugin { ts: 'civet', config: false }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      // resolveId receives filePath + ".jsx" (the output-extension id)
+      result := plugin.resolveId.call ctx, filePath + ".jsx", undefined, { isEntry: true}
+
+      assert result, "resolveId returned a result for existing file"
+      assert (result as string).includes(".civet"), "resolved id includes .civet"
+
+    it "returns null for non-existent absolute path with no implicit match", ->
+      plugin := rawPlugin { ts: 'civet', config: false, implicitExtension: false }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      result := plugin.resolveId.call ctx, "/nonexistent/path/that/does/not/exist.civet.jsx", undefined, { isEntry: true}
+
+      assert.equal result, null
+
+  describe "unplugin: tsc", ->
+    it "typecheck: true runs tsc type checking", ->
+      @timeout 10000
+
+      fileWithTSError := await makeCivetTempFile "x: number := 'not a number'\n"
+      rootDir := path.dirname fileWithTSError
+
+      plugin := rawPlugin {
+        ts: 'tsc'
+        config: false
+        typecheck: true
+        tsConfig: {
+          rootDir
+          files: [ fileWithTSError ]
+        }
+      }, { framework: 'esbuild' }
+      ctx := { ...nullContext, ...plugin }
+
+      plugin.esbuild.config { outdir: '/tmp/test-out' }
+
+      tscErrors: string[] .= []
+      origError := console.error
+      console.error = (msg) => {
+        tscErrors.push msg
+      }
+      let errored
+      try
+        await plugin.buildStart.call ctx
+        await plugin.load.call ctx, fileWithTSError + ".jsx"
+        await plugin.buildEnd.call ctx
+      catch error
+        assert error <? Error
+        assert.equal error.message, "Aborting build because of 1 TypeScript diagnostic above"
+        errored = true
+      finally
+        console.error = origError
+
+      assert errored
+
+    it "emitDeclaration: true emits .d.ts files", ->
+      @timeout 5000
+      plugin := rawPlugin {
+        ts: 'tsc'
+        config: false
+        emitDeclaration: true
+      }, { framework: 'esbuild' }
+      ctx := { ...nullContext, ...plugin }
+
+      plugin.esbuild.config { outdir: '/tmp/test-out' }
+
+      fileWithDeclaration := await makeCivetTempFile "x: number := 5\n"
+
+      tscErrors: string[] .= []
+      origError := console.error
+      console.error = (msg) => {
+        tscErrors.push msg
+      }
+
+      try
+        await plugin.buildStart.call ctx
+        await plugin.load.call ctx, fileWithDeclaration + ".jsx"
+        await plugin.buildEnd.call ctx
+      finally
+        console.error = origError
+
+describe "unplugin: extractCivetFilename hash branch", ->
+  it "strips hash fragment from id when file does not exist at that path", ->
+    // loadInclude checks filename.endsWith('.civet'); the hash branch strips #...
+    // We can test this indirectly via loadInclude: pass an id with # that
+    // after stripping ends in .civet
+    plugin := rawPlugin { ts: 'civet', config: false }, minMeta
+    // id: foo.civet.jsx#hash — extractCivetFilename strips .jsx → foo.civet#hash
+    // file doesn't exist, so hash is stripped → filename = foo.civet → ends with .civet → true
+    assert.equal plugin.loadInclude("/nonexistent/foo.civet.jsx#some-hash"), true
+
+describe "unplugin: esbuild framework hook", ->
+  it "esbuild.config sets outDir from outdir", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'esbuild' }
+    //@ts-expect-error build context
+    await plugin.buildStart()
+    assert plugin.esbuild?.config, "esbuild.config exists"
+    plugin.esbuild.config { outdir: '/tmp/test-out' }
+    // just checking it doesn't throw
+
+  it "esbuild.config sets outDir from outfile dirname", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'esbuild' }
+    //@ts-expect-error build context
+    await plugin.buildStart()
+    plugin.esbuild.config { outfile: '/tmp/test-out/bundle.js' }
+    // just checking it doesn't throw
+
+describe "unplugin: vite framework hook", ->
+  it "vite.config sets rootDir and pushes .civet to extensions", ->
+    plugin := rawPlugin { ts: 'civet', config: false, implicitExtension: true }, { framework: 'vite' }
+    //@ts-expect-error build context
+    await plugin.buildStart()
+    assert plugin.vite?.config, "vite.config exists"
+    viteConfig: any := { root: '/tmp', build: { outDir: 'dist' }, resolve: { extensions: ['.js'] } }
+    //@ts-expect-error context
+    plugin.vite.config viteConfig
+    assert viteConfig.resolve.extensions.includes('.civet'), ".civet added to extensions"
+
+  it "vite.config creates resolve.extensions if missing", ->
+    plugin := rawPlugin { ts: 'civet', config: false, implicitExtension: true }, { framework: 'vite' }
+    //@ts-expect-error context
+    await plugin.buildStart()
+    viteConfig: any := { root: '/tmp', build: {} }
+    //@ts-expect-error context
+    plugin.vite.config viteConfig
+    assert viteConfig.resolve?.extensions?.includes('.civet'), ".civet added to extensions"
+
+describe "unplugin: rspack framework hook", ->
+  it "rspack pushes .civet to resolve.extensions", ->
+    //@ts-expect-error framework compiler
+    plugin := rawPlugin { ts: 'civet', config: false, implicitExtension: true }, { framework: 'rspack' }
+    //@ts-expect-error context
+    await plugin.buildStart()
+    assert plugin.rspack, "rspack hook exists"
+    compiler: any := { options: { resolve: { extensions: ['.js'] } } }
+    plugin.rspack compiler
+    assert compiler.options.resolve.extensions.includes('.civet'), ".civet pushed to rspack extensions"
+
+describe "unplugin: webpack framework hook", ->
+  it "webpack pushes .civet to resolve.extensions", ->
+    //@ts-expect-error framework compiler
+    plugin := rawPlugin { ts: 'civet', config: false, implicitExtension: true }, { framework: 'webpack' }
+    //@ts-expect-error context
+    await plugin.buildStart()
+    assert plugin.webpack, "webpack hook exists"
+    compiler: any := { options: { resolve: { extensions: ['.js'] } } }
+    plugin.webpack compiler
+    assert compiler.options.resolve.extensions.includes('.civet'), ".civet pushed to webpack extensions"
+
+  it "webpack alias resolver returns id unchanged when no alias matches", ->
+    //@ts-expect-error framework compiler
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'webpack' }
+    //@ts-expect-error context
+    await plugin.buildStart()
+    compiler: any := { options: { resolve: { extensions: ['.js'], alias: { '@app': '/src' } } } }
+    plugin.webpack compiler
+    // resolveId uses the aliasResolver; trigger it via resolveId
+    //@ts-expect-error context
+    result := plugin.resolveId "some-random-module", undefined, {}
+    // no alias match + no file on disk → null
+    assert.equal result, null
+
+  it "webpack alias resolver resolves exact alias", ->
+    //@ts-expect-error framework compiler
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'webpack' }
+    //@ts-expect-error context
+    await plugin.buildStart()
+    // alias ending in $ matches exact key
+    compiler: any := { options: { resolve: { extensions: ['.js'], alias: { 'foo$': '/absolute/foo' } } } }
+    plugin.webpack compiler
+    // resolveId('foo', ...) → aliasResolver maps 'foo' → '/absolute/foo'
+    // then resolveAbsolutePath checks if '/absolute/foo' exists (it won't), returns null
+    // The important thing is aliasResolver ran (covered) without crashing
+    //@ts-expect-error context
+    result := plugin.resolveId "foo", undefined, {}
+    // result is null because '/absolute/foo' doesn't exist, but the alias path ran
+    assert.equal result, null

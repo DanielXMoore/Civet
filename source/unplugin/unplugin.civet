@@ -1,4 +1,4 @@
-import { type TransformResult, createUnplugin } from 'unplugin'
+import { type TransformResult, createUnplugin, type UnpluginContextMeta, type UnpluginOptions } from 'unplugin'
 import civet, { decode, lib, SourceMap, type CompileOptions, type ParseOptions } from '@danielx/civet'
 import { findInDir, loadConfig } from '@danielx/civet/config'
 import {
@@ -47,6 +47,7 @@ export type PluginOptions
   /** config filename, or false/null to not look for default config file */
   config?: string | false | null
   parseOptions?: ParseOptions
+  tsConfig?: any
 
 type CacheEntry
   mtime: number
@@ -123,8 +124,7 @@ function implicitCivet(file: string): string?
   civet := file + '.civet'
   return civet if tryFsResolve civet
 
-export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
-(options: PluginOptions = {}, meta) =>
+export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
   if (options.dts) options.emitDeclaration = options.dts
   compileOptions: CompileOptions .= {}
 
@@ -166,11 +166,11 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
 
   cache := new Map<string, CacheEntry> unless options.cache is false
 
-  plugin: ReturnType<typeof rawPlugin> := {
+  plugin := {
     name: 'unplugin-civet'
     enforce: 'pre'
 
-    async buildStart(): Promise<void>
+    buildStart(): Promise<void>
       civetConfigPath .= options.config
       if civetConfigPath is undefined
         civetConfigPath = await findInDir process.cwd()
@@ -185,15 +185,21 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
 
       if transformTS or ts is "tsc"
         ts := await tsPromise!
+        let config: any, error: Diagnostic?, tsConfigPath: string | undefined
 
-        tsConfigPath := ts.findConfigFile process.cwd(), ts.sys.fileExists
+        if options.tsConfig
+          config = options.tsConfig
+          if options.tsConfig.rootDir
+            tsConfigPath = path.join options.tsConfig.rootDir, 'tsconfig.json'
+        else
+          tsConfigPath = ts.findConfigFile process.cwd(), ts.sys.fileExists
 
-        unless tsConfigPath
-          throw new Error "Could not find 'tsconfig.json'"
+          unless tsConfigPath
+            throw new Error "Could not find 'tsconfig.json'"
 
-        { config, error } := ts.readConfigFile
-          tsConfigPath
-          ts.sys.readFile
+          { config, error } = ts.readConfigFile
+            tsConfigPath
+            ts.sys.readFile
 
         if error
           console.error ts.formatDiagnostic error, getFormatHost ts.sys
@@ -219,7 +225,10 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         configContents := ts.parseJsonConfigFileContent
           config
           system
-          process.cwd()
+          if tsConfigPath then path.dirname(tsConfigPath) else process.cwd()
+          undefined
+          tsConfigPath
+
         configErrors = configContents.errors
         configFileNames = configContents.fileNames
 
@@ -237,7 +246,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         }
         fsMap = new Map()
 
-    async buildEnd(useConfigFileNames = false): Promise<void>
+    buildEnd(useConfigFileNames = false): Promise<void>
       if transformTS
         const ts = await tsPromise!
 
@@ -392,7 +401,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
                   compilerOptions.outDir ?? process.cwd()
                   filePath
 
-                this.emitFile
+                @emitFile
                   source: content
                   fileName: pathFromDistDir
                   type: 'asset'
@@ -440,7 +449,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       return false if skipWorker and workerRE.test postfix
       filename.endsWith civetSuffix
 
-    async load(id)
+    load(id)
       {filename} .= extractCivetFilename id, outExt
       // We're guaranteed to have .civet extension here by loadInclude
 
@@ -595,7 +604,8 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           config.resolve ??= {}
           config.resolve.extensions ??= DEFAULT_EXTENSIONS
           config.resolve.extensions.push '.civet'
-      async transformIndexHtml(html)
+
+      transformIndexHtml(html)
         html.replace /<!--[^]*?-->|<[^<>]*>/g, (tag) =>
           tag.replace /<\s*script\b[^<>]*>/gi, (script) =>
             // https://html.spec.whatwg.org/multipage/syntax.html#attributes-2
@@ -609,6 +619,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
                         `${extension}${outExt}?transform${endQuote}`
                     )
                   : attr
+
       handleHotUpdate({ file, server, modules })
         // `file` is an absolute path to the changed file on disk,
         // so for our case it should end with .civet extension
@@ -652,7 +663,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
               return '\0' unless value <? 'string'
               return value + id[key.length..]
         id
-  }
+  } satisfies UnpluginOptions
 
 var unplugin = createUnplugin(rawPlugin)
 export default unplugin
