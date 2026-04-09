@@ -830,7 +830,6 @@ as well as a full diff and commit list.
 ## 0.6.60 (2023-12-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.59...v0.6.60), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.60))
 * Use .-1 notation in Civet source [[#879](https://github.com/DanielXMoore/Civet/pull/879)]
 * Update font; tagline [[#880](https://github.com/DanielXMoore/Civet/pull/880)]
-*  [[#881](https://github.com/DanielXMoore/Civet/pull/881)]
 * docs: Revise tagline, opening paragraph, and purple [[#882](https://github.com/DanielXMoore/Civet/pull/882)]
 * Allow arbitrary unary operators before ampersand function notation [[#883](https://github.com/DanielXMoore/Civet/pull/883)]
 * `[a ... b]` is a range, `[a ...b]` is implicit call [[#884](https://github.com/DanielXMoore/Civet/pull/884)]
@@ -869,7 +868,6 @@ as well as a full diff and commit list.
 * Fix special relational operator precedence [[#843](https://github.com/DanielXMoore/Civet/pull/843)]
 
 ## 0.6.54 (2023-12-06, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.53...v0.6.54), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.54))
-*  [[#827](https://github.com/DanielXMoore/Civet/pull/827)]
 * Generalize pin expressions to allow x.y and ^x.y [[#834](https://github.com/DanielXMoore/Civet/pull/834)]
 
 ## 0.6.53 (2023-12-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.52...v0.6.53), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.53))
