@@ -1,38 +1,88 @@
-import TSService from "../source/lib/typescript-service.mjs"
+import TSService from "../source/lib/typescript-service.civet"
 import { pathToFileURL } from "url"
 import { TextDocument } from "vscode-languageserver-textdocument"
 import fs from "fs"
+import path from "path"
 
-{ forwardMap } from ../source/lib/util.mjs
+{ forwardMap } from ../source/lib/util.civet
 
 assert from assert
 
-loadFile := async (service: Awaited<ReturnType<typeof TSService>>, path: string) ->
+loadFile := (service: Awaited<ReturnType<typeof TSService>>, path: string) ->
   document := TextDocument.create(pathToFileURL(path).href, "civet", 0, fs.readFileSync(path, "utf8"))
   service.host.addOrUpdateDocument(document)
+
+projectURL := pathToFileURL("./integration/project-test/").href
+aPath := "./integration/project-test/a.civet"
+bPath := "./integration/project-test/b.civet"
 
 describe "ts service", ->
   @timeout 5000
   it "should launch ts service", async ->
-    service := await TSService(pathToFileURL("./integration/project-test/").href)
+    service := await TSService(projectURL)
     await service.loadPlugins()
 
-    filePath := "./integration/project-test/a.civet"
-    await loadFile(service, filePath)
+    await loadFile(service, aPath)
 
-    diagnostics := service.getSemanticDiagnostics(filePath + ".tsx")
+    diagnostics := service.getSemanticDiagnostics(aPath + ".tsx")
 
     console.log diagnostics
     // console.log service.host.getScriptFileNames()
 
     assert.equal diagnostics.length, 0
 
-    {transpiledDoc, sourcemapLines} := service.host.getMeta(filePath)!
+    {transpiledDoc, sourcemapLines} := service.host.getMeta(aPath)!
 
     position := transpiledDoc!.offsetAt forwardMap(sourcemapLines, {
       line: 0
       character: 0
     })
-    info := service.getQuickInfoAtPosition(filePath + ".tsx", position)
+    info := service.getQuickInfoAtPosition(aPath + ".tsx", position)
 
     assert info
+
+describe "ts service features", ->
+  @timeout 10000
+
+  service .= null as any as Awaited<ReturnType<typeof TSService>>
+
+  before async ->
+    service = await TSService(projectURL)
+    await service.loadPlugins()
+    loadFile(service, aPath)
+    loadFile(service, bPath)
+
+  it "should go to definition cross-file", async ->
+    {transpiledDoc, sourcemapLines} := service.host.getMeta(aPath)!
+    // "b" is at character 0 on line 0 of a.civet: `b, {b as b2} from ./b.civet`
+    offset := transpiledDoc!.offsetAt forwardMap(sourcemapLines, {line: 0, character: 0})
+    defs := service.getDefinitionAtPosition(aPath + ".tsx", offset)
+    assert.ok defs?.length, "expected at least one definition"
+    rawName := service.getSourceFileName(defs![0].fileName)
+    assert rawName.endsWith("b.civet"), `expected definition in b.civet, got ${rawName}`
+
+  it "should return completions at console.", async ->
+    {transpiledDoc, sourcemapLines} := service.host.getMeta(aPath)!
+    src := fs.readFileSync(aPath, "utf8")
+    lines := src.split("\n")
+    consoleLine := lines.findIndex (l) => l.includes("console.log")
+    consoleCol := lines[consoleLine].indexOf("console.") + "console.".length
+    offset := transpiledDoc!.offsetAt forwardMap(sourcemapLines, {line: consoleLine, character: consoleCol})
+    completions := service.getCompletionsAtPosition(aPath + ".tsx", offset, {})
+    assert.ok completions?.entries.some((e) => e.name === "log"), "expected 'log' in console completions"
+
+  it "should detect type errors and map to civet positions", async ->
+    // Use absolute path so addOrUpdateDocument and getMeta agree on the key
+    errorPath := path.resolve("./integration/project-test/error.civet")
+    errorDoc := TextDocument.create(pathToFileURL(errorPath).href, "civet", 0, 'x: number := "not a number"')
+    service.host.addOrUpdateDocument(errorDoc)
+    diagnostics := service.getSemanticDiagnostics(errorPath + ".tsx")
+    assert.ok diagnostics.length > 0, "expected type error diagnostic"
+    // Verify it's the right error
+    msg := typeof diagnostics[0].messageText === "string"
+      ? diagnostics[0].messageText
+      : diagnostics[0].messageText.messageText
+    assert.match msg, /not assignable/
+    // Verify sourcemap lines are populated (needed for diagnostic remapping)
+    {sourcemapLines} := service.host.getMeta(errorPath)!
+    assert.ok sourcemapLines, "expected sourcemap lines"
