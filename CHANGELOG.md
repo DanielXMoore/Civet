@@ -4,6 +4,9 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## Unreleased ([diff](https://github.com/DanielXMoore/Civet/compare/v0.11.6...???))
+* Add full repo history to publish script checkout for changelog verification step [[#1930](https://github.com/DanielXMoore/Civet/pull/1930)]
+
 ## 0.11.6 (2026-04-06, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.5...v0.11.6), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.6))
 * Allow class fields with the same name as modifiers [[#1861](https://github.com/DanielXMoore/Civet/pull/1861)]
 * Support TypeScript 6+ [[#1865](https://github.com/DanielXMoore/Civet/pull/1865)]
@@ -13,10 +16,45 @@ as well as a full diff and commit list.
 * Sourcemap sources should be relative to outdir [[#1872](https://github.com/DanielXMoore/Civet/pull/1872)]
 * Fix double-wrapping of assignment expressions inside explicit parentheses [[#1880](https://github.com/DanielXMoore/Civet/pull/1880)]
 * Rewrite .ts/.civet in dynamic imports with string literals [[#1877](https://github.com/DanielXMoore/Civet/pull/1877)]
+* Fix one-line arrow dynamic import parsing [[#1884](https://github.com/DanielXMoore/Civet/pull/1884)]
+* Fix parse error for trailing comments in JSX prop function bodies [[#1887](https://github.com/DanielXMoore/Civet/pull/1887)]
+* Organize into pnpm workspaces [[#1886](https://github.com/DanielXMoore/Civet/pull/1886)]
+* Fix semicolon-terminated single-line case clause [[#1889](https://github.com/DanielXMoore/Civet/pull/1889)]
+* Speed up building and testing [[#1879](https://github.com/DanielXMoore/Civet/pull/1879)]
+* Using Civet in parser.hera [[#1876](https://github.com/DanielXMoore/Civet/pull/1876)]
+* Upgrade dev dependencies, resolving dependabot security alerts [[#1891](https://github.com/DanielXMoore/Civet/pull/1891)]
+* Claude Code GitHub Workflow [[#1892](https://github.com/DanielXMoore/Civet/pull/1892)]
 * Claude Code config [[#1894](https://github.com/DanielXMoore/Civet/pull/1894)]
 * Claude Code debugging [[#1895](https://github.com/DanielXMoore/Civet/pull/1895)]
+* pnpm overrides for lodash, esbuild, diff security vulnerabilities [[#1897](https://github.com/DanielXMoore/Civet/pull/1897)]
+* Remove gulp pnpm-lock to unify it with the workspace [[#1898](https://github.com/DanielXMoore/Civet/pull/1898)]
+* Update nocache rules to be in sync with grammar [[#1900](https://github.com/DanielXMoore/Civet/pull/1900)]
+* First pass converting parser.hera to Civet code [[#1899](https://github.com/DanielXMoore/Civet/pull/1899)]
+* Fix shorthand @ in destructuring assignments to use this.x directly [[#1901](https://github.com/DanielXMoore/Civet/pull/1901)]
+* Fix implicit object with arrow function body parsed as typed const [[#1873](https://github.com/DanielXMoore/Civet/pull/1873)]
+* test: only post coverage on pull_request to prevent double status [[#1907](https://github.com/DanielXMoore/Civet/pull/1907)]
+* test: add main compiler API test coverage [[#1902](https://github.com/DanielXMoore/Civet/pull/1902)]
+* test: add bundler adapter test coverage [[#1903](https://github.com/DanielXMoore/Civet/pull/1903)]
+* test: add unplugin core module test coverage [[#1906](https://github.com/DanielXMoore/Civet/pull/1906)]
+* test: add browser module test coverage [[#1904](https://github.com/DanielXMoore/Civet/pull/1904)]
+* test: expand config loading test coverage [[#1909](https://github.com/DanielXMoore/Civet/pull/1909)]
+* test: expand CLI argument parsing and output filename coverage [[#1908](https://github.com/DanielXMoore/Civet/pull/1908)]
+* test: add worker-pool test coverage [[#1905](https://github.com/DanielXMoore/Civet/pull/1905)]
+* test: expand esbuild plugin test coverage [[#1910](https://github.com/DanielXMoore/Civet/pull/1910)]
+* test: add ts-diagnostic test coverage [[#1912](https://github.com/DanielXMoore/Civet/pull/1912)]
+* test: add babel plugin test coverage [[#1911](https://github.com/DanielXMoore/Civet/pull/1911)]
 * Chain sourcemaps in Civet input [[#1896](https://github.com/DanielXMoore/Civet/pull/1896)]
+* Remove test logging clutter [[#1914](https://github.com/DanielXMoore/Civet/pull/1914)]
+* Cache Civet compiles to speed up CI [[#1913](https://github.com/DanielXMoore/Civet/pull/1913)]
+* Fix doubled call to test [[#1918](https://github.com/DanielXMoore/Civet/pull/1918)]
+* Condition gating coveralls isn't working as intended; double status is benign [[#1917](https://github.com/DanielXMoore/Civet/pull/1917)]
+* OIDC publish from GitHub workflow [[#1916](https://github.com/DanielXMoore/Civet/pull/1916)]
+* Infrastructure fixes: cross-env, package config [[#1915](https://github.com/DanielXMoore/Civet/pull/1915)]
+* get max turns from organization variable [[#1920](https://github.com/DanielXMoore/Civet/pull/1920)]
+* LSP tests working again [[#1923](https://github.com/DanielXMoore/Civet/pull/1923)]
+* Fix compiler crash when assigning switch with declaration condition [[#1922](https://github.com/DanielXMoore/Civet/pull/1922)]
 * Fix CLI tests on Windows [[#1925](https://github.com/DanielXMoore/Civet/pull/1925)]
+* Correct source filenames in esbuild diagnostic errors [[#1924](https://github.com/DanielXMoore/Civet/pull/1924)]
 * Use .cache/build when building [[#1927](https://github.com/DanielXMoore/Civet/pull/1927)]
 * Fix sourcemap composition by allowing inexact match [[#1926](https://github.com/DanielXMoore/Civet/pull/1926)]
 * Release scripts: CI changelog verification, pnpm release [[#1928](https://github.com/DanielXMoore/Civet/pull/1928)]
@@ -927,6 +965,7 @@ as well as a full diff and commit list.
 * Unify pattern matching and declaration conditions [[#717](https://github.com/DanielXMoore/Civet/pull/717)]
 
 ## 0.6.35 (2023-09-10, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.34...v0.6.35), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.35))
+* Updating civet dep to reap some perf improvement [[#712](https://github.com/DanielXMoore/Civet/pull/712)]
 * Fix #629: Unary op with late assignment [[#716](https://github.com/DanielXMoore/Civet/pull/716)]
 * Reference [[#685](https://github.com/DanielXMoore/Civet/pull/685)]
 * get/set method shorthand [[#637](https://github.com/DanielXMoore/Civet/pull/637)]
@@ -934,6 +973,7 @@ as well as a full diff and commit list.
 * Fix #719: existential property glob and get/set shorthand with existential glob [[#720](https://github.com/DanielXMoore/Civet/pull/720)]
 
 ## 0.6.34 (2023-09-08, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.33...v0.6.34), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.34))
+* Allow more ergonomic require of cjs esbuild plugin [[#713](https://github.com/DanielXMoore/Civet/pull/713)]
 
 ## 0.6.33 (2023-09-08, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.32...v0.6.33), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.33))
 * Underflowing arrays is a perf killer [[#711](https://github.com/DanielXMoore/Civet/pull/711)]
@@ -965,6 +1005,9 @@ as well as a full diff and commit list.
 * `(&)` identity function shorthand [[#688](https://github.com/DanielXMoore/Civet/pull/688)]
 
 ## 0.6.27 (2023-08-31, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.26...v0.6.27), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.27))
+* Add Coveralls [[#658](https://github.com/DanielXMoore/Civet/pull/658)]
+* Update Hera [[#656](https://github.com/DanielXMoore/Civet/pull/656)]
+* ??? -> unknown [[#659](https://github.com/DanielXMoore/Civet/pull/659)]
 * 🐈🐈🐈 [[#657](https://github.com/DanielXMoore/Civet/pull/657)]
 * Added void to improve types and opt out of implicit returns [[#672](https://github.com/DanielXMoore/Civet/pull/672)]
 * Add missing semicolon after one-line `if` branch [[#671](https://github.com/DanielXMoore/Civet/pull/671)]
@@ -977,12 +1020,16 @@ as well as a full diff and commit list.
 * Fix #564 Implement basic const enums in --js mode [[#654](https://github.com/DanielXMoore/Civet/pull/654)]
 
 ## 0.6.25 (2023-08-25, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.24...v0.6.25), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.25))
+* Docs add vite-plugin-civetman to Integration [[#650](https://github.com/DanielXMoore/Civet/pull/650)]
+* basic babel plugin [[#550](https://github.com/DanielXMoore/Civet/pull/550)]
+* Fix #599 [[#648](https://github.com/DanielXMoore/Civet/pull/648)]
 * Initial auto-const [[#649](https://github.com/DanielXMoore/Civet/pull/649)]
 * Fix #639 hoistable thick pipe ref decs [[#651](https://github.com/DanielXMoore/Civet/pull/651)]
 * Fix #640 implicit return of const function declarations [[#652](https://github.com/DanielXMoore/Civet/pull/652)]
 
 ## 0.6.24 (2023-08-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.23...v0.6.24), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.24))
 * Updated the Bun-related how-to [[#646](https://github.com/DanielXMoore/Civet/pull/646)]
+* cache2: 2 cache 2 furious [[#645](https://github.com/DanielXMoore/Civet/pull/645)]
 
 ## 0.6.23 (2023-08-20, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.22...v0.6.23), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.23))
 * Postfix expressions inside indented implicit object literals [[#630](https://github.com/DanielXMoore/Civet/pull/630)]
@@ -1002,6 +1049,8 @@ as well as a full diff and commit list.
 
 ## 0.6.20 (2023-08-07, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.19...v0.6.20), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.20))
 * Fix tuple-matching behavior [[#608](https://github.com/DanielXMoore/Civet/pull/608)]
+* Bump semver from 5.7.1 to 5.7.2 in /lsp [[#609](https://github.com/DanielXMoore/Civet/pull/609)]
+* Bump semver from 6.3.0 to 6.3.1 [[#610](https://github.com/DanielXMoore/Civet/pull/610)]
 * Forbid binary op after newline within SingleLineStatements (e.g. `then`) [[#612](https://github.com/DanielXMoore/Civet/pull/612)]
 * Remove forbidMultiLineImplicitObjectLiteral [[#613](https://github.com/DanielXMoore/Civet/pull/613)]
 * Revamp braced object literals [[#614](https://github.com/DanielXMoore/Civet/pull/614)]
@@ -1021,6 +1070,7 @@ as well as a full diff and commit list.
 * Possessive object access [[#603](https://github.com/DanielXMoore/Civet/pull/603)]
 
 ## 0.6.17 (2023-07-31, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.16...v0.6.17), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.17))
+* Fix #596. async function expression [[#597](https://github.com/DanielXMoore/Civet/pull/597)]
 * `switch` fixes [[#594](https://github.com/DanielXMoore/Civet/pull/594)]
 * Support indented RHS after binary op [[#600](https://github.com/DanielXMoore/Civet/pull/600)]
 * No implicit return from async function: Promise<void> [[#601](https://github.com/DanielXMoore/Civet/pull/601)]
@@ -1053,80 +1103,124 @@ as well as a full diff and commit list.
 * Support new arrow function types [[#569](https://github.com/DanielXMoore/Civet/pull/569)]
 
 ## 0.6.10 (2023-07-03, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.9...v0.6.10), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.10))
+* Added optional prefixed union syntax for TypeScript. Fixes #544 [[#556](https://github.com/DanielXMoore/Civet/pull/556)]
 * `not` support outside coffeeCompat mode [[#557](https://github.com/DanielXMoore/Civet/pull/557)]
 * Unicode operators ≤≥≠≢≡≣⩶⩵«»⋙‖⁇∈∉∋∌▷‥…≔→⇒ [[#558](https://github.com/DanielXMoore/Civet/pull/558)]
 
 ## 0.6.9 (2023-06-18, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.8...v0.6.9), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.9))
+* Implement config file [[#551](https://github.com/DanielXMoore/Civet/pull/551)]
 
 ## 0.6.8 (2023-06-10, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.7...v0.6.8), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.8))
 * Function implicit bodies [[#542](https://github.com/DanielXMoore/Civet/pull/542)]
 * Fix implicit calls with bind and decorators [[#545](https://github.com/DanielXMoore/Civet/pull/545)]
 * Fix readonly support in interfaces  [[#546](https://github.com/DanielXMoore/Civet/pull/546)]
+* Bump vite from 4.0.4 to 4.3.9 [[#554](https://github.com/DanielXMoore/Civet/pull/554)]
+* Fixes #552. Don't hoist decs to bare blocks [[#553](https://github.com/DanielXMoore/Civet/pull/553)]
 
 ## 0.6.7 (2023-06-02, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.6...v0.6.7), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.7))
+* Allow for method and constructor overloading in classes. Fixes #538 [[#540](https://github.com/DanielXMoore/Civet/pull/540)]
 
 ## 0.6.6 (2023-05-31, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.5...v0.6.6), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.6))
+* Use refs for indexed object shorthand. Fixes #415 [[#537](https://github.com/DanielXMoore/Civet/pull/537)]
 
 ## 0.6.5 (2023-05-29, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.4...v0.6.5), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.5))
+* refs for object glob left hand side [[#535](https://github.com/DanielXMoore/Civet/pull/535)]
 
 ## 0.6.4 (2023-05-25, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.3...v0.6.4), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.4))
+* Moving functions from parser.hera into lib.js [[#531](https://github.com/DanielXMoore/Civet/pull/531)]
+* Add unary expression processing in ampersand blocks. Fixes #528 [[#532](https://github.com/DanielXMoore/Civet/pull/532)]
 
 ## 0.6.3 (2023-05-24, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.2...v0.6.3), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.3))
 * Small whitespace fix for trailing splat [[#524](https://github.com/DanielXMoore/Civet/pull/524)]
+* Fix a typo when loading `civetPlugin` [[#526](https://github.com/DanielXMoore/Civet/pull/526)]
+* post rest trailing commas and elisions. Fixes #525 [[#530](https://github.com/DanielXMoore/Civet/pull/530)]
+* ref decs for pattern matching. Fixes #523 [[#529](https://github.com/DanielXMoore/Civet/pull/529)]
 
 ## 0.6.2 (2023-05-13, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.1...v0.6.2), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.2))
+* handle non-binding multiple pattern alternatives [[#516](https://github.com/DanielXMoore/Civet/pull/516)]
+* Pattern matching gather duplicate bindings [[#517](https://github.com/DanielXMoore/Civet/pull/517)]
+* Pattern spread [[#518](https://github.com/DanielXMoore/Civet/pull/518)]
 * Support splats in type tuples [[#521](https://github.com/DanielXMoore/Civet/pull/521)]
 
 ## 0.6.1 (2023-05-02, [diff](https://github.com/DanielXMoore/Civet/compare/v0.6.0...v0.6.1), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.1))
 
 ## 0.6.0 (2023-05-02, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.94...v0.6.0), [commits](https://github.com/DanielXMoore/Civet/commits/v0.6.0))
+* more pattern matching [[#510](https://github.com/DanielXMoore/Civet/pull/510)]
 
 ## 0.5.94 (2023-04-15, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.93...v0.5.94), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.94))
+* Configurable and chainable civet esbuild plugin [[#448](https://github.com/DanielXMoore/Civet/pull/448)]
+* const type parameters. #456 [[#502](https://github.com/DanielXMoore/Civet/pull/502)]
 * x@y and @@x bind shorthand, plus JSX fixes [[#506](https://github.com/DanielXMoore/Civet/pull/506)]
 * JSX unbraced @ and @@ shorthand [[#507](https://github.com/DanielXMoore/Civet/pull/507)]
 * JSX braceless call/member/glob expressions [[#508](https://github.com/DanielXMoore/Civet/pull/508)]
 
 ## 0.5.93 (2023-04-01, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.92...v0.5.93), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.93))
+* Fixes #491 [[#494](https://github.com/DanielXMoore/Civet/pull/494)]
+* Fix #493 [[#496](https://github.com/DanielXMoore/Civet/pull/496)]
+* Fixes #488 [[#495](https://github.com/DanielXMoore/Civet/pull/495)]
+* source-map-support dependency [[#497](https://github.com/DanielXMoore/Civet/pull/497)]
 * Call splice method directly [[#499](https://github.com/DanielXMoore/Civet/pull/499)]
 * Fix sourcemap support from CLI [[#498](https://github.com/DanielXMoore/Civet/pull/498)]
 * Remove tsx after ESM transpilation [[#500](https://github.com/DanielXMoore/Civet/pull/500)]
 * Fix implicit async/* in functions with arguments [[#501](https://github.com/DanielXMoore/Civet/pull/501)]
 
 ## 0.5.92 (2023-03-30, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.91...v0.5.92), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.92))
+* fix #483 [[#484](https://github.com/DanielXMoore/Civet/pull/484)]
 
 ## 0.5.91 (2023-03-29, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.90...v0.5.91), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.91))
 * Indentation after await operator [[#475](https://github.com/DanielXMoore/Civet/pull/475)]
 * CLI can run ESM scripts via import [[#477](https://github.com/DanielXMoore/Civet/pull/477)]
 * Inline implicit object literals can't end with comma [[#479](https://github.com/DanielXMoore/Civet/pull/479)]
+* implicit JSX element [[#482](https://github.com/DanielXMoore/Civet/pull/482)]
 
 ## 0.5.90 (2023-03-23, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.89...v0.5.90), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.90))
+* Fixes #469 [[#470](https://github.com/DanielXMoore/Civet/pull/470)]
+* splices and this assignments in conditional bindings [[#471](https://github.com/DanielXMoore/Civet/pull/471)]
+* Fixes #293. Await ops [[#472](https://github.com/DanielXMoore/Civet/pull/472)]
 
 ## 0.5.89 (2023-03-20, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.88...v0.5.89), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.89))
+* Refactor block indentation [[#465](https://github.com/DanielXMoore/Civet/pull/465)]
+* Fix #452. Ampersand block trailing members [[#468](https://github.com/DanielXMoore/Civet/pull/468)]
 
 ## 0.5.88 (2023-03-19, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.87...v0.5.88), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.88))
+* Fixes #461 [[#463](https://github.com/DanielXMoore/Civet/pull/463)]
+* semi-colon suppresses result push [[#464](https://github.com/DanielXMoore/Civet/pull/464)]
 
 ## 0.5.87 (2023-03-16, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.86...v0.5.87), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.87))
 * Link to Civetman [[#450](https://github.com/DanielXMoore/Civet/pull/450)]
+* Declarations inside conditionals [[#451](https://github.com/DanielXMoore/Civet/pull/451)]
 
 ## 0.5.86 (2023-03-11, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.85...v0.5.86), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.86))
+* @ type parameter with other parameters [[#447](https://github.com/DanielXMoore/Civet/pull/447)]
 
 ## 0.5.85 (2023-03-10, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.84...v0.5.85), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.85))
 * For loop optimizations and generalizations [[#442](https://github.com/DanielXMoore/Civet/pull/442)]
 * Semicolon-separated statements in blocks [[#443](https://github.com/DanielXMoore/Civet/pull/443)]
+* TypeTemplateLiterals. Fixes #441 [[#445](https://github.com/DanielXMoore/Civet/pull/445)]
 
 ## 0.5.84 (2023-03-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.83...v0.5.84), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.84))
+* Fixes #436. Fixed regression in TrailingComment [[#437](https://github.com/DanielXMoore/Civet/pull/437)]
 
 ## 0.5.83 (2023-03-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.82...v0.5.83), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.83))
 * Fix regression in indented application from decorators change. Fixes #434 [[#435](https://github.com/DanielXMoore/Civet/pull/435)]
 
 ## 0.5.82 (2023-03-04, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.81...v0.5.82), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.82))
+* Implicit `async` and `*` for functions and methods [[#433](https://github.com/DanielXMoore/Civet/pull/433)]
 
 ## 0.5.81 (2023-03-04, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.80...v0.5.81), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.81))
+* Codeblocks!!!!! [[#428](https://github.com/DanielXMoore/Civet/pull/428)]
+* Replace TrailingComment* with _? except after statement delimiters. [[#430](https://github.com/DanielXMoore/Civet/pull/430)]
+* ♻️ change grammar.hera to parser.hera [[#432](https://github.com/DanielXMoore/Civet/pull/432)]
+* Ampersand pipes [[#431](https://github.com/DanielXMoore/Civet/pull/431)]
 
 ## 0.5.80 (2023-03-02, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.79...v0.5.80), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.80))
 * New top-level statement system [[#414](https://github.com/DanielXMoore/Civet/pull/414)]
+* Fixes #416: Fix handling of backslash escapes inside strings that convert to template strings [[#417](https://github.com/DanielXMoore/Civet/pull/417)]
+* Fixes #420 Decorate exported class [[#425](https://github.com/DanielXMoore/Civet/pull/425)]
+* Use a simple deep copy because structuredClone isn't available on node <17 [[#426](https://github.com/DanielXMoore/Civet/pull/426)]
 
 ## 0.5.79 (2023-02-24, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.78...v0.5.79), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.79))
+* Decorators with member and calls [[#413](https://github.com/DanielXMoore/Civet/pull/413)]
 
 ## 0.5.78 (2023-02-23, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.77...v0.5.78), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.78))
 * Call with unparenthesized iteration expression argument [[#411](https://github.com/DanielXMoore/Civet/pull/411)]
@@ -1134,7 +1228,9 @@ as well as a full diff and commit list.
 ## 0.5.77 (2023-02-23, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.76...v0.5.77), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.77))
 * async do, async for [[#402](https://github.com/DanielXMoore/Civet/pull/402)]
 * Improve ligature toggles [[#404](https://github.com/DanielXMoore/Civet/pull/404)]
+* Pipe ref [[#403](https://github.com/DanielXMoore/Civet/pull/403)]
 * Leave plain JSX strings alone, including newlines [[#408](https://github.com/DanielXMoore/Civet/pull/408)]
+* Pattern Matching [[#409](https://github.com/DanielXMoore/Civet/pull/409)]
 * enum support [[#410](https://github.com/DanielXMoore/Civet/pull/410)]
 
 ## 0.5.76 (2023-02-20, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.75...v0.5.76), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.76))
@@ -1142,19 +1238,33 @@ as well as a full diff and commit list.
 
 ## 0.5.75 (2023-02-20, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.74...v0.5.75), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.75))
 * Move Philosophy to civet.dev [[#394](https://github.com/DanielXMoore/Civet/pull/394)]
+* Parent pointer cleanup [[#395](https://github.com/DanielXMoore/Civet/pull/395)]
 * Prevent indented application in Coffee for loops [[#396](https://github.com/DanielXMoore/Civet/pull/396)]
 * Forbid indented application in first line of array literal [[#397](https://github.com/DanielXMoore/Civet/pull/397)]
 * Automatically await/async expressionized statements with await [[#399](https://github.com/DanielXMoore/Civet/pull/399)]
 
 ## 0.5.74 (2023-02-19, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.73...v0.5.74), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.74))
+* Aggregate duplicate pattern matching bindings [[#375](https://github.com/DanielXMoore/Civet/pull/375)]
+* duplicate bindings after rest work [[#377](https://github.com/DanielXMoore/Civet/pull/377)]
 * do expressions wrapping in iffe [[#376](https://github.com/DanielXMoore/Civet/pull/376)]
+* Fixes #383 [[#384](https://github.com/DanielXMoore/Civet/pull/384)]
+* Docs: Comparison to JavaScript/TypeScript [[#382](https://github.com/DanielXMoore/Civet/pull/382)]
+* Fixes #369 [[#385](https://github.com/DanielXMoore/Civet/pull/385)]
 * Write an intro to Civet for the front page [[#386](https://github.com/DanielXMoore/Civet/pull/386)]
+* #387. Improve thick pipe return; pipe after inline arrow expression [[#388](https://github.com/DanielXMoore/Civet/pull/388)]
+* Fixes #387 [[#389](https://github.com/DanielXMoore/Civet/pull/389)]
+* Ligatures font toggle [[#390](https://github.com/DanielXMoore/Civet/pull/390)]
 * Update Hero.vue [[#392](https://github.com/DanielXMoore/Civet/pull/392)]
 * TypeScript non-null declarations [[#393](https://github.com/DanielXMoore/Civet/pull/393)]
 
 ## 0.5.73 (2023-02-15, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.72...v0.5.73), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.73))
+* Namespace and declare support [[#374](https://github.com/DanielXMoore/Civet/pull/374)]
 
 ## 0.5.72 (2023-02-14, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.71...v0.5.72), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.72))
+* #346 Unwrap amp blocks [[#370](https://github.com/DanielXMoore/Civet/pull/370)]
+* implicit return and results aggregation in pattern matching [[#372](https://github.com/DanielXMoore/Civet/pull/372)]
+* pattern matching expression [[#373](https://github.com/DanielXMoore/Civet/pull/373)]
+* x[..] slice [[#371](https://github.com/DanielXMoore/Civet/pull/371)]
 
 ## 0.5.71 (2023-02-13, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.70...v0.5.71), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.71))
 * return.value and return = [[#364](https://github.com/DanielXMoore/Civet/pull/364)]
@@ -1163,12 +1273,14 @@ as well as a full diff and commit list.
 
 ## 0.5.70 (2023-02-12, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.69...v0.5.70), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.70))
 * Allow label argument in break and continue [[#363](https://github.com/DanielXMoore/Civet/pull/363)]
+* Fix multiple spread object regression [[#360](https://github.com/DanielXMoore/Civet/pull/360)]
 
 ## 0.5.69 (2023-02-11, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.68...v0.5.69), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.69))
 *  Allow assignments and update operators within assignments and update operators ++/-- [[#353](https://github.com/DanielXMoore/Civet/pull/353)]
 * Support for labeling statements [[#354](https://github.com/DanielXMoore/Civet/pull/354)]
 * Cleanup flag stacks, re-allow stuff inside parens/brackets/braces [[#356](https://github.com/DanielXMoore/Civet/pull/356)]
 * Prevent `case:` from implicit object literal [[#357](https://github.com/DanielXMoore/Civet/pull/357)]
+* Allow newline before type inside parens [[#358](https://github.com/DanielXMoore/Civet/pull/358)]
 
 ## 0.5.68 (2023-02-09, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.67...v0.5.68), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.68))
 * Inner assignments within assignment chains [[#348](https://github.com/DanielXMoore/Civet/pull/348)]
@@ -1181,32 +1293,52 @@ as well as a full diff and commit list.
 * Support hex and other numbers in ranges [[#345](https://github.com/DanielXMoore/Civet/pull/345)]
 
 ## 0.5.66 (2023-02-07, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.65...v0.5.66), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.66))
+* Thicc pipe [[#318](https://github.com/DanielXMoore/Civet/pull/318)]
 * xor/^^ and xnor/!^ operators [[#340](https://github.com/DanielXMoore/Civet/pull/340)]
 
 ## 0.5.65 (2023-02-06, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.64...v0.5.65), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.65))
+* Fix #337. Correct RegExp character classes. [[#338](https://github.com/DanielXMoore/Civet/pull/338)]
 
 ## 0.5.64 (2023-02-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.63...v0.5.64), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.64))
+* Optional dot for object glob [[#331](https://github.com/DanielXMoore/Civet/pull/331)]
+* Make ampersand optional for some common blocks [[#330](https://github.com/DanielXMoore/Civet/pull/330)]
 * Object globs, v2 [[#333](https://github.com/DanielXMoore/Civet/pull/333)]
 * Fix #332 [[#334](https://github.com/DanielXMoore/Civet/pull/334)]
 
 ## 0.5.63 (2023-02-04, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.62...v0.5.63), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.63))
 * Improve super property support [[#326](https://github.com/DanielXMoore/Civet/pull/326)]
+* Object glob patterns obj.{a,b} [[#327](https://github.com/DanielXMoore/Civet/pull/327)]
+* fix crash on empty [] pattern [[#328](https://github.com/DanielXMoore/Civet/pull/328)]
 
 ## 0.5.62 (2023-02-02, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.61...v0.5.62), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.62))
 * Tagged string literals become tagged template literals [[#322](https://github.com/DanielXMoore/Civet/pull/322)]
+* Improve LSP queuing behavior [[#321](https://github.com/DanielXMoore/Civet/pull/321)]
 * Function fixes [[#323](https://github.com/DanielXMoore/Civet/pull/323)]
 * typeof shorthand [[#325](https://github.com/DanielXMoore/Civet/pull/325)]
 
 ## 0.5.61 (2023-02-01, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.60...v0.5.61), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.61))
+* Fixes #309 by being stricter about snug vs spaced binary ops [[#314](https://github.com/DanielXMoore/Civet/pull/314)]
+* Fix #310: Allow empty catch block; catch then; catch/finally cleanup [[#316](https://github.com/DanielXMoore/Civet/pull/316)]
+* Fix #305: Allow thin arrow in types [[#317](https://github.com/DanielXMoore/Civet/pull/317)]
 
 ## 0.5.60 (2023-02-01, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.59...v0.5.60), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.60))
 * operator= assignment [[#301](https://github.com/DanielXMoore/Civet/pull/301)]
+* Added a sponsorship segment to the readme [[#302](https://github.com/DanielXMoore/Civet/pull/302)]
+* buffering change events to prevent stacking transpilations [[#304](https://github.com/DanielXMoore/Civet/pull/304)]
+* Fix #306: don't rewrite .ts imports in deno [[#307](https://github.com/DanielXMoore/Civet/pull/307)]
 
 ## 0.5.59 (2023-01-28, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.58...v0.5.59), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.59))
 
 ## 0.5.58 (2023-01-28, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.57...v0.5.58), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.58))
 
 ## 0.5.57 (2023-01-27, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.56...v0.5.57), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.57))
+* Escape `*/` in `###...###`, document `###` and `coffeeBoolean` [[#288](https://github.com/DanielXMoore/Civet/pull/288)]
+* Refactor StringLiteral vs. TemplateLiteral [[#294](https://github.com/DanielXMoore/Civet/pull/294)]
+* wip: pattern matching rules [[#239](https://github.com/DanielXMoore/Civet/pull/239)]
+* Identifier operators [[#295](https://github.com/DanielXMoore/Civet/pull/295)]
+* wip object pattern matching [[#296](https://github.com/DanielXMoore/Civet/pull/296)]
+* pushing flagging props to the limit [[#297](https://github.com/DanielXMoore/Civet/pull/297)]
+* `not op` for custom infix operator `op` [[#298](https://github.com/DanielXMoore/Civet/pull/298)]
 
 ## 0.5.56 (2023-01-24, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.55...v0.5.56), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.56))
 * `{x[y]}` shorthand for `{[y]: x[y]}` [[#284](https://github.com/DanielXMoore/Civet/pull/284)]
@@ -1214,9 +1346,11 @@ as well as a full diff and commit list.
 * `not instanceof`, `!<?`, reserve `not` [[#286](https://github.com/DanielXMoore/Civet/pull/286)]
 
 ## 0.5.55 (2023-01-24, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.54...v0.5.55), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.55))
+* move beyond tc39 to home page, slight reorder [[#282](https://github.com/DanielXMoore/Civet/pull/282)]
 * Integer property access [[#283](https://github.com/DanielXMoore/Civet/pull/283)]
 
 ## 0.5.54 (2023-01-23, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.53...v0.5.54), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.54))
+* Move autolet to nearest statement [[#229](https://github.com/DanielXMoore/Civet/pull/229)]
 
 ## 0.5.53 (2023-01-23, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.52...v0.5.53), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.53))
 * Fix Init being called too late [[#280](https://github.com/DanielXMoore/Civet/pull/280)]
@@ -1229,19 +1363,33 @@ as well as a full diff and commit list.
 * Insert semicolons between lines that JS would combine [[#277](https://github.com/DanielXMoore/Civet/pull/277)]
 
 ## 0.5.51 (2023-01-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.50...v0.5.51), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.51))
+* Add simple export tests for require/import of package [[#263](https://github.com/DanielXMoore/Civet/pull/263)]
+* Change `is` operator to `Object.is` call [[#262](https://github.com/DanielXMoore/Civet/pull/262)]
+* Interface fixes [[#274](https://github.com/DanielXMoore/Civet/pull/274)]
 
 ## 0.5.50 (2023-01-21, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.49...v0.5.50), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.50))
+* Change `is in` operator to use `includes` method [[#261](https://github.com/DanielXMoore/Civet/pull/261)]
+* Braceless type = and implicit inline braceless types [[#264](https://github.com/DanielXMoore/Civet/pull/264)]
 
 ## 0.5.49 (2023-01-20, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.48...v0.5.49), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.49))
 * Contributing document for getting started with Civet [[#255](https://github.com/DanielXMoore/Civet/pull/255)]
+* Fixes #256. Add readonly to AccessModifier [[#258](https://github.com/DanielXMoore/Civet/pull/258)]
+* #156. Improve TS declare lexical bindings [[#259](https://github.com/DanielXMoore/Civet/pull/259)]
 
 ## 0.5.48 (2023-01-18, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.47...v0.5.48), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.48))
+* Fixes #251 [[#253](https://github.com/DanielXMoore/Civet/pull/253)]
 
 ## 0.5.47 (2023-01-17, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.46...v0.5.47), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.47))
+* Bun civet [[#252](https://github.com/DanielXMoore/Civet/pull/252)]
 
 ## 0.5.46 (2023-01-17, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.45...v0.5.46), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.46))
+* Fixes #247 [[#249](https://github.com/DanielXMoore/Civet/pull/249)]
 
 ## 0.5.45 (2023-01-17, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.44...v0.5.45), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.45))
+* Wrap object expressions with parentheses at statement level [[#241](https://github.com/DanielXMoore/Civet/pull/241)]
+* `type ... from ...` import shorthand [[#244](https://github.com/DanielXMoore/Civet/pull/244)]
+* Import assertions [[#245](https://github.com/DanielXMoore/Civet/pull/245)]
+* Re-order docs to ease people into the Civet mindset [[#246](https://github.com/DanielXMoore/Civet/pull/246)]
 
 ## 0.5.44 (2023-01-16, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.43...v0.5.44), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.44))
 
@@ -1252,92 +1400,193 @@ as well as a full diff and commit list.
 ## 0.5.41 (2023-01-14, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.40...v0.5.41), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.41))
 
 ## 0.5.40 (2023-01-14, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.39...v0.5.40), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.40))
+* Fixes: #233. Dedented commas should not delimit [[#234](https://github.com/DanielXMoore/Civet/pull/234)]
 * New fast JSX parser [[#235](https://github.com/DanielXMoore/Civet/pull/235)]
+* Fixes #228. `this` type in function parameters. [[#236](https://github.com/DanielXMoore/Civet/pull/236)]
 
 ## 0.5.39 (2023-01-13, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.38...v0.5.39), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.39))
 * Fix CLI behavior especially on Unix [[#232](https://github.com/DanielXMoore/Civet/pull/232)]
+* Fixes #197 [[#231](https://github.com/DanielXMoore/Civet/pull/231)]
 
 ## 0.5.38 (2023-01-12, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.37...v0.5.38), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.38))
+* Fixes #220. We weren't popping scope stack at the end of the function :fearful: [[#223](https://github.com/DanielXMoore/Civet/pull/223)]
+* Fixes #221 [[#224](https://github.com/DanielXMoore/Civet/pull/224)]
+* Fixes #218. Optional type void => shorthand [[#225](https://github.com/DanielXMoore/Civet/pull/225)]
+* Fixes #160 [[#226](https://github.com/DanielXMoore/Civet/pull/226)]
 
 ## 0.5.37 (2023-01-12, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.36...v0.5.37), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.37))
+* Fixes #209 by not allowing whitespace before TypeArguments [[#210](https://github.com/DanielXMoore/Civet/pull/210)]
+* `return` from expressionized blocks [[#211](https://github.com/DanielXMoore/Civet/pull/211)]
+* Support TypeScript `interface extends` [[#219](https://github.com/DanielXMoore/Civet/pull/219)]
 
 ## 0.5.36 (2023-01-11, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.35...v0.5.36), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.36))
 * Gulp plugin [[#206](https://github.com/DanielXMoore/Civet/pull/206)]
+* Docs: fix URI to base64 translation [[#208](https://github.com/DanielXMoore/Civet/pull/208)]
+* Fixes #205 [[#207](https://github.com/DanielXMoore/Civet/pull/207)]
 
 ## 0.5.35 (2023-01-11, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.34...v0.5.35), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.35))
+* Docs: Add playground page [[#198](https://github.com/DanielXMoore/Civet/pull/198)]
+* Docs: Fix playground [[#199](https://github.com/DanielXMoore/Civet/pull/199)]
+* Docs: fix playground object outputting [[#200](https://github.com/DanielXMoore/Civet/pull/200)]
+* Fix identifier used only in coffee for loop [[#201](https://github.com/DanielXMoore/Civet/pull/201)]
+* Fix register and other integration docs [[#204](https://github.com/DanielXMoore/Civet/pull/204)]
 
 ## 0.5.34 (2023-01-10, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.33...v0.5.34), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.34))
+* Add type guard function for compile errors [[#183](https://github.com/DanielXMoore/Civet/pull/183)]
+* Docs: Enhance playground error handling [[#185](https://github.com/DanielXMoore/Civet/pull/185)]
+* Moved :: behind coffeePrototype config flag [[#188](https://github.com/DanielXMoore/Civet/pull/188)]
+* Confirm that docs build in CI for PRs [[#189](https://github.com/DanielXMoore/Civet/pull/189)]
+* Moved CoffeeScript focus into separate document [[#191](https://github.com/DanielXMoore/Civet/pull/191)]
+* Fixes #192 [[#195](https://github.com/DanielXMoore/Civet/pull/195)]
+* #175 Added preliminary ':' -> 'as' improvement [[#186](https://github.com/DanielXMoore/Civet/pull/186)]
+* Fixes #194 [[#196](https://github.com/DanielXMoore/Civet/pull/196)]
 
 ## 0.5.33 (2023-01-10, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.32...v0.5.33), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.33))
 * Synonyous -> synonymous [[#180](https://github.com/DanielXMoore/Civet/pull/180)]
+* Docs: add interactive snippets [[#172](https://github.com/DanielXMoore/Civet/pull/172)]
+* Docs: fix playground server side rendering [[#181](https://github.com/DanielXMoore/Civet/pull/181)]
+* Docs: Fix mobile playground [[#182](https://github.com/DanielXMoore/Civet/pull/182)]
+* + extra pipeline example [[#184](https://github.com/DanielXMoore/Civet/pull/184)]
 
 ## 0.5.32 (2023-01-09, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.31...v0.5.32), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.32))
 
 ## 0.5.31 (2023-01-09, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.30...v0.5.31), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.31))
+* Try expression [[#173](https://github.com/DanielXMoore/Civet/pull/173)]
+* Fixes #51 [[#178](https://github.com/DanielXMoore/Civet/pull/178)]
 
 ## 0.5.30 (2023-01-08, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.29...v0.5.30), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.30))
 
 ## 0.5.29 (2023-01-08, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.28...v0.5.29), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.29))
+* Fix inline ifs [[#171](https://github.com/DanielXMoore/Civet/pull/171)]
 
 ## 0.5.28 (2023-01-08, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.27...v0.5.28), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.28))
+* Function declarations without parentheses [[#159](https://github.com/DanielXMoore/Civet/pull/159)]
 * Create directory in `-o` option if it doesn't exist [[#164](https://github.com/DanielXMoore/Civet/pull/164)]
+* Fix array parsing bug [[#168](https://github.com/DanielXMoore/Civet/pull/168)]
 
 ## 0.5.27 (2023-01-07, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.26...v0.5.27), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.27))
+* Support initializers in type parameters [[#149](https://github.com/DanielXMoore/Civet/pull/149)]
+* Support `import`/`export` `type`/`{type}` [[#151](https://github.com/DanielXMoore/Civet/pull/151)]
+* Compilation and AST modes for REPL [[#148](https://github.com/DanielXMoore/Civet/pull/148)]
+* Improve extends '<' shorthand [[#152](https://github.com/DanielXMoore/Civet/pull/152)]
+* `yarn build` before building docs locally [[#153](https://github.com/DanielXMoore/Civet/pull/153)]
 
 ## 0.5.26 (2023-01-06, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.25...v0.5.26), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.26))
 * New Playground tag in docs [[#125](https://github.com/DanielXMoore/Civet/pull/125)]
+* JSX +- toggles like LiveScript object literals [[#135](https://github.com/DanielXMoore/Civet/pull/135)]
+* Expanded LiveScript toggles to include ! and added ! to JSX attribute toggle shorthand [[#136](https://github.com/DanielXMoore/Civet/pull/136)]
 * Docs: fix code examples rendering [[#140](https://github.com/DanielXMoore/Civet/pull/140)]
+* Docs: add sponsors [[#141](https://github.com/DanielXMoore/Civet/pull/141)]
+* JSX implicit fragments [[#139](https://github.com/DanielXMoore/Civet/pull/139)]
 
 ## 0.5.25 (2023-01-06, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.24...v0.5.25), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.25))
+* Avoid object literal calls with class extends [[#131](https://github.com/DanielXMoore/Civet/pull/131)]
 * Fix for nested JSX if else expressions [[#133](https://github.com/DanielXMoore/Civet/pull/133)]
+* ESM build and refactoring [[#134](https://github.com/DanielXMoore/Civet/pull/134)]
 
 ## 0.5.24 (2023-01-06, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.23...v0.5.24), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.24))
+* Document void return to avoid implicit return [[#123](https://github.com/DanielXMoore/Civet/pull/123)]
+* Add missing NonIdContinue after keywords [[#130](https://github.com/DanielXMoore/Civet/pull/130)]
+* New operators: is not, is in, is not in, not in [[#124](https://github.com/DanielXMoore/Civet/pull/124)]
+* Positive modulo operator %% [[#132](https://github.com/DanielXMoore/Civet/pull/132)]
 
 ## 0.5.23 (2023-01-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.22...v0.5.23), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.23))
+* Several more examples for docs [[#119](https://github.com/DanielXMoore/Civet/pull/119)]
+* Document how to import and that TS code is valid input [[#121](https://github.com/DanielXMoore/Civet/pull/121)]
+* CLI support for running script with arguments [[#122](https://github.com/DanielXMoore/Civet/pull/122)]
 
 ## 0.5.22 (2023-01-05, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.21...v0.5.22), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.22))
+* Update docs [[#115](https://github.com/DanielXMoore/Civet/pull/115)]
+* Improve CLI documentation [[#116](https://github.com/DanielXMoore/Civet/pull/116)]
+* Register fixes [[#117](https://github.com/DanielXMoore/Civet/pull/117)]
 
 ## 0.5.21 (2023-01-04, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.20...v0.5.21), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.21))
+* Add docs [[#110](https://github.com/DanielXMoore/Civet/pull/110)]
+* Document implicit return features [[#111](https://github.com/DanielXMoore/Civet/pull/111)]
+* Docs update [[#112](https://github.com/DanielXMoore/Civet/pull/112)]
+* Auto let Fix [[#105](https://github.com/DanielXMoore/Civet/pull/105)]
 
 ## 0.5.20 (2023-01-03, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.19...v0.5.20), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.20))
+* Document let shorthand [[#107](https://github.com/DanielXMoore/Civet/pull/107)]
+* Support `|> return` and document pipes [[#106](https://github.com/DanielXMoore/Civet/pull/106)]
+* Class shorthand optimizations [[#108](https://github.com/DanielXMoore/Civet/pull/108)]
+* Avoid implicit return via trailing semicolon [[#109](https://github.com/DanielXMoore/Civet/pull/109)]
 
 ## 0.5.19 (2022-12-31, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.18...v0.5.19), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.19))
+* Insert Final Newline setting for VSCode [[#101](https://github.com/DanielXMoore/Civet/pull/101)]
+* XML comment support within JSX [[#102](https://github.com/DanielXMoore/Civet/pull/102)]
 
 ## 0.5.18 (2022-12-30, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.16...v0.5.18), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.18))
+* Fix CLI behavior on Windows [[#96](https://github.com/DanielXMoore/Civet/pull/96)]
+* Filter combined JSX classes [[#100](https://github.com/DanielXMoore/Civet/pull/100)]
+* New CLI including REPL [[#99](https://github.com/DanielXMoore/Civet/pull/99)]
 
 ## 0.5.16 (2022-12-29, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.15...v0.5.16), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.16))
+* JSX #id and .class shorthands [[#95](https://github.com/DanielXMoore/Civet/pull/95)]
 
 ## 0.5.15 (2022-12-29, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.14...v0.5.15), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.15))
+* Use Set to represent uncacheable rules [[#90](https://github.com/DanielXMoore/Civet/pull/90)]
+* Fix indentation JSX within attributes [[#92](https://github.com/DanielXMoore/Civet/pull/92)]
+* Better support for multi-tsconfig projects [[#91](https://github.com/DanielXMoore/Civet/pull/91)]
+* Bump json5 from 2.2.1 to 2.2.2 in /lsp [[#93](https://github.com/DanielXMoore/Civet/pull/93)]
+* Bump json5 from 2.2.1 to 2.2.2 [[#94](https://github.com/DanielXMoore/Civet/pull/94)]
 
 ## 0.5.14 (2022-12-29, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.13...v0.5.14), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.14))
+* JSX arrow functions don't need braces [[#89](https://github.com/DanielXMoore/Civet/pull/89)]
 
 ## 0.5.13 (2022-12-29, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.12...v0.5.13), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.13))
+* Don't deploy civet.dev website from forks [[#87](https://github.com/DanielXMoore/Civet/pull/87)]
 
 ## 0.5.12 (2022-12-26, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.11...v0.5.12), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.12))
+* Fix function application with implicit object [[#84](https://github.com/DanielXMoore/Civet/pull/84)]
+* Implicit dynamic import() [[#86](https://github.com/DanielXMoore/Civet/pull/86)]
 
 ## 0.5.11 (2022-12-25, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.10...v0.5.11), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.11))
+* Class enhancements: Support abstract & readonly [[#82](https://github.com/DanielXMoore/Civet/pull/82)]
+* Add support for |> pipelines [[#83](https://github.com/DanielXMoore/Civet/pull/83)]
 
 ## 0.5.10 (2022-12-23, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.9...v0.5.10), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.10))
 
 ## 0.5.9 (2022-12-23, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.8...v0.5.9), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.9))
+* Support access modifiers (public/protected/private) [[#80](https://github.com/DanielXMoore/Civet/pull/80)]
 
 ## 0.5.8 (2022-12-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.7...v0.5.8), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.8))
+* Link to GitHub repo from civet.dev [[#78](https://github.com/DanielXMoore/Civet/pull/78)]
 
 ## 0.5.7 (2022-12-20, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.6...v0.5.7), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.7))
 
 ## 0.5.6 (2022-12-20, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.5...v0.5.6), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.6))
+* Link to starter templates for Solid [Start] [[#69](https://github.com/DanielXMoore/Civet/pull/69)]
+* Clarify that comma operator works in `for` [[#70](https://github.com/DanielXMoore/Civet/pull/70)]
+* Link to Vite, esbuild, ESM plugins [[#71](https://github.com/DanielXMoore/Civet/pull/71)]
+* Super property access [[#73](https://github.com/DanielXMoore/Civet/pull/73)]
+* Fix autoLet will redeclare the variable explicit declared [[#74](https://github.com/DanielXMoore/Civet/pull/74)]
+* Allow type annotation in catch clause [[#76](https://github.com/DanielXMoore/Civet/pull/76)]
+*   Allow decorators on static methods/fields and properties [[#77](https://github.com/DanielXMoore/Civet/pull/77)]
 
 ## 0.5.5 (2022-12-18, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.4...v0.5.5), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.5))
+* Typed JSX elements/fragments for Solid [[#68](https://github.com/DanielXMoore/Civet/pull/68)]
 
 ## 0.5.4 (2022-12-18, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.3...v0.5.4), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.4))
+* Fix multi-line JSX fragments [[#67](https://github.com/DanielXMoore/Civet/pull/67)]
 
 ## 0.5.3 (2022-12-17, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.2...v0.5.3), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.3))
+* Refactor ref making [[#63](https://github.com/DanielXMoore/Civet/pull/63)]
+* Fix singleton TypeParameters compatibility with TSX [[#65](https://github.com/DanielXMoore/Civet/pull/65)]
+* Support type parameters in JSX tag names [[#66](https://github.com/DanielXMoore/Civet/pull/66)]
 
 ## 0.5.2 (2022-12-17, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.1...v0.5.2), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.2))
+* JSX `...foo` shorthand for `{...foo}` [[#62](https://github.com/DanielXMoore/Civet/pull/62)]
 
 ## 0.5.1 (2022-12-16, [diff](https://github.com/DanielXMoore/Civet/compare/v0.5.0...v0.5.1), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.1))
+* support typescript `satisfies` [[#56](https://github.com/DanielXMoore/Civet/pull/56)]
+* Default to tsx extension for transpiled files [[#57](https://github.com/DanielXMoore/Civet/pull/57)]
 
 ## 0.5.0 (2022-12-14, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.38...v0.5.0), [commits](https://github.com/DanielXMoore/Civet/commits/v0.5.0))
+* README cleanup [[#44](https://github.com/DanielXMoore/Civet/pull/44)]
+* Support whitespace-free JSX attributes [[#45](https://github.com/DanielXMoore/Civet/pull/45)]
+* Omit type parameters in js output [[#41](https://github.com/DanielXMoore/Civet/pull/41)]
+* Add autolet [[#43](https://github.com/DanielXMoore/Civet/pull/43)]
 
 ## 0.4.38 (2022-12-13, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.37...v0.4.38), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.38))
 
@@ -1346,16 +1595,26 @@ as well as a full diff and commit list.
 ## 0.4.36 (2022-12-13, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.35...v0.4.36), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.36))
 
 ## 0.4.35 (2022-12-12, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.34...v0.4.35), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.35))
+* Document JSX object literal enhancement [[#36](https://github.com/DanielXMoore/Civet/pull/36)]
+* Support content on same line as <> [[#37](https://github.com/DanielXMoore/Civet/pull/37)]
+* Support for many unbraced JSX attribute values [[#38](https://github.com/DanielXMoore/Civet/pull/38)]
+* Support computed JSX attribute names [[#39](https://github.com/DanielXMoore/Civet/pull/39)]
 
 ## 0.4.34 (2022-12-12, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.33...v0.4.34), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.34))
+* Support type args in classes [[#34](https://github.com/DanielXMoore/Civet/pull/34)]
 
 ## 0.4.33 (2022-12-11, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.32...v0.4.33), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.33))
 
 ## 0.4.32 (2022-12-11, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.31...v0.4.32), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.32))
 
 ## 0.4.31 (2022-12-11, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.28...v0.4.31), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.31))
+* LSP: Update other documents asynchronously when content gets updated [[#29](https://github.com/DanielXMoore/Civet/pull/29)]
+* JSX object shorthand [[#32](https://github.com/DanielXMoore/Civet/pull/32)]
+* Indentation in middle of arrays [[#33](https://github.com/DanielXMoore/Civet/pull/33)]
 
 ## 0.4.28 (2022-12-10, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.27...v0.4.28), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.28))
+* Add Discord link and NPM badges [[#28](https://github.com/DanielXMoore/Civet/pull/28)]
+* Indentation-based JSX [[#25](https://github.com/DanielXMoore/Civet/pull/25)]
 
 ## 0.4.27 (2022-12-10, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.26...v0.4.27), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.27))
 
@@ -1364,6 +1623,7 @@ as well as a full diff and commit list.
 ## 0.4.25 (2022-12-10, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.24...v0.4.25), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.25))
 
 ## 0.4.24 (2022-12-10, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.23...v0.4.24), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.24))
+* Indentation flexibility [[#26](https://github.com/DanielXMoore/Civet/pull/26)]
 
 ## 0.4.23 (2022-12-08, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.22...v0.4.23), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.23))
 * CoffeeScript export to-do [[#22](https://github.com/DanielXMoore/Civet/pull/22)]
@@ -1439,6 +1699,7 @@ as well as a full diff and commit list.
 ## 0.4.8 (2022-10-11, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.7...v0.4.8), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.8))
 
 ## 0.4.7 (2022-10-10, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.6...v0.4.7), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.7))
+* Implicit returns [[#2](https://github.com/DanielXMoore/Civet/pull/2)]
 
 ## 0.4.6 (2022-10-01, [diff](https://github.com/DanielXMoore/Civet/compare/v0.4.5...v0.4.6), [commits](https://github.com/DanielXMoore/Civet/commits/v0.4.6))
 

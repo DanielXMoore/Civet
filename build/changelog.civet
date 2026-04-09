@@ -111,30 +111,45 @@ for each version of versions
 
 // Find pull requests between each version
 
+// Squash-merged PRs appear as single commits on the first-parent chain.
+// We restrict (title #NNN) detection to first-parent commits to avoid
+// treating issue references in internal branch commit messages as PRs.
+firstParentCommits: Set<string> := new Set
+run 'git', ['log', '--topo-order', '--reverse', '--first-parent', '--format=%H']
+.split '\n'
+.forEach (hash) => firstParentCommits.add hash.trim() if hash.trim()
+
 prLogs := run 'git', [
   'log'
   '--topo-order'
   '--reverse'
-  // We can't just look at PR merge commits; also need to see version commits.
-  //'--grep'
-  //'Merge pull request #[0-9]'
+  // Full log so merge commits on non-first-parent paths are still included
+  // (can happen when git pull creates a local merge commit).
 ]
-let prs: string[] = []
-let pr?: string
+let prs: Set<string> = new Set
+let seenSubject = false
+let currentCommit = ''
 for each line of prLogs.split '\n'
   if [, commit] := line.match /^commit ([0-9a-f]+)/
     if commit in commitToVersion
-      commitToVersion[commit].prs = prs
-      prs = []
-  else if match := line.match /^    Merge pull request #([0-9]+) from (\S+)/
-    unless match.2 is like /\/dependabot\//
-      prs.push match.1
+      commitToVersion[commit].prs = [...prs]
+      prs = new Set
+    seenSubject = false
+    currentCommit = commit
+  else if (line.match /^    /) and not seenSubject
+    seenSubject = true
+    if match := line.match /^    Merge pull request #([0-9]+) from (\S+)/
+      unless match.2 is like /\/dependabot\//
+        prs.add match.1
+    else if firstParentCommits.has currentCommit
+      if match := line.match /^    .+\(#([0-9]+)\)\s*$/
+        prs.add match.1
 
-if prs#
+if prs.size
   if uncommitted?
-    uncommitted.prs = prs
+    uncommitted.prs = [...prs]
   else
-    versions.push { prs, version: 'Unreleased' }
+    versions.push { prs: [...prs], version: 'Unreleased' }
 
 // Look up current PR titles
 
@@ -255,7 +270,8 @@ for each version, i of versions
   detail := if details# then ` (${details.join ', '})` else ''
   changelog += `## ${version.version}${detail}\n`
   for each pr of version.prs ?? []
-    changelog += `* ${prMap[pr]?.title ?? ''} [[#${pr}](${repoUrl}/pull/${pr})]\n`
+    continue unless prMap[pr]?
+    changelog += `* ${prMap[pr].title} [[#${pr}](${repoUrl}/pull/${pr})]\n`
     if matches := prMap[pr]?.body?.match /^BREAKING CHANGE: ([^\r\n]+)/mg
       for match of matches
         changelog += `  * ${match}\n`
