@@ -1,0 +1,84 @@
+#!/usr/bin/env civet
+/**
+ * show-uncovered.civet
+ *
+ * Reads coverage/coverage-final.json and prints uncovered code with context,
+ * formatted for easy reading by humans or LLM agents.
+ *
+ * Usage:
+ *   civet scripts/show-uncovered.civet [file-pattern] [--context N]
+ *
+ * Examples:
+ *   civet scripts/show-uncovered.civet
+ *   civet scripts/show-uncovered.civet typescript-service
+ *   civet scripts/show-uncovered.civet --context 5
+ */
+
+{ readFileSync, existsSync } from "fs"
+{ resolve, relative } from "path"
+
+args := process.argv.slice 2
+patternArg := args.find (a) => !a.startsWith "--"
+contextIdx := args.indexOf "--context"
+CONTEXT := contextIdx !== -1 ? parseInt(args[contextIdx + 1], 10) : 3
+
+coveragePath := resolve "coverage/coverage-final.json"
+unless existsSync coveragePath
+  console.error "No coverage data found. Run npm run coverage:all first."
+  process.exit 1
+
+coverage := JSON.parse readFileSync coveragePath, "utf8"
+
+for [filePath, data] of Object.entries coverage
+  rel := relative process.cwd(), filePath
+  continue if patternArg and !rel.includes patternArg
+
+  // Collect uncovered statement line numbers (1-based)
+  uncoveredLines := new Set<number>
+  for [id, count] of Object.entries data.s
+    if count is 0
+      loc := data.statementMap[id]
+      for l of [loc.start.line..loc.end.line]
+        uncoveredLines.add l
+
+  continue if uncoveredLines.size is 0
+  continue unless existsSync filePath
+
+  lines := (readFileSync filePath, "utf8").split "\n"
+
+  // Group consecutive uncovered lines into ranges
+  sorted := [...uncoveredLines].sort (a, b) => a - b
+  ranges: [number, number][] := []
+  start .= sorted[0]
+  end .= sorted[0]
+  for i of [1...sorted.length]
+    if sorted[i] <= end + 1
+      end = sorted[i]
+    else
+      ranges.push [start, end]
+      start = end = sorted[i]
+  ranges.push [start, end]
+
+  console.log `\n${"=".repeat 60}`
+  console.log `FILE: ${rel}  (${uncoveredLines.size} uncovered lines in ${ranges.length} region(s))`
+  console.log `${"=".repeat 60}`
+
+  // Merge nearby ranges so we don't print the same context twice
+  merged := [ranges[0]]
+  for i of [1...ranges.length]
+    prev := merged[merged.length - 1]
+    if ranges[i][0] - prev[1] <= CONTEXT * 2 + 1
+      prev[1] = ranges[i][1]
+    else
+      merged.push ranges[i]
+
+  for [rStart, rEnd] of merged
+    from := Math.max 1, rStart - CONTEXT
+    to := Math.min lines.length, rEnd + CONTEXT
+    console.log `\n  Lines ${rStart}–${rEnd}:`
+    for l of [from..to]
+      marker := uncoveredLines.has(l) ? ">>>" : "   "
+      lineNum := String(l).padStart 4
+      console.log `  ${marker} ${lineNum}: ${lines[l - 1]}`
+
+console.log ""
