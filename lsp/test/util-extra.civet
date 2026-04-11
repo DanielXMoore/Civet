@@ -1,0 +1,262 @@
+import assert from assert
+import { TextDocument } from vscode-languageserver-textdocument
+
+{
+  convertNavTree,
+  convertDiagnostic,
+  withResolvers,
+  getCompletionItemKind,
+  logTiming,
+} from ../source/lib/util.civet
+
+import { CompletionItemKind, DiagnosticSeverity } from vscode-languageserver
+import { ScriptElementKind, DiagnosticCategory } from typescript
+
+describe "util (extra)", ->
+  describe "convertNavTree", ->
+    // Minimal TextDocument for offset calculations
+    doc := TextDocument.create("file:///test.ts", "typescript", 0, "const x = 1\nconst y = 2\n")
+
+    it "returns false and skips alias items", ->
+      item := {
+        text: "alias"
+        kind: ScriptElementKind.alias
+        kindModifiers: ""
+        spans: [{ start: 0, length: 5 }]
+        childItems: []
+        indent: 0
+        nameSpan: undefined
+      } as any
+      output: any[] := []
+      result := convertNavTree(item, output, doc, undefined)
+      assert.equal result, false
+      assert.equal output.length, 0
+
+    it "returns false for empty/unnamed items", ->
+      item := {
+        text: ""
+        kind: ScriptElementKind.constElement
+        kindModifiers: ""
+        spans: [{ start: 0, length: 5 }]
+        childItems: []
+        indent: 0
+        nameSpan: undefined
+      } as any
+      output: any[] := []
+      result := convertNavTree(item, output, doc, undefined)
+      assert.equal result, false
+
+    it "includes a named const in output", ->
+      item := {
+        text: "x"
+        kind: ScriptElementKind.constElement
+        kindModifiers: ""
+        spans: [{ start: 6, length: 1 }]
+        childItems: []
+        indent: 0
+        nameSpan: { start: 6, length: 1 }
+      } as any
+      output: any[] := []
+      result := convertNavTree(item, output, doc, undefined)
+      assert.equal result, true
+      assert.equal output.length, 1
+      assert.equal output[0].name, "x"
+
+    it "marks deprecated items with tag", ->
+      item := {
+        text: "oldFn"
+        kind: ScriptElementKind.functionElement
+        kindModifiers: "deprecated"
+        spans: [{ start: 0, length: 5 }]
+        childItems: []
+        indent: 0
+        nameSpan: undefined
+      } as any
+      output: any[] := []
+      convertNavTree(item, output, doc, undefined)
+      assert.equal output[0]?.tags?.[0], 1 // SymbolTag.Deprecated
+
+    it "nests child items whose span overlaps the parent range", ->
+      // exercises lines 141-146: child is moved into parent's children array
+      child := {
+        text: "x"
+        kind: ScriptElementKind.constElement
+        kindModifiers: ""
+        spans: [{ start: 6, length: 1 }]   // inside the parent span
+        childItems: []
+        indent: 1
+        nameSpan: { start: 6, length: 1 }
+      } as any
+      parent := {
+        text: "outer"
+        kind: ScriptElementKind.functionElement
+        kindModifiers: ""
+        spans: [{ start: 0, length: 24 }]   // whole document
+        childItems: [child]
+        indent: 0
+        nameSpan: { start: 0, length: 5 }
+      } as any
+      output: any[] := []
+      convertNavTree(parent, output, doc, undefined)
+      assert.equal output.length, 1
+      assert.equal output[0].name, "outer"
+      assert.equal output[0].children.length, 1
+      assert.equal output[0].children[0].name, "x"
+
+    it "prefixes get/set accessor labels in convertSymbol", ->
+      // exercises lines 165-169 in convertSymbol
+      getItem := {
+        text: "myProp"
+        kind: ScriptElementKind.memberGetAccessorElement
+        kindModifiers: ""
+        spans: [{ start: 0, length: 5 }]
+        childItems: []
+        indent: 0
+        nameSpan: undefined
+      } as any
+      setItem := {
+        text: "myProp"
+        kind: ScriptElementKind.memberSetAccessorElement
+        kindModifiers: ""
+        spans: [{ start: 0, length: 5 }]
+        childItems: []
+        indent: 0
+        nameSpan: undefined
+      } as any
+      getOut: any[] := []
+      setOut: any[] := []
+      convertNavTree(getItem, getOut, doc, undefined)
+      convertNavTree(setItem, setOut, doc, undefined)
+      assert.equal getOut[0].name, "(get) myProp"
+      assert.equal setOut[0].name, "(set) myProp"
+
+    it "returns SymbolKind.Variable for unrecognized kind (getSymbolKind default)", ->
+      // exercises line 53: getSymbolKind falls through to default return
+      unknownItem := {
+        text: "thing"
+        kind: ScriptElementKind.warning   // not in getSymbolKind switch
+        kindModifiers: ""
+        spans: [{ start: 0, length: 5 }]
+        childItems: []
+        indent: 0
+        nameSpan: undefined
+      } as any
+      output: any[] := []
+      convertNavTree(unknownItem, output, doc, undefined)
+      // SymbolKind.Variable = 13; just assert a symbol was produced
+      assert.equal output.length, 1
+
+  describe "convertDiagnostic", ->
+    doc := TextDocument.create("file:///test.civet", "civet", 0, "x := 1\ny := 2\n")
+
+    it "converts an error diagnostic", ->
+      diag := {
+        messageText: "Some error"
+        start: 0
+        length: 1
+        category: DiagnosticCategory.Error
+        code: 2304
+        source: undefined
+      } as any
+      result := convertDiagnostic(diag, doc)
+      assert.equal result.message, "Some error"
+      assert.equal result.severity, DiagnosticSeverity.Error
+      assert.equal result.code, 2304
+      assert.equal result.source, "typescript"
+
+    it "converts a warning diagnostic", ->
+      diag := {
+        messageText: "A warning"
+        start: 0
+        length: 1
+        category: DiagnosticCategory.Warning
+        code: 1001
+        source: "civet"
+      } as any
+      result := convertDiagnostic(diag, doc)
+      assert.equal result.severity, DiagnosticSeverity.Warning
+      assert.equal result.source, "civet"
+
+    it "converts suggestion and message categories", ->
+      suggestion := { messageText: "s", start: 0, length: 1, category: DiagnosticCategory.Suggestion, code: 1, source: undefined } as any
+      message    := { messageText: "m", start: 0, length: 1, category: DiagnosticCategory.Message,    code: 2, source: undefined } as any
+      assert.equal convertDiagnostic(suggestion, doc).severity, DiagnosticSeverity.Hint
+      assert.equal convertDiagnostic(message, doc).severity, DiagnosticSeverity.Information
+
+  describe "withResolvers", ->
+    it "resolves the promise", async ->
+      { promise, resolve } := withResolvers<number>()
+      resolve(42)
+      result := await promise
+      assert.equal result, 42
+
+    it "rejects the promise", async ->
+      { promise, reject } := withResolvers<number>()
+      reject(new Error("boom"))
+      await assert.rejects promise, /boom/
+
+  describe "getCompletionItemKind", ->
+    it "maps keyword to Keyword kind", ->
+      assert.equal getCompletionItemKind(ScriptElementKind.keyword), CompletionItemKind.Keyword
+
+    it "maps function to Function kind", ->
+      assert.equal getCompletionItemKind(ScriptElementKind.functionElement), CompletionItemKind.Function
+
+    it "maps class to Class kind", ->
+      assert.equal getCompletionItemKind(ScriptElementKind.classElement), CompletionItemKind.Class
+
+    it "maps enum to Enum kind", ->
+      assert.equal getCompletionItemKind(ScriptElementKind.enumElement), CompletionItemKind.Enum
+
+    it "defaults unknown to Property kind", ->
+      assert.equal getCompletionItemKind("unknown-kind"), CompletionItemKind.Property
+
+    it "maps variable kinds to Variable", ->
+      assert.equal getCompletionItemKind(ScriptElementKind.variableElement), CompletionItemKind.Variable
+      assert.equal getCompletionItemKind(ScriptElementKind.localVariableElement), CompletionItemKind.Variable
+      assert.equal getCompletionItemKind(ScriptElementKind.alias), CompletionItemKind.Variable
+      assert.equal getCompletionItemKind(ScriptElementKind.parameterElement), CompletionItemKind.Variable
+
+    it "maps member accessor/variable kinds to Field", ->
+      assert.equal getCompletionItemKind(ScriptElementKind.memberVariableElement), CompletionItemKind.Field
+      assert.equal getCompletionItemKind(ScriptElementKind.memberGetAccessorElement), CompletionItemKind.Field
+      assert.equal getCompletionItemKind(ScriptElementKind.memberSetAccessorElement), CompletionItemKind.Field
+
+    it "maps signature kinds to Method", ->
+      assert.equal getCompletionItemKind(ScriptElementKind.constructSignatureElement), CompletionItemKind.Method
+      assert.equal getCompletionItemKind(ScriptElementKind.callSignatureElement), CompletionItemKind.Method
+      assert.equal getCompletionItemKind(ScriptElementKind.indexSignatureElement), CompletionItemKind.Method
+
+    it "maps enumMember to EnumMember", ->
+      assert.equal getCompletionItemKind(ScriptElementKind.enumMemberElement), CompletionItemKind.EnumMember
+
+    it "maps module kinds to Module", ->
+      assert.equal getCompletionItemKind(ScriptElementKind.moduleElement), CompletionItemKind.Module
+      assert.equal getCompletionItemKind(ScriptElementKind.externalModuleName), CompletionItemKind.Module
+
+    it "maps interface to Interface", ->
+      assert.equal getCompletionItemKind(ScriptElementKind.interfaceElement), CompletionItemKind.Interface
+
+    it "maps warning to Text", ->
+      assert.equal getCompletionItemKind(ScriptElementKind.warning), CompletionItemKind.Text
+
+    it "maps script to File", ->
+      assert.equal getCompletionItemKind(ScriptElementKind.scriptElement), CompletionItemKind.File
+
+    it "maps directory to Folder", ->
+      assert.equal getCompletionItemKind(ScriptElementKind.directory), CompletionItemKind.Folder
+
+    it "maps string to Constant", ->
+      assert.equal getCompletionItemKind(ScriptElementKind.string), CompletionItemKind.Constant
+
+  describe "logTiming", ->
+    it "calls the wrapped function and returns its result", ->
+      // exercises lines 328-341
+      calls: string[] := []
+      logger := { log: (msg: string) => calls.push(msg) } as any
+      add := (a: number, b: number) => a + b
+      timedAdd := logTiming(logger, "add", add)
+      result := timedAdd(2, 3)
+      assert.equal result, 5
+      assert.equal calls.length, 1
+      assert.ok calls[0].includes("add")
