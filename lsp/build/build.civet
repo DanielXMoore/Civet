@@ -1,4 +1,6 @@
 { build } from esbuild
+{ resolve } from path
+{ writeFileSync, readFileSync } from fs
 civetPlugin from @danielx/civet/esbuild
 
 minify := false // !watch or process.argv.includes '--minify'
@@ -29,8 +31,7 @@ build({
   outfile: 'dist/extension.js'
 }).catch ->
   process.exit 1
-.then ({metafile}) ->
-  { writeFileSync } := await import('fs')
+.then ({ metafile }) ->
   writeFileSync 'extension.metafile', JSON.stringify(metafile)
 
 isDev := process.env.NODE_ENV is "development"
@@ -42,9 +43,6 @@ build({
   tsconfig: "./tsconfig.json"
   format: "cjs"
   +bundle
-  // In dev mode, keep all npm packages external so the bundle is small and
-  // source maps map cleanly back to .civet files (used for coverage too).
-  packages: isDev ? 'external' : undefined
   external: ['vscode']
   sourcemap
   minify
@@ -54,11 +52,26 @@ build({
   ]
   define:
     "import.meta.url": '""'
+  ...(if isDev then { packages: 'external' } else {})
 }).catch ->
   process.exit 1
-.then ({metafile}) ->
-  { writeFileSync } := await import('fs')
-  writeFileSync 'server.metafile', JSON.stringify(metafile)
+.then ({ metafile }) ->
+  if metafile
+    writeFileSync 'server.metafile', JSON.stringify(metafile)
+
+  if isDev
+    // Rewrite source map sources to absolute paths so that v8-to-istanbul's
+    // excludePath callback receives a path that test-exclude can match.
+    // The source map uses relative paths like "../source/server.civet"
+    // (relative to dist/) which test-exclude rejects because they appear to be
+    // inside the dist directory.
+    // Absolute paths are made relative to cwd by test-exclude and correctly
+    // matched against include: ["source"].
+    mapPath := 'dist/server.js.map'
+    map := JSON.parse readFileSync(mapPath, 'utf8') as string
+    base := resolve 'dist'
+    map.sources = map.sources.map (s: string) => resolve base, s
+    writeFileSync mapPath, JSON.stringify map
 
 // E2E test runner and test files
 { readdirSync } from fs
