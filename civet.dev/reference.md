@@ -192,6 +192,18 @@ headers :=
   Content-Encoding: "gzip"
 </Playground>
 
+### Optional Properties
+
+Braced object literals support `?` shorthand for properties
+that get included only when the value is non-null:
+
+<Playground>
+options := { filename?, data?: getData() }
+</Playground>
+
+This is especially helpful for satisfying TypeScript's
+[`exactOptionalPropertyTypes` mode](https://www.typescriptlang.org/tsconfig/#exactOptionalPropertyTypes).
+
 ### Object Globs
 
 Inspired by
