@@ -1,0 +1,140 @@
+import type ts from typescript
+type SymbolDisplayPart = ts.server.protocol.SymbolDisplayPart
+type FileSpan = ts.server.protocol.FileSpan
+type JSDocTagInfo = ts.server.protocol.JSDocTagInfo
+
+// Based on https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/util/textRendering.ts
+
+export function asPlainText(parts: SymbolDisplayPart[] | string)
+  return parts if parts <? 'string'
+  parts.map((part) => part.text).join('')
+
+export function asPlainTextWithLinks(parts: SymbolDisplayPart[] | string | undefined)
+  return '' unless parts
+  return parts if parts <? 'string'
+  out .= ""
+  let currentLink: {
+    name?: string
+    target?: FileSpan
+    text?: string
+    linkcode: boolean
+  }?
+
+  for part of parts
+    switch part.kind
+      case "link":
+        if currentLink
+          if currentLink.target
+            //const file = filePathConverter.toResource(currentLink.target.file)
+            args :=
+              //file: { ...file.toJSON(), $mid: undefined }
+              file: currentLink.target.file
+              position:
+                lineNumber: currentLink.target.start.line - 1
+                column: currentLink.target.start.offset - 1
+
+            command := "command:_typescript.openJsDocLink?" +
+              encodeURIComponent(JSON.stringify([args]))
+            linkText := currentLink.text or escapeBackTicks(currentLink.name or "")
+
+            out += `[${currentLink.linkcode ? '`' + linkText + '`' : linkText}](${command})`
+          else
+            if text := currentLink.text ?? currentLink.name
+              if /^https?:/.test(text)
+                subparts := text.split(' ')
+                if subparts.length is 1 and !currentLink.linkcode
+                  out += `<${subparts[0]}>`
+                else
+                  linkText := subparts.length > 1
+                    ? subparts.slice(1).join(' ')
+                    : subparts[0]
+                  out += `[${currentLink.linkcode ? '`' + escapeBackTicks(linkText) + '`' : linkText}](${subparts[0]})`
+              else
+                out += escapeBackTicks(text)
+        else
+          currentLink =
+            linkcode: part.text is "{@linkcode "
+        currentLink = undefined
+        break
+      when "linkName":
+        if currentLink
+          currentLink.name = part.text
+          // @ts-ignore Proto.JSDocLinkDisplayPart
+          currentLink.target = part.target
+      when "linkText":
+        if currentLink
+          currentLink.text = part.text
+      default:
+        out += part.text
+
+  return out
+
+function escapeBackTicks(text: string)
+  text.replace(/`/g, '\\$&')
+
+export function tagsToMarkdown(tags: JSDocTagInfo[])
+  tags.map(getTagDocumentation).join('  \n\n')
+
+function getTagDocumentation(tag: JSDocTagInfo)
+  switch tag.name
+    when "augments", "extends", "param", "template"
+      body := getTagBody(tag)
+      if body?.length is 3
+        [, param, doc] := body
+        label := `*@${tag.name}* \`${param}\``
+        return label unless doc
+        return label + (doc.match(/\r\n|\n/g) ? '  \n' + doc : ` \u2014 ${doc}`)
+
+    when "return", "returns":
+      return undefined unless tag.text?.length
+
+  label := `*@${tag.name}*`
+  text := getTagBodyText(tag)
+  return label unless text
+  return label + (text.match(/\r\n|\n/g) ? '  \n' + text : ` \u2014 ${text}`)
+
+function getTagBody(tag: JSDocTagInfo)
+  if tag.name is "template"
+    parts := tag.text
+    if parts and parts !<? "string"
+      params := parts
+      .filter .kind is "typeParameterName"
+      .map .text
+      .join(", ")
+
+      docs := parts
+      .filter .kind is "text"
+      .map((p) => asPlainTextWithLinks(p.text.replace(/^\s*-?\s*/, "")))
+      .join(", ")
+      return params ? ["", params, docs] : undefined
+
+  return asPlainTextWithLinks(tag.text).split(/^(\S+)\s*-?\s*/)
+
+function getTagBodyText(tag: JSDocTagInfo)
+  if (!tag.text) return
+
+  function makeCodeblock(text: string)
+    if (/^\s*[~`]{3}/m.test(text)) return text
+    return '```\n' + text + '\n```'
+
+  text .= asPlainTextWithLinks(tag.text)
+
+  switch tag.name
+    when "example":
+      text = asPlainText tag.text
+      captionTagMatches := text.match(/<caption>(.*?)<\/caption>\s*(\r\n|\n)/)
+
+      if captionTagMatches and captionTagMatches.index is 0
+        captionTagMatches[1] + "\n" +
+          makeCodeblock(text.slice(captionTagMatches[0].length))
+      else
+        makeCodeblock(text)
+    when "author":
+      emailMatch := text.match(/(.+)\s<([-.\w]+@[-.\w]+)>/)
+      return text unless emailMatch
+
+      `${emailMatch[1]} ${emailMatch[2]}`
+    when "default":
+      makeCodeblock(text)
+    else
+      text

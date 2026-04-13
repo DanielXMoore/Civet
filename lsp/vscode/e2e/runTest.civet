@@ -1,0 +1,64 @@
+* as path from path
+{ runTests } from @vscode/test-electron
+{ spawn, spawnSync } from child_process
+* as readline from readline
+
+// Strip ANSI escape codes for pattern matching (keep original for output)
+stripAnsi := (s: string) => s.replace /\x1b\[[0-9;]*m/g, ''
+
+// Lines emitted by VS Code/Electron internals that add no test value
+vscodeLine := (line: string) =>
+  s := stripAnsi line
+  /^\[\d+:\d+\//.test(s) or                    // Chromium [pid:date/time:level:file] ...
+  /^\[main \d{4}-/.test(s) or                  // [main 2026-...]
+  s.startsWith('NativeExtensionHostFactory.') or
+  s is 'workbench#open()' or
+  s.startsWith('Started local extension host') or
+  s.startsWith('IExtensionHostStarter') or
+  s.startsWith('Loading development extension') or
+  s.startsWith('Settings Sync:') or
+  s.startsWith('Extension host test runner exit code:') or
+  s.startsWith('Asking native host service to exit') or
+  /^Exit code:\s+\d/.test(s)
+
+// Always re-spawn to filter VS Code/Electron debug output.
+// On Linux, wrap in xvfb-run for a headless virtual framebuffer.
+if !process.env.RUNNING_UNDER_XVFB
+  let child
+  if process.platform is 'linux'
+    check := spawnSync 'xvfb-run', ['--help'], { stdio: 'ignore' }
+    if check.error
+      console.error 'Error: xvfb-run is not installed. Please install it (e.g. apt install xvfb) to run e2e tests on Linux.'
+      process.exit 1
+    child = spawn 'xvfb-run', ['-a', process.execPath, process.argv[1]], {
+      env: { ...process.env, RUNNING_UNDER_XVFB: '1' }
+    }
+  else
+    child = spawn process.execPath, [process.argv[1]], {
+      env: { ...process.env, RUNNING_UNDER_XVFB: '1' }
+    }
+
+  for [stream, dest] of [[child.stdout, process.stdout], [child.stderr, process.stderr]] as const
+    rl := readline.createInterface { input: stream }
+    rl.on 'line', (line) =>
+      unless vscodeLine line
+        dest.write line + '\n'
+
+  child.on 'close', (code) =>
+    process.exit code ?? 1
+
+else
+  async function main()
+    try
+      extensionDevelopmentPath := path.resolve(__dirname, '../../')
+      extensionTestsPath := path.resolve(__dirname, './index')
+      workspacePath := path.resolve(__dirname, '../fixture')
+      extensionTestsEnv: Record<string, string> := {}
+      if process.env.NODE_V8_COVERAGE
+        extensionTestsEnv.NODE_V8_COVERAGE = path.resolve process.env.NODE_V8_COVERAGE
+      await runTests({ extensionDevelopmentPath, extensionTestsPath, launchArgs: [workspacePath], extensionTestsEnv })
+    catch err
+      console.error('Failed to run e2e tests:', err)
+      process.exit(1)
+
+  main()

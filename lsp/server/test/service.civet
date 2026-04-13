@@ -1,0 +1,194 @@
+import TSService from "../source/lib/typescript-service.civet"
+import { pathToFileURL } from "url"
+import { TextDocument } from "vscode-languageserver-textdocument"
+import fs from "fs"
+import path from "path"
+
+{ forwardMap } from ../source/lib/util.civet
+
+assert from assert
+
+nullLogger :=
+  log: ->
+  info: ->
+  error: ->
+
+loadFile := (service: Awaited<ReturnType<typeof TSService>>, path: string) ->
+  document := TextDocument.create(pathToFileURL(path).href, "civet", 0, fs.readFileSync(path, "utf8"))
+  service.host.addOrUpdateDocument(document)
+
+projectURL := pathToFileURL("./integration/project-test/").href
+aPath := "./integration/project-test/a.civet"
+bPath := "./integration/project-test/b.civet"
+
+describe "ts service", ->
+  it "should launch ts service", async ->
+    service := await TSService(projectURL, nullLogger)
+    await service.loadPlugins()
+
+    loadFile(service, aPath)
+
+    diagnostics := service.getSemanticDiagnostics(aPath + ".tsx")
+
+    assert.equal diagnostics.length, 0
+
+    { transpiledDoc, sourcemapLines } := service.host.getMeta(aPath)!
+    assert sourcemapLines
+
+    position := transpiledDoc!.offsetAt forwardMap(sourcemapLines, {
+      line: 0
+      character: 0
+    })
+    info := service.getQuickInfoAtPosition(aPath + ".tsx", position)
+
+    assert info
+
+describe "ts service features", ->
+  service .= null as any as Awaited<ReturnType<typeof TSService>>
+
+  before async ->
+    service = await TSService(projectURL, nullLogger)
+    await service.loadPlugins()
+    loadFile(service, aPath)
+    loadFile(service, bPath)
+
+  it "should go to definition cross-file", async ->
+    { transpiledDoc, sourcemapLines } := service.host.getMeta(aPath)!
+    assert sourcemapLines
+
+    // "b" is at character 0 on line 0 of a.civet: `b, {b as b2} from ./b.civet`
+    offset := transpiledDoc!.offsetAt forwardMap(sourcemapLines, {line: 0, character: 0})
+    defs := service.getDefinitionAtPosition(aPath + ".tsx", offset)
+    assert defs?.length
+
+    rawName := service.getSourceFileName(defs![0].fileName)
+    assert rawName.endsWith("b.civet"), `expected definition in b.civet, got ${rawName}`
+
+  it "should return completions at console.", async ->
+    { transpiledDoc, sourcemapLines } := service.host.getMeta(aPath)!
+    assert sourcemapLines
+
+    src := fs.readFileSync(aPath, "utf8")
+    lines := src.split("\n")
+    consoleLine := lines.findIndex (l) => l.includes("console.log")
+    consoleCol := lines[consoleLine].indexOf("console.") + "console.".length
+    offset := transpiledDoc!.offsetAt forwardMap(sourcemapLines, {line: consoleLine, character: consoleCol})
+    completions := service.getCompletionsAtPosition(aPath + ".tsx", offset, {})
+
+    assert completions?.entries.some .name is "log"
+
+  it "should detect type errors and map to civet positions", async ->
+    // Use absolute path so addOrUpdateDocument and getMeta agree on the key
+    errorPath := path.resolve("./integration/project-test/error.civet")
+    errorDoc := TextDocument.create(pathToFileURL(errorPath).href, "civet", 0, 'x: number := "not a number"')
+    service.host.addOrUpdateDocument(errorDoc)
+    diagnostics := service.getSemanticDiagnostics(errorPath + ".tsx")
+
+    assert diagnostics.length > 0
+
+    // Verify it's the right error
+    msg := diagnostics[0].messageText <? "string"
+      ? diagnostics[0].messageText
+      : diagnostics[0].messageText.messageText
+    assert.match msg, /not assignable/
+    // Verify sourcemap lines are populated (needed for diagnostic remapping)
+    { sourcemapLines } := service.host.getMeta(errorPath)!
+
+    assert sourcemapLines
+
+  it "should compute change range when a civet file is updated", ->
+    absPath := path.resolve(aPath)
+    transpiledPath := absPath + ".tsx"
+
+    // First snapshot
+    snap1 := service.host.getScriptSnapshot(transpiledPath)
+    assert snap1, "expected first snapshot"
+
+    // Prepend a comment so the transpiled output differs from the start
+    // (avoids the "prefix-only" case where fullDiffTextChangeRange returns undefined)
+    origContent := fs.readFileSync(absPath, "utf8")
+    updatedDoc := TextDocument.create(pathToFileURL(absPath).href, "civet", 1, "// extra\n" + origContent)
+    service.host.addOrUpdateDocument(updatedDoc)
+
+    // Second snapshot — new Snap instance with updated transpiled text
+    snap2 := service.host.getScriptSnapshot(transpiledPath)
+    assert snap2, "expected second snapshot"
+    assert.notStrictEqual snap2, snap1
+
+    // Exercises fullDiffTextChangeRange and Snap.getChangeRange (also createOrUpdateMeta update branch)
+    changeRange := snap2.getChangeRange(snap1)
+    assert changeRange, "expected a defined change range when content differs from the start"
+    assert.ok changeRange!.span.start >= 0
+    assert.ok changeRange!.newLength >= 0
+
+    // Calling again returns the cached result
+    assert.strictEqual snap2.getChangeRange(snap1), changeRange
+
+  it "should add a non-transpiled ts document without error", ->
+    tsPath := path.resolve("./integration/project-test/t.ts")
+    tsDoc := TextDocument.create(pathToFileURL(tsPath).href, "typescript", 0, "const x = 1")
+    service.host.addOrUpdateDocument(tsDoc)
+    // No transpiler for .ts — exercises the plain-document branch
+
+  it "should return undefined meta for a plain ts path", ->
+    tsPath := path.resolve("./integration/project-test/t.ts")
+    meta := service.host.getMeta(tsPath)
+    // No meta recorded for non-transpiled files — exercises getTranspiledPath fallback
+    assert.equal meta, undefined
+
+  it "should call writeFile without error", ->
+    service.host.writeFile!("out.js", "const x = 1;")
+    // writeFile just delegates to logger.log; no assertion needed beyond no throw
+
+  it "should return original filename when target extension does not match transpiler target", ->
+    // .civet transpiler targets .tsx; passing .civet.js means target (.js) != .tsx
+    // so remapFileName falls through to the final return (line 557)
+    result := service.getSourceFileName("foo.civet.js")
+    assert.equal result, "foo.civet.js"
+
+  it "should return undefined change range when snapshots have identical text", ->
+    // Getting the same cached snapshot and calling getChangeRange on itself
+    // exercises fullDiffTextChangeRange(text, text) → all chars match → return undefined (line 586)
+    transpiledPath := path.resolve(aPath) + ".tsx"
+    snap := service.host.getScriptSnapshot(transpiledPath)
+    assert snap
+
+    result := snap!.getChangeRange(snap!)
+    assert.equal result, undefined
+
+  it "should compute change range when content changes in the middle", ->
+    // Two civet snapshots differing only in the middle (shared prefix and suffix)
+    // exercises the break in the suffix-scan loop (line 572)
+    snapPath := path.resolve("./integration/project-test/snap-test.civet")
+    snapTranspiledPath := snapPath + ".tsx"
+
+    doc1 := TextDocument.create(pathToFileURL(snapPath).href, "civet", 0, "x := 1")
+    service.host.addOrUpdateDocument(doc1)
+    snap1 := service.host.getScriptSnapshot(snapTranspiledPath)
+
+    assert snap1
+
+    doc2 := TextDocument.create(pathToFileURL(snapPath).href, "civet", 1, "x := 2")
+    service.host.addOrUpdateDocument(doc2)
+    snap2 := service.host.getScriptSnapshot(snapTranspiledPath)
+
+    assert snap2
+    assert.notStrictEqual snap1, snap2
+
+    // "const x = 1;" vs "const x = 2;" — common suffix ";" hits break after one match
+    changeRange := snap2!.getChangeRange(snap1!)
+
+    assert changeRange, "expected a change range for middle-of-string diff"
+    assert changeRange!.span.start >= 0
+
+  it "should store fatal parse error in meta when transpiler throws", ->
+    // Null bytes cause Civet.compile to throw rather than returning errors in the array
+    // exercises the catch block in doTranspileAndUpdateMeta (lines 352-355)
+    errorPath := path.resolve("./integration/project-test/throw-test.civet")
+    throwDoc := TextDocument.create(pathToFileURL(errorPath).href, "civet", 0, "\x00invalid")
+    service.host.addOrUpdateDocument(throwDoc)
+    meta := service.host.getMeta(errorPath)
+
+    assert meta, "expected meta to be recorded after a compile throw"
+    assert meta!.fatal, "expected fatal=true when compile throws"
+    assert meta!.parseErrors?.length, "expected parse errors to be recorded"
