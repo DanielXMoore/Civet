@@ -8,6 +8,16 @@ title: Integrations
 
 - [Civet VSCode extension](https://marketplace.visualstudio.com/items?itemName=DanielX.civet)
 
+## Zed
+
+Install the Civet extension from the Zed extension marketplace, or install it as a dev extension from the `lsp/zed/` directory of the Civet repo.
+
+The extension requires `civet-lsp` to be on your PATH:
+
+```bash
+npm install -g @danielx/civet-language-server
+```
+
 ## Neovim
 
 Neovim 0.10+ supports LSP natively. Add this to your `init.lua`:
@@ -27,7 +37,7 @@ vim.api.nvim_create_autocmd("FileType", {
 })
 ```
 
-Replace `/path/to/civet` with your local Civet repo path, or the path to a globally installed `@danielx/civet-lsp-server` package.
+Replace `/path/to/civet` with your local Civet repo path, or the path to a globally installed `@danielx/civet-language-server` package.
 
 Build the server first if using the repo directly:
 
