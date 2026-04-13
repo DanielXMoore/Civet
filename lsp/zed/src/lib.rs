@@ -14,7 +14,7 @@ impl zed::Extension for CivetExtension {
     ) -> Result<zed::Command> {
         let civet_lsp = worktree
             .which("civet-lsp")
-            .ok_or_else(|| "civet-lsp not found on PATH. Install it with: npm install -g @danielx/civet".to_string())?;
+            .ok_or_else(|| "civet-lsp not found on PATH. Install it with: npm install -g @danielx/civet-language-server".to_string())?;
 
         Ok(zed::Command {
             command: civet_lsp,
