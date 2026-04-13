@@ -20,7 +20,7 @@ vim.api.nvim_create_autocmd("FileType", {
   callback = function(args)
     vim.lsp.start({
       name = "civet_lsp",
-      cmd = { "node", "/path/to/civet/lsp-server/dist/server.js", "--stdio" },
+      cmd = { "node", "/path/to/civet/lsp/server/dist/server.js", "--stdio" },
       root_dir = vim.fs.root(args.file, { "tsconfig.json", "package.json", ".git" }) or vim.fn.getcwd(),
     })
   end,
@@ -32,7 +32,7 @@ Replace `/path/to/civet` with your local Civet repo path, or the path to a globa
 Build the server first if using the repo directly:
 
 ```bash
-cd lsp-server && pnpm build
+cd lsp/server && pnpm build
 ```
 
 ## Build tools
