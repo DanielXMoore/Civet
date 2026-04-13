@@ -1125,8 +1125,8 @@ function add(a: number, b: number): number
 ### Arrow Functions
 
 ::: info
-Unlike ECMAScript, zero-argument arrows do not need a `()` prefix,
-but one-argument arrows do need parentheses around the argument.
+Unlike ECMAScript, zero-parameter arrows do not need a `()` prefix,
+but one-parameter arrows do need parentheses around the argument.
 :::
 
 <Playground>
@@ -3739,13 +3739,23 @@ You can increase JavaScript compatibility with the following options:
 ### No Implicit Returns
 
 To disable [implicit returns from functions](#function),
-use the directive `"civet -implicitReturns"`:
+use the directive `"civet -implicitReturns"`.
 
 <Playground>
 "civet -implicitReturns"
 function processAll(array)
   for item of array
     process item
+</Playground>
+
+One-line `=>` arrow functions still have implicit returns,
+like in JavaScript, but one-line `->` and `function` do not.
+
+<Playground>
+"civet -implicitReturns"
+=> "returned"
+-> "not returned"
+function() "not returned"
 </Playground>
 
 ### Strict Mode
