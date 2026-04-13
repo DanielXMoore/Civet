@@ -1,123 +1,69 @@
-; ── Comments ──────────────────────────────────────────────────────────────────
+; ── Comments ───────────────────────────────────────────────────────────────────
 
-(comment) @comment
-(hash_comment) @comment.block
+(line_comment)  @comment.line
+(block_comment) @comment.block
+(hash_comment)  @comment.block
 
-; ── Types ─────────────────────────────────────────────────────────────────────
-
-(type_identifier) @type
-(predefined_type) @type.builtin
-
-((identifier) @type
- (#match? @type "^[A-Z]"))
-
-(type_arguments
-  "<" @punctuation.bracket
-  ">" @punctuation.bracket)
-
-; ── Variables & parameters ────────────────────────────────────────────────────
-
-(identifier) @variable
-(property_identifier) @property
-
-(required_parameter (identifier) @variable.parameter)
-(optional_parameter (identifier) @variable.parameter)
-
-(this) @variable.builtin
-(super) @variable.builtin
-
-; ── @ this-shorthand ──────────────────────────────────────────────────────────
-
-(at_expression "@" @variable.builtin)
-(at_expression (property_identifier) @property)
-
-; ── Functions ─────────────────────────────────────────────────────────────────
-
-(function_declaration name: (identifier) @function)
-(function_expression  name: (identifier) @function)
-(method_definition    name: (property_identifier) @function.method)
-
-(call_expression function: (identifier) @function)
-(call_expression function: (member_expression
-  property: (property_identifier) @function.method))
-
-(variable_declarator
-  name: (identifier) @function
-  value: [(function_expression) (arrow_function)])
-
-; ── Pipe operator ─────────────────────────────────────────────────────────────
-
-(pipe_expression "|>" @operator)
-
-; ── Range operator ────────────────────────────────────────────────────────────
-
-(range_expression operator: ".." @operator)
-(range_expression operator: "..." @operator)
-
-; ── Literals ──────────────────────────────────────────────────────────────────
-
-(true)  @constant.builtin
-(false) @constant.builtin
-(null)  @constant.builtin
-(undefined) @constant.builtin
+; ── Strings ────────────────────────────────────────────────────────────────────
 
 (string)          @string
 (template_string) @string
-(regex)           @string.special
-(number)          @number
+(escape_sequence) @string.escape
+(template_substitution ["${" "}"] @punctuation.special)
+
+; ── Numbers ────────────────────────────────────────────────────────────────────
+
+(number) @number
+
+; ── Constants & builtins ───────────────────────────────────────────────────────
+
+((constant) @boolean
+ (#match? @boolean "^(true|false)$"))
+
+((constant) @constant.builtin
+ (#match? @constant.builtin "^(null|undefined)$"))
+
+((constant) @variable.builtin
+ (#match? @variable.builtin "^this$"))
+
+; ── Identifiers ────────────────────────────────────────────────────────────────
+
+(private_identifier) @property
+
+; PascalCase identifiers → types
+((identifier) @type
+ (#match? @type "^[A-Z]"))
+
+; ALL_CAPS identifiers → constants
+((identifier) @constant
+ (#match? @constant "^[A-Z_][A-Z\\d_]+$"))
+
+(identifier) @variable
+
+; ── @ this-shorthand ──────────────────────────────────────────────────────────
+
+(at_expression "@"          @variable.builtin)
+(at_expression (identifier) @property)
+
+; ── @@ decorators ─────────────────────────────────────────────────────────────
+
+(decorator "@@" @attribute)
+(decorator (identifier) @attribute)
 
 ; ── Keywords ──────────────────────────────────────────────────────────────────
 
-[
-  "abstract" "declare" "enum" "export" "implements" "interface"
-  "keyof" "namespace" "private" "protected" "public" "type"
-  "readonly" "override" "satisfies"
-] @keyword
+(type_keyword) @type.builtin
 
-[
-  "async" "await"
-  "break" "case" "catch" "class" "const"
-  "continue" "debugger" "default" "delete" "do" "else"
-  "finally" "for" "from" "function"
-  "if" "import" "in" "instanceof"
-  "let" "new" "of" "return"
-  "static" "switch" "target" "throw" "try"
-  "typeof" "var" "void" "while" "with" "yield"
-  "extends"
-] @keyword
-
-; Civet-specific keywords
-["unless" "until"] @keyword
+(keyword) @keyword
 
 ; ── Operators ─────────────────────────────────────────────────────────────────
 
-[
-  "-" "--" "-=" "+" "++" "+="
-  "*" "*=" "**" "**="
-  "/" "/=" "%" "%="
-  "<" "<=" "<<" "<<="
-  "=" "==" "===" "!" "!=" "!=="
-  "=>" "->"
-  ">" ">=" ">>" ">>=" ">>>" ">>>="
-  "~" "^" "&" "|"
-  "^=" "&=" "|=" "&&" "||" "??" "&&=" "||=" "??="
-] @operator
+(operator) @operator
 
 ; ── Punctuation ───────────────────────────────────────────────────────────────
 
-[";" "." "," (optional_chain)] @punctuation.delimiter
-["(" ")" "[" "]" "{" "}"] @punctuation.bracket
+((punctuation) @punctuation.bracket
+ (#match? @punctuation.bracket "^[(){}\\[\\]]$"))
 
-; ── Decorators ────────────────────────────────────────────────────────────────
-
-(decorator "@@" @attribute)
-
-; ── Special identifiers ───────────────────────────────────────────────────────
-
-((identifier) @constructor (#match? @constructor "^[A-Z]"))
-
-([
-  (identifier)
-  (shorthand_property_identifier)
-  (shorthand_property_identifier_pattern)
-] @constant (#match? @constant "^[A-Z_][A-Z\\d_]+$"))
+((punctuation) @punctuation.delimiter
+ (#match? @punctuation.delimiter "^[;.,]$"))

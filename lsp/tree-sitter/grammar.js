@@ -1,142 +1,155 @@
 // @ts-nocheck
 /**
- * Civet grammar for tree-sitter, extending TypeScript.
+ * Minimal Civet tree-sitter grammar for syntax highlighting.
  *
- * Key Civet additions over TypeScript:
- *  - @    shorthand for `this.` / `this`  (Civet uses @@ for decorators)
- *  - @@   decorator (TypeScript uses @ but Civet repurposes that for this)
- *  - |>   pipe operator
- *  - ->   thin arrow
- *  - unless / until  control flow keywords
- *  - ..  / ...  inclusive/exclusive range literals
- *  - ###  block comment (coffee-style)
+ * Covers all token types needed for Zed/editors without inheriting the full
+ * 300k-line TypeScript parser. Handles:
+ *   strings, template literals, comments (// /* ### ), numbers, identifiers,
+ *   keywords, type keywords, builtins, operators, and Civet-specific syntax
+ *   (@  @@  |>  ..  ...  ->  :=  unless  until).
  */
 
-// @ts-ignore
-const TypeScript = require('tree-sitter-typescript/typescript/grammar');
-
-module.exports = grammar(TypeScript, {
+module.exports = grammar({
   name: 'civet',
 
-  extras: ($, previous) => [
-    ...previous,
-    $.hash_comment,
-  ],
+  // Lets tree-sitter distinguish keywords from identifiers at word boundaries.
+  word: $ => $.identifier,
 
-  conflicts: ($, previous) => previous.concat([
-    [$.await_expression, $.range_expression],
-  ]),
+  extras: $ => [/\s+/],
 
   rules: {
-    // -----------------------------------------------------------------------
-    // # and ### comments (CoffeeScript-style)
-    // -----------------------------------------------------------------------
+    program: $ => repeat($._item),
 
+    _item: $ => choice(
+      $.line_comment,
+      $.block_comment,
+      $.hash_comment,
+      $.string,
+      $.template_string,
+      $.number,
+      $.private_identifier,
+      $.decorator,
+      $.at_expression,
+      $.keyword,
+      $.type_keyword,
+      $.constant,
+      $.identifier,
+      $.operator,
+      $.punctuation,
+    ),
+
+    // ── Comments ─────────────────────────────────────────────────────────────
+
+    line_comment: _ => token(seq('//', /[^\r\n]*/)),
+
+    block_comment: _ => token(seq('/*', /[^*]*\*+([^/*][^*]*\*+)*/, '/')),
+
+    // ### block comment ### — no lookahead needed; uses alternation to avoid ###
     hash_comment: _ => token(
-      // ### block comment ###  (coffee-compat mode also allows # line comments,
-      // but standard Civet only has ### block comments)
       seq('###', /[^#]*(?:#[^#][^#]*|##[^#][^#]*)*/, '###'),
     ),
 
-    // -----------------------------------------------------------------------
-    // @@ decorator (Civet repurposes @ for this-shorthand)
-    // -----------------------------------------------------------------------
+    // ── Strings ──────────────────────────────────────────────────────────────
 
-    decorator: $ => seq(
-      '@@',
-      choice(
-        $.identifier,
-        alias($.decorator_member_expression, $.member_expression),
-        alias($.decorator_call_expression, $.call_expression),
-        alias($.decorator_parenthesized_expression, $.parenthesized_expression),
-      ),
-    ),
-
-    // -----------------------------------------------------------------------
-    // @ shorthand for `this` / `this.foo`
-    // -----------------------------------------------------------------------
-
-    at_expression: $ => prec(15, choice(
-      // @foo  →  this.foo
-      seq('@', alias($.identifier, $.property_identifier)),
-      // @  →  this (standalone)
-      '@',
+    // Single- and double-quoted strings with escape sequences and multiline support.
+    string: _ => token(choice(
+      seq("'", /[^'\\]*(?:\\(?:.|\n)[^'\\]*)*/, "'"),
+      seq('"', /[^"\\]*(?:\\(?:.|\n)[^"\\]*)*/, '"'),
     )),
 
-    primary_expression: ($, previous) => choice(
-      previous,
-      $.at_expression,
-    ),
-
-    // -----------------------------------------------------------------------
-    // |> pipe operator
-    // -----------------------------------------------------------------------
-
-    pipe_expression: $ => prec.left('binary', seq(
-      field('left', $.expression),
-      '|>',
-      field('right', $.expression),
-    )),
-
-    // -----------------------------------------------------------------------
-    // Range expressions:  lo..hi  (inclusive)  lo...hi  (exclusive)
-    // -----------------------------------------------------------------------
-
-    range_expression: $ => prec.left(10, seq(
-      field('from', $.expression),
-      field('operator', choice('..', '...')),
-      field('to', $.expression),
-    )),
-
-    // -----------------------------------------------------------------------
-    // unless / until
-    // -----------------------------------------------------------------------
-
-    unless_statement: $ => prec.right(1, seq(
-      'unless',
-      field('condition', $.parenthesized_expression),
-      field('body', $.statement),
-      field('alternative', optional($.else_clause)),
-    )),
-
-    until_statement: $ => prec(1, seq(
-      'until',
-      field('condition', $.parenthesized_expression),
-      field('body', $.statement),
-    )),
-
-    // -----------------------------------------------------------------------
-    // Thin arrow ->
-    // -----------------------------------------------------------------------
-
-    arrow_function: ($, previous) => choice(
-      previous,
-      prec(-1, seq(
-        field('parameters', choice(
-          $.identifier,
-          $._destructuring_pattern,
-          $.formal_parameters,
-        )),
-        '->',
-        field('body', choice($.expression, $.statement_block)),
+    template_string: $ => seq(
+      '`',
+      repeat(choice(
+        $.escape_sequence,
+        $.template_substitution,
+        $.template_chars,
+        '$',              // lone $ not followed by {
       )),
+      '`',
     ),
 
-    // -----------------------------------------------------------------------
-    // Extended rules
-    // -----------------------------------------------------------------------
+    // Any chars that are not `, \, or $
+    template_chars: _ => /[^`\\$]+/,
 
-    expression: ($, previous) => choice(
-      previous,
-      $.pipe_expression,
-      $.range_expression,
+    escape_sequence: _ => token(seq('\\', /[\s\S]/)),
+
+    template_substitution: $ => seq('${', repeat($._item), '}'),
+
+    // ── Numbers ──────────────────────────────────────────────────────────────
+
+    number: _ => token(choice(
+      /0[xX][0-9a-fA-F][0-9a-fA-F_]*/,
+      /0[oO][0-7][0-7_]*/,
+      /0[bB][01][01_]*/,
+      /[0-9][0-9_]*n/,
+      /[0-9][0-9_]*\.[0-9][0-9_]*(?:[eE][+-]?[0-9]+)?/,
+      /[0-9][0-9_]*(?:[eE][+-]?[0-9]+)?/,
+    )),
+
+    // ── Identifiers ──────────────────────────────────────────────────────────
+
+    // Private class fields: #foo
+    private_identifier: _ => /#[a-zA-Z_$][a-zA-Z0-9_$]*/,
+
+    // @@ decorator — lexer picks '@@' (2 chars) over '@' (1 char) via maximal munch.
+    decorator: $ => seq('@@', $.identifier),
+
+    // @ this-shorthand: @foo → this.foo, @ → this
+    at_expression: $ => prec.right(seq('@', optional($.identifier))),
+
+    identifier: _ => /[a-zA-Z_$][a-zA-Z0-9_$]*/,
+
+    // ── Keywords ─────────────────────────────────────────────────────────────
+
+    keyword: _ => choice(
+      // JavaScript control flow
+      'break', 'case', 'catch', 'class', 'const', 'continue',
+      'debugger', 'default', 'delete', 'do', 'else', 'export',
+      'extends', 'finally', 'for', 'from', 'function',
+      'if', 'import', 'in', 'instanceof', 'let', 'new',
+      'of', 'return', 'static', 'super', 'switch',
+      'throw', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield',
+      'async', 'await',
+      // TypeScript
+      'abstract', 'as', 'declare', 'enum', 'implements', 'interface',
+      'namespace', 'override', 'private', 'protected', 'public',
+      'readonly', 'satisfies',
+      // Civet
+      'unless', 'until', 'then',
     ),
 
-    statement: ($, previous) => choice(
-      previous,
-      $.unless_statement,
-      $.until_statement,
+    // Type-system keywords (highlighted differently)
+    type_keyword: _ => choice(
+      'type', 'keyof', 'infer', 'never', 'unknown',
     ),
 
+    // Built-in value keywords (highlighted as constants/builtins)
+    constant: _ => choice(
+      'true', 'false', 'null', 'undefined', 'this',
+    ),
+
+    // ── Operators ────────────────────────────────────────────────────────────
+
+    operator: _ => token(choice(
+      // Civet-specific
+      '|>', '->', ':=',
+      // Ranges (... before .. so longer wins)
+      '...', '..',
+      // Multi-char operators (longer first within token(choice) for clarity)
+      '>>>=', '**=', '&&=', '||=', '??=',
+      '<<=', '>>=',
+      '===', '!==', '==', '!=', '<=', '>=',
+      '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=',
+      '&&', '||', '??', '?.', '=>',
+      '++', '--', '**',
+      '>>>', '>>', '<<',
+      // Single-char
+      '+', '-', '*', '/', '%',
+      '=', '!', '<', '>',
+      '&', '|', '^', '~',
+      '?', ':',
+    )),
+
+    punctuation: _ => /[(){}\[\];.,]/,
   },
 });
