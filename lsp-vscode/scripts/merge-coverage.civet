@@ -1,5 +1,13 @@
-// Merges e2e V8 coverage (coverage/e2e-tmp/) into unit test coverage (coverage/tmp/)
-// then runs `c8 report` over the combined set.
+// Merges lsp-server unit coverage (../lsp-server/coverage/tmp/) with
+// lsp-vscode e2e coverage (coverage/e2e-tmp/) and reports unified coverage.
+//
+// The e2e coverage references lsp-vscode/dist/server.js whose source map
+// has been rewritten (by build.sh) to use absolute paths back to
+// lsp-server/source/, so c8 correctly attributes hits to the original sources.
+//
+// The source-map-cache written by VS Code's internal source map handling is
+// stripped: it contains a fake source built from lineLengths (all dots) that
+// breaks v8-to-istanbul and collapses all coverage to 100%.
 { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
 { resolve, join } from 'path'
 { fileURLToPath } from 'url'
@@ -8,34 +16,43 @@
 root := typeof __dirname !== "undefined" ?
   join(__dirname, '..') :
   fileURLToPath new URL('..', import.meta.url)
-unitTmp := join root, 'coverage/tmp'
-e2eTmp := join root, 'coverage/e2e-tmp'
 
-mkdirSync unitTmp, { recursive: true }
+e2eTmp := join root, 'coverage/e2e-tmp'
+unitTmp := join root, '../lsp-server/coverage/tmp'
+mergedTmp := join root, 'coverage/merged-tmp'
 
 unless existsSync e2eTmp
   console.error `No e2e coverage found at ${e2eTmp} — run 'pnpm test:e2e:coverage' first`
   process.exit 1
 
-// Copy e2e coverage JSON files into the unit-test temp dir so c8 sees them all.
-// Strip source-map-cache: VS Code enables source maps internally, causing Node to
-// write a source-map-cache with a fake source built from lineLengths (all dots).
-// c8 would pass this fake source to v8-to-istanbul, breaking AST parsing and
-// collapsing all coverage to 100%. Without the cache, c8 reads the real JS file
-// and uses our rewritten source map with absolute paths → accurate coverage.
-copied .= 0
+unless existsSync unitTmp
+  console.error `No unit coverage found at ${unitTmp} — run 'pnpm test:unit:coverage' in lsp-server first`
+  process.exit 1
+
+mkdirSync mergedTmp, { recursive: true }
+
+// Copy unit coverage as-is
+unitCopied .= 0
+for f of readdirSync unitTmp
+  if f.endsWith '.json'
+    writeFileSync join(mergedTmp, `unit-${f}`), readFileSync join(unitTmp, f)
+    unitCopied++
+console.log `Copied ${unitCopied} unit coverage file(s)`
+
+// Copy e2e coverage, stripping source-map-cache
+e2eCopied .= 0
 for f of readdirSync e2eTmp
   if f.endsWith '.json'
     raw := JSON.parse readFileSync join(e2eTmp, f), 'utf8'
     delete raw['source-map-cache']
-    writeFileSync join(unitTmp, `e2e-${f}`), JSON.stringify raw
-    copied++
-console.log `Merged ${copied} e2e coverage file(s) into ${unitTmp}`
+    writeFileSync join(mergedTmp, `e2e-${f}`), JSON.stringify raw
+    e2eCopied++
+console.log `Copied ${e2eCopied} e2e coverage file(s)`
 
-// Run c8 report (reads from coverage/tmp by default).
-// Pass --no-all to skip synthesizing empty coverage for source files that
-// weren't executed: Civet files aren't valid JS, so v8-to-istanbul falls back
-// to line-level (1 statement per line), which then merges incorrectly with the
-// real remapped bundle coverage and inflates everything to 100%.
 c8 := resolve root, '../node_modules/c8/bin/c8.js'
-execFileSync process.execPath, [c8, 'report', '--no-all', '--exclude-after-remap', '--reporter', 'text'], { cwd: root, stdio: 'inherit' }
+execFileSync process.execPath, [
+  c8, 'report'
+  '--no-all'
+  '--reporter', 'text'
+  '--temp-dir', 'coverage/merged-tmp'
+], { cwd: root, stdio: 'inherit' }

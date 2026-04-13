@@ -2,7 +2,7 @@
 
 ## Setup
 
-Open `civet/lsp/` in another VSCode window.
+Open `civet/lsp-vscode/` in another VSCode window.
 
 ```bash
 # From the repository root (pnpm workspace)
@@ -11,21 +11,31 @@ pnpm install
 
 ## Overview
 
-- `source/lib/typescript-service.mts`
-  - TSServer wrapper with Civet transpilation support.
-  - Handles module resolution to transpiled files.
-- `source/extension.civet`
-  - VSCode Extension client
-  - Adds commands
-  - Registers languages
-- `source/server.mts`
-  - VSCode Extension language server
-  - Handles LSP events, delegates to TypeScriptService to respond.
+This repo is split into two packages:
+
+- `lsp-server/` — standalone, editor-agnostic Language Server
+  - `source/server.civet` — LSP event handlers, delegates to TypeScriptService
+  - `source/lib/typescript-service.civet` — TSServer wrapper with Civet transpilation support, handles module resolution
+  - `source/lib/previewer.civet`, `util.civet`, `textRendering.civet` — supporting utilities
+- `lsp-vscode/` — VSCode extension wrapper
+  - `source/extension.civet` — launches the language server, registers commands and languages
 
 ## Trying out changes
 
-- Run and Debug -> Launch Extension
-- Open `civet/lsp/integration/project-test/`
-- Press `` Ctrl + ` `` View extension console logs in Output by selecting "Civet Language Server"
+- Run and Debug -> Client + Server
+- Open `civet/lsp-server/integration/project-test/`
+- Breakpoints in editor should work
+- Press `` Ctrl + ` `` to view extension console logs in Output by selecting "Civet Language Server"
 
-## TODO: describe attaching the debugger
+## Testing
+
+```bash
+# Unit tests (lsp-server)
+cd lsp-server && pnpm test
+
+# E2E tests (lsp-vscode)
+cd lsp-vscode && pnpm test
+
+# Unified coverage report
+cd lsp-vscode && pnpm test:coverage
+```
