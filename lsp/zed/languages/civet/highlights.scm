@@ -46,7 +46,7 @@
  (#eq? @_chain "?."))
 
 ; Function and method calls — identifier immediately followed by (
-((identifier) @function.call
+((identifier) @function
  .
  (punctuation) @_paren
  (#eq? @_paren "("))

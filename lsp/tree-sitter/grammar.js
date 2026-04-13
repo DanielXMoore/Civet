@@ -116,6 +116,7 @@ module.exports = grammar({
       'readonly', 'satisfies',
       // Civet
       'unless', 'until', 'then',
+      'and', 'or', 'not', 'is',
     ),
 
     // Type-system keywords (highlighted differently)
@@ -132,7 +133,7 @@ module.exports = grammar({
 
     operator: _ => token(choice(
       // Civet-specific
-      '|>', '->', ':=',
+      '|>', '->', ':=', '.=', '<?',
       // Ranges (... before .. so longer wins)
       '...', '..',
       // Multi-char operators (longer first within token(choice) for clarity)
