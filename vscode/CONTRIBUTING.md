@@ -15,7 +15,7 @@ Civet's language support is split into two packages:
   - `source/server.civet` — LSP event handlers, delegates to TypeScriptService
   - `source/lib/typescript-service.civet` — TSServer wrapper with Civet transpilation support, handles module resolution
   - `source/lib/previewer.civet`, `util.civet`, `textRendering.civet` — supporting utilities
-- `lsp-vscode/` — VSCode extension wrapper
+- `vscode/` — VSCode extension wrapper
   - `source/extension.civet` — launches the language server, registers commands and languages
 
 ## Trying out changes
@@ -32,9 +32,9 @@ Civet's language support is split into two packages:
 # Unit tests (lsp-server)
 cd lsp-server && pnpm test
 
-# E2E tests (lsp-vscode)
-cd lsp-vscode && pnpm test
+# E2E tests (vscode)
+cd vscode && pnpm test
 
 # Unified coverage report
-cd lsp-vscode && pnpm test:coverage
+cd vscode && pnpm test:coverage
 ```

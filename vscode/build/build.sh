@@ -16,7 +16,7 @@ cp ../lsp-server/dist/server.js dist/server.js
 cp -r ../lsp-server/dist/lib/. dist/lib/
 
 # Rewrite source map paths to absolute so c8 can remap e2e coverage back to
-# lsp-server/source/ correctly (relative paths would resolve to lsp-vscode/source/).
+# lsp-server/source/ correctly (relative paths would resolve to vscode/source/).
 node -e "
   const fs = require('fs'), path = require('path');
   const src = '../lsp-server/dist/server.js.map';
