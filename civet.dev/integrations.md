@@ -45,6 +45,27 @@ Build the server first if using the repo directly:
 cd lsp/server && pnpm build
 ```
 
+### Tree-sitter (syntax highlighting)
+
+The Civet tree-sitter grammar is included in the Civet repo at `lsp/tree-sitter/`.
+After cloning Civet, register it in your `init.lua`:
+
+```lua
+local parser_config = require("nvim-treesitter.parsers").get_parser_configs()
+parser_config.civet = {
+  install_info = {
+    url = "https://github.com/DanielXMoore/Civet",
+    files = { "src/parser.c" },
+    location = "lsp/tree-sitter",
+    generate_requires_npm = false,
+    requires_generate_from_grammar = false,
+  },
+  filetype = "civet",
+}
+```
+
+Then run `:TSInstall civet`.
+
 ## Build tools
 
 - [unplugin](https://github.com/DanielXMoore/Civet/blob/main/source/unplugin) integrates Civet into Vite, esbuild, Astro, Farm, Rolldown, Rollup, and Webpack, including `.d.ts` generation (see [basic instructions](https://civet.dev/getting-started#building-a-project))
