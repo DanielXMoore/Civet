@@ -2,7 +2,7 @@
 
 [Civet](https://civet.dev/) is a programming language that compiles to
 TypeScript or JavaScript, so you can use existing tooling
-while enabling concise and powerful syntax
+while enabling concise and powerful syntax.
 
 This plugin enables VSCode type checking, hints, completion, etc.
 for `.civet` files, via a language server.

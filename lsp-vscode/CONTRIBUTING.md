@@ -2,8 +2,6 @@
 
 ## Setup
 
-Open `civet/lsp-vscode/` in another VSCode window.
-
 ```bash
 # From the repository root (pnpm workspace)
 pnpm install
@@ -11,7 +9,7 @@ pnpm install
 
 ## Overview
 
-This repo is split into two packages:
+Civet's language support is split into two packages:
 
 - `lsp-server/` — standalone, editor-agnostic Language Server
   - `source/server.civet` — LSP event handlers, delegates to TypeScriptService
@@ -22,6 +20,7 @@ This repo is split into two packages:
 
 ## Trying out changes
 
+- Open `civet/lsp-vscode/` in a separate VSCode window.
 - Run and Debug -> Client + Server
 - Open `civet/lsp-server/integration/project-test/`
 - Breakpoints in editor should work
