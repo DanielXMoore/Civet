@@ -3502,6 +3502,27 @@ and/or the server:
 link := <a href="https://civet.dev/">Civet
 </Playground>
 
+## ECMAScript Compatibility
+
+Turn on full ECMAScript compatibility mode
+with a `"civet esCompat"` directive at the top of your file,
+or use more specific directive(s) as listed below.
+This is useful for gradually converting an existing JavaScript codebase to Civet.
+
+### Single-Argument Arrow Functions
+
+By default, Civet requires parentheses around a single arrow function parameter:
+`(x) => x + 1`.
+With `esArrowFunction`, you can write `x => x + 1` as in ECMAScript.
+Note that this disables Civet's implicit zero-argument arrow functions (`=> body`);
+use explicit `() => body` instead.
+
+<Playground>
+"civet esArrowFunction"
+double := x => x * 2
+greet := (name) => `Hello, ${name}!`
+</Playground>
+
 ## [CoffeeScript](https://coffeescript.org/) Compatibility
 
 Turn on full [CoffeeScript](https://coffeescript.org/) compatibility mode
