@@ -3516,12 +3516,13 @@ By default, Civet requires parentheses around a single arrow function parameter:
 With `esArrowFunction`, you can write `x => x + 1` as in ECMAScript.
 Note that this disables Civet's implicit zero-argument arrow functions (`=> body`);
 use explicit `() => body` instead.
-The same behavior applies to `->` arrow functions.
+The behavior of `->` remains unchanged.
 
 <Playground>
 "civet esArrowFunction"
 double := x => x * 2
 greet := (name) => `Hello, ${name}!`
+noArgs := -> console.log "Hello, world!"
 </Playground>
 
 ## [CoffeeScript](https://coffeescript.org/) Compatibility
