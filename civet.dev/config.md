@@ -63,15 +63,15 @@ Template literals and other computed specifiers are left unchanged.
 
 ## ECMAScript Compatibility
 
-The `jsCompat` compatibility flag modifies Civet to be
+The `esCompat` compatibility flag modifies Civet to be
 closer to pure ECMAScript, removing some
 [places where Civet is not a superset of ECMAScript](comparison).
 Like `coffeeCompat`, this is useful for gradually converting an existing codebase.
 
 | Configuration       | What it enables |
 |---------------------|---------------------------------------|
-| [`jsCompat`](reference#ecmascript-compatibility) | enable all of the following ECMAScript compatibility flags |
-| [`jsArrowFunction`](reference#single-argument-arrow-functions) | `x => x+1` as shorthand for `(x) => x+1`; disables implicit `=> x` zero-argument arrow functions |
+| [`esCompat`](reference#ecmascript-compatibility) | enable all of the following ECMAScript compatibility flags |
+| [`esArrowFunction`](reference#single-argument-arrow-functions) | `x => x+1` as shorthand for `(x) => x+1`; disables implicit `=> x` zero-argument arrow functions |
 
 We also have the following related options:
 
