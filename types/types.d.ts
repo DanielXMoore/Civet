@@ -22,6 +22,8 @@ declare module "@danielx/civet" {
     coffeePrototype: boolean
     coffeeRange: boolean
     defaultElement: string
+    esCompat: boolean
+    esArrowFunction: boolean
     globals: string[]
     implicitReturns: boolean
     jsxCode: boolean
