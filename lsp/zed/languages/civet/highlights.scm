@@ -63,6 +63,14 @@
 (decorator "@@" @attribute)
 (decorator (identifier) @attribute)
 
+; ── Function and class declarations ──────────────────────────────────────────
+
+(function_declaration "function" @keyword)
+(function_declaration name: (identifier) @function)
+
+(class_declaration "class" @keyword)
+(class_declaration name: (identifier) @type)
+
 ; ── Keywords ──────────────────────────────────────────────────────────────────
 
 (type_keyword) @type.builtin

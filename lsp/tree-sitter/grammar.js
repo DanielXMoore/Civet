@@ -17,6 +17,14 @@ module.exports = grammar({
 
   extras: $ => [/\s+/],
 
+  // When 'function'/'class' is followed by an identifier, both function_declaration
+  // / class_declaration and a plain keyword+identifier are valid parses.
+  // Declare the ambiguity so tree-sitter uses GLR and prefers the declaration form.
+  conflicts: $ => [
+    [$.function_declaration, $.keyword],
+    [$.class_declaration, $.keyword],
+  ],
+
   rules: {
     program: $ => repeat($._item),
 
@@ -30,6 +38,8 @@ module.exports = grammar({
       $.private_identifier,
       $.decorator,
       $.at_expression,
+      $.function_declaration,
+      $.class_declaration,
       $.keyword,
       $.type_keyword,
       $.constant,
@@ -99,10 +109,29 @@ module.exports = grammar({
 
     identifier: _ => /[a-zA-Z_$][a-zA-Z0-9_$]*/,
 
+    // ── Function and class declarations ──────────────────────────────────────
+
+    // Captures the name as a distinct node so highlights.scm can colour it
+    // independently of ordinary identifier/call uses.
+    // Name is required (not optional) to avoid a shift/reduce conflict with
+    // the keyword rule; anonymous `function(` and `class {` still match the
+    // keyword fallback in _item.
+    function_declaration: $ => seq(
+      'function',
+      field('name', $.identifier),
+    ),
+
+    class_declaration: $ => seq(
+      'class',
+      field('name', $.identifier),
+    ),
+
     // ── Keywords ─────────────────────────────────────────────────────────────
 
     keyword: _ => choice(
       // JavaScript control flow
+      // 'function'/'class' stay here for anonymous/expression forms;
+      // named forms are matched by function_declaration/class_declaration.
       'break', 'case', 'catch', 'class', 'const', 'continue',
       'debugger', 'default', 'delete', 'do', 'else', 'export',
       'extends', 'finally', 'for', 'from', 'function',
