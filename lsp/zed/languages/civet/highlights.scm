@@ -38,6 +38,19 @@
 ((identifier) @constant
  (#match? @constant "^[A-Z_][A-Z\\d_]+$"))
 
+; Property access — identifier immediately after . or ?.
+((punctuation) @_dot . (identifier) @property
+ (#eq? @_dot "."))
+
+((operator) @_chain . (identifier) @property
+ (#eq? @_chain "?."))
+
+; Function and method calls — identifier immediately followed by (
+((identifier) @function.call
+ .
+ (punctuation) @_paren
+ (#eq? @_paren "("))
+
 (identifier) @variable
 
 ; ── @ this-shorthand ──────────────────────────────────────────────────────────

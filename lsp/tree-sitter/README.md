@@ -1,8 +1,9 @@
 # tree-sitter-civet
 
-Tree-sitter grammar for Civet, extending the TypeScript grammar with Civet-specific syntax.
+Minimal tree-sitter grammar for Civet, written from scratch for syntax highlighting.
+Covers all token types without inheriting the 300k-line TypeScript parser.
 
-## Added syntax
+## Syntax coverage
 
 | Feature | Example |
 |---------|---------|
@@ -12,6 +13,7 @@ Tree-sitter grammar for Civet, extending the TypeScript grammar with Civet-speci
 | `..` / `...` ranges | `1..10` |
 | `unless` / `until` | `unless (cond)` |
 | `->` thin arrow | `(x) -> x + 1` |
+| `:=` assignment | `x := 1` |
 | `###` block comments | `### ... ###` |
 
 ## Generating the parser
@@ -19,7 +21,13 @@ Tree-sitter grammar for Civet, extending the TypeScript grammar with Civet-speci
 ```bash
 cd lsp/tree-sitter
 pnpm install
-pnpm exec tree-sitter generate
+pnpm run generate
 ```
 
-The generated `src/parser.c` should be committed. `src/scanner.c` and `src/scanner.h` are copied from `tree-sitter-typescript` and should also remain committed.
+The generated `src/parser.c` should be committed alongside `grammar.js`.
+
+## Testing
+
+```bash
+pnpm test
+```
