@@ -71,7 +71,7 @@ Like `coffeeCompat`, this is useful for gradually converting an existing codebas
 | Configuration       | What it enables |
 |---------------------|---------------------------------------|
 | [`esCompat`](reference#ecmascript-compatibility) | enable all of the following ECMAScript compatibility flags |
-| [`esArrowFunction`](reference#single-argument-arrow-functions) | `x => x+1` as shorthand for `(x) => x+1`; disables implicit `=> x` zero-argument arrow functions; does not affect `->` |
+| [`esArrowFunction`](reference#single-argument-arrow-functions) | `x => x+1` as shorthand for `(x) => x+1`; does not affect `->` |
 
 We also have the following related options:
 
