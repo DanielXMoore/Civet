@@ -75,7 +75,7 @@ module.exports = grammar({
       seq(
         '/',
         choice(
-          /[^\n/\\*\[]/,     // normal first char (not * [ \ / newline)
+          /[^\n /\\*\[]/,    // normal first char (not space * [ \ / newline)
           /\\[^\n]/,          // escaped first char
           /\[(?:[^\]\\]|\\[^\n])*\]/,  // character class as first element
         ),

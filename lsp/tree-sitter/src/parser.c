@@ -1183,7 +1183,8 @@ static bool ts_lex(TSLexer *lexer, TSStateId state) {
       if (lookahead == '[') ADVANCE(13);
       if (lookahead == '\\') ADVANCE(21);
       if (lookahead != 0 &&
-          lookahead != '\n') ADVANCE(12);
+          lookahead != '\n' &&
+          lookahead != ' ') ADVANCE(12);
       END_STATE();
     case 55:
       ACCEPT_TOKEN(sym_operator);
