@@ -34,6 +34,7 @@ module.exports = grammar({
       $.hash_comment,
       $.string,
       $.template_string,
+      $.regex,
       $.number,
       $.private_identifier,
       $.decorator,
@@ -66,6 +67,23 @@ module.exports = grammar({
       seq("'", /[^'\\]*(?:\\(?:.|\n)[^'\\]*)*/, "'"),
       seq('"', /[^"\\]*(?:\\(?:.|\n)[^"\\]*)*/, '"'),
     )),
+
+    // Regex literals: /pattern/flags
+    // The first body element must not be * (to avoid matching /*).
+    // Body elements: normal chars, escape sequences, or character classes [...].
+    regex: _ => token(
+      seq(
+        '/',
+        choice(
+          /[^\n/\\*\[]/,     // normal first char (not * [ \ / newline)
+          /\\[^\n]/,          // escaped first char
+          /\[(?:[^\]\\]|\\[^\n])*\]/,  // character class as first element
+        ),
+        /(?:[^\n/\\\[]|\\[^\n]|\[(?:[^\]\\]|\\[^\n])*\])*/,  // rest of body
+        '/',
+        /[gimsuvy]*/,
+      ),
+    ),
 
     template_string: $ => seq(
       '`',
