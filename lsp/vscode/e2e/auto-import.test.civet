@@ -1,0 +1,217 @@
+{ commands, Position, Range, workspace, window, WorkspaceEdit } from vscode
+type { CompletionList, CompletionItem, CompletionItemLabel, TextEdit } from vscode
+assert from assert
+{ getDocUri, activate, poll, doc } from ./helper.civet
+
+getLabel := (i: CompletionItem) =>
+  i.label <? 'string' ? i.label : i.label.label
+
+getDescription := (i: CompletionItem): string | undefined =>
+  if i.label <? 'object'
+    (i.label as CompletionItemLabel).description
+  else
+    undefined
+
+// Apply a completion item (main edit + additionalTextEdits) to the document.
+function applyCompletion(docUri: import('vscode').Uri, item: CompletionItem, prefixRange: Range)
+  edit := new WorkspaceEdit()
+  // Apply the main completion text
+  insertText := (item.insertText <? 'string' ? item.insertText : undefined) ?? getLabel(item)
+  if item.textEdit
+    te := item.textEdit as TextEdit
+    edit.replace(docUri, te.range, te.newText)
+  else
+    edit.replace(docUri, prefixRange, insertText)
+  // Apply additional edits (the import statement)
+  for e of item.additionalTextEdits ?? []
+    edit.replace(docUri, e.range, e.newText)
+  await workspace.applyEdit(edit)
+
+// Replace the entire document content.
+function setDocText(docUri: import('vscode').Uri, text: string)
+  edit := new WorkspaceEdit()
+  fullRange := new Range(
+    new Position(0, 0)
+    doc.positionAt(doc.getText().length)
+  )
+  edit.replace(docUri, fullRange, text)
+  await workspace.applyEdit(edit)
+
+suite 'Auto Import', =>
+  // Ensure valid.civet is known to the language service before testing
+  // auto-import (TS needs the file in its program to offer auto-imports).
+  suiteSetup =>
+    ext := (await import('vscode')).extensions.getExtension('DanielX.civet')!
+    await ext.activate()
+    validDoc := await workspace.openTextDocument(getDocUri('valid.civet'))
+    await window.showTextDocument(validDoc)
+    await new Promise<void> (r) => setTimeout(r, 500)
+
+  test 'Adds new import via completion', =>
+    // Ensure valid.civet is known to the language service
+    ext := (await import('vscode')).extensions.getExtension('DanielX.civet')!
+    await ext.activate()
+    validDoc := await workspace.openTextDocument(getDocUri('valid.civet'))
+    await window.showTextDocument(validDoc)
+    await new Promise<void> (r) => setTimeout(r, 500)
+
+    // auto-import.civet contains just `gree` with no imports
+    docUri := getDocUri('auto-import.civet')
+    await activate(docUri)
+    originalText := doc.getText()
+
+    // Poll until TS returns a resolved auto-import completion for `greet`
+    // from the .civet file with additionalTextEdits.
+    // Use a high resolve count since auto-import items sort late
+    // (after all uppercase globals).
+    completions := await poll(
+      () => commands.executeCommand(
+        'vscode.executeCompletionItemProvider'
+        docUri
+        new Position(0, 4)
+        undefined
+        1100
+      ) as Promise<CompletionList>
+      (list) => list?.items.some (i) =>
+        getLabel(i) === 'greet'
+        and getDescription(i)?.includes('.civet')
+        and i.additionalTextEdits?.length
+      4000
+    )
+
+    greetItem := completions.items.find (i) =>
+      getLabel(i) === 'greet'
+      and getDescription(i)?.includes('.civet')
+      and i.additionalTextEdits?.length
+    assert greetItem, 'Expected a greet auto-import completion with additionalTextEdits'
+
+    // Apply the completion to the document
+    prefixRange := new Range(new Position(0, 0), new Position(0, 4))
+    await applyCompletion(docUri, greetItem, prefixRange)
+
+    // Verify the resulting document content
+    text := doc.getText()
+    lines := text.split('\n')
+
+    // The import should appear at the top in Civet syntax
+    assert lines[0].includes('greet'),
+      `Expected first line to include 'greet', got: ${lines[0]}`
+    assert lines[0].includes('from'),
+      `Expected first line to include 'from', got: ${lines[0]}`
+    assert lines[0].includes('./valid.civet'),
+      `Expected first line to include './valid.civet', got: ${lines[0]}`
+    assert !lines[0].startsWith('import '),
+      `Expected Civet syntax without 'import' keyword, got: ${lines[0]}`
+    assert !lines[0].includes('"') and !lines[0].includes("'"),
+      `Expected Civet syntax without quotes, got: ${lines[0]}`
+
+    // The completed identifier should appear after the import
+    assert text.includes('\ngreet'),
+      `Expected 'greet' on its own line after import, got:\n${text}`
+
+    // Restore original content for other tests
+    await setDocText(docUri, originalText)
+
+  test 'Adds new import in .ts file with TS syntax', =>
+    // auto-import.ts has `gree` — importing greet from valid.civet
+    // should produce standard TypeScript import syntax (not Civet syntax)
+    docUri := getDocUri('auto-import.ts')
+    await activate(docUri)
+    originalText := doc.getText()
+
+    completions := await poll(
+      () => commands.executeCommand(
+        'vscode.executeCompletionItemProvider'
+        docUri
+        new Position(0, 4)
+        undefined
+        1100
+      ) as Promise<CompletionList>
+      (list) => list?.items.some (i) =>
+        getLabel(i) === 'greet'
+        and getDescription(i)?.includes('.civet')
+        and i.additionalTextEdits?.length
+      4000
+    )
+
+    greetItem := completions.items.find (i) =>
+      getLabel(i) === 'greet'
+      and getDescription(i)?.includes('.civet')
+      and i.additionalTextEdits?.length
+    assert greetItem, 'Expected a greet auto-import completion with additionalTextEdits'
+
+    // Apply the completion to the document
+    prefixRange := new Range(new Position(0, 0), new Position(0, 4))
+    await applyCompletion(docUri, greetItem, prefixRange)
+
+    // Verify the resulting document content
+    text := doc.getText()
+    lines := text.split('\n')
+
+    // The import should be standard TypeScript syntax
+    assert lines[0].startsWith('import '),
+      `Expected TS syntax with 'import' keyword, got: ${lines[0]}`
+    assert lines[0].includes('greet'),
+      `Expected import to include 'greet', got: ${lines[0]}`
+    assert lines[0].includes('from'),
+      `Expected import to include 'from', got: ${lines[0]}`
+    assert lines[0].includes('"') or lines[0].includes("'"),
+      `Expected TS syntax with quoted path, got: ${lines[0]}`
+
+    // The completed identifier should appear after the import
+    assert text.includes('\ngreet'),
+      `Expected 'greet' on its own line after import, got:\n${text}`
+
+    // Restore original content for other tests
+    await setDocText(docUri, originalText)
+
+  test 'Adds export to existing import via completion', =>
+    // auto-import-existing.civet already imports { greet } from ./valid.civet
+    // and has partial `farewel` — completing `farewell` should modify existing import
+    docUri := getDocUri('auto-import-existing.civet')
+    await activate(docUri)
+    originalText := doc.getText()
+
+    completions := await poll(
+      () => commands.executeCommand(
+        'vscode.executeCompletionItemProvider'
+        docUri
+        new Position(4, 7)
+        undefined
+        1100
+      ) as Promise<CompletionList>
+      (list) => list?.items.some (i) =>
+        getLabel(i) === 'farewell' and i.additionalTextEdits?.length
+      4000
+    )
+
+    farewellItem := completions.items.find (i) =>
+      getLabel(i) === 'farewell' and i.additionalTextEdits?.length
+    assert farewellItem, 'Expected a farewell auto-import completion with additionalTextEdits'
+
+    // Apply the completion to the document
+    prefixRange := new Range(new Position(4, 0), new Position(4, 7))
+    await applyCompletion(docUri, farewellItem, prefixRange)
+
+    // Verify the resulting document content
+    text := doc.getText()
+    lines := text.split('\n')
+
+    // The first line should now include both greet and farewell in the import
+    assert lines[0].includes('greet'),
+      `Expected first line to still include 'greet', got: ${lines[0]}`
+    assert lines[0].includes('farewell'),
+      `Expected first line to include 'farewell', got: ${lines[0]}`
+    assert lines[0].includes('from'),
+      `Expected first line to include 'from', got: ${lines[0]}`
+    assert !lines[0].startsWith('import '),
+      `Expected Civet syntax without 'import' keyword, got: ${lines[0]}`
+    assert !lines[0].includes('"') and !lines[0].includes("'"),
+      `Expected Civet syntax without quotes, got: ${lines[0]}`
+
+    // The completed identifier should appear in the body
+    assert text.includes('farewell'),
+      `Expected 'farewell' in document body, got:\n${text}`
+
+    // Restore original content for other tests
+    await setDocText(docUri, originalText)

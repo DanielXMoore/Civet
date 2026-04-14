@@ -571,6 +571,7 @@ connection.onCompletionResolve(async (item) => {
   return item unless service
 
   let document
+  let sourcemapLines: SourcemapLines | undefined
   if (sourcePath.match(tsSuffix)) { // non-transpiled
     document = documents.get(URI.file(sourcePath).toString())
     assert(document)
@@ -579,6 +580,7 @@ connection.onCompletionResolve(async (item) => {
     meta := service.host.getMeta(sourcePath)
     return item unless meta
     { transpiledDoc } := meta
+    sourcemapLines = meta.sourcemapLines
     return item unless transpiledDoc
     document = transpiledDoc
     sourcePath = documentToSourcePath(transpiledDoc)
@@ -598,8 +600,48 @@ connection.onCompletionResolve(async (item) => {
 
   // getDetails from https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
   details: string[] := []
+  additionalEdits: TextEdit[] := []
   for (const action of detail.codeActions ?? []) {
     details.push(action.description)
+    // Convert code action changes (e.g. auto-import) to additionalTextEdits
+    for (const change of action.changes) {
+      // Determine the document for this change and whether remapping is needed
+      let changeDoc: TextDocument | undefined
+      let changeSourcemapLines: SourcemapLines | undefined
+      if (change.fileName === sourcePath) {
+        // Change targets the current (possibly transpiled) document
+        changeDoc = document
+        changeSourcemapLines = sourcemapLines
+      } else {
+        // Change targets another file; look up its transpiled doc
+        changeMeta := service.host.getMeta(change.fileName)
+        if changeMeta?.transpiledDoc
+          changeDoc = changeMeta.transpiledDoc
+          changeSourcemapLines = changeMeta.sourcemapLines
+        else
+          // Non-transpiled file
+          changeDoc = documents.get(URI.file(change.fileName).toString())
+      }
+      continue unless changeDoc
+      for (const tc of change.textChanges) {
+        start .= changeDoc.positionAt(tc.span.start)
+        end .= changeDoc.positionAt(tc.span.start + tc.span.length)
+        newText .= tc.newText
+        if changeSourcemapLines
+          start = remapPosition(start, changeSourcemapLines)
+          end = remapPosition(end, changeSourcemapLines)
+          // Convert TS import syntax to Civet:
+          // `import { foo } from "./bar"` → `{ foo } from ./bar`
+          newText = newText.replace(
+            /^import (.*?) from ["'](.+?)["'];?/gm
+            "$1 from $2"
+          )
+        additionalEdits.push({ range: { start, end }, newText })
+      }
+    }
+  }
+  if (additionalEdits.length) {
+    item.additionalTextEdits = additionalEdits
   }
   details.push(asPlainTextWithLinks(detail.displayParts))
   item.detail = details.join("\n\n")
