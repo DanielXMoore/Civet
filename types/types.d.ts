@@ -195,6 +195,23 @@ declare module "@danielx/civet" {
   export function generate(ast: CivetAST, options?: GenerateOptions): string
   export function decode(source: string | Buffer): string
 
+  export type TokenGroup =
+    | "keyword"
+    | "string"
+    | "number"
+    | "regexp"
+    | "operator"
+    | "comment"
+    | "type"
+
+  export type SemanticToken = {
+    pos: number
+    length: number
+    group: TokenGroup
+  }
+
+  export function getSemanticTokens(ast: CivetAST): SemanticToken[]
+
   export const lib: {
     gatherRecursive(ast: CivetAST, predicate: (node: CivetAST) => boolean): CivetAST[]
     gatherRecursiveAll(ast: CivetAST, predicate: (node: CivetAST) => boolean): CivetAST[]
@@ -207,6 +224,7 @@ declare module "@danielx/civet" {
     parse: typeof parse
     generate: typeof generate
     decode: typeof decode
+    getSemanticTokens: typeof getSemanticTokens
     SourceMap: typeof SourceMap
     ParseError: typeof ParseError
     ParseErrors: typeof ParseErrors

@@ -16,6 +16,7 @@
   Location
   DiagnosticSeverity
   TextEdit
+  SemanticTokensRequest
 } from vscode-languageserver/node
 
 {
@@ -39,6 +40,17 @@ ts, {
 } from typescript
 { URI } from vscode-uri
 { setTimeout } from timers/promises
+BundledCivet from @danielx/civet
+
+semanticTokenTypes := [
+  "keyword"
+  "string"
+  "number"
+  "regexp"
+  "operator"
+  "comment"
+  "type"
+] as const
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -150,6 +162,11 @@ connection.onInitialize async (params: InitializeParams) =>
       hoverProvider: true
       referencesProvider: true
       renameProvider: true
+      semanticTokensProvider:
+        legend:
+          tokenTypes: semanticTokenTypes as string[]
+          tokenModifiers: []
+        full: true
 
     }
   }
@@ -1194,6 +1211,45 @@ function scheduleUpdateDiagnostics(changedDocs: Set<TextDocument>) {
 connection.onDidChangeWatchedFiles (_change) =>
   // Monitored files have change in VSCode
   logger.log('We received an file change event')
+
+// Semantic tokens for .civet files
+// Encoded per LSP spec: [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]
+connection.onRequest SemanticTokensRequest.type, (params) =>
+  doc := documents.get params.textDocument.uri
+  return { data: [] } unless doc
+  sourcePath := documentToSourcePath params.textDocument
+  return { data: [] } unless sourcePath.endsWith '.civet'
+
+  source := doc.getText()
+  try
+    ast := BundledCivet.compile source, { ast: true, sync: true }
+    tokens := BundledCivet.getSemanticTokens ast
+
+    // Build line-offset table for fast offset→line/char conversion
+    lineOffsets: number[] := [0]
+    for i of [0...source.length]
+      lineOffsets.push i + 1 if source[i] is '\n'
+
+    offsetToLineChar := (offset: number) =>
+      lo .= 0, hi .= lineOffsets.length - 1
+      while lo < hi
+        mid := Math.ceil (lo + hi) / 2
+        if lineOffsets[mid] <= offset then lo = mid else hi = mid - 1
+      { line: lo, character: offset - lineOffsets[lo] }
+
+    data: number[] := []
+    prevLine .= 0, prevChar .= 0
+    for token of tokens
+      typeIndex := semanticTokenTypes.indexOf token.group
+      continue if typeIndex < 0
+      { line, character } := offsetToLineChar token.pos
+      deltaLine := line - prevLine
+      data.push deltaLine, (if deltaLine is 0 then character - prevChar else character), token.length, typeIndex, 0
+      prevLine = line
+      prevChar = character
+    { data }
+  catch
+    { data: [] }
 
 // Make the text document manager listen on the connection
 // for open, change and close text document events
