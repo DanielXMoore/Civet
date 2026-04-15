@@ -30,7 +30,7 @@ To enable semantic token highlighting (context-aware colors for variables, funct
 }
 ```
 
-`"combined"` overlays LSP semantic tokens on top of tree-sitter highlighting. Use `"full"` to use only LSP semantic tokens.
+`"combined"` overlays LSP semantic tokens on top of tree-sitter highlighting.
 
 ## Neovim
 
