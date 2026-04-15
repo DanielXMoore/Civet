@@ -5,29 +5,59 @@ Mocha from mocha
 // Wait for the TS language service to be ready before running tests.
 // On CI the service can take several seconds to initialize; without this
 // warmup the first tests to hit TS always time out.
+//
+// We use console.error for timing logs because VS Code's test runner
+// filters stdout but lets stderr through.
 async function warmup()
   vscode := await import('vscode')
+  log := console.error.bind(console)
+  t0 := Date.now()
+  elapsed := () => `${Date.now() - t0}ms`
+
   ext := vscode.extensions.getExtension('DanielX.civet')!
   await ext.activate()
+  log `[warmup] extension activated (${elapsed()})`
 
-  // Open a fixture file so the language server starts its TS project
+  // Open auto-import.civet (contains `gree`) so the language server
+  // starts its TS project.  We avoid valid.civet here because the
+  // diagnostics test subscribes to its first diagnostics event.
   fixtureDir := path.resolve(__dirname, '../fixture')
-  docUri := vscode.Uri.file(path.join(fixtureDir, 'valid.civet'))
+  docUri := vscode.Uri.file(path.join(fixtureDir, 'auto-import.civet'))
   doc := await vscode.workspace.openTextDocument(docUri)
   await vscode.window.showTextDocument(doc)
+  log `[warmup] opened auto-import.civet (${elapsed()})`
 
-  // Poll until TS returns completions, proving the service is live
+  // Also open valid.civet (the export source) so TS knows about it,
+  // but don't show it — just open it in the background.
+  validUri := vscode.Uri.file(path.join(fixtureDir, 'valid.civet'))
+  await vscode.workspace.openTextDocument(validUri)
+  log `[warmup] opened valid.civet in background (${elapsed()})`
+
+  // Poll until TS returns an auto-import completion for `greet` with
+  // additionalTextEdits.  This proves the full auto-import pipeline
+  // (transpilation, type-checking, export index) is ready.
   deadline := Date.now() + 30_000
+  attempts .= 0
   loop
+    attempts++
     list := await vscode.commands.executeCommand(
       'vscode.executeCompletionItemProvider'
       docUri
-      new vscode.Position(1, 0)
-    ) as { items: unknown[] }
-    break if list?.items?.length
+      new vscode.Position(0, 4)  // end of `gree`
+      undefined
+      1100  // high resolve count for auto-import items
+    ) as { items: {label: string | {label: string}, additionalTextEdits?: unknown[]}[] }
+    hasAutoImport := list?.items?.some (i) =>
+      label := i.label <? 'string' ? i.label : i.label.label
+      label is 'greet' and i.additionalTextEdits?.length
+    if hasAutoImport
+      log `[warmup] auto-import ready after ${attempts} attempts (${elapsed()})`
+      break
     if Date.now() >= deadline
-      throw new Error 'Warmup: TS language service did not become ready within 30s'
-    await new Promise<void> (r) => setTimeout(r, 250)
+      log `[warmup] TIMEOUT after ${attempts} attempts (${elapsed()})`
+      log `[warmup] last completion count: ${list?.items?.length ?? 0}`
+      break  // don't throw — let tests run so we get per-test diagnostics
+    await new Promise<void> (r) => setTimeout(r, 500)
 
 export function run(): Promise<void>
   isWindows := process.platform is 'win32'
