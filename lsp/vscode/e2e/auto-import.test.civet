@@ -12,7 +12,10 @@ getDescription := (i: CompletionItem): string | undefined =>
   else
     undefined
 
-pollTimeout := 8000
+isWindows := process.platform is 'win32'
+// CI runners are much slower to build the auto-import index.
+// Linux CI: ~8s, Windows CI: ~30s.
+pollTimeout := isWindows ? 30_000 : 15_000
 
 // Apply a completion item (main edit + additionalTextEdits) to the document.
 function applyCompletion(docUri: import('vscode').Uri, item: CompletionItem, prefixRange: Range)
@@ -39,6 +42,30 @@ function setDocText(docUri: import('vscode').Uri, text: string)
   edit.replace(docUri, fullRange, text)
   await workspace.applyEdit(edit)
 
+// Poll for auto-import completions.
+// Uses a high resolve count since auto-import items sort late.
+function pollAutoImport(
+  docUri: import('vscode').Uri
+  position: Position
+  predicate: (i: CompletionItem) => boolean
+  timeout = pollTimeout
+)
+  completions := await poll(
+    () => commands.executeCommand(
+      'vscode.executeCompletionItemProvider'
+      docUri
+      position
+      undefined
+      1100
+    ) as Promise<CompletionList>
+    (list) => list?.items.some predicate
+    timeout
+    1000
+  )
+  item := completions.items.find predicate
+  assert item, 'Expected an auto-import completion with additionalTextEdits'
+  return { completions, item }
+
 suite 'Auto Import', =>
   test 'Adds new import via completion', =>
     // auto-import.civet contains just `gree` with no imports
@@ -46,30 +73,14 @@ suite 'Auto Import', =>
     await activate(docUri)
     originalText := doc.getText()
 
-    // Poll until TS returns a resolved auto-import completion for `greet`
-    // from the .civet file with additionalTextEdits.
-    // Use a high resolve count since auto-import items sort late
-    // (after all uppercase globals).
-    completions := await poll(
-      () => commands.executeCommand(
-        'vscode.executeCompletionItemProvider'
-        docUri
-        new Position(0, 4)
-        undefined
-        1100
-      ) as Promise<CompletionList>
-      (list) => list?.items.some (i) =>
-        getLabel(i) === 'greet'
+    { item: greetItem } := await pollAutoImport(
+      docUri
+      new Position(0, 4)
+      (i) =>
+        getLabel(i) is 'greet'
         and getDescription(i)?.includes('.civet')
         and i.additionalTextEdits?.length
-      pollTimeout
     )
-
-    greetItem := completions.items.find (i) =>
-      getLabel(i) === 'greet'
-      and getDescription(i)?.includes('.civet')
-      and i.additionalTextEdits?.length
-    assert greetItem, 'Expected a greet auto-import completion with additionalTextEdits'
 
     // Apply the completion to the document
     prefixRange := new Range(new Position(0, 0), new Position(0, 4))
@@ -105,26 +116,14 @@ suite 'Auto Import', =>
     await activate(docUri)
     originalText := doc.getText()
 
-    completions := await poll(
-      () => commands.executeCommand(
-        'vscode.executeCompletionItemProvider'
-        docUri
-        new Position(0, 4)
-        undefined
-        1100
-      ) as Promise<CompletionList>
-      (list) => list?.items.some (i) =>
-        getLabel(i) === 'greet'
+    { item: greetItem } := await pollAutoImport(
+      docUri
+      new Position(0, 4)
+      (i) =>
+        getLabel(i) is 'greet'
         and getDescription(i)?.includes('.civet')
         and i.additionalTextEdits?.length
-      pollTimeout
     )
-
-    greetItem := completions.items.find (i) =>
-      getLabel(i) === 'greet'
-      and getDescription(i)?.includes('.civet')
-      and i.additionalTextEdits?.length
-    assert greetItem, 'Expected a greet auto-import completion with additionalTextEdits'
 
     // Apply the completion to the document
     prefixRange := new Range(new Position(0, 0), new Position(0, 4))
@@ -158,22 +157,12 @@ suite 'Auto Import', =>
     await activate(docUri)
     originalText := doc.getText()
 
-    completions := await poll(
-      () => commands.executeCommand(
-        'vscode.executeCompletionItemProvider'
-        docUri
-        new Position(4, 7)
-        undefined
-        1100
-      ) as Promise<CompletionList>
-      (list) => list?.items.some (i) =>
-        getLabel(i) === 'farewell' and i.additionalTextEdits?.length
-      pollTimeout
+    { item: farewellItem } := await pollAutoImport(
+      docUri
+      new Position(4, 7)
+      (i) =>
+        getLabel(i) is 'farewell' and i.additionalTextEdits?.length
     )
-
-    farewellItem := completions.items.find (i) =>
-      getLabel(i) === 'farewell' and i.additionalTextEdits?.length
-    assert farewellItem, 'Expected a farewell auto-import completion with additionalTextEdits'
 
     // Apply the completion to the document
     prefixRange := new Range(new Position(4, 0), new Position(4, 7))
