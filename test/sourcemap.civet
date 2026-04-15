@@ -2,6 +2,7 @@
 assert from assert
 
 { SourceMap, base64Encode, decodeVLQ } from ../source/sourcemap.civet
+{ remapPosition } from ../source/ts-diagnostic.civet
 { transform } from esbuild
 
 describe "source map", ->
@@ -247,3 +248,62 @@ describe "source map", ->
         const x = 5;
         //# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoidGVzdC5qcyIsInNvdXJjZXMiOlsidGVzdC5jaXZldCJdLCJtYXBwaW5ncyI6IkFBQVMsTUFBVCxJQUFhOyIsIm5hbWVzIjpbXSwic291cmNlc0NvbnRlbnQiOlsieDogbnVtYmVyIDo9IDUiXX0=
       """
+
+  describe "@ shorthand remapping", ->
+    it "should remap generated this.name to within source line bounds", ->
+      src := """
+        class Greeter
+          name: string
+          @(@name)
+
+          greet()
+            `Hello, ${@name}!`
+
+      """
+
+      {code, sourceMap} := await compile src,
+        js: true
+        sourceMap: true
+        filename: "test.civet"
+
+      srcLines := src.split('\n')
+      outLines := code.split('\n')
+
+      // Walk every mapped segment and verify source positions are in bounds
+      for smLine, lineIdx of sourceMap.lines
+        continue unless smLine
+        for seg of smLine
+          continue unless seg.length is 4
+          srcLine := seg[2]
+          srcCol := seg[3]
+          assert srcLine < srcLines.length,
+            `Mapped source line ${srcLine} out of bounds (${srcLines.length} lines)`
+          assert srcCol <= srcLines[srcLine].length,
+            `Mapped source col ${srcCol} out of bounds on line ${srcLine} (${srcLines[srcLine].length} chars): ${JSON.stringify srcLines[srcLine]}`
+
+    it "should remap positions through remapPosition to within source line bounds", ->
+      src := """
+        class Greeter
+          name: string
+          @(@name)
+
+          greet()
+            `Hello, ${@name}!`
+
+      """
+
+      {code, sourceMap} := await compile src,
+        js: true
+        sourceMap: true
+        filename: "test.civet"
+
+      srcLines := src.split('\n')
+      outLines := code.split('\n')
+
+      // For every character in the output, remapPosition should land within source bounds
+      for outLine, lineIdx of outLines
+        for charIdx of [0...outLine.length]
+          pos := remapPosition({line: lineIdx, character: charIdx}, sourceMap.lines)
+          continue unless pos.line < srcLines.length
+          assert pos.character <= srcLines[pos.line].length,
+            `remap(${lineIdx}:${charIdx}) = (${pos.line}:${pos.character}) but source line ${pos.line} is only ${srcLines[pos.line].length} chars: ${JSON.stringify srcLines[pos.line]}`
