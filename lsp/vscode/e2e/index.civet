@@ -2,16 +2,45 @@ path from path
 fs from fs
 Mocha from mocha
 
+// Wait for the TS language service to be ready before running tests.
+// On CI the service can take several seconds to initialize; without this
+// warmup the first tests to hit TS always time out.
+async function warmup()
+  vscode := await import('vscode')
+  ext := vscode.extensions.getExtension('DanielX.civet')!
+  await ext.activate()
+
+  // Open a fixture file so the language server starts its TS project
+  fixtureDir := path.resolve(__dirname, '../fixture')
+  docUri := vscode.Uri.file(path.join(fixtureDir, 'valid.civet'))
+  doc := await vscode.workspace.openTextDocument(docUri)
+  await vscode.window.showTextDocument(doc)
+
+  // Poll until TS returns completions, proving the service is live
+  deadline := Date.now() + 30_000
+  loop
+    list := await vscode.commands.executeCommand(
+      'vscode.executeCompletionItemProvider'
+      docUri
+      new vscode.Position(1, 0)
+    ) as { items: unknown[] }
+    break if list?.items?.length
+    if Date.now() >= deadline
+      throw new Error 'Warmup: TS language service did not become ready within 30s'
+    await new Promise<void> (r) => setTimeout(r, 250)
+
 export function run(): Promise<void>
   isWindows := process.platform is 'win32'
   mocha := new Mocha({ ui: 'tdd', color: true, reporter: 'dot' })
-  mocha.timeout isWindows ? 10000 : 5000
+  mocha.timeout isWindows ? 20000 : 10000
 
   testsRoot := __dirname
   files := fs.readdirSync(testsRoot).filter (f) => f.endsWith('.test.js')
   files.forEach (f) => mocha.addFile(path.resolve(testsRoot, f))
 
-  new Promise<void> (resolve, reject) =>
+  await warmup()
+
+  return new Promise<void> (resolve, reject) =>
     try
       mocha.run (failures) =>
         if failures > 0
