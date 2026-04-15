@@ -40,16 +40,31 @@ ts, {
 } from typescript
 { URI } from vscode-uri
 { setTimeout } from timers/promises
-BundledCivet from @danielx/civet
-
+// TS 2020 semantic classification token types (order must match TypeScript's internal TokenType enum)
+// See: https://github.com/microsoft/TypeScript/blob/main/src/services/classifier2020.ts
 semanticTokenTypes := [
-  "keyword"
-  "string"
-  "number"
-  "regexp"
-  "operator"
-  "comment"
-  "type"
+  "class"          // 0
+  "enum"           // 1
+  "interface"      // 2
+  "namespace"      // 3
+  "typeParameter"  // 4
+  "type"           // 5
+  "parameter"      // 6
+  "variable"       // 7
+  "enumMember"     // 8
+  "property"       // 9
+  "function"       // 10
+  "member"         // 11
+] as const
+
+// TS 2020 semantic classification token modifiers (order must match TypeScript's internal TokenModifier enum)
+semanticTokenModifiers := [
+  "declaration"    // 0
+  "static"         // 1
+  "async"          // 2
+  "readonly"       // 3
+  "defaultLibrary" // 4
+  "local"          // 5
 ] as const
 
 // Create a connection for the server, using Node's IPC as a transport.
@@ -165,7 +180,7 @@ connection.onInitialize async (params: InitializeParams) =>
       semanticTokensProvider:
         legend:
           tokenTypes: semanticTokenTypes as string[]
-          tokenModifiers: []
+          tokenModifiers: semanticTokenModifiers as string[]
         full: true
 
     }
@@ -1212,45 +1227,70 @@ connection.onDidChangeWatchedFiles (_change) =>
   // Monitored files have change in VSCode
   logger.log('We received an file change event')
 
-// Semantic tokens for .civet files
-// Encoded per LSP spec: [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]
-connection.onRequest SemanticTokensRequest.type, (params) =>
+// Semantic tokens: use TypeScript's semantic classifications, remapped via sourcemap
+connection.onRequest SemanticTokensRequest.type, async (params) =>
   doc := documents.get params.textDocument.uri
   return { data: [] } unless doc
   sourcePath := documentToSourcePath params.textDocument
-  return { data: [] } unless sourcePath.endsWith '.civet'
 
-  source := doc.getText()
+  await updating(params.textDocument)
+  service := await ensureServiceForSourcePath(sourcePath)
+
+  // Determine transpiled file path and sourcemap
+  let transpiledPath: string
+  let sourcemapLines: SourcemapLines | undefined
+  let transpiledDoc: TextDocument | undefined
+  if sourcePath.match(tsSuffix)
+    // Non-transpiled TS/JS file
+    transpiledPath = sourcePath
+  else
+    meta := service.host.getMeta(sourcePath)
+    return { data: [] } unless meta?.transpiledDoc
+    transpiledDoc = meta.transpiledDoc
+    sourcemapLines = meta.sourcemapLines
+    transpiledPath = documentToSourcePath(transpiledDoc)
+
   try
-    ast := BundledCivet.compile source, { ast: true, sync: true }
-    tokens := BundledCivet.getSemanticTokens ast
+    tsDoc := transpiledDoc ?? doc
+    sourceText := tsDoc.getText()
+    span: ts.TextSpan := { start: 0, length: sourceText.length }
+    result := service.getEncodedSemanticClassifications(transpiledPath, span, ts.SemanticClassificationFormat.TwentyTwenty)
 
-    // Build line-offset table for fast offset→line/char conversion
-    lineOffsets: number[] := [0]
-    for i of [0...source.length]
-      lineOffsets.push i + 1 if source[i] is '\n'
+    // TS 2020 spans: [start, length, encodedType, start, length, encodedType, ...]
+    // encodedType: (tokenType + 1) << 8 | modifierSet
+    // First collect remapped tokens, then sort by position before delta-encoding
+    remapped: { line: number, character: number, length: number, tokenType: number, tokenModifiers: number }[] := []
+    for i of [0...result.spans.length] by 3
+      tsStart := result.spans[i]
+      len := result.spans[i + 1]
+      encoded := result.spans[i + 2]
 
-    offsetToLineChar := (offset: number) =>
-      lo .= 0
-      hi .= lineOffsets.length - 1
-      while lo < hi
-        mid := Math.ceil (lo + hi) / 2
-        if lineOffsets[mid] <= offset then lo = mid else hi = mid - 1
-      { line: lo, character: offset - lineOffsets[lo] }
+      tokenType := ((encoded >> 8) - 1)
+      tokenModifiers := (encoded & 0xFF)
+      continue if tokenType < 0 or tokenType >= semanticTokenTypes.length
 
+      // Map position from transpiled TS back to Civet source
+      tsPos := tsDoc.positionAt(tsStart)
+      pos := remapPosition(tsPos, sourcemapLines)
+
+      remapped.push { line: pos.line, character: pos.character, length: len, tokenType, tokenModifiers }
+
+    // Sort by position (required for valid delta encoding)
+    remapped.sort (a, b) => a.line - b.line or a.character - b.character
+
+    // Delta-encode
     data: number[] := []
     prevLine .= 0
     prevChar .= 0
-    for token of tokens
-      typeIndex := semanticTokenTypes.indexOf token.group
-      continue if typeIndex < 0
-      { line, character } := offsetToLineChar token.pos
-      deltaLine := line - prevLine
-      data.push deltaLine, (if deltaLine is 0 then character - prevChar else character), token.length, typeIndex, 0
-      prevLine = line
-      prevChar = character
+    for token of remapped
+      deltaLine := token.line - prevLine
+      deltaChar := if deltaLine is 0 then token.character - prevChar else token.character
+      data.push deltaLine, deltaChar, token.length, token.tokenType, token.tokenModifiers
+      prevLine = token.line
+      prevChar = token.character
     { data }
-  catch
+  catch e
+    logger.error("Semantic tokens error: " + e)
     { data: [] }
 
 // Make the text document manager listen on the connection
