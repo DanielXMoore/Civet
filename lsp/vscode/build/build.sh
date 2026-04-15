@@ -6,6 +6,8 @@ export NODE_ENV=${1-}
 rm -rf dist
 mkdir dist
 
+rm -rf e2e/dist
+
 # Build lsp/server first so we can copy its output
 (cd ../server && bash ./build/build.sh ${1-})
 
