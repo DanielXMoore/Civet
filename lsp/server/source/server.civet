@@ -40,6 +40,7 @@ ts, {
 } from typescript
 { URI } from vscode-uri
 { setTimeout } from timers/promises
+{ ParseError } from @danielx/civet
 // TS 2020 semantic classification token types (order must match TypeScript's internal TokenType enum)
 // See: https://github.com/microsoft/TypeScript/blob/main/src/services/classifier2020.ts
 semanticTokenTypes := [
@@ -142,20 +143,16 @@ ensureServiceForSourcePath := (sourcePath: string) =>
   return service
 
 // TODO Propagate this to an extension setting
-diagnosticsDelay := 16;  // ms delay for primary updated file
-diagnosticsPropagationDelay := 100;  // ms delay for other files
+diagnosticsDelay := 16  // ms delay for primary updated file
+diagnosticsPropagationDelay := 100  // ms delay for other files
 
-connection.onInitialize async (params: InitializeParams) =>
+connection.onInitialize (params: InitializeParams) =>
   capabilities := params.capabilities
 
   // Does the client support the `workspace/configuration` request?
   // If not, we fall back using global settings.
-  hasConfigurationCapability = !!(
-    capabilities.workspace && !!capabilities.workspace.configuration
-  )
-  hasWorkspaceFolderCapability = !!(
-    capabilities.workspace && !!capabilities.workspace.workspaceFolders
-  )
+  hasConfigurationCapability = !!capabilities.workspace?.configuration
+  hasWorkspaceFolderCapability = !!capabilities.workspace?.workspaceFolders
 
   result: InitializeResult := {
     capabilities: {
@@ -179,8 +176,8 @@ connection.onInitialize async (params: InitializeParams) =>
       renameProvider: true
       semanticTokensProvider:
         legend:
-          tokenTypes: semanticTokenTypes as string[]
-          tokenModifiers: semanticTokenModifiers as string[]
+          tokenTypes: semanticTokenTypes as! string[]
+          tokenModifiers: semanticTokenModifiers as! string[]
         full: true
 
     }
@@ -218,64 +215,56 @@ updating := (document: { uri: string }) => documentUpdateStatus.get(document.uri
 tsSuffix := /\.[cm]?[jt]s$|\.json|\.[jt]sx/
 civetFileExtension := '.civet'
 
-connection.onHover(async ({ textDocument, position }) => {
-  // logger.log("hover"+ position)
+connection.onHover ({ textDocument, position }) =>
   sourcePath := documentToSourcePath(textDocument)
-  assert(sourcePath)
+  assert sourcePath
 
   service := await ensureServiceForSourcePath(sourcePath)
 
   doc := documents.get(textDocument.uri)
-  assert(doc)
+  assert doc
 
   let info
   await updating(textDocument)
-  if (sourcePath.match(tsSuffix)) { // non-transpiled
+  if sourcePath.match tsSuffix // non-transpiled
     p := doc.offsetAt(position)
     info = service.getQuickInfoAtPosition(sourcePath, p)
-  } else { // Transpiled
+  else // Transpiled
     // need to sourcemap the line/columns
     meta := service.host.getMeta(sourcePath)
     return unless meta
-    sourcemapLines := meta.sourcemapLines
-    transpiledDoc := meta.transpiledDoc
+    { sourcemapLines, transpiledDoc } := meta
     return unless transpiledDoc
 
     // Map input hover position into output TS position
     // Don't map for files that don't have a sourcemap (plain .ts for example)
     position = forwardMap(sourcemapLines, position) if sourcemapLines
 
-    // logger.log("onHover2"+ sourcePath+ position)
-
     p := transpiledDoc.offsetAt(position)
     transpiledPath := documentToSourcePath(transpiledDoc)
     info = service.getQuickInfoAtPosition(transpiledPath, p)
-    // logger.log("onHover3"+ info)
 
-  }
   return unless info
 
   display := displayPartsToString(info.displayParts)
   // TODO: Replace Previewer
   documentation := Previewer.plain(displayPartsToString(info.documentation))
 
-  return {
+  return
     // TODO: Range
-    contents: {
+    contents:
       kind: MarkupKind.Markdown
       value: [
         `\`\`\`typescript\n${display}\n\`\`\``
         documentation ?? ""
         ...info.tags?.map(Previewer.getTagDocumentation).filter((t) => !!t) || []
       ].join("\n\n")
-    }
-  }
-})
 
 // Helpers for completing import paths.
 
 looksLikeImportContext := /\b(from|import|require)(\s+['"]?)?$/
-function likelyImportContext(text: string): boolean { return looksLikeImportContext.test(text) }
+function likelyImportContext(text: string): boolean
+  looksLikeImportContext.test(text)
 
 // … Extract information about an import statement under the cursor
 importPathExtractor := /\b(?<statement>from|import|require)\b[ \t]*(?:[\(][ \t]*)?(?:(?<qt>')(?<path>[^']*)(?<endqt>'?)|(?<qt>")(?<path>[^"]*)(?<endqt>")?|(?<path>[^;"'\s=>]*))/gd
@@ -285,19 +274,17 @@ type ImportPathMatchIterator = RegExpStringIterator< RegExpExecArray & {
   indices: { groups: { statement: [number, number], path: [number, number], qt: [number, number], endqt: [number, number] } }
 }>
 
-function extractImportPath(lineText: string, cursorOffset: number) {
+function extractImportPath(lineText: string, cursorOffset: number)
   // Get all import|from|require statements in the line
   matches := lineText.matchAll(importPathExtractor) as ImportPathMatchIterator
 
   // See if there's a match whose path group spans over the cursor
-  for (const match of matches) {
+  for match of matches
     // Return that whole match, including quotes and the statement type
-    if ( cursorOffset >= match.indices.groups.path[0]
-      && cursorOffset <= match.indices.groups.path[1] ) {
-        return match.groups
-  }}
+    if cursorOffset >= match.indices.groups.path[0]
+        and cursorOffset <= match.indices.groups.path[1]
+      return match.groups
   return // undefined means no match
-}
 
 function findCivetFilesInDir(searchDir: string): string[]
   try
@@ -312,7 +299,7 @@ function createCivetFileCompletions(
   sourcePath: string
   position: Position
 ): CompletionItem[]
-  files.map (file) => {
+  files.map (file) =>
     label: file
     kind: CompletionItemKind.File
     insertText: file
@@ -324,95 +311,72 @@ function createCivetFileCompletions(
       source: undefined
       data: undefined
     }
-  }
 
 function resolvePathAliasDir(
   compilationSettings: ts.CompilerOptions
   importPath: string
-): string | undefined {
+): string | undefined
   { baseUrl, paths } := compilationSettings
   return unless paths
-  return unless (baseUrl && path.isAbsolute(baseUrl))
+  return unless baseUrl and path.isAbsolute(baseUrl)
 
   candidates: { resolvedDir: string, aliasPattern: string }[] := []
 
-  for (const [pattern, replacements] of Object.entries(paths)) {
-    if (pattern.endsWith('*')) {
+  for [pattern, replacements] of Object.entries(paths)
+    if pattern.endsWith '*'
       aliasPrefix := pattern.slice(0, -1)
-      if (importPath.startsWith(aliasPrefix)) {
+      if importPath.startsWith aliasPrefix
         pathAfterAlias := importPath.slice(aliasPrefix.length)
-        for (const replacement of replacements) {
-          replacementBase := replacement.endsWith('*') ? replacement.slice(0, -1) : replacement
+        for replacement of replacements
+          replacementBase := if replacement.endsWith('*') then replacement.slice(0, -1) else replacement
           resolvedDir := path.resolve(baseUrl, replacementBase, pathAfterAlias)
-          if (tsSys.directoryExists(resolvedDir)) {
-            candidates.push({
-              aliasPattern: aliasPrefix
-              resolvedDir
-            })
-          }
-        }
-      }
-    } else if (importPath === pattern) {
-      for (const replacement of replacements) {
+          if tsSys.directoryExists resolvedDir
+            candidates.push { aliasPattern: aliasPrefix, resolvedDir }
+    else if importPath is pattern
+      for replacement of replacements
         resolvedDir := path.resolve(baseUrl, replacement)
-        if (tsSys.directoryExists(resolvedDir)) {
-          candidates.push({
-            resolvedDir
-            aliasPattern: pattern
-          })
-        }
-      }
-    }
-  }
+        if tsSys.directoryExists resolvedDir
+          candidates.push { resolvedDir, aliasPattern: pattern }
 
-  chosenCandidate := candidates
+  candidates
     .sort((a, b) => b.aliasPattern.length - a.aliasPattern.length)
     .at(0)
-
-  return chosenCandidate?.resolvedDir
-}
+    ?.resolvedDir
 
 lineEnding := /[\n\r]+$/g
 /** Get the content of the current line (with the trailing newline removed.) */
-function getCurrentLineText(document: TextDocument, position: Position): string {
-  return document.getText({
+function getCurrentLineText(document: TextDocument, position: Position): string
+  document.getText({
     start: { character: 0, line: position.line     }
     end:   { character: 0, line: position.line + 1 }
   }).replace(lineEnding, '')
-}
 
 function appendClosingQuoteToPathCompletions(
   completions: CompletionItem[]
   closingQuoteSuffix: "'" | '"' | undefined
-): CompletionItem[] {
+): CompletionItem[]
   return completions unless closingQuoteSuffix
 
-  for (const completion of completions) {
-    if (completion.kind !== CompletionItemKind.File && completion.kind !== CompletionItemKind.Module) {
+  for completion of completions
+    if completion.kind !== CompletionItemKind.File and completion.kind !== CompletionItemKind.Module
       continue
-    }
-    if (completion.textEdit &&
-        !completion.textEdit.newText.endsWith(closingQuoteSuffix)) {
+    if completion.textEdit and
+        not completion.textEdit.newText.endsWith(closingQuoteSuffix)
       completion.textEdit.newText += closingQuoteSuffix
-    }
-    if (typeof completion.label === 'string') {
+    if completion.label <? 'string'
       completion.insertText ??= completion.label
-    }
-    if (typeof completion.insertText === 'string' &&
-        !completion.insertText.endsWith(closingQuoteSuffix)) {
+    if completion.insertText <? 'string' and
+        not completion.insertText.endsWith(closingQuoteSuffix)
       completion.insertText += closingQuoteSuffix
-    }
-  }
 
-  return completions
-}
+  completions
 
 function getCivetFileCompletions(
   service: ResolvedService
   document: TextDocument
   sourcePath: string
   position: Position
-) {
+)
   lineText := getCurrentLineText(document, position)
   civetFileCompletions: CompletionItem[] .= []
   show := {
@@ -426,16 +390,14 @@ function getCivetFileCompletions(
   let closingQuoteSuffix: "'" | '"' | undefined
 
   extracted := extractImportPath(lineText, position.character)
-  // logger.log(JSON.stringify(extracted || { path: '' }))
-  if (extracted != null) {
+  if extracted?
     { statement, path: pathText, qt, endqt } := extracted
 
     // require needs quotes to trigger completions
-    if (statement !== 'require' || qt) {
+    if statement !== 'require' or qt
       show.otherPaths = true
-      if (statement === 'from' || statement === 'require') {
+      if statement is 'from' or statement is 'require'
         show.otherLspCompletions = false
-      }
 
       // Hardcode special-case cursor offset
       //
@@ -443,102 +405,88 @@ function getCivetFileCompletions(
       //     Transpiled:  import a from "./a"|
       //     Adjusted:    import a from "./a|"
       //
-      if (!qt || qt !== endqt) cursorOffsetAdjustment = -1
-      if (qt && qt !== endqt) closingQuoteSuffix = qt
+      if not qt or qt !== endqt then cursorOffsetAdjustment = -1
+      if qt and qt !== endqt then closingQuoteSuffix = qt
 
       importPath = pathText
-      show.relative = importPath.startsWith('./') || importPath.startsWith('../')
-      show.alias = importPath.length > 0 && !show.relative
-    }
-  }
+      show.relative = importPath.startsWith('./') or importPath.startsWith('../')
+      show.alias = importPath# > 0 and not show.relative
 
   relativeCompletionItems: CompletionItem[] .= []
-  if (show.relative) {
+  if show.relative
     sourceDir := path.dirname(sourcePath)
     searchDir := path.resolve(sourceDir, importPath.substring(0, importPath.lastIndexOf('/')))
     relativeCivetFiles := findCivetFilesInDir(searchDir)
     relativeCompletionItems = createCivetFileCompletions(relativeCivetFiles, sourcePath, position)
-  }
 
   pathAliasCompletionItems: CompletionItem[] .= []
-  if (show.alias) {
+  if show.alias
     compilationSettings := service.host.getCompilationSettings()
     aliasDir := resolvePathAliasDir(compilationSettings, importPath)
-    pathAliasCivetFiles := !aliasDir ? [] : findCivetFilesInDir(aliasDir)
+    pathAliasCivetFiles := aliasDir ? findCivetFilesInDir(aliasDir) : []
     pathAliasCompletionItems = createCivetFileCompletions(pathAliasCivetFiles, sourcePath, position)
-  }
 
   civetFileCompletions = relativeCompletionItems.concat(pathAliasCompletionItems)
 
   heuristics := { show, cursorOffsetAdjustment }
   return { civetFileCompletions, heuristics, closingQuoteSuffix }
-}
 
 // This handler provides the initial list of the completion items.
-connection.onCompletion(async ({ textDocument, position, context }) => {
+connection.onCompletion ({ textDocument, position, context }) =>
 
   document := documents.get(textDocument.uri)
-  assert(document)
+  assert document
 
   // Fast path for space trigger
   linePrefix := getCurrentLineText(document, position).slice(0, position.character)
   isLikelyImportContext := likelyImportContext(linePrefix)
-  if (context?.triggerCharacter is ' ' && !isLikelyImportContext) {
+  if context?.triggerCharacter is ' ' and not isLikelyImportContext
     return []
-  }
 
   await updating(textDocument)
 
   sourcePath := documentToSourcePath(textDocument)
-  assert(sourcePath)
+  assert sourcePath
   service := await ensureServiceForSourcePath(sourcePath)
 
-  logger.log("completion " + sourcePath + " " + (position.line+1) + ":" + position.character)
+  logger.log "completion " + sourcePath + " " + (position.line+1) + ":" + position.character
 
   { civetFileCompletions, heuristics, closingQuoteSuffix } := getCivetFileCompletions(
     service, document, sourcePath, position
   )
 
   // Options for the downstream TS LSP
-  completionOptions: GetCompletionsAtPositionOptions := {
-    includeCompletionsForImportStatements: heuristics.show.otherPaths || isLikelyImportContext
+  completionOptions: GetCompletionsAtPositionOptions :=
+    includeCompletionsForImportStatements: heuristics.show.otherPaths or isLikelyImportContext
     includeCompletionsForModuleExports:    heuristics.show.otherLspCompletions
     includeCompletionsWithSnippetText:     heuristics.show.otherLspCompletions
 
     allowIncompleteCompletions: true
     includeCompletionsWithInsertText: true
     useLabelDetailsInCompletionEntries: true
-  }
-  if (context?.triggerKind) {
+  if context?.triggerKind
     completionOptions.triggerKind = context.triggerKind
-  }
-  if (context?.triggerCharacter) {
+  if context?.triggerCharacter
     completionOptions.triggerCharacter = context.triggerCharacter as ts.CompletionsTriggerCharacter
 
-    if (context?.triggerCharacter === ' ' && isLikelyImportContext) {
+    if context?.triggerCharacter is ' ' and isLikelyImportContext
       // Civet recovers incomplete `import ` as `import ""` for TS.
       // Treat this as if the user typed `"` so TS returns module path completions.
       completionOptions.triggerCharacter = '"' as ts.CompletionsTriggerCharacter
-    }
-  }
 
-  if (sourcePath.match(tsSuffix)) {
+  if sourcePath.match tsSuffix
     // Non-transpiled files
     p := document.offsetAt(position)
     tslCompletions := service.getCompletionsAtPosition(sourcePath, p, completionOptions)
-    completions := if tslCompletions
-      convertCompletions(
-        tslCompletions, document, sourcePath, position
-        undefined, // No sourcemap
-        true, // Show file extensions (and use them in path completions)
-      )
-    else
-      []
+    completions := convertCompletions(
+      tslCompletions, document, sourcePath, position
+      undefined, // No sourcemap
+      true, // Show file extensions (and use them in path completions)
+    )
 
     return appendClosingQuoteToPathCompletions(
       civetFileCompletions.concat(completions)
       closingQuoteSuffix)
-  }
 
   // Civet files
 
@@ -549,14 +497,14 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
   return civetFileCompletions unless transpiledDoc
   if sourcemapLines
     position = forwardMap(sourcemapLines, position)
-    logger.log('remapped')
+    logger.log 'remapped'
   p .= transpiledDoc.offsetAt(position)
 
   // … Adjust the cursor position, on a case-per-case basis, to access better completions.
   //  0: Default, when sourcemap cursor position is already perfect.
   // -1: Gets inside closing quotes for import file completion.
   p += heuristics.cursorOffsetAdjustment
-  if (isLikelyImportContext) {
+  if isLikelyImportContext
     // When we type `import` at EOF, sourcemapping is a bit wonky
     // and we end up to the left of the quotes instead of inside them.
     start := transpiledDoc.positionAt(p)
@@ -565,47 +513,37 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
       end: { line: start.line, character: start.character + 3 }
     })
     match := quoteRangeText.match(/^( ?)(""|'')/)
-    if (match) p += match[1].length + 1
-  }
-  // logger.log([
-  //   transpiledDoc.getText().slice(0, p)
-  //   transpiledDoc.getText().slice(p)
-  // ].join(`<[${heuristics.cursorOffsetAdjustment}]|>`))
+    if match then p += match[1].length + 1
 
   // … Get completions from TS
   transpiledPath := documentToSourcePath(transpiledDoc)
   tslCompletions := service.getCompletionsAtPosition(
     transpiledPath, p, completionOptions)
-  completions := if tslCompletions
-    convertCompletions(
-      tslCompletions
-      transpiledDoc
-      sourcePath
-      position
-      sourcemapLines
-      true
-    )
-  else
-    []
+  completions := convertCompletions(
+    tslCompletions
+    transpiledDoc
+    sourcePath
+    position
+    sourcemapLines
+    true
+  )
 
   // … Return.
   return appendClosingQuoteToPathCompletions(
     civetFileCompletions.concat(completions)
     closingQuoteSuffix)
 
-})
-
-connection.onCompletionResolve(async (item) => {
+connection.onCompletionResolve (item) =>
   { sourcePath, position, name, source, data } .= item.data
   service := await ensureServiceForSourcePath(sourcePath)
   return item unless service
 
   let document
   let sourcemapLines: SourcemapLines | undefined
-  if (sourcePath.match(tsSuffix)) { // non-transpiled
+  if sourcePath.match tsSuffix // non-transpiled
     document = documents.get(URI.file(sourcePath).toString())
-    assert(document)
-  } else {
+    assert document
+  else
     // use transpiled doc; forward source mapping already done
     meta := service.host.getMeta(sourcePath)
     return item unless meta
@@ -614,38 +552,36 @@ connection.onCompletionResolve(async (item) => {
     return item unless transpiledDoc
     document = transpiledDoc
     sourcePath = documentToSourcePath(transpiledDoc)
-  }
   p := document.offsetAt(position)
 
   let detail
-  try {
+  try
     detail = service.getCompletionEntryDetails(sourcePath, p, name, {
       semicolons: SemicolonPreference.Remove
     }, source, undefined, data)
-  } catch (e) {
-    logger.log("Failed to get completion details for " + name)
-    logger.log(String(e))
-  }
+  catch e
+    logger.log "Failed to get completion details for " + name
+    logger.log String(e)
   return item unless detail
 
   // getDetails from https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
   details: string[] := []
   additionalEdits: TextEdit[] := []
-  for (const action of detail.codeActions ?? []) {
-    details.push(action.description)
+  for action of detail.codeActions ?? []
+    details.push action.description
     // Convert code action changes (e.g. auto-import) to additionalTextEdits
-    for (const change of action.changes) {
+    for change of action.changes
       // Canonicalize the path from TS (always forward slashes) so it
       // matches sourcePath and service.host.getMeta keys on Windows.
       changeFileName := getCanonicalFileName(change.fileName)
       // Determine the document for this change and whether remapping is needed
       let changeDoc: TextDocument | undefined
       let changeSourcemapLines: SourcemapLines | undefined
-      if (changeFileName === getCanonicalFileName(sourcePath)) {
+      if changeFileName is getCanonicalFileName(sourcePath)
         // Change targets the current (possibly transpiled) document
         changeDoc = document
         changeSourcemapLines = sourcemapLines
-      } else {
+      else
         // Change targets another file; look up its transpiled doc
         changeMeta := service.host.getMeta(changeFileName)
         if changeMeta?.transpiledDoc
@@ -654,9 +590,8 @@ connection.onCompletionResolve(async (item) => {
         else
           // Non-transpiled file
           changeDoc = documents.get(URI.file(changeFileName).toString())
-      }
       continue unless changeDoc
-      for (const tc of change.textChanges) {
+      for tc of change.textChanges
         start .= changeDoc.positionAt(tc.span.start)
         end .= changeDoc.positionAt(tc.span.start + tc.span.length)
         newText .= tc.newText
@@ -669,25 +604,19 @@ connection.onCompletionResolve(async (item) => {
             /^import (.*?) from ["'](.+?)["'];?/gms
             "$1 from $2"
           )
-        additionalEdits.push({ range: { start, end }, newText })
-      }
-    }
-  }
-  if (additionalEdits.length) {
+        additionalEdits.push { range: { start, end }, newText }
+  if additionalEdits#
     item.additionalTextEdits = additionalEdits
-  }
-  details.push(asPlainTextWithLinks(detail.displayParts))
+  details.push asPlainTextWithLinks(detail.displayParts)
   item.detail = details.join("\n\n")
 
   // getDocumentation from https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
   documentations: string[] := []
-  if (detail.documentation) {
-    documentations.push(asPlainTextWithLinks(detail.documentation))
-  }
-  if (detail.tags) {
-    documentations.push(tagsToMarkdown(detail.tags))
-  }
-  if (documentations.length) {
+  if detail.documentation
+    documentations.push asPlainTextWithLinks(detail.documentation)
+  if detail.tags
+    documentations.push tagsToMarkdown(detail.tags)
+  if documentations#
     item.documentation = {
       kind: "markdown"
       value: documentations.join("\n\n")
@@ -695,26 +624,24 @@ connection.onCompletionResolve(async (item) => {
       baseUri: document.uri
       isTrusted: { enabledCommands: ["_typescript.openJsDocLink"] }
     }
-  }
 
   return item
-})
 
-connection.onDefinition(async ({ textDocument, position }) => {
+connection.onDefinition ({ textDocument, position }) =>
   sourcePath := documentToSourcePath(textDocument)
-  assert(sourcePath)
+  assert sourcePath
   service := await ensureServiceForSourcePath(sourcePath)
 
   let definitions
 
   await updating(textDocument)
   // Non-transpiled
-  if (sourcePath.match(tsSuffix)) {
+  if sourcePath.match tsSuffix
     document := documents.get(textDocument.uri)
-    assert(document)
+    assert document
     p := document.offsetAt(position)
     definitions = service.getDefinitionAtPosition(sourcePath, p)
-  } else {
+  else
     // need to sourcemap the line/columns
     meta := service.host.getMeta(sourcePath)
     return unless meta
@@ -728,15 +655,14 @@ connection.onDefinition(async ({ textDocument, position }) => {
     p := transpiledDoc.offsetAt(position)
     transpiledPath := documentToSourcePath(transpiledDoc)
     definitions = service.getDefinitionAtPosition(transpiledPath, p)
-  }
 
   return unless definitions
 
   program := service.getProgram()
-  assert(program)
+  assert program
 
   defs := definitions as readonly ts.DefinitionInfo[]
-  return defs.map((definition) => {
+  defs.map((definition) =>
     { fileName, textSpan } .= definition
     // source file as it is known to TSServer
     sourceFile := program.getSourceFile(fileName)
@@ -756,30 +682,25 @@ connection.onDefinition(async ({ textDocument, position }) => {
 
     return {
       uri: URI.file(rawSourceName).toString()
-      range: {
-        start
-        end
-      }
+      range: { start, end }
     }
-  }).filter((d): d is Location => !!d)
+  ).filter((d): d is Location => !!d)
 
-})
-
-connection.onReferences(async ({ textDocument, position }) => {
+connection.onReferences ({ textDocument, position }) =>
   sourcePath := documentToSourcePath(textDocument)
-  assert(sourcePath)
+  assert sourcePath
   service := await ensureServiceForSourcePath(sourcePath)
   // TODO: same source mapping as onDefinition I think...
 
   let references
 
   await updating(textDocument)
-  if (sourcePath.match(tsSuffix)) { // non-transpiled
+  if sourcePath.match tsSuffix // non-transpiled
     document := documents.get(textDocument.uri)
-    assert(document)
+    assert document
     p := document.offsetAt(position)
     references = service.getReferencesAtPosition(sourcePath, p)
-  } else {
+  else
     // need to sourcemap the line/columns
     meta := service.host.getMeta(sourcePath)
     return unless meta
@@ -793,15 +714,14 @@ connection.onReferences(async ({ textDocument, position }) => {
     p := transpiledDoc.offsetAt(position)
     transpiledPath := documentToSourcePath(transpiledDoc)
     references = service.getReferencesAtPosition(transpiledPath, p)
-  }
 
   return unless references
 
   program := service.getProgram()
-  assert(program)
+  assert program
 
   refs := references as readonly ts.ReferenceEntry[]
-  return refs.map((reference) => {
+  refs.map((reference) =>
     { fileName, textSpan } .= reference
     // source file as it is known to TSServer
     sourceFile := program.getSourceFile(fileName)
@@ -821,51 +741,43 @@ connection.onReferences(async ({ textDocument, position }) => {
 
     return {
       uri: URI.file(rawSourceName).toString()
-      range: {
-        start
-        end
-      }
+      range: { start, end }
     }
-  }).filter((d): d is Location => !!d)
-})
+  ).filter((d): d is Location => !!d)
 
-connection.onDocumentSymbol(async ({ textDocument }) => {
+connection.onDocumentSymbol ({ textDocument }) =>
   sourcePath := documentToSourcePath(textDocument)
-  assert(sourcePath)
+  assert sourcePath
 
   service := await ensureServiceForSourcePath(sourcePath)
 
   let document, navTree, sourcemapLines
 
   await updating(textDocument)
-  if (sourcePath.match(tsSuffix)) { // non-transpiled
+  if sourcePath.match tsSuffix // non-transpiled
     document = documents.get(textDocument.uri)
-    assert(document)
+    assert document
     navTree = service.getNavigationTree(sourcePath)
-  } else {
+  else
     // Transpiled
     meta := service.host.getMeta(sourcePath)
-    assert(meta)
+    assert meta
     { transpiledDoc } := meta
-    assert(transpiledDoc)
+    assert transpiledDoc
 
     document = transpiledDoc
     transpiledPath := documentToSourcePath(transpiledDoc)
     navTree = service.getNavigationTree(transpiledPath)
     sourcemapLines = meta.sourcemapLines
-  }
 
   items: DocumentSymbol[] := []
 
   // The root represents the file. Ignore this when showing in the UI
-  if (navTree.childItems) {
-    for (const child of navTree.childItems) {
+  if navTree.childItems
+    for child of navTree.childItems
       convertNavTree(child, items, document, sourcemapLines)
-    }
-  }
 
   return items
-})
 
 function getRenameSourceDetails(
   service: ResolvedService
@@ -898,59 +810,49 @@ function getRenameSourceDetails(
       offset: document.offsetAt(mappedPosition)
     }
 
-function remapLocationRename(service: ResolvedService, sourceFile: ts.SourceFile, loc: ts.RenameLocation) {
+function remapLocationRename(service: ResolvedService, sourceFile: ts.SourceFile, loc: ts.RenameLocation)
   start := sourceFile.getLineAndCharacterOfPosition(loc.textSpan.start)
   end := sourceFile.getLineAndCharacterOfPosition(loc.textSpan.start + loc.textSpan.length)
 
   sourceFileName := service.getSourceFileName(loc.fileName)
   meta := service.host.getMeta(sourceFileName)
 
-  if (meta?.sourcemapLines) {
+  if meta?.sourcemapLines
     return {
       start: remapPosition(start, meta.sourcemapLines)
       end: remapPosition(end, meta.sourcemapLines)
       uri: pathToFileURL(sourceFileName).toString()
     }
-  }
 
-  return {
-    start
-    end
-    uri: pathToFileURL(loc.fileName).toString()
-  }
-}
+  return { start, end, uri: pathToFileURL(loc.fileName).toString() }
 
 function createRenameLocationChanges(
   service: ResolvedService
   program: ts.Program
   locations: readonly ts.RenameLocation[]
   newName: string
-) {
+)
   changes: Record<string, TextEdit[]> := {}
 
-  for (const loc of locations) {
+  for loc of locations
     sourceFile := program.getSourceFile(loc.fileName)
-    if (!sourceFile) continue
+    continue unless sourceFile
 
     { start, end, uri } := remapLocationRename(service, sourceFile, loc)
-    edit: TextEdit := {
+    edit: TextEdit :=
       range: { start, end }
       newText: newName
-    }
 
-    if (changes[uri]) {
+    if changes[uri]
       changes[uri].push(edit)
-    } else {
+    else
       changes[uri] = [edit]
-    }
-  }
 
   return changes
-}
 
 connection.onRenameRequest ({ textDocument, position, newName }) =>
   sourcePath := documentToSourcePath(textDocument)
-  assert(sourcePath)
+  assert sourcePath
 
   service := await ensureServiceForSourcePath(sourcePath)
 
@@ -968,99 +870,86 @@ connection.onRenameRequest ({ textDocument, position, newName }) =>
   changes: createRenameLocationChanges(service, program, locations, newName)
 
 // TODO
-documents.onDidClose(({ document }) => {
-  logger.log("close " + document.uri)
-})
+documents.onDidClose ({ document }) =>
+  logger.log "close " + document.uri
 
-documents.onDidOpen(async ({ document }) => {
-  logger.log("open " + document.uri)
-})
+documents.onDidOpen ({ document }) =>
+  logger.log "open " + document.uri
 
 // Buffer up changes to documents so we don't stack transpilations and become unresponsive
 changeQueue .= new Set<TextDocument>()
 let executeTimeout: Promise<void> | undefined
 documentUpdateStatus := new Map<string, WithResolvers<boolean>>()
-async function executeQueue() {
+function executeQueue(): Promise<void>
   // Cancel any in-flight project-wide diagnostics update to avoid conflicts
-  if (runningDiagnosticsUpdate) {
+  if runningDiagnosticsUpdate
     runningDiagnosticsUpdate.isCanceled = true
-  }
   changed := Array.from(changeQueue)
   changeQueue = new Set()
-  if (changed.length === 0) {
+  if changed# is 0
     executeTimeout = undefined
     return
-  }
-  logger.log(`executeQueue: Processing batch of ${changed.length} documents.`)
+  logger.log `executeQueue: Processing batch of ${changed#} documents.`
 
   docsByProject := new Map<string, { service: ResolvedService; docs: TextDocument[] }>()
 
   // Group documents by their project path to ensure atomic updates per project.
-  for (const doc of changed) {
+  for doc of changed
     sourcePath := documentToSourcePath(doc)
     projPath := getProjectPathFromSourcePath(sourcePath)
-    if (!docsByProject.has(projPath)) {
+    unless docsByProject.has(projPath)
       service := await ensureServiceForSourcePath(sourcePath)
-      if (service) docsByProject.set(projPath, { service, docs: [] })
-    }
+      if service then docsByProject.set(projPath, { service, docs: [] })
     docsByProject.get(projPath)?.docs.push(doc)
-  }
 
-  for (const { service, docs } of docsByProject.values()) {
+  for { service, docs } of docsByProject.values()
     // Phase 1: Stage all changes within this project.
-    docs.forEach((doc) => service.host.addOrUpdateDocument(doc))
+    docs.forEach (doc) => service.host.addOrUpdateDocument(doc)
 
     // Phase 2: Analyze all staged documents within this project.
-    for (const doc of docs) {
+    for doc of docs
       await updateDiagnosticsForDoc(doc, service)
       documentUpdateStatus.get(doc.uri)?.resolve(true)
-      Promise.resolve().then(() => documentUpdateStatus.delete(doc.uri))
-    }
-  }
+      Promise.resolve().then () => documentUpdateStatus.delete(doc.uri)
   executeTimeout = undefined
-  if (changeQueue.size) {
+  if changeQueue.size
     scheduleExecuteQueue()
-  } else {
+  else
     scheduleUpdateDiagnostics(new Set(changed))
-  }
-}
-async function scheduleExecuteQueue() {
+
+function scheduleExecuteQueue()
   // Schedule executeQueue() if there isn't one already running or scheduled
   return if executeTimeout
   return unless changeQueue.size
   await (executeTimeout = setTimeout(diagnosticsDelay))
   await executeQueue()
-}
 
 // The content of a text document has changed. This event is emitted
 // when the text document first opened or when its content has changed.
-documents.onDidChangeContent(async ({ document }) => {
-  logger.log("onDidChangeContent " + document.uri)
+documents.onDidChangeContent ({ document }) =>
+  logger.log "onDidChangeContent " + document.uri
   documentUpdateStatus.set(document.uri, withResolvers())
   changeQueue.add(document)
   scheduleExecuteQueue()
-})
 
-async function updateDiagnosticsForDoc(document: TextDocument, service?: ResolvedService) {
+function updateDiagnosticsForDoc(document: TextDocument, service?: ResolvedService)
   logger.log("Updating diagnostics for doc: " + document.uri)
   sourcePath := documentToSourcePath(document)
-  assert(sourcePath)
+  assert sourcePath
 
-  if (!service) {
+  unless service
     service = await ensureServiceForSourcePath(sourcePath)
-  }
 
   // When called from executeQueue, document is already staged.
   // When called from updateProjectDiagnostics, we need to stage it.
-  if (arguments.length === 1) {
+  if arguments.length is 1
     service.host.addOrUpdateDocument(document)
-  }
 
   getTypeScriptDiagnostics := (
     filePath: string
     diagDocument: TextDocument
     sourcemapLines?: SourcemapLines
-  ): Diagnostic[] => {
+  ): Diagnostic[] =>
     diagnostics: Diagnostic[] := []
     diagnosticMethods := [
       "getSyntacticDiagnostics"
@@ -1068,74 +957,63 @@ async function updateDiagnosticsForDoc(document: TextDocument, service?: Resolve
       "getSuggestionDiagnostics"
     ] as const
 
-    for (const method of diagnosticMethods) {
-      try {
+    for method of diagnosticMethods
+      try
         fn := service[method].bind(service)
         tsDiagnostics := logTiming(logger, `service.${method}`, fn)(filePath)
         diagnostics.push(...tsDiagnostics.map((diagnostic) =>
           convertDiagnostic(diagnostic, diagDocument, sourcemapLines)))
-      } catch (error) {
-        errorMessage := error instanceof Error
-          ? `${error.name}: ${error.message}`
-          : String(error)
+      catch error
+        errorMessage := if error instanceof Error then `${error.name}: ${error.message}` else String(error)
         message := `TypeScript ${method} failed for ${filePath}: ${errorMessage}`
-        logger.error(message)
-        if (error instanceof Error && error.stack) {
-          logger.error(error.stack)
-        }
-        diagnostics.push({
+        logger.error message
+        if error instanceof Error and error.stack
+          logger.error error.stack
+        diagnostics.push {
           severity: DiagnosticSeverity.Error
-          range: {
+          range:
             start: { line: 0, character: 0 }
             end: { line: 0, character: 1 }
-          }
           message
           source: 'civet'
-        })
+        }
         break
-      }
-    }
 
     return diagnostics
-  }
 
   // Non-transpiled
-  if (sourcePath.match(tsSuffix)) {
+  if sourcePath.match tsSuffix
     diagnostics := getTypeScriptDiagnostics(sourcePath, document)
 
-    return connection.sendDiagnostics({
+    return connection.sendDiagnostics {
       uri: document.uri
       diagnostics
-    })
-  }
+    }
 
   // Transpiled file
   meta := service.host.getMeta(sourcePath)
-  if (!meta) {
-    logger.log("no meta for " + sourcePath)
-    return
-  }
+  return logger.log `no meta for ${sourcePath}` unless meta
+
   { sourcemapLines, transpiledDoc, parseErrors, fatal } := meta
-  if (!transpiledDoc) {
-    logger.log("no transpiledDoc for " + sourcePath)
-    return
-  }
+  return logger.log `no transpiledDoc for ${sourcePath}` unless transpiledDoc
 
   transpiledPath := documentToSourcePath(transpiledDoc)
   diagnostics: Diagnostic[] := []
 
-  if (parseErrors?.length) {
-    diagnostics.push(...parseErrors.map((e: Error & {line?: number, column?: number}) => {
-      let start = { line: 0, character: 0 }, end = { line: 0, character: 10 }
-      let message = e.message
-      if (e.line != null && e.column != null) { // ParseError
+  if parseErrors?#
+    diagnostics.push ...parseErrors.map (e) =>
+      start := { line: 0, character: 0 }, end = { line: 0, character: 10 }
+      message .= e.message
+
+      if e <? ParseError
         // Remove leading filename:line:column from message
         message = message.replace(/^\S+ /, "")
+        line := e.line <? "number" ? e.line : parseInt(e.line, 10)
+        column := e.column <? "number" ? e.column : parseInt(e.column, 10)
         // Convert 1-based to 0-based
-        start.line = end.line = e.line - 1
-        start.character = e.column - 1
-        end.character = e.column + 3
-      }
+        start.line = end.line = line - 1
+        start.character = column - 1
+        end.character = column + 3
 
       return {
         severity: DiagnosticSeverity.Error
@@ -1147,29 +1025,26 @@ async function updateDiagnosticsForDoc(document: TextDocument, service?: Resolve
         message
         source: 'civet'
       }
-    }).filter((x) => !!x))
-  }
-  if (!fatal) {
-    diagnostics.push(...getTypeScriptDiagnostics(transpiledPath, transpiledDoc, sourcemapLines))
-  }
 
-  connection.sendDiagnostics({
+  unless fatal
+    diagnostics.push(...getTypeScriptDiagnostics(transpiledPath, transpiledDoc, sourcemapLines))
+
+  connection.sendDiagnostics {
     uri: document.uri
     diagnostics
-  })
+  }
 
   return
-}
 
 // Using a cancellation token we prevent parallel executions of scheduleUpdateDiagnostics
 let runningDiagnosticsUpdate: { isCanceled: boolean } | undefined
 
 // Asynchronously update diagnostics for all the documents
 // in a project, based on the service instance.
-updateProjectDiagnostics := async (
+updateProjectDiagnostics := (
   status: { isCanceled: boolean }
   service: ResolvedService
-) => {
+) =>
   program := service.getProgram()
   return unless program
 
@@ -1177,7 +1052,7 @@ updateProjectDiagnostics := async (
   await setTimeout(diagnosticsPropagationDelay)
 
   projectFiles := program.getSourceFiles()
-  for (const sourceFile of projectFiles) {
+  for sourceFile of projectFiles
     return if status.isCanceled
 
     // We only need to send diagnostics for files the user has open
@@ -1185,43 +1060,37 @@ updateProjectDiagnostics := async (
     rawFileName := service.getSourceFileName(sourceFile.fileName)
     docUri := URI.file(rawFileName).toString()
     doc := documents.get(docUri)
-    if (doc) {
+    if doc
       await updateDiagnosticsForDoc(doc, service)
-    }
-  }
-}
 
 // Schedule an update of diagnostics for all projects affected by recent changes.
-function scheduleUpdateDiagnostics(changedDocs: Set<TextDocument>) {
-  if (runningDiagnosticsUpdate) {
+function scheduleUpdateDiagnostics(changedDocs: Set<TextDocument>)
+  if runningDiagnosticsUpdate
     runningDiagnosticsUpdate.isCanceled = true
-  }
+
   status := { isCanceled: false }
   runningDiagnosticsUpdate = status
 
   // Deduplicate by project path to avoid redundant updates.
   servicesToUpdate := new Set<ResolvedService>()
-  for (const doc of changedDocs) {
+  for doc of changedDocs
     sourcePath := documentToSourcePath(doc)
     projPath := getProjectPathFromSourcePath(sourcePath)
     service := projectPathToServiceMap.get(projPath)
-    if (service) {
+    if service
       servicesToUpdate.add(service)
-    }
-  }
 
   // Trigger updates for each affected project.
   for service of servicesToUpdate
     // Don't await; let updates for different projects run in parallel.
     updateProjectDiagnostics(status, service)
-}
 
 connection.onDidChangeWatchedFiles (_change) =>
   // Monitored files have change in VSCode
-  logger.log('We received an file change event')
+  logger.log('We received a file change event')
 
 // Semantic tokens: use TypeScript's semantic classifications, remapped via sourcemap
-connection.onRequest SemanticTokensRequest.type, async (params) =>
+connection.onRequest SemanticTokensRequest.type, (params) =>
   doc := documents.get params.textDocument.uri
   return { data: [] } unless doc
   sourcePath := documentToSourcePath params.textDocument
@@ -1343,13 +1212,15 @@ function getFileExtensionModifier(kindModifiers: Set<string>)
 
   return ''
 
-function convertCompletions(completions: ts.CompletionInfo, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: SourcemapLines, showFileExtensions?: boolean): CompletionItem[] {
+function convertCompletions(completions: ts.CompletionInfo?, document: TextDocument, sourcePath: string, position: Position, sourcemapLines?: SourcemapLines, showFileExtensions?: boolean): CompletionItem[]
+  return [] unless completions
+
   // Partial simulation of MyCompletionItem in
   // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
   { entries } := completions
 
   items: CompletionItem[] := []
-  for (const entry of entries) {
+  for entry of entries
     kind := getCompletionItemKind(entry.kind)
 
     // https://github.com/typescript-language-server/typescript-language-server/blob/e91bd52a47c05ffd946e0abd27f242eb631b7604/src/completion.ts#L106
@@ -1363,26 +1234,21 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
       }
     }
 
-    if (entry.sourceDisplay) {
+    if entry.sourceDisplay
       item.labelDetails = { description: Previewer.plain(entry.sourceDisplay) }
-    } else if (entry.source && entry.hasAction) {
-      item.labelDetails = { description: rootDir ? path.relative(rootDir, entry.source) : entry.source }
-    }
-    if (entry.labelDetails) {
+    else if entry.source and entry.hasAction
+      item.labelDetails = { description: if rootDir then path.relative(rootDir, entry.source) else entry.source }
+    if entry.labelDetails
       item.labelDetails = { ...item.labelDetails, ...entry.labelDetails }
-    }
 
-    if (entry.isRecommended) {
+    if entry.isRecommended
       item.preselect = entry.isRecommended
-    }
-    item.insertText = entry.insertText || item.label
-    if (entry.filterText) {
+    item.insertText = entry.insertText or item.label
+    if entry.filterText
       item.filterText = entry.filterText
-    }
-    if (entry.sortText) {
+    if entry.sortText
       item.sortText = entry.sortText
-    }
-    if (entry.replacementSpan) {
+    if entry.replacementSpan
       { start, length } := entry.replacementSpan
       begin .= document.positionAt(start)
       end .= document.positionAt(start + length)
@@ -1393,29 +1259,21 @@ function convertCompletions(completions: ts.CompletionInfo, document: TextDocume
         range: { start: begin, end }
         newText: entry.insertText ?? entry.name ?? ''
       }
-    }
-    if (entry.kindModifiers) {
+    if entry.kindModifiers
       kindModifiers := parseKindModifier(entry.kindModifiers)
-      if (kind === CompletionItemKind.File && showFileExtensions) {
+      if kind is CompletionItemKind.File and showFileExtensions
         extension := getFileExtensionModifier(kindModifiers)
-        if (extension && !entry.name.toLowerCase().endsWith(extension)) {
+        if extension and !entry.name.toLowerCase().endsWith(extension)
           item.label += extension
           item.insertText += extension
-        }
-      }
-      if (kindModifiers.has(ScriptElementKindModifier.optionalModifier)) {
+      if kindModifiers.has(ScriptElementKindModifier.optionalModifier)
         item.label += '?'
-      }
-      if (kindModifiers.has(ScriptElementKindModifier.deprecatedModifier)) {
+      if kindModifiers.has(ScriptElementKindModifier.deprecatedModifier)
         item.tags = [CompletionItemTag.Deprecated]
-      }
-    }
 
-    items.push(item)
-  }
+    items.push item
 
   return items
-}
 
 /*
   References:
