@@ -4,8 +4,36 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
-## Unreleased ([diff](https://github.com/DanielXMoore/Civet/compare/v0.11.6...???))
+## 0.11.7 (2026-04-16, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.6...v0.11.7), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.7))
 * Add full repo history to publish script checkout for changelog verification step [[#1930](https://github.com/DanielXMoore/Civet/pull/1930)]
+* Build and test use sourcemaps and default to up to 4 threads [[#1931](https://github.com/DanielXMoore/Civet/pull/1931)]
+* Increase CLI and unplugin test coverage [[#1921](https://github.com/DanielXMoore/Civet/pull/1921)]
+* Fix ternary with trailing ? and indented values [[#1934](https://github.com/DanielXMoore/Civet/pull/1934)]
+* Dev: Improve changelog handling of squash commits [[#1932](https://github.com/DanielXMoore/Civet/pull/1932)]
+* Convert LSP source and build to use Civet [[#1935](https://github.com/DanielXMoore/Civet/pull/1935)]
+* LSP E2E test coverage [[#1937](https://github.com/DanielXMoore/Civet/pull/1937)]
+* LSP fixes for path casing (e.g. Windows) and ts documents [[#1939](https://github.com/DanielXMoore/Civet/pull/1939)]
+* CI tests on Windows too [[#1940](https://github.com/DanielXMoore/Civet/pull/1940)]
+* feat: object shorthand optional properties [[#1938](https://github.com/DanielXMoore/Civet/pull/1938)]
+* Pin parameters `^name` gain `typeof` type inference  [[#1942](https://github.com/DanielXMoore/Civet/pull/1942)]
+* Rename LSP test script names [[#1941](https://github.com/DanielXMoore/Civet/pull/1941)]
+* Allow trailing member access after pipeline expressions [[#1943](https://github.com/DanielXMoore/Civet/pull/1943)]
+* Bump vite from 8.0.3 to 8.0.5 [[#1944](https://github.com/DanielXMoore/Civet/pull/1944)]
+* Dev: Fix eslint typecheck [[#1947](https://github.com/DanielXMoore/Civet/pull/1947)]
+* Dev: Update Next.js and Vite dependencies [[#1948](https://github.com/DanielXMoore/Civet/pull/1948)]
+* Bump vite from 5.4.21 to 8.0.5 [[#1946](https://github.com/DanielXMoore/Civet/pull/1946)]
+* eslint internal tweak to use new extension rewriting [[#1952](https://github.com/DanielXMoore/Civet/pull/1952)]
+* Pin properties and pin patterns in arrays use `typeof` typing [[#1951](https://github.com/DanielXMoore/Civet/pull/1951)]
+* Add esCompat flag with esArrowFunction option [[#1949](https://github.com/DanielXMoore/Civet/pull/1949)]
+* Extract LSP server into standalone @danielx/civet-lsp-server package [[#1950](https://github.com/DanielXMoore/Civet/pull/1950)]
+* `esCompat` turns off implicit returns, no longer affects `->` [[#1954](https://github.com/DanielXMoore/Civet/pull/1954)]
+* Feature: Zed Extension [[#1953](https://github.com/DanielXMoore/Civet/pull/1953)]
+* Fix civet-language-server package name, nvim tree-sitter config [[#1955](https://github.com/DanielXMoore/Civet/pull/1955)]
+* LSP: Auto import when selecting completions [[#1956](https://github.com/DanielXMoore/Civet/pull/1956)]
+* Add semantic token provider to Civet LSP [[#1881](https://github.com/DanielXMoore/Civet/pull/1881)]
+* LSP test coverage [[#1957](https://github.com/DanielXMoore/Civet/pull/1957)]
+* Code style and typing fixes [[#1958](https://github.com/DanielXMoore/Civet/pull/1958)]
+* Dev: Unify compiler and LSP code coverage [[#1960](https://github.com/DanielXMoore/Civet/pull/1960)]
 
 ## 0.11.6 (2026-04-06, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.5...v0.11.6), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.6))
 * Allow class fields with the same name as modifiers [[#1861](https://github.com/DanielXMoore/Civet/pull/1861)]
