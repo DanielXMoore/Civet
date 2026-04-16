@@ -6,9 +6,9 @@
 # Run from lsp/vscode: bash build/autorelease.sh
 set -euo pipefail
 
-VERSION=$(node -p "require('./package.json').version")
-PUBLISHER=$(node -p "require('./package.json').publisher")
-NAME=$(node -p "require('./package.json').name")
+VERSION=$(jq -r .version package.json)
+PUBLISHER=$(jq -r .publisher package.json)
+NAME=$(jq -r .name package.json)
 QUALIFIED="${PUBLISHER}.${NAME}"
 
 echo "Checking $QUALIFIED@$VERSION"
@@ -23,7 +23,7 @@ fi
 
 # Publish to VS Code Marketplace
 if [ -n "${VSCE_PAT:-}" ]; then
-  PUBLISHED=$(node_modules/.bin/vsce show "$QUALIFIED" --json 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).versions?.[0]?.version" 2>/dev/null || echo "")
+  PUBLISHED=$(node_modules/.bin/vsce show "$QUALIFIED" --json 2>/dev/null | jq -r '.versions[0].version // empty' 2>/dev/null || echo "")
   if [ "$PUBLISHED" = "$VERSION" ]; then
     echo "Skip: $QUALIFIED@$VERSION is already on VS Code Marketplace."
   else
@@ -36,7 +36,7 @@ fi
 
 # Publish to Open VSX Registry
 if [ -n "${OVSX_PAT:-}" ]; then
-  PUBLISHED=$(node_modules/.bin/ovsx get "$QUALIFIED" --metadata 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version" 2>/dev/null || echo "")
+  PUBLISHED=$(node_modules/.bin/ovsx get "$QUALIFIED" --metadata 2>/dev/null | jq -r '.version // empty' 2>/dev/null || echo "")
   if [ "$PUBLISHED" = "$VERSION" ]; then
     echo "Skip: $QUALIFIED@$VERSION is already on Open VSX."
   else
