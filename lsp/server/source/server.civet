@@ -16,6 +16,7 @@
   Location
   DiagnosticSeverity
   TextEdit
+  SemanticTokensRequest
 } from vscode-languageserver/node
 
 {
@@ -39,6 +40,32 @@ ts, {
 } from typescript
 { URI } from vscode-uri
 { setTimeout } from timers/promises
+// TS 2020 semantic classification token types (order must match TypeScript's internal TokenType enum)
+// See: https://github.com/microsoft/TypeScript/blob/main/src/services/classifier2020.ts
+semanticTokenTypes := [
+  "class"          // 0
+  "enum"           // 1
+  "interface"      // 2
+  "namespace"      // 3
+  "typeParameter"  // 4
+  "type"           // 5
+  "parameter"      // 6
+  "variable"       // 7
+  "enumMember"     // 8
+  "property"       // 9
+  "function"       // 10
+  "member"         // 11
+] as const
+
+// TS 2020 semantic classification token modifiers (order must match TypeScript's internal TokenModifier enum)
+semanticTokenModifiers := [
+  "declaration"    // 0
+  "static"         // 1
+  "async"          // 2
+  "readonly"       // 3
+  "defaultLibrary" // 4
+  "local"          // 5
+] as const
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -150,6 +177,11 @@ connection.onInitialize async (params: InitializeParams) =>
       hoverProvider: true
       referencesProvider: true
       renameProvider: true
+      semanticTokensProvider:
+        legend:
+          tokenTypes: semanticTokenTypes as string[]
+          tokenModifiers: semanticTokenModifiers as string[]
+        full: true
 
     }
   }
@@ -192,7 +224,6 @@ connection.onHover(async ({ textDocument, position }) => {
   assert(sourcePath)
 
   service := await ensureServiceForSourcePath(sourcePath)
-  return unless service
 
   doc := documents.get(textDocument.uri)
   assert(doc)
@@ -461,7 +492,6 @@ connection.onCompletion(async ({ textDocument, position, context }) => {
   sourcePath := documentToSourcePath(textDocument)
   assert(sourcePath)
   service := await ensureServiceForSourcePath(sourcePath)
-  return unless service
 
   logger.log("completion " + sourcePath + " " + (position.line+1) + ":" + position.character)
 
@@ -674,7 +704,6 @@ connection.onDefinition(async ({ textDocument, position }) => {
   sourcePath := documentToSourcePath(textDocument)
   assert(sourcePath)
   service := await ensureServiceForSourcePath(sourcePath)
-  return unless service
 
   let definitions
 
@@ -741,7 +770,6 @@ connection.onReferences(async ({ textDocument, position }) => {
   assert(sourcePath)
   service := await ensureServiceForSourcePath(sourcePath)
   // TODO: same source mapping as onDefinition I think...
-  return unless service
 
   let references
 
@@ -806,7 +834,6 @@ connection.onDocumentSymbol(async ({ textDocument }) => {
   assert(sourcePath)
 
   service := await ensureServiceForSourcePath(sourcePath)
-  return unless service
 
   let document, navTree, sourcemapLines
 
@@ -926,7 +953,6 @@ connection.onRenameRequest ({ textDocument, position, newName }) =>
   assert(sourcePath)
 
   service := await ensureServiceForSourcePath(sourcePath)
-  return unless service
 
   await updating(textDocument)
 
@@ -1023,7 +1049,6 @@ async function updateDiagnosticsForDoc(document: TextDocument, service?: Resolve
   if (!service) {
     service = await ensureServiceForSourcePath(sourcePath)
   }
-  return unless service
 
   // When called from executeQueue, document is already staged.
   // When called from updateProjectDiagnostics, we need to stage it.
@@ -1194,6 +1219,95 @@ function scheduleUpdateDiagnostics(changedDocs: Set<TextDocument>) {
 connection.onDidChangeWatchedFiles (_change) =>
   // Monitored files have change in VSCode
   logger.log('We received an file change event')
+
+// Semantic tokens: use TypeScript's semantic classifications, remapped via sourcemap
+connection.onRequest SemanticTokensRequest.type, async (params) =>
+  doc := documents.get params.textDocument.uri
+  return { data: [] } unless doc
+  sourcePath := documentToSourcePath params.textDocument
+
+  await updating(params.textDocument)
+  service := await ensureServiceForSourcePath(sourcePath)
+
+  // Determine transpiled file path and sourcemap
+  let transpiledPath: string
+  let sourcemapLines: SourcemapLines | undefined
+  let transpiledDoc: TextDocument | undefined
+  if sourcePath.match(tsSuffix)
+    // Non-transpiled TS/JS file
+    transpiledPath = sourcePath
+  else
+    meta := service.host.getMeta(sourcePath)
+    return { data: [] } unless meta?.transpiledDoc
+    transpiledDoc = meta.transpiledDoc
+    sourcemapLines = meta.sourcemapLines
+    transpiledPath = documentToSourcePath(transpiledDoc)
+
+  try
+    tsDoc := transpiledDoc ?? doc
+    sourceText := tsDoc.getText()
+    span: ts.TextSpan := { start: 0, length: sourceText.length }
+    result := service.getEncodedSemanticClassifications(transpiledPath, span, ts.SemanticClassificationFormat.TwentyTwenty)
+
+    // TS 2020 spans: [start, length, encodedType, start, length, encodedType, ...]
+    // encodedType: (tokenType + 1) << 8 | modifierSet
+    // First collect remapped tokens, then sort by position before delta-encoding
+    civetText := if sourcemapLines then doc.getText() else undefined
+    remapped: { line: number, character: number, length: number, tokenType: number, tokenModifiers: number }[] := []
+    for i of [0...result.spans.length] by 3
+      tsStart := result.spans[i]
+      len := result.spans[i + 1]
+      encoded := result.spans[i + 2]
+
+      tokenType := ((encoded >> 8) - 1)
+      tokenModifiers := (encoded & 0xFF)
+      continue if tokenType < 0 or tokenType >= semanticTokenTypes.length
+
+      // Map position from transpiled TS back to Civet source
+      tsPos := tsDoc.positionAt(tsStart)
+      pos := remapPosition(tsPos, sourcemapLines)
+      // Skip tokens with invalid remapped positions
+      continue if pos.line < 0 or pos.character < 0
+
+      // Compute length from Civet source to handle tokens that change size
+      // (e.g. @name -> this.name). Use source text at remapped position.
+      length .= len
+      if civetText
+        offset := doc.offsetAt(pos)
+        continue if offset >= civetText.length
+        // Measure identifier length at the remapped position, clamped to line end
+        lineEnd := civetText.indexOf('\n', offset)
+        remaining := (if lineEnd < 0 then civetText.length else lineEnd) - offset
+        match := civetText.slice(offset, offset + remaining).match(/^[@#]?\w+/)
+        length = if match then match[0].length else len
+        continue if length <= 0 or length > remaining
+
+      remapped.push { line: pos.line, character: pos.character, length, tokenType, tokenModifiers }
+
+    // Sort by position (required for valid delta encoding)
+    remapped.sort (a, b) => a.line - b.line or a.character - b.character
+
+    // Delta-encode, skipping overlapping/zero-length tokens
+    data: number[] := []
+    prevLine .= 0
+    prevChar .= 0
+    prevEnd .= 0  // end column of previous token on current line
+    for token of remapped
+      continue unless token.length > 0
+      if token.line is not prevLine
+        prevEnd = 0
+      else if token.character < prevEnd
+        continue
+      deltaLine := token.line - prevLine
+      deltaChar := if deltaLine is 0 then token.character - prevChar else token.character
+      data.push deltaLine, deltaChar, token.length, token.tokenType, token.tokenModifiers
+      prevLine = token.line
+      prevChar = token.character
+      prevEnd = token.character + token.length
+    { data }
+  catch e
+    logger.error("Semantic tokens error: " + e)
+    { data: [] }
 
 // Make the text document manager listen on the connection
 // for open, change and close text document events

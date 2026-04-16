@@ -1,0 +1,144 @@
+* as vscode from vscode
+{ commands, Position, type SemanticTokens, type SemanticTokensLegend } from vscode
+assert from assert
+{ getDocUri, activate, poll } from ./helper.civet
+
+suite 'Semantic Tokens', =>
+  test 'Returns semantic tokens for a .civet file', async =>
+    docUri := getDocUri('valid.civet')
+    await activate(docUri)
+
+    tokens := await poll
+      () => commands.executeCommand('vscode.provideDocumentSemanticTokens', docUri) as Promise<SemanticTokens | undefined>
+      (v) => v?.data?.length > 0
+
+    assert tokens, 'Expected semantic tokens result'
+    assert tokens.data.length > 0, 'Expected non-empty token data'
+    // LSP semantic tokens are delta-encoded in groups of 5:
+    // [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]
+    assert.strictEqual tokens.data.length % 5, 0, 'Token data length must be a multiple of 5'
+
+  test 'Returns semantic tokens for a .ts file', async =>
+    docUri := getDocUri('valid.ts')
+    await activate(docUri)
+
+    tokens := await poll
+      () => commands.executeCommand('vscode.provideDocumentSemanticTokens', docUri) as Promise<SemanticTokens | undefined>
+      (v) => v?.data?.length > 0
+
+    assert tokens, 'Expected semantic tokens result for .ts file'
+    assert tokens.data.length > 0, 'Expected non-empty token data for .ts file'
+    assert.strictEqual tokens.data.length % 5, 0, 'Token data length must be a multiple of 5'
+
+  test 'Identifies function declarations', async =>
+    docUri := getDocUri('valid.civet')
+    await activate(docUri)
+
+    legend := await commands.executeCommand('vscode.provideDocumentSemanticTokensLegend', docUri) as SemanticTokensLegend | undefined
+    tokens := await poll
+      () => commands.executeCommand('vscode.provideDocumentSemanticTokens', docUri) as Promise<SemanticTokens | undefined>
+      (v) => v?.data?.length > 0
+
+    assert legend, 'Expected semantic tokens legend'
+    assert tokens, 'Expected semantic tokens'
+
+    functionIndex := legend.tokenTypes.indexOf('function')
+    assert functionIndex >= 0, 'Expected "function" in token types legend'
+
+    // Decode delta-encoded tokens and check for function type
+    hasFunctionToken .= false
+    for i of [0...tokens.data.length] by 5
+      tokenType := tokens.data[i + 3]
+      if tokenType is functionIndex
+        hasFunctionToken = true
+        break
+    assert hasFunctionToken, 'Expected at least one function token'
+
+  test 'Identifies variable declarations', async =>
+    docUri := getDocUri('valid.civet')
+    await activate(docUri)
+
+    legend := await commands.executeCommand('vscode.provideDocumentSemanticTokensLegend', docUri) as SemanticTokensLegend | undefined
+    tokens := await poll
+      () => commands.executeCommand('vscode.provideDocumentSemanticTokens', docUri) as Promise<SemanticTokens | undefined>
+      (v) => v?.data?.length > 0
+
+    assert legend, 'Expected semantic tokens legend'
+    assert tokens, 'Expected semantic tokens'
+
+    variableIndex := legend.tokenTypes.indexOf('variable')
+    assert variableIndex >= 0, 'Expected "variable" in token types legend'
+
+    hasVariableToken .= false
+    for i of [0...tokens.data.length] by 5
+      tokenType := tokens.data[i + 3]
+      if tokenType is variableIndex
+        hasVariableToken = true
+        break
+    assert hasVariableToken, 'Expected at least one variable token'
+
+  test 'Identifies parameter tokens', async =>
+    docUri := getDocUri('valid.civet')
+    await activate(docUri)
+
+    legend := await commands.executeCommand('vscode.provideDocumentSemanticTokensLegend', docUri) as SemanticTokensLegend | undefined
+    tokens := await poll
+      () => commands.executeCommand('vscode.provideDocumentSemanticTokens', docUri) as Promise<SemanticTokens | undefined>
+      (v) => v?.data?.length > 0
+
+    assert legend, 'Expected semantic tokens legend'
+    assert tokens, 'Expected semantic tokens'
+
+    parameterIndex := legend.tokenTypes.indexOf('parameter')
+    assert parameterIndex >= 0, 'Expected "parameter" in token types legend'
+
+    // valid.civet has function greet(name: string) — 'name' should be a parameter
+    hasParameterToken .= false
+    for i of [0...tokens.data.length] by 5
+      tokenType := tokens.data[i + 3]
+      if tokenType is parameterIndex
+        hasParameterToken = true
+        break
+    assert hasParameterToken, 'Expected at least one parameter token'
+
+  test 'Token lengths match Civet source, not transpiled output', async =>
+    // shorthand.civet uses @name which transpiles to this.name
+    // Token length should be 5 (@name) not 9 (this.name)
+    docUri := getDocUri('shorthand.civet')
+    await activate(docUri)
+
+    sourceDoc := await vscode.workspace.openTextDocument(docUri)
+    sourceText := sourceDoc.getText()
+
+    legend := await commands.executeCommand('vscode.provideDocumentSemanticTokensLegend', docUri) as SemanticTokensLegend | undefined
+    tokens := await poll
+      () => commands.executeCommand('vscode.provideDocumentSemanticTokens', docUri) as Promise<SemanticTokens | undefined>
+      (v) => v?.data?.length > 0
+
+    assert legend, 'Expected semantic tokens legend'
+    assert tokens, 'Expected semantic tokens'
+
+    // Decode delta-encoded tokens into absolute positions
+    decoded: { line: number, character: number, length: number, tokenType: string }[] := []
+    line .= 0
+    char .= 0
+    for i of [0...tokens.data.length] by 5
+      deltaLine := tokens.data[i]
+      deltaChar := tokens.data[i + 1]
+      length := tokens.data[i + 2]
+      typeIndex := tokens.data[i + 3]
+      if deltaLine > 0
+        line += deltaLine
+        char = deltaChar
+      else
+        char += deltaChar
+      decoded.push { line, character: char, length, tokenType: legend.tokenTypes[typeIndex] }
+
+    // Find tokens whose length exceeds the remaining text on that line
+    lines := sourceText.split('\n')
+    for token of decoded
+      continue unless token.line < lines.length
+      lineText := lines[token.line]
+      remaining := lineText.length - token.character
+      assert token.length <= remaining,
+        `Token at ${token.line}:${token.character} (type: ${token.tokenType}) has length ${token.length} but only ${remaining} chars remain on line: "${lineText}"`

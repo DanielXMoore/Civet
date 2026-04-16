@@ -18,6 +18,20 @@ The extension requires `civet-lsp` to be on your PATH:
 npm install -g @danielx/civet-language-server
 ```
 
+To enable semantic token highlighting (context-aware colors for variables, functions, types, etc.), add to your Zed settings:
+
+```json
+{
+  "languages": {
+    "Civet": {
+      "semantic_tokens": "combined"
+    }
+  }
+}
+```
+
+`"combined"` overlays LSP semantic tokens on top of tree-sitter highlighting.
+
 ## Neovim
 
 Neovim 0.10+ supports LSP natively. Add this to your `init.lua`:
