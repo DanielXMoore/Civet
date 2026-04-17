@@ -220,20 +220,6 @@ declare module "@danielx/civet" {
   export default Civet;
 }
 
-declare module "@danielx/civet/esbuild-plugin" {
-  import { Plugin } from "esbuild"
-
-  interface Options {
-    filter?: RegExp
-    inlineMap?: boolean
-    js?: boolean
-    next?: unknown
-  }
-
-  const plugin: ((options: Options) => Plugin) & Plugin
-  export default plugin
-}
-
 declare module "@danielx/civet/config" {
   export function findInDir(dirPath: string): Promise<string | undefined>
   export function findConfig(path: string): Promise<string | null>
