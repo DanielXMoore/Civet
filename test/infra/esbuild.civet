@@ -1,6 +1,6 @@
 esbuildPlugin from "../../source/esbuild-plugin.civet"
 esbuild from "esbuild"
-{ writeFile, mkdir, rm } from "fs/promises"
+{ readFile, writeFile, mkdir, rm } from "fs/promises"
 path from "path"
 { tmpdir } from "os"
 
@@ -132,3 +132,41 @@ describe "esbuild", ->
       output := result.outputFiles[0].text
       // js: true by default, so TypeScript annotations are stripped
       assert !output.includes(": number")
+
+  it "next plugin receives compiled output via tmp file", ->
+    await withTempFile "x := 42\n", ".civet", async (filePath) ->
+      nextCalled .= false
+      nextReceivedSource .= ""
+
+      // Mock next plugin that exercises all stub methods on the fake build object
+      // AND captures the compiled output via onLoad
+      mockNextPlugin: esbuild.Plugin := {
+        name: "mock-next-full"
+        setup(build: any)
+          // Call all the stub methods to cover lines 66-71 in esbuild-plugin.civet
+          build.onEnd()
+          build.onStart()
+          build.resolve()
+          build.onResolve()
+          build.initialOptions()
+          build.esbuild()
+          // Register the real handler to receive compiled output
+          build.onLoad { filter: /\.jsx$/ }, async (args: any) ->
+            nextCalled = true
+            source := (await readFile args.path).toString()
+            nextReceivedSource = source
+            { contents: source, loader: "js" as const }
+      }
+
+      plugin := esbuildPlugin({ next: mockNextPlugin, js: true })
+      result := await esbuild.build {
+        entryPoints: [filePath]
+        bundle: false
+        write: false
+        plugins: [plugin]
+        logLevel: "silent"
+      }
+
+      assert.equal result.errors.length, 0
+      assert nextCalled, "next plugin should have been called"
+      assert nextReceivedSource.includes("42"), "compiled output should be passed to next plugin"

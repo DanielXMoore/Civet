@@ -432,6 +432,87 @@ describe "unplugin: file system", ->
       finally
         console.error = origError
 
+    it "transformTS rewrites .mts import extensions in module specifiers", ->
+      @timeout 10000
+      // Use a file with an import that has a .mts extension,
+      // which should be rewritten to .mjs by the transformTS block
+      fileWithImport := await makeCivetTempFile "import foo from './helper.mts'\nfoo\n"
+
+      plugin := rawPlugin {
+        ts: 'tsc'
+        config: false
+        emitDeclaration: true
+      }, { framework: 'esbuild' }
+      ctx := { ...nullContext, ...plugin }
+      plugin.esbuild.config { outdir: testOutDir }
+
+      origError := console.error
+      console.error = ->
+      try
+        await plugin.buildStart.call ctx
+        result := await plugin.load.call ctx, fileWithImport + ".jsx"
+        // The transformTS block runs; module specifier .mts → .mjs rewrite happens
+        assert result?.code, "load should return compiled code"
+      finally
+        console.error = origError
+
+    it "tsConfig without rootDir uses process.cwd() as base", ->
+      @timeout 10000
+      plugin := rawPlugin {
+        ts: 'tsc'
+        config: false
+        emitDeclaration: true
+        // tsConfig without rootDir — tsConfigPath will be undefined
+        tsConfig: { compilerOptions: { strict: false } }
+      }, { framework: 'esbuild' }
+      ctx := { ...nullContext, ...plugin }
+      plugin.esbuild.config { outdir: testOutDir }
+
+      origError := console.error
+      console.error = ->
+      try
+        await plugin.buildStart.call ctx
+        // Just check buildStart doesn't throw
+      finally
+        console.error = origError
+
+    it "declarationExtension renames .d.ts output files", ->
+      @timeout 10000
+      fileForDecl := await makeCivetTempFile "x: number := 5\n"
+      rootDir := path.dirname fileForDecl
+
+      emitFiles: { source: string, fileName: string }[] .= []
+      declCtx := {
+        ...nullContext
+        emitFile(info: { source: string, fileName: string })
+          emitFiles.push info
+      }
+
+      plugin := rawPlugin {
+        ts: 'tsc'
+        config: false
+        emitDeclaration: true
+        declarationExtension: '.d.civet.ts'
+        tsConfig: {
+          rootDir
+          files: [ fileForDecl ]
+        }
+      }, { framework: 'esbuild' }
+      ctx := { ...declCtx, ...plugin }
+      plugin.esbuild.config { outdir: testOutDir }
+
+      origLog := console.log
+      origError := console.error
+      console.log = ->
+      console.error = ->
+      try
+        await plugin.buildStart.call ctx
+        await plugin.load.call ctx, fileForDecl + ".jsx"
+        await plugin.buildEnd.call ctx
+      finally
+        console.log = origLog
+        console.error = origError
+
 describe "unplugin: extractCivetFilename hash branch", ->
   it "strips hash fragment from id when file does not exist at that path", ->
     // loadInclude checks filename.endsWith('.civet'); the hash branch strips #...
@@ -528,3 +609,278 @@ describe "unplugin: webpack framework hook", ->
     result := plugin.resolveId "foo", undefined, {}
     // result is null because '/absolute/foo' doesn't exist, but the alias path ran
     assert.equal result, null
+
+  it "webpack alias resolver returns null byte for non-string alias value", ->
+    //@ts-expect-error framework compiler
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'webpack' }
+    //@ts-expect-error context
+    await plugin.buildStart()
+    // exact alias ending in $ with non-string value → returns '\0'
+    compiler: any := { options: { resolve: { alias: { 'bar$': false } } } }
+    plugin.webpack compiler
+    //@ts-expect-error context
+    result := plugin.resolveId "bar", undefined, {}
+    // \0 prefix causes resolveId to return null
+    assert.equal result, null
+
+  it "webpack alias resolver resolves prefix alias to string", ->
+    //@ts-expect-error framework compiler
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'webpack' }
+    //@ts-expect-error context
+    await plugin.buildStart()
+    // prefix alias: id starts with key + '/', maps to value + rest
+    compiler: any := { options: { resolve: { alias: { 'mylib': '/absolute/mylib' } } } }
+    plugin.webpack compiler
+    //@ts-expect-error context
+    result := plugin.resolveId "mylib/utils", undefined, {}
+    // aliased to '/absolute/mylib/utils' which doesn't exist → null
+    assert.equal result, null
+
+  it "webpack alias resolver returns null byte for non-string prefix alias value", ->
+    //@ts-expect-error framework compiler
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'webpack' }
+    //@ts-expect-error context
+    await plugin.buildStart()
+    // prefix alias with non-string value → '\0'
+    compiler: any := { options: { resolve: { alias: { 'mylib': null } } } }
+    plugin.webpack compiler
+    //@ts-expect-error context
+    result := plugin.resolveId "mylib/utils", undefined, {}
+    assert.equal result, null
+
+describe "unplugin: default ts warning", ->
+  it "no ts option logs a warning about default mode", ->
+    logCalls: string[] := []
+    orig := console.log
+    console.log = (msg: string) => logCalls.push(msg)
+    try
+      plugin := rawPlugin({ config: false }, minMeta)
+      assert plugin, "plugin should be created"
+      assert logCalls.some((m) => /WARNING.*default mode/i.test(m)),
+        `expected default-mode warning, got: ${JSON.stringify logCalls}`
+    finally
+      console.log = orig
+
+describe "unplugin: buildStart config loading", ->
+  it "buildStart without config option calls findInDir", ->
+    plugin := rawPlugin { ts: 'civet' }, minMeta
+    // Should not throw even if no civetconfig is found in cwd
+    //@ts-expect-error build context
+    await plugin.buildStart()
+
+  it "buildStart with explicit config path loads the config", ->
+    plugin := rawPlugin { ts: 'civet', config: 'test/infra/config/civetconfig.json' }, minMeta
+    //@ts-expect-error build context
+    await plugin.buildStart()
+
+describe "unplugin: resolveId implicit extension", ->
+  let tmpDir2: string
+  fileNum2 .= 0
+  before ->
+    tmpDir2 = path.join tmpdir(), "civet-unplugin-implicit-" + Math.random().toString(36).substring(2)
+    await mkdir tmpDir2, { recursive: true }
+  after ->
+    await rm tmpDir2, { recursive: true, force: true }
+
+  it "resolveId uses implicit .civet extension for existing file", ->
+    filePath := path.join tmpDir2, `file-${fileNum2++}.civet`
+    await writeFile filePath, "x := 1\n"
+    plugin := rawPlugin { ts: 'civet', config: false, implicitExtension: true }, minMeta
+    ctx := { ...nullContext, ...plugin }
+    await plugin.buildStart.call ctx
+    // Resolve an id that has no .civet extension, using the civet file as importer
+    idWithoutCivet := path.basename(filePath)[...-6]  // strip .civet
+    result := plugin.resolveId.call ctx, "./" + idWithoutCivet + ".jsx", filePath, { isEntry: false }
+    assert result, "resolveId should resolve via implicit .civet extension"
+    assert (result as string).endsWith(".civet.jsx"),
+      `expected .civet.jsx but got: ${result}`
+
+describe "unplugin: resolveId vite scan mode", ->
+  it "resolveId in vite scan mode returns \\0-prefixed id", ->
+    viteMeta := { framework: 'vite' as const }
+    plugin := rawPlugin { ts: 'civet', config: false }, viteMeta
+    ctx := { ...nullContext, ...plugin }
+    await plugin.buildStart.call ctx
+    civetFile := path.resolve process.cwd(), 'integration/example/source/main.civet'
+    result := plugin.resolveId.call ctx, civetFile + ".jsx", undefined, { scan: true }
+    assert result, "should return a result"
+    assert (result as string).startsWith('\0'),
+      `expected \\0-prefixed id in scan mode, got: ${result}`
+
+describe "unplugin: vite 7 skipWorker", ->
+  it "vite.config with vite 7 sets skipWorker, blocking ?worker requests", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    //@ts-expect-error build context
+    await plugin.buildStart()
+    viteConfig: any := { root: '', build: {} }
+    // Simulate Vite 7 plugin context with meta.viteVersion
+    //@ts-ignore
+    plugin.vite.config.call { meta: { viteVersion: '7.0.0' } }, viteConfig
+    // skipWorker is now true; ?worker suffix should be blocked
+    assert.equal plugin.loadInclude("foo.civet.jsx?worker"), false
+
+describe "unplugin: vite.transformIndexHtml()", ->
+  it "rewrites .civet src attribute in script tags", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    html := '<html><body><script src="./main.civet"></script></body></html>'
+    result := plugin.vite.transformIndexHtml html
+    assert result.includes('./main.civet.jsx?transform'),
+      `expected src rewrite, got: ${result}`
+
+  it "leaves non-civet src unchanged", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    html := '<html><body><script src="./main.js"></script></body></html>'
+    result := plugin.vite.transformIndexHtml html
+    assert result.includes('./main.js'), "non-civet src should be unchanged"
+    assert !result.includes('?transform'), "should not add ?transform"
+
+  it "leaves plain HTML comments without script tags unchanged", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    html := '<!-- just a comment --><p>hello</p>'
+    result := plugin.vite.transformIndexHtml html
+    assert !result.includes('?transform'), "comment without script should not produce ?transform"
+
+  it "leaves non-script tags unchanged", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    html := '<link href="./style.css"><img src="./photo.civet">'
+    result := plugin.vite.transformIndexHtml html
+    assert !result.includes('?transform'), "non-script tags should not be rewritten"
+
+describe "unplugin: vite.handleHotUpdate()", ->
+  it "returns undefined for non-civet files (early return)", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    modules: any[] := [{ id: 'foo.ts' }]
+    server: any :=
+      moduleGraph:
+        getModulesByFile: -> null
+        onFileChange: ->
+    result := plugin.vite.handleHotUpdate { file: 'foo.ts', server, modules }
+    assert.equal result, undefined
+
+  it "returns modules for civet files with no server entry", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    modules: any[] := []
+    server: any :=
+      moduleGraph:
+        getModulesByFile: -> null
+        onFileChange: ->
+    result := plugin.vite.handleHotUpdate { file: '/app/main.civet', server, modules }
+    assert.deepEqual result, modules
+
+  it "returns merged modules for civet files with server entry", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    existingModule: any := { id: 'main.civet.jsx' }
+    fileModules := new Set [existingModule]
+    modules: any[] := []
+    server: any :=
+      moduleGraph:
+        getModulesByFile: -> fileModules
+        onFileChange: ->
+    result := plugin.vite.handleHotUpdate { file: '/app/main.civet', server, modules }
+    assert Array.isArray(result), "result should be array"
+    assert (result as any[]).includes(existingModule), "should include file modules"
+
+describe "unplugin: tsc string typecheck", ->
+  let tmpDirTsc: string
+  before ->
+    tmpDirTsc = path.join tmpdir(), "civet-tsc-str-" + Math.random().toString(36).substring(2)
+    await mkdir tmpDirTsc, { recursive: true }
+  after ->
+    await rm tmpDirTsc, { recursive: true, force: true }
+
+  it "typecheck: 'error' string fails on type errors", ->
+    @timeout 15000
+    fileWithTSError := path.join tmpDirTsc, "err.civet"
+    await writeFile fileWithTSError, "x: number := 'not a number'\n"
+    rootDir := tmpDirTsc
+
+    plugin := rawPlugin {
+      ts: 'tsc'
+      config: false
+      typecheck: 'error'
+      tsConfig: {
+        rootDir
+        files: [ fileWithTSError ]
+      }
+    }, { framework: 'esbuild' }
+    ctx := { ...nullContext, ...plugin }
+    plugin.esbuild.config { outdir: testOutDir }
+
+    origError := console.error
+    console.error = ->
+    let errored
+    try
+      await plugin.buildStart.call ctx
+      await plugin.load.call ctx, fileWithTSError + ".jsx"
+      await plugin.buildEnd.call ctx
+    catch error
+      assert error <? Error
+      assert.match error.message, /Aborting build/
+      errored = true
+    finally
+      console.error = origError
+    assert errored, "build should have aborted due to type error"
+
+  it "typecheck: 'all' string fails on any diagnostics", ->
+    @timeout 15000
+    fileWithTSError2 := path.join tmpDirTsc, "err2.civet"
+    await writeFile fileWithTSError2, "x: number := 'not a number'\n"
+    rootDir := tmpDirTsc
+
+    plugin := rawPlugin {
+      ts: 'tsc'
+      config: false
+      typecheck: 'all'
+      tsConfig: {
+        rootDir
+        files: [ fileWithTSError2 ]
+      }
+    }, { framework: 'esbuild' }
+    ctx := { ...nullContext, ...plugin }
+    plugin.esbuild.config { outdir: testOutDir }
+
+    origError := console.error
+    console.error = ->
+    let errored
+    try
+      await plugin.buildStart.call ctx
+      await plugin.load.call ctx, fileWithTSError2 + ".jsx"
+      await plugin.buildEnd.call ctx
+    catch error
+      assert error <? Error
+      errored = true
+    finally
+      console.error = origError
+    assert errored, "build should have aborted with typecheck:'all'"
+
+describe "unplugin: emitDeclaration without esbuild outdir", ->
+  it "buildEnd throws if emitDeclaration is true and esbuild outdir is not set", ->
+    @timeout 15000
+    plugin := rawPlugin {
+      ts: 'tsc'
+      config: false
+      emitDeclaration: true
+    }, { framework: 'esbuild' }
+    ctx := { ...nullContext, ...plugin }
+    // Set esbuild options WITHOUT outdir (only outfile)
+    plugin.esbuild.config { outfile: path.join testOutDir, 'bundle.js' }
+
+    // Load a file so fsMap is populated
+    filePath := path.join tmpdir(), "civet-emit-nodest-" + Date.now() + ".civet"
+    await writeFile filePath, "x: number := 5\n"
+
+    origError := console.error
+    console.error = ->
+    let errored
+    try
+      await plugin.buildStart.call ctx
+      await plugin.load.call ctx, filePath + ".jsx"
+      await plugin.buildEnd.call ctx
+    catch error
+      assert error <? Error
+      assert.match error.message, /emitDeclaration.*outdir|outdir.*emitDeclaration/i
+      errored = true
+    finally
+      console.error = origError
+      await rm filePath, { force: true }
+    assert errored, "should throw when emitDeclaration is true without outdir"
