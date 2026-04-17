@@ -329,7 +329,7 @@ import civetPlugin from '@danielx/civet/esbuild'
 esbuild.build({
   ...,
   plugins: [
-    civetPlugin({ ts: 'esbuild' })
+    civetPlugin({ ts: 'preserve' })
   ]
 }).catch(() => process.exit(1))
 ```
