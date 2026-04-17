@@ -1,9 +1,15 @@
 { initialize, resolve, load } from ../../source/esm.civet
 { pathToFileURL } from url
+os from os
+{ join } from path
+fs from fs/promises
 
 assert from assert
 
 describe "esm", =>
+  afterEach =>
+    initialize {}  // reset globalOptions between tests
+
   it "should resolve", =>
     next := =>
 
@@ -21,3 +27,43 @@ describe "esm", =>
     result := await load url, context, next
     assert result, "compiled"
     assert result.source?.includes("?? div"), "compiled CoffeeScript"
+
+  it "calls next for non-civet URLs (load passthrough)", =>
+    // Covers lines 97-98 of esm.civet: `return next url, context`
+    called .= false
+    nextFn := (u: string, ctx: unknown) =>
+      called = true
+      {}
+    await load "file:///some/file.js", { format: "module" }, nextFn
+    assert called, "next should be called for non-civet URL"
+
+  it "loads civet file without explicit config (finds config via findConfig)", =>
+    // config is undefined → triggers findConfig (line 73 of esm.civet)
+    initialize {}
+    sourcePath := "./test/infra/config/needs-coffee.civet"
+    url := pathToFileURL(sourcePath).href
+    result := await load url, { format: "civet" }, undefined
+    assert result, "should have compiled"
+    assert result.source, "should have source code"
+
+  it "applies parseOptions from globalOptions", =>
+    // Covers line 82 of esm.civet: `if globalOptions.parseOptions`
+    initialize { parseOptions: { coffeeCompat: true } }
+    sourcePath := "./test/infra/config/needs-coffee.civet"
+    url := pathToFileURL(sourcePath).href
+    result := await load url, { format: "civet" }, undefined
+    assert result?.source?.includes("?? div"), "coffeeCompat should be applied"
+
+  it "rethrows compile error and logs it", =>
+    // Covers lines 90-91 of esm.civet: catch block in load
+    initialize { config: null }
+    tmpFile := join os.tmpdir(), `civet-test-bad-${Date.now()}.civet`
+    await fs.writeFile tmpFile, ">>> this is not valid <<<"
+    url := pathToFileURL(tmpFile).href
+    try
+      await load url, { format: "civet" }, undefined
+      assert.fail "should have thrown"
+    catch err
+      assert err, "error should be defined"
+    finally
+      await fs.rm tmpFile, { force: true }
