@@ -83,7 +83,6 @@ Then run `:TSInstall civet`.
 ## Build tools
 
 - [unplugin](https://github.com/DanielXMoore/Civet/blob/main/source/unplugin) integrates Civet into Vite, esbuild, Astro, Farm, Rolldown, Rollup, and Webpack, including `.d.ts` generation (see [basic instructions](https://civet.dev/getting-started#building-a-project))
-  - [Older Vite plugin](https://github.com/edemaine/vite-plugin-civet) (no longer recommended)
 - [ESM/CJS loader](https://github.com/DanielXMoore/Civet/blob/main/register.js) for `import`/`require` to support `.civet` files
 - [Babel plugin](https://github.com/DanielXMoore/Civet/blob/main/source/babel-plugin.civet)
   - Including [React Native / Metro](https://github.com/DanielXMoore/Civet/tree/main/integration/metro)
