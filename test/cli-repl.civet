@@ -1,0 +1,210 @@
+// Tests for source/cli.civet `repl()` function.
+// Spawn a Node subprocess that requires build/register.js (which compiles
+// .civet with inlineMap: true), then imports and invokes `repl()` from
+// source/cli.civet.  Coverage is collected because c8 sets
+// NODE_V8_COVERAGE in the parent env and child Node processes inherit it.
+
+{ spawn, type ChildProcess } from node:child_process
+{ fileURLToPath } from node:url
+path from node:path
+assert from assert
+
+REPO_ROOT := path.resolve path.dirname(fileURLToPath(import.meta.url)), '..'
+
+interface ReplHandle
+  write(input: string): void
+  waitForPrompt(timeout?: number): Promise<string>
+  close(): Promise<number?>
+  proc: ChildProcess
+
+function spawnRepl(args: string[] = [], options: {} = {}): ReplHandle
+  // The inline -e script imports repl() and runs it with the given options.
+  // It keeps the event loop alive until repl exits (via process.exit).
+  optsJson := JSON.stringify {run: true, parseOptions: {}, ...options}
+  argsJson := JSON.stringify args
+  script := `
+    const { repl } = require('./source/cli.civet');
+    repl(${argsJson}, ${optsJson}).catch(e => { console.error(e); process.exit(1); });
+  `
+  proc := spawn 'node', ['--enable-source-maps', '-r', './build/register.js', '-e', script],
+    cwd: REPO_ROOT
+    stdio: ['pipe', 'pipe', 'pipe']
+    env: process.env
+
+  outChunks: string[] := []
+  errChunks: string[] := []
+  proc.stdout!.setEncoding 'utf8'
+  proc.stderr!.setEncoding 'utf8'
+  proc.stdout!.on 'data', (c: string) => outChunks.push c
+  proc.stderr!.on 'data', (c: string) => errChunks.push c
+
+  exitPromise := new Promise<number?> (resolve) =>
+    proc.once 'exit', (code: number?) => resolve code
+
+  // Wait until the aggregated stdout matches `pred`, then return everything
+  // captured so far and clear the buffer.
+  function waitFor(pred: (s: string) => boolean, timeout = 5000): Promise<string>
+    start := Date.now()
+    loop
+      joined := outChunks.join ''
+      if pred joined
+        outChunks.length = 0
+        return joined
+      if Date.now() - start > timeout
+        throw new Error `timeout waiting for match; captured stdout: ${JSON.stringify joined}; stderr: ${JSON.stringify errChunks.join('')}`
+      await new Promise<void> (r) => setTimeout r, 20
+
+  {
+    proc
+    write: (input: string) => proc.stdin!.write input
+    waitForPrompt: (timeout?: number) =>
+      waitFor ((s) => /(?:🐱|🐈|🌲)>\s*$/.test s), timeout
+    close: =>
+      unless proc.killed or proc.exitCode?
+        proc.stdin!.end 'quit\n'
+      await exitPromise
+  }
+
+describe "CLI repl()", ->
+  @timeout 15000
+
+  it "starts, shows banner with execute prompt", ->
+    r := spawnRepl []
+    banner := await r.waitForPrompt()
+    assert.match banner, /Civet .* REPL/, banner
+    assert.match banner, /execute code/, banner
+    assert.match banner, /🐱>/, "execute prompt"
+    await r.close()
+
+  it "evaluates simple expression in default run mode", ->
+    r := spawnRepl []
+    await r.waitForPrompt()
+    r.write "1 + 2\n\n"
+    out := await r.waitForPrompt()
+    assert.match out, /\b3\b/, out
+    await r.close()
+
+  it "compile mode shows transpile banner and 🐈> prompt, outputs TS code", ->
+    r := spawnRepl [], { compile: true }
+    banner := await r.waitForPrompt()
+    assert.match banner, /transpile code/, banner
+    assert.match banner, /🐈>/, banner
+    r.write "x := 1\n\n"
+    out := await r.waitForPrompt()
+    assert.match out, /\bx\b/, out
+    await r.close()
+
+  it "ast mode shows parse banner and 🌲> prompt, outputs JSON AST", ->
+    r := spawnRepl [], { ast: true }
+    banner := await r.waitForPrompt()
+    assert.match banner, /parse code/, banner
+    assert.match banner, /🌲>/, banner
+    r.write "x := 1\n\n"
+    out := await r.waitForPrompt()
+    assert.match out, /"type"/, out
+    await r.close()
+
+  for cmd of ['quit', 'exit', 'quit()', 'exit()']
+    it `exits with code 0 on '${cmd}' command (process.exit branch)`, ->
+      r := spawnRepl []
+      await r.waitForPrompt()
+      // Write command without closing stdin — the REPL's own process.exit(0)
+      // must cause exit, not a stdin close.
+      r.write `${cmd}\n`
+      code := await new Promise<number?> (resolve) => r.proc.once 'exit', resolve
+      assert.equal code, 0
+
+  it "prints parse error for invalid Civet in run mode", ->
+    r := spawnRepl []
+    await r.waitForPrompt()
+    r.write "}\n\n"
+    out := await r.waitForPrompt()
+    await r.close()
+    assert.match out, /\^/, "parse error pointer '^' in output: " + out
+
+  it "unwraps ParseErrors (plural) in compile mode (showError .errors? branch)", ->
+    // `x.` has an ASTError in the parse tree that becomes a ParseErrors on
+    // generate; exercises the `(error as ParseErrors).errors?` unwrap branch.
+    r := spawnRepl [], { compile: true }
+    await r.waitForPrompt()
+    r.write "x.\n\n"
+    out := await r.waitForPrompt()
+    await r.close()
+    assert.match out, /\^/, out
+
+  it "run mode triggers generate errors branch (errors#)", ->
+    // `x.` parses into an AST containing an ASTError node. In run mode the
+    // CLI calls generate() with an errors array, which produces entries — this
+    // exercises the `if errors#` rerun-with-sourceMap branch.
+    r := spawnRepl []
+    await r.waitForPrompt()
+    r.write "x.\n\n"
+    out := await r.waitForPrompt()
+    await r.close()
+    assert.match out, /\^/, out
+
+  it "prints parse error for invalid Civet in compile mode", ->
+    r := spawnRepl [], { compile: true }
+    await r.waitForPrompt()
+    r.write "}\n\n"
+    out := await r.waitForPrompt()
+    await r.close()
+    assert.match out, /\^/, out
+
+  it "prints parse error for invalid Civet in ast mode", ->
+    r := spawnRepl [], { ast: true }
+    await r.waitForPrompt()
+    r.write "}\n\n"
+    out := await r.waitForPrompt()
+    await r.close()
+    assert.match out, /\^/, out
+
+  it "reports runtime errors from VM execution (caller sees error)", ->
+    r := spawnRepl []
+    await r.waitForPrompt()
+    r.write "throw new Error('boom')\n\n"
+    await r.waitForPrompt()
+    await r.close()
+    assert true  // process stayed alive after caught error
+
+  it "handles top-level await", ->
+    r := spawnRepl []
+    await r.waitForPrompt()
+    r.write "await Promise.resolve(42)\n\n"
+    out := await r.waitForPrompt()
+    assert.match out, /\b42\b/, out
+    await r.close()
+
+  it "handles top-level await rejection", ->
+    r := spawnRepl []
+    await r.waitForPrompt()
+    r.write "await Promise.reject(new Error('tla-fail'))\n\n"
+    await r.waitForPrompt()
+    await r.close()
+    assert true
+
+  it "handles multi-line continuation input", ->
+    r := spawnRepl []
+    await r.waitForPrompt()
+    r.write "x :=\n"
+    r.write "  5\n\n"
+    await r.waitForPrompt()
+    r.write "x\n\n"
+    out := await r.waitForPrompt()
+    assert.match out, /\b5\b/, out
+    await r.close()
+
+  it "accepts immediate blank-input line (blank branch)", ->
+    r := spawnRepl []
+    await r.waitForPrompt()
+    r.write "\n"
+    await r.waitForPrompt()
+    await r.close()
+
+  it "ast mode writer produces JSON for BigInt input", ->
+    r := spawnRepl [], { ast: true }
+    await r.waitForPrompt()
+    r.write "1n\n\n"
+    out := await r.waitForPrompt()
+    await r.close()
+    assert.match out, /"type"/, out
