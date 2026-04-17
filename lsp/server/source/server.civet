@@ -882,9 +882,18 @@ connection.onRenameRequest ({ textDocument, position, newName }) =>
 
   changes: createRenameLocationChanges(service, program, locations, newName)
 
-// TODO
 documents.onDidClose ({ document }) =>
   logger.log "close " + document.uri
+  sourcePath := documentToSourcePath(document)
+  projPath := getProjectPathFromSourcePath(sourcePath)
+  service := projectPathToServiceMap.get(projPath)
+  service?.host.closeDocument(sourcePath)
+  // Drop any pending in-flight change for this doc so the queue doesn't
+  // re-add it to the host after close.
+  changeQueue.delete(document)
+  // Clear diagnostics on the client side; without this the Problems panel
+  // keeps showing the last-known errors for a closed file.
+  connection.sendDiagnostics { uri: document.uri, diagnostics: [] }
 
 documents.onDidOpen ({ document }) =>
   logger.log "open " + document.uri
@@ -1170,10 +1179,20 @@ connection.onDidChangeWatchedFiles (change) =>
   logger.log('We received a file change event')
 
   for fileEvent of change.changes
+    filePath := URI.parse(fileEvent.uri).fsPath
+    basename := path.basename(filePath)
+
+    // Source file deletion: purge from the owning service and clear diagnostics
+    if fileEvent.type is FileChangeType.Deleted and basename isnt 'tsconfig.json'
+      projPath := getProjectPathFromSourcePath(filePath)
+      service := projectPathToServiceMap.get(projPath)
+      service?.host.removeDocument(filePath)
+      connection.sendDiagnostics { uri: fileEvent.uri, diagnostics: [] }
+      continue
+
     // Only react to tsconfig.json creates and changes (not deletes)
     continue if fileEvent.type is FileChangeType.Deleted
-    filePath := URI.parse(fileEvent.uri).fsPath
-    continue unless path.basename(filePath) is 'tsconfig.json'
+    continue unless basename is 'tsconfig.json'
 
     // Compute the project path this tsconfig belongs to
     projPath := URI.file(path.dirname(filePath) + "/").toString()
