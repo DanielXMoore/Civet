@@ -17,6 +17,7 @@
   DiagnosticSeverity
   TextEdit
   SemanticTokensRequest
+  FileChangeType
 } from vscode-languageserver/node
 
 {
@@ -91,6 +92,18 @@ projectPathToPendingPromiseMap := new Map<string, Promise<void>>()
 // Mapping from project path -> TSService instance operating on that base directory
 type ResolvedService = Awaited<ReturnType<typeof TSService>>
 projectPathToServiceMap := new Map<string, ResolvedService>()
+
+// Debounce timers for tsconfig.json reload (project path -> timer id)
+tsConfigReloadTimers := new Map<string, ReturnType<typeof globalThis.setTimeout>>()
+
+// Last known tsconfig.json content per project path (for no-op detection)
+tsConfigContentMap := new Map<string, string>()
+
+// Set of project paths currently undergoing a TSService rebuild
+rebuildInProgress := new Set<string>()
+
+// Set of project paths that need another rebuild after the current one completes
+rebuildQueued := new Set<string>()
 
 let rootUri: string | undefined, rootDir: string | undefined
 
@@ -1085,9 +1098,90 @@ function scheduleUpdateDiagnostics(changedDocs: Set<TextDocument>)
     // Don't await; let updates for different projects run in parallel.
     updateProjectDiagnostics(status, service)
 
-connection.onDidChangeWatchedFiles (_change) =>
+// Debounce delay (ms) before rebuilding a TSService after tsconfig.json changes
+tsConfigReloadDebounce := 300
+
+function scheduleServiceReload(projPath: string, tsConfigPath: string)
+  // Debounce: cancel existing timer and set a new one
+  existing := tsConfigReloadTimers.get(projPath)
+  globalThis.clearTimeout(existing) if existing
+
+  reloadCallback := () =>
+    tsConfigReloadTimers.delete(projPath)
+    doReloadServiceForProject(projPath, tsConfigPath)
+  timer := globalThis.setTimeout(reloadCallback, tsConfigReloadDebounce)
+  tsConfigReloadTimers.set(projPath, timer)
+
+async function doReloadServiceForProject(projPath: string, tsConfigPath: string): Promise<void>
+  // Coalesce: if a rebuild is already running, queue one more and return
+  if rebuildInProgress.has(projPath)
+    rebuildQueued.add(projPath)
+    return
+
+  // Wait for any in-progress initial service creation to settle first, avoiding
+  // a race where both ensureServiceForSourcePath and this function call TSService
+  // concurrently and the slower one orphans the faster one's result.
+  await projectPathToPendingPromiseMap.get(projPath)
+
+  // No-op detection: skip rebuild if tsconfig content hasn't changed
+  newContent := tsSys.readFile(tsConfigPath) ?? ''
+  if newContent is tsConfigContentMap.get(projPath)
+    logger.log `tsconfig.json unchanged for ${projPath}, skipping reload`
+    return
+
+  logger.log `Reloading TSService for ${projPath} due to tsconfig.json change`
+  rebuildInProgress.add(projPath)
+
+  try
+    newService := await TSService(projPath, connection.console)
+    await newService.loadPlugins()
+
+    // Only record the new content after a successful rebuild so that a failed
+    // rebuild doesn't permanently suppress retries for the same content.
+    tsConfigContentMap.set(projPath, newContent)
+
+    // Atomically swap: incoming requests continue using the old service until this point
+    oldService := projectPathToServiceMap.get(projPath)
+    projectPathToServiceMap.set(projPath, newService)
+
+    // Dispose old service after a short grace period so in-flight requests finish
+    if oldService
+      globalThis.setTimeout(() => oldService.dispose?.(), 1000)
+
+    // Re-send diagnostics for all open documents belonging to this project
+    openDocs := new Set<TextDocument>()
+    for doc of documents.all()
+      docProjPath := getProjectPathFromSourcePath(documentToSourcePath(doc))
+      openDocs.add(doc) if docProjPath is projPath
+    scheduleUpdateDiagnostics(openDocs) if openDocs.size > 0
+
+  catch e
+    logger.error `Failed to reload TSService for ${projPath}: ${e}`
+
+  rebuildInProgress.delete(projPath)
+
+  // If another change arrived during the rebuild, run it now
+  if rebuildQueued.has(projPath)
+    rebuildQueued.delete(projPath)
+    return doReloadServiceForProject(projPath, tsConfigPath)
+
+connection.onDidChangeWatchedFiles (change) =>
   // Monitored files have change in VSCode
   logger.log('We received a file change event')
+
+  for fileEvent of change.changes
+    // Only react to tsconfig.json creates and changes (not deletes)
+    continue if fileEvent.type is FileChangeType.Deleted
+    filePath := URI.parse(fileEvent.uri).fsPath
+    continue unless path.basename(filePath) is 'tsconfig.json'
+
+    // Compute the project path this tsconfig belongs to
+    projPath := URI.file(path.dirname(filePath) + "/").toString()
+
+    // Only reload if we already have (or are initializing) a service for this project
+    if projectPathToServiceMap.has(projPath) or projectPathToPendingPromiseMap.has(projPath)
+      logger.log `tsconfig.json changed for known project ${projPath}`
+      scheduleServiceReload(projPath, filePath)
 
 // Semantic tokens: use TypeScript's semantic classifications, remapped via sourcemap
 connection.onRequest SemanticTokensRequest.type, (params) =>
