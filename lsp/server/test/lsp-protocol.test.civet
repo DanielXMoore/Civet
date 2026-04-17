@@ -88,6 +88,44 @@ describe "LSP protocol", ->
     finally
       await client.stop()
 
+  it "ignores tsconfig delete and non-tsconfig create/change events", ->
+    // Exercises the fall-through arms of onDidChangeWatchedFiles:
+    //  - tsconfig.json Deleted (skipped, no reload)
+    //  - random file Changed (no match, skipped)
+    // The server must not crash and must continue producing diagnostics
+    // normally after these no-op events.
+    client := spawnLspServer()
+    try
+      await initializeClient client
+
+      tsConfigUri := docUri path.join(projectRoot, "tsconfig.json")
+      strayUri := docUri path.join(projectRoot, "stray.civet")
+      // Types per LSP spec: Created = 1, Changed = 2, Deleted = 3
+      client.notify "workspace/didChangeWatchedFiles", {
+        changes: [
+          { uri: tsConfigUri, type: 3 }
+          { uri: strayUri, type: 2 }
+          { uri: strayUri, type: 1 }
+        ]
+      }
+
+      // Prove the server is still alive and serving diagnostics afterwards.
+      livePath := path.join(projectRoot, "proto-live.civet")
+      liveUri := docUri livePath
+      client.notify "textDocument/didOpen", {
+        textDocument: {
+          uri: liveUri
+          languageId: "civet"
+          version: 1
+          text: 'console.log "live"'
+        }
+      }
+      diagnostics := await client.waitFor "textDocument/publishDiagnostics",
+        (p) => p.uri is liveUri
+      assert diagnostics, "server should continue producing diagnostics after no-op events"
+    finally
+      await client.stop()
+
   it "settles diagnostics to the final version after rapid edits", ->
     // Stress the change pipeline with back-to-back edits and confirm the
     // last publishDiagnostics reflects the final text. Guards against the
