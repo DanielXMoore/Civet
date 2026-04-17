@@ -612,6 +612,24 @@ describe "CLI file tests", ->
       content := await readFile expectedOut, 'utf8'
       assert content.includes('v'), "output in new dir contains variable"
 
+    // Covers lines 582-584: writeFile failure branch
+    it "reports write failure when output file is read-only", ->
+      { chmod } := await import 'fs/promises'
+      inputFile := await makeCivetTempFile "q := 9\n"
+      // Pre-create the output file as a regular file so parseArgs routes it
+      // through the outputPath branch (not outputDir). Then chmod it 0o400
+      // so writeFile fails with EACCES.
+      readOnlyOut := path.join tmpDir, `readonly-${fileNum++}.js`
+      await writeFile readOnlyOut, ''
+      await chmod readOnlyOut, 0o400
+      try
+        { exitCode, stdErr } := await captureProcess =>
+          await cli ['-c', '--no-config', '-o', readOnlyOut, inputFile]
+        assert stdErr.includes('failed to write'), "stderr mentions write failure: " + stdErr
+        assert exitCode? and exitCode > 0, "exitCode > 0: " + exitCode
+      finally
+        await chmod readOnlyOut, 0o600
+
   describe "error handling", ->
     it "prints error for invalid Civet syntax and sets non-zero exit code", ->
       inputFile := await makeCivetTempFile "}\n"
@@ -629,6 +647,97 @@ describe "CLI file tests", ->
 
       assert.equal exitCode, 1
       assert stdErr.toLowerCase().includes('invalid'), "stderr mentions invalid argument: " + stdErr
+
+// Covers lines 537-541: EPIPE/EOF stdout error handler.
+// The handler is installed once by the first cli() call that goes past the
+// options.repl early return. We invoke the registered listener directly.
+describe "CLI stdout error handler", ->
+  async function ensureInstalled(): Promise<void>
+    // Any cli() call (compile -e) registers the listener idempotently.
+    await captureProcess => await cli ['-c', '--no-config', '-e', 'x := 1']
+
+  function getListener(): (e: {code: string}) => void
+    listeners := process.stdout.listeners 'error'
+    assert listeners.length > 0, "stdout error listener installed"
+    listeners[listeners.length - 1] as (e: {code: string}) => void
+
+  it "exits 0 for EPIPE on stdout", ->
+    await ensureInstalled()
+    listener := getListener()
+    { exitCode } := await captureProcess =>
+      listener code: 'EPIPE'
+    assert.equal exitCode, 0
+
+  it "exits 0 for EOF on stdout", ->
+    await ensureInstalled()
+    listener := getListener()
+    { exitCode } := await captureProcess =>
+      listener code: 'EOF'
+    assert.equal exitCode, 0
+
+  it "logs and exits 1 for other stdout errors", ->
+    await ensureInstalled()
+    listener := getListener()
+    { exitCode, stdErr } := await captureProcess =>
+      listener code: 'ENOSPC'
+    assert.equal exitCode, 1
+    assert stdErr.length > 0, "stderr had error output"
+
+// Exercises lines 526-527 (run mode sets js/inlineMap), 586-592 (esm detection
+// on output without await/import/export keywords), and the else branch at 646
+// that falls through to module._compile. `module` is undefined in ESM-loaded
+// tests, so the branch eventually throws — but the lines leading up to that
+// are hit and counted.
+describe "CLI run mode (cli)", ->
+  // The ESM run-mode branch writes a .stdin-<pid>.civet temp file before
+  // trying to fork a child process; that fork fails in ESM-loaded tests
+  // (no __dirname), so the temp file can be left behind. Clean it up.
+  after ->
+    { readdir, unlink } := await import 'fs/promises'
+    for entry of await readdir process.cwd()
+      if /^\.stdin-\d+\.civet$/.test entry
+        try
+          await unlink entry
+
+  it "invokes run mode and sets js/inlineMap defaults", ->
+    let err: any
+    await captureProcess =>
+      try
+        await cli ['-e', 'x := 1', '--no-config']
+      catch e
+        err = e
+    assert err?, "run mode attempted to execute; cli threw: " + err?.message
+
+  // Covers lines 592-597: esm detection (output mentions await/import/export)
+  // triggers re-parsing for lib.hasAwait/hasImportDeclaration/hasExportDeclaration.
+  it "detects ESM-ness of run-mode output containing top-level await", ->
+    let err: any
+    await captureProcess =>
+      try
+        await cli ['-e', 'await Promise.resolve(1)', '--no-config']
+      catch e
+        err = e
+    assert err?, "ESM run-mode attempted to execute; cli threw: " + err?.message
+
+  // Covers line 596: hasImportDeclaration probed when output has `import`.
+  it "detects ESM-ness via import declaration (no await)", ->
+    let err: any
+    await captureProcess =>
+      try
+        await cli ['-e', 'import fs from "node:fs"', '--no-config']
+      catch e
+        err = e
+    assert err?, "import branch ran; cli threw: " + err?.message
+
+  // Covers line 597: hasExportDeclaration probed when output has `export` only.
+  it "detects ESM-ness via export declaration (no await, no import)", ->
+    let err: any
+    await captureProcess =>
+      try
+        await cli ['-e', 'export x := 1', '--no-config']
+      catch e
+        err = e
+    assert err?, "export branch ran; cli threw: " + err?.message
 
 describe "CLI piped stdin", ->
   it "compiles Civet code read from piped stdin to stdout", ->
@@ -720,4 +829,49 @@ describe "CLI --typecheck", ->
       await cli ['--typecheck', '--no-config', inputFile]
     // Non-zero exit due to TS diagnostics
     assert exitCode? and exitCode > 0, "typecheck reported errors via exitCode: " + exitCode
+
+  // Covers line 514: ts: if options.js then 'civet' else 'preserve'
+  it "typechecks with --js (strips types) without errors", :any ->
+    @timeout 30000
+    inputFile := await makeCivetTempFile "x := 42\n"
+    { exitCode, stdErr } := await captureProcess =>
+      await cli ['--typecheck', '--js', '--no-config', inputFile]
+    assert.equal exitCode ?? 0, 0, "--typecheck --js succeeds; stderr: " + stdErr
+
+  // Covers line 517 (outputExt?.replace → '.d.ts') plus emitFile branch (666-667)
+  it "emits .d.ts declaration files with --emit-declaration -o .ts", :any ->
+    @timeout 30000
+    { readdir } := await import 'fs/promises'
+    // Work in an isolated directory with its own tsconfig so `noEmit: false`
+    // allows `.d.ts` files to actually be written.
+    isolated := path.join tmpDir, "decl-isolated"
+    await mkdir isolated, { recursive: true }
+    await writeFile path.join(isolated, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022'
+        module: 'ESNext'
+        moduleResolution: 'Bundler'
+        declaration: true
+        emitDeclarationOnly: true
+        noEmit: false
+        skipLibCheck: true
+        strict: false
+        jsx: 'preserve'
+        allowImportingTsExtensions: true
+      }
+    })
+    inputFile := path.join isolated, "decl-input.civet"
+    await writeFile inputFile, "export x: number := 42\n"
+    outExt := path.join '.', '.ts'  // becomes outputExt '.ts'
+
+    origCwd := process.cwd()
+    try
+      process.chdir isolated
+      { exitCode, stdErr, stdOut } := await captureProcess =>
+        await cli ['--emit-declaration', '--no-config', '-o', outExt, 'decl-input.civet']
+      files := await readdir isolated
+      declFiles := files.filter (f: string) => f.endsWith '.d.ts'
+      assert declFiles.length > 0, `.d.ts emitted; got: ${JSON.stringify files}; exitCode=${exitCode}; stdErr=${stdErr}; stdOut=${stdOut}`
+    finally
+      process.chdir origCwd
 

@@ -208,3 +208,45 @@ describe "CLI repl()", ->
     out := await r.waitForPrompt()
     await r.close()
     assert.match out, /"type"/, out
+
+// Covers cli() → repl branch (line 534: `return repl args, options if options.repl`)
+// by invoking cli() through a subprocess with a mocked TTY so parseArgs sets
+// options.repl = true, triggering the early return into repl().
+describe "CLI cli() → repl branch", ->
+  @timeout 15000
+
+  it "cli() with no args starts REPL when stdin is TTY", ->
+    script := `
+      // Force parseArgs to treat stdin as a TTY so it sets options.repl.
+      Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+      const { cli } = require('./source/cli.civet');
+      cli([]).catch(e => { console.error(e); process.exit(1); });
+    `
+    proc := spawn 'node', ['--enable-source-maps', '-r', './build/register.js', '-e', script],
+      cwd: REPO_ROOT
+      stdio: ['pipe', 'pipe', 'pipe']
+      env: process.env
+
+    outChunks: string[] := []
+    proc.stdout!.setEncoding 'utf8'
+    proc.stdout!.on 'data', (c: string) => outChunks.push c
+
+    exitPromise := new Promise<number?> (resolve) =>
+      proc.once 'exit', (code: number?) => resolve code
+
+    await new Promise<void> (resolve, reject) =>
+      deadline := setTimeout
+        => reject new Error `timeout waiting for REPL banner; stdout: ${outChunks.join ''}`
+        5000
+      check := =>
+        if /🐱>/.test outChunks.join ''
+          clearTimeout deadline
+          resolve()
+        else
+          setTimeout check, 20
+      check()
+
+    unless proc.killed or proc.exitCode?
+      proc.stdin!.end 'quit\n'
+    code := await exitPromise
+    assert.equal code, 0, "process exited cleanly"
