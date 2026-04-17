@@ -18,10 +18,6 @@ The modern way to write TypeScript.
 - [Discord Server](https://discord.gg/xkrW9GebBc)
 - Plugins for
   [Vite, esbuild, Astro, Farm, Rolldown, Rollup, Webpack](source/unplugin),
-  <!--
-  [esbuild](source/esbuild-plugin.civet),
-  [Vite](https://github.com/edemaine/vite-plugin-civet),
-  -->
   [ESM/CJS loader](source/esm.civet),
   [Babel](source/babel-plugin.civet),
   [Jest](https://github.com/DanielXMoore/Civet/blob/main/integration/jest),
@@ -328,12 +324,12 @@ I strongly recommend using [esbuild](https://esbuild.github.io/) for building / 
 
 ```javascript
 import esbuild from 'esbuild'
-import civetPlugin from '@danielx/civet/esbuild-plugin'
+import civetPlugin from '@danielx/civet/esbuild'
 
 esbuild.build({
   ...,
   plugins: [
-    civetPlugin
+    civetPlugin({ ts: 'preserve' })
   ]
 }).catch(() => process.exit(1))
 ```

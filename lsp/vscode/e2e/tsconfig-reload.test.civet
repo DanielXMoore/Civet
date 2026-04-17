@@ -1,0 +1,46 @@
+* as vscode from vscode
+* as fs from 'node:fs'
+assert from assert
+{ getDocUri, getDocPath, activate, onNextDiagnostics, poll } from ./helper.civet
+
+suite 'TSConfig Reload', =>
+  tsConfigPath := getDocPath 'tsconfig.json'
+  originalContent .= ''
+
+  setup =>
+    originalContent = fs.readFileSync tsConfigPath, 'utf8'
+
+  teardown =>
+    fs.writeFileSync tsConfigPath, originalContent
+
+  test 'Re-sends diagnostics and applies new tsconfig settings after change', async =>
+    // unused-local.civet has `x := 42` — unused local.
+    // With the default tsconfig (no noUnusedLocals) there should be no errors.
+    docUri := getDocUri 'unused-local.civet'
+    await activate docUri
+
+    // Wait until the initial diagnostic pass has run (expect 0 errors)
+    await poll(
+      () => Promise.resolve vscode.languages.getDiagnostics docUri
+      (d) => d.length is 0
+      5000
+    )
+
+    // Subscribe to the next diagnostics event BEFORE modifying tsconfig
+    // so we cannot miss it.
+    diagPromise := onNextDiagnostics docUri, 15000
+
+    // Modify tsconfig to enable noUnusedLocals — this should surface an
+    // error in unused-local.civet once the server reloads the TSService.
+    parsed := JSON.parse originalContent
+    parsed.compilerOptions.noUnusedLocals = true
+    fs.writeFileSync tsConfigPath, JSON.stringify(parsed, null, 2)
+
+    // The server debounces 300 ms, rebuilds TSService, then re-sends
+    // diagnostics for all open documents.  Wait for that event.
+    diagnostics := await diagPromise
+
+    assert diagnostics.length >= 1,
+      `Expected at least one diagnostic after enabling noUnusedLocals, got ${diagnostics.length}`
+    assert diagnostics.some((d) => d.message.includes 'x'),
+      `Expected a diagnostic about 'x', got: ${diagnostics.map((d) => d.message).join(', ')}`

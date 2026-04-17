@@ -343,3 +343,74 @@ describe "source map", ->
           pos := remapPosition({line: lineIdx, character: charIdx}, sourceMap.lines)
           assert pos.character >= 0,
             `remap(${lineIdx}:${charIdx}) = (${pos.line}:${pos.character}) has negative character; TS line: ${JSON.stringify outLines[lineIdx]}, src line: ${JSON.stringify srcLines[pos.line]}`
+
+  describe "composeLines edge cases", ->
+    it "passes through length-1 (unmapped) downstream entries unchanged", ->
+      upstreamLines := [[[0, 0, 0, 0]]]
+      downstreamLines := [[[5]]]  // length-1 entry: no source mapping
+      result := SourceMap.composeLines upstreamLines, downstreamLines
+      assert.deepEqual result, [[[5]]]
+
+    it "handles length-5 downstream entries (entries with name index)", ->
+      upstreamLines := [[[0, 0, 0, 0]]]
+      // [colDelta, sourceFileIndex, srcLine, srcCol, nameIndex]
+      downstreamLines := [[[0, 0, 0, 0, 3]]]
+      result := SourceMap.composeLines upstreamLines, downstreamLines
+      assert.equal result[0][0].length, 5
+      assert.equal result[0][0][4], 3  // name index preserved
+
+    it "returns undefined for downstream entry referencing missing upstream line", ->
+      upstreamLines := []  // no upstream lines
+      downstreamLines := [[[5, 0, 0, 0]]]  // references srcLine=0 which doesn't exist
+      result := SourceMap.composeLines upstreamLines, downstreamLines
+      // When upstream line is missing, entry degrades to length-1 (unmapped)
+      assert.deepEqual result, [[[5]]]
+
+  describe "composeDownstream", ->
+    it "parses unparsed downstream map (plain JSON without lines)", ->
+      src := "x := 5\n"
+      { sourceMap } := await compile src,
+        sourceMap: true
+        filename: "input.civet"
+
+      downstreamMapJSON :=
+        version: 3
+        file: "output.ts"
+        sources: ["input.civet"]
+        // identity mapping: line 0, col 0 → src line 0, col 0
+        mappings: "AAAA"
+        names: []
+
+      // Should not throw — composeDownstream must parseWithLines internally
+      sourceMap.composeDownstream downstreamMapJSON
+      assert.ok Array.isArray(sourceMap.lines)
+      assert.ok sourceMap.lines.length > 0
+
+    it "parses unparsed downstream map (base64 string)", ->
+      src := "x := 5\n"
+      { sourceMap } := await compile src,
+        sourceMap: true
+        filename: "input.civet"
+
+      downstreamMapJSON :=
+        version: 3
+        file: "output.ts"
+        sources: ["input.civet"]
+        mappings: "AAAA"
+        names: []
+
+      sourceMap.composeDownstream base64Encode JSON.stringify downstreamMapJSON
+      assert.ok Array.isArray(sourceMap.lines)
+      assert.ok sourceMap.lines.length > 0
+
+  describe "parseWithLines error handling", ->
+    it "throws for source map entries with invalid VLQ field count", ->
+      // A single entry with 2 VLQ values is invalid (must be 1, 4, or 5)
+      assert.throws =>
+        SourceMap.parseWithLines
+          version: 3
+          file: "foo.ts"
+          sources: []
+          mappings: "AA"  // decodes to [0, 0] — 2 fields, which is invalid
+          names: []
+      , /Unknown source map entry/
