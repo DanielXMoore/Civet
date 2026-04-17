@@ -16,6 +16,11 @@ export CIVET_THREADS=
 # Use sourcemaps so errors have correct line numbers.
 export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--enable-source-maps"
 
+# Windows is slower; increase default mocha timeout (before $args so it's overridable).
+if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == win* ]]; then
+  args="--timeout 5000 $args"
+fi
+
 if [ "${CIVET_COVERAGE:-0}" = "1" ]; then
   c8 mocha $args "$@"
 else
