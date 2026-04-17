@@ -1118,12 +1118,16 @@ async function doReloadServiceForProject(projPath: string, tsConfigPath: string)
     rebuildQueued.add(projPath)
     return
 
+  // Wait for any in-progress initial service creation to settle first, avoiding
+  // a race where both ensureServiceForSourcePath and this function call TSService
+  // concurrently and the slower one orphans the faster one's result.
+  await projectPathToPendingPromiseMap.get(projPath)
+
   // No-op detection: skip rebuild if tsconfig content hasn't changed
   newContent := tsSys.readFile(tsConfigPath) ?? ''
   if newContent is tsConfigContentMap.get(projPath)
     logger.log `tsconfig.json unchanged for ${projPath}, skipping reload`
     return
-  tsConfigContentMap.set(projPath, newContent)
 
   logger.log `Reloading TSService for ${projPath} due to tsconfig.json change`
   rebuildInProgress.add(projPath)
@@ -1131,6 +1135,10 @@ async function doReloadServiceForProject(projPath: string, tsConfigPath: string)
   try
     newService := await TSService(projPath, connection.console)
     await newService.loadPlugins()
+
+    // Only record the new content after a successful rebuild so that a failed
+    // rebuild doesn't permanently suppress retries for the same content.
+    tsConfigContentMap.set(projPath, newContent)
 
     // Atomically swap: incoming requests continue using the old service until this point
     oldService := projectPathToServiceMap.get(projPath)
@@ -1155,7 +1163,7 @@ async function doReloadServiceForProject(projPath: string, tsConfigPath: string)
   // If another change arrived during the rebuild, run it now
   if rebuildQueued.has(projPath)
     rebuildQueued.delete(projPath)
-    doReloadServiceForProject(projPath, tsConfigPath)
+    return doReloadServiceForProject(projPath, tsConfigPath)
 
 connection.onDidChangeWatchedFiles (change) =>
   // Monitored files have change in VSCode
