@@ -13,5 +13,5 @@ if [ ${#files[@]} -eq 0 ]; then
 fi
 
 for f in "${files[@]}"; do
-  sed -i -E "s/typeof ([a-zA-Z_][a-zA-Z0-9_.]*) (===|is) (['\"])/\1 <\? \3/g" "$f"
+  sed -i'' -E "s/typeof ([a-zA-Z_][a-zA-Z0-9_.]*) (===|is) (['\"])/\1 <\? \3/g" "$f"
 done
