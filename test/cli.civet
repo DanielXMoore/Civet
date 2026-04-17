@@ -629,3 +629,95 @@ describe "CLI file tests", ->
 
       assert.equal exitCode, 1
       assert stdErr.toLowerCase().includes('invalid'), "stderr mentions invalid argument: " + stdErr
+
+describe "CLI piped stdin", ->
+  it "compiles Civet code read from piped stdin to stdout", ->
+    origStdin := process.stdin
+    try
+      async function* gen()
+        yield "wPiped := 7\n"
+      mockStdin :=
+        isTTY: false
+        setEncoding: (_enc: string) => undefined
+        [Symbol.asyncIterator]: => gen()
+      Object.defineProperty process, 'stdin',
+        value: mockStdin
+        configurable: true
+      { stdOut } := await captureProcess =>
+        await cli ['-c', '--no-config', '-']
+      assert stdOut.includes('wPiped'), "piped stdin output contains variable: " + stdOut
+    finally
+      Object.defineProperty process, 'stdin',
+        value: origStdin
+        configurable: true
+
+
+describe "CLI --config", ->
+  let tmpDir: string
+  fileNum .= 0
+  before ->
+    tmpDir = path.join tmpdir(), "civet-cli-config-test-" + Math.random().toString(36).substring(2, 15)
+    await mkdir tmpDir, { recursive: true }
+  after ->
+    await rm tmpDir, { recursive: true, force: true }
+
+  it "loads --config JSON file with parseOptions", ->
+    configPath := path.join tmpDir, "config-${fileNum++}.json"
+    await writeFile configPath, JSON.stringify({parseOptions: {autoLet: true}})
+    { stdOut } := await captureProcess =>
+      await cli ['-c', '--config', configPath, '-e', 'x = 1']
+    assert stdOut.includes('let'), "autoLet from config applied: " + stdOut
+
+  it "deep merges --config parseOptions with --civet flag", ->
+    configPath := path.join tmpDir, "config-${fileNum++}.json"
+    await writeFile configPath, JSON.stringify({parseOptions: {autoLet: true}})
+    // Use --civet to supply an additional parseOption; config's autoLet should remain
+    { stdOut, exitCode } := await captureProcess =>
+      await cli ['-c', '--config', configPath, '--civet', 'tab=2', '-e', 'x = 1']
+    assert.equal exitCode, 0, "merged config + --civet succeeded"
+    assert stdOut.includes('let'), "autoLet from config still applied after merge: " + stdOut
+
+  it "auto-discovers config when neither --config nor --no-config given", ->
+    // Put a config in tmpDir and cd there
+    configPath := path.join tmpDir, "civetconfig.json"
+    await writeFile configPath, JSON.stringify({parseOptions: {autoLet: true}})
+    origCwd := process.cwd()
+    try
+      process.chdir tmpDir
+      { stdOut, exitCode } := await captureProcess =>
+        await cli ['-c', '-e', 'x = 1']
+      assert.equal exitCode, 0
+      assert stdOut.includes('let'), "auto-discovered config applied autoLet: " + stdOut
+    finally
+      process.chdir origCwd
+
+describe "CLI --typecheck", ->
+  let tmpDir: string
+  fileNum .= 0
+  before ->
+    // Place tmp files inside the project so TypeScript's rootDir accepts them
+    tmpDir = path.join process.cwd(), "test", "infra", "tmp-cli-typecheck-" + Math.random().toString(36).substring(2, 15)
+    await mkdir tmpDir, { recursive: true }
+  after ->
+    await rm tmpDir, { recursive: true, force: true }
+
+  function makeCivetTempFile(content: string): string
+    filePath := path.join tmpDir, `input-${fileNum++}.civet`
+    await writeFile filePath, content
+    filePath
+
+  it "typechecks a valid .civet file without errors", :any ->
+    @timeout 30000
+    inputFile := await makeCivetTempFile "x: number := 42\n"
+    { exitCode, stdErr } := await captureProcess =>
+      await cli ['--typecheck', '--no-config', inputFile]
+    assert.equal exitCode ?? 0, 0, "valid file typechecks cleanly; stderr: " + stdErr
+
+  it "reports TypeScript diagnostics for type errors", :any ->
+    @timeout 30000
+    inputFile := await makeCivetTempFile 'x: number := "not a number"\n'
+    { exitCode } := await captureProcess =>
+      await cli ['--typecheck', '--no-config', inputFile]
+    // Non-zero exit due to TS diagnostics
+    assert exitCode? and exitCode > 0, "typecheck reported errors via exitCode: " + exitCode
+
