@@ -87,3 +87,66 @@ describe "LSP protocol", ->
         "expected diagnostics cleared on watched-file delete"
     finally
       await client.stop()
+
+  it "settles diagnostics to the final version after rapid edits", ->
+    // Stress the change pipeline with back-to-back edits and confirm the
+    // last publishDiagnostics reflects the final text. Guards against the
+    // documented race where a slower in-flight diagnostic run for an older
+    // version publishes *after* the fast run for the newer version, leaving
+    // a stale result behind.
+    client := spawnLspServer()
+    try
+      await initializeClient client
+
+      racePath := path.join(projectRoot, "proto-race.civet")
+      uri := docUri racePath
+
+      // Collect every publishDiagnostics for this uri so we can inspect
+      // the tail after the dust settles.
+      allPublishes: any[] := []
+      client.on "textDocument/publishDiagnostics", (p: any) =>
+        allPublishes.push p if p.uri is uri
+
+      hasError := (d: any) =>
+        // Only count hard TypeScript errors; unused-local suggestions are
+        // noise for this settle-check.
+        d.severity is 1
+
+      client.notify "textDocument/didOpen", {
+        textDocument: {
+          uri
+          languageId: "civet"
+          version: 1
+          text: 'console.log "err" + 1 as number'
+        }
+      }
+      await client.waitFor "textDocument/publishDiagnostics",
+        (p) => p.uri is uri and p.diagnostics.some(hasError)
+
+      // Rapid-fire edits: clean -> error -> clean. Final text is error-free.
+      client.notify "textDocument/didChange", {
+        textDocument: { uri, version: 2 }
+        contentChanges: [{ text: 'console.log "ok"' }]
+      }
+      client.notify "textDocument/didChange", {
+        textDocument: { uri, version: 3 }
+        contentChanges: [{ text: 'console.log "err" + 1 as number' }]
+      }
+      client.notify "textDocument/didChange", {
+        textDocument: { uri, version: 4 }
+        contentChanges: [{ text: 'console.log "final ok"' }]
+      }
+
+      // Wait for the pipeline to settle to a non-error state.
+      await client.waitFor "textDocument/publishDiagnostics",
+        (p) => p.uri is uri and not p.diagnostics.some(hasError)
+      // Give any stale in-flight runs time to (wrongly) publish.
+      await new Promise<void> (r) => setTimeout r, 1500
+
+      tail := allPublishes[allPublishes.length - 1]
+      assert tail, "expected at least one publishDiagnostics"
+      errorDiags := tail.diagnostics.filter(hasError)
+      assert.equal errorDiags.length, 0,
+        `expected last publish to have no errors (final text is valid), got ${JSON.stringify errorDiags}`
+    finally
+      await client.stop()
