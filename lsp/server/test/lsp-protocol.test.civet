@@ -1,0 +1,55 @@
+// Protocol-level tests that drive the built LSP server as a subprocess.
+// These complement the unit tests in service.civet by exercising the full
+// JSON-RPC roundtrip (initialize -> didOpen -> publishDiagnostics -> didClose).
+
+{ spawnLspServer, docUri, type LspClient } from ./lsp-harness.civet
+path from node:path
+assert from assert
+
+projectRoot := path.resolve "./integration/project-test"
+
+initializeClient := (client: LspClient) ->
+  rootUri := docUri(projectRoot)
+  await client.request "initialize", {
+    processId: process.pid
+    rootUri
+    capabilities: {}
+    workspaceFolders: [{ uri: rootUri, name: "project-test" }]
+  }
+  client.notify "initialized", {}
+
+describe "LSP protocol", ->
+  @timeout 15000
+
+  it "clears diagnostics when a file with errors is closed", ->
+    client := spawnLspServer()
+    try
+      await initializeClient client
+
+      errorPath := path.join(projectRoot, "proto-close.civet")
+      uri := docUri errorPath
+
+      client.notify "textDocument/didOpen", {
+        textDocument: {
+          uri
+          languageId: "civet"
+          version: 1
+          text: 'x: number := "not a number"'
+        }
+      }
+
+      // Wait for the error diagnostic
+      before := await client.waitFor "textDocument/publishDiagnostics",
+        (p) => p.uri is uri and p.diagnostics.length > 0
+
+      assert before.diagnostics.length > 0, "expected a diagnostic before close"
+
+      client.notify "textDocument/didClose", { textDocument: { uri } }
+
+      // Fix: server should publish an empty diagnostics array on close
+      after := await client.waitFor "textDocument/publishDiagnostics",
+        (p) => p.uri is uri and p.diagnostics.length is 0
+
+      assert.equal after.diagnostics.length, 0, "expected diagnostics cleared on close"
+    finally
+      await client.stop()
