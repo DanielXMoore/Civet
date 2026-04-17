@@ -4,7 +4,7 @@ import { TextDocument } from "vscode-languageserver-textdocument"
 import fs from "fs"
 import path from "path"
 
-{ forwardMap } from ../source/lib/util.civet
+{ forwardMap, getCanonicalFileName } from ../source/lib/util.civet
 
 assert from assert
 
@@ -192,3 +192,80 @@ describe "ts service features", ->
     assert meta, "expected meta to be recorded after a compile throw"
     assert meta!.fatal, "expected fatal=true when compile throws"
     assert meta!.parseErrors?.length, "expected parse errors to be recorded"
+
+describe "ts service document lifecycle", ->
+  it "closeDocument should drop editor doc but keep civet file in project", ->
+    // Mirrors LSP didClose: editor tab closed, file still on disk.
+    // Editor-tied caches must clear so next read falls back to disk,
+    // but scriptFileNames must keep the transpiled path since other
+    // open files may still import this one.
+    service := await TSService(projectURL, nullLogger)
+    await service.loadPlugins()
+
+    civetPath := path.resolve("./integration/project-test/close-test.civet")
+    transpiledPath := civetPath + ".tsx"
+    doc := TextDocument.create(pathToFileURL(civetPath).href, "civet", 0, "x := 1")
+    service.host.addOrUpdateDocument(doc)
+    // Prime caches
+    preMeta := service.host.getMeta(civetPath)
+    assert preMeta, "precondition: meta should exist after add"
+
+    service.host.closeDocument(civetPath)
+
+    assert.equal service.host.getScriptVersion(civetPath), "0",
+      "source editor doc should be forgotten after close"
+    assert service.host.getScriptFileNames().includes(getCanonicalFileName transpiledPath),
+      "transpiled path should remain in scriptFileNames after close (file may still be imported)"
+
+  it "removeDocument should fully drop civet doc from project", ->
+    // Mirrors file deletion: file no longer exists on disk, drop everything.
+    service := await TSService(projectURL, nullLogger)
+    await service.loadPlugins()
+
+    civetPath := path.resolve("./integration/project-test/remove-test.civet")
+    transpiledPath := civetPath + ".tsx"
+    doc := TextDocument.create(pathToFileURL(civetPath).href, "civet", 0, "x := 1")
+    service.host.addOrUpdateDocument(doc)
+    service.host.getMeta(civetPath)  // prime caches
+
+    service.host.removeDocument(civetPath)
+
+    assert.equal service.host.getScriptVersion(civetPath), "0",
+      "source path should be forgotten after removeDocument"
+    assert.equal service.host.getScriptVersion(transpiledPath), "0",
+      "transpiled path should be forgotten after removeDocument"
+    assert not service.host.getScriptFileNames().includes(getCanonicalFileName transpiledPath),
+      "transpiled path should be removed from scriptFileNames"
+
+  it "closeDocument should keep plain ts file in scriptFileNames", ->
+    service := await TSService(projectURL, nullLogger)
+    await service.loadPlugins()
+
+    tsPath := path.resolve("./integration/project-test/close-plain.ts")
+    doc := TextDocument.create(pathToFileURL(tsPath).href, "typescript", 0, "const x = 1")
+    service.host.addOrUpdateDocument(doc)
+
+    service.host.closeDocument(tsPath)
+
+    assert service.host.getScriptFileNames().includes(getCanonicalFileName tsPath),
+      "plain ts file should remain in scriptFileNames after close"
+    assert.equal service.host.getScriptVersion(tsPath), "0",
+      "editor doc for plain ts should be forgotten after close"
+
+  it "removeDocument should drop plain ts file from scriptFileNames", ->
+    service := await TSService(projectURL, nullLogger)
+    await service.loadPlugins()
+
+    tsPath := path.resolve("./integration/project-test/remove-plain.ts")
+    doc := TextDocument.create(pathToFileURL(tsPath).href, "typescript", 0, "const x = 1")
+    service.host.addOrUpdateDocument(doc)
+
+    assert service.host.getScriptFileNames().includes(getCanonicalFileName tsPath),
+      "precondition: plain ts should be in scriptFileNames"
+
+    service.host.removeDocument(tsPath)
+
+    assert not service.host.getScriptFileNames().includes(getCanonicalFileName tsPath),
+      "plain ts should be removed from scriptFileNames"
+    assert.equal service.host.getScriptVersion(tsPath), "0",
+      "plain ts path should be forgotten after removeDocument"

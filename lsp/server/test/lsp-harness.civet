@@ -1,0 +1,139 @@
+// Drive the built LSP server as a subprocess over JSON-RPC on stdio.
+// Purpose: deterministic protocol-level tests (publishDiagnostics, didClose,
+// didChangeWatchedFiles) that VSCode's test harness can't reliably exercise.
+
+{ spawn, type ChildProcess } from node:child_process
+path from node:path
+{ pathToFileURL, fileURLToPath } from node:url
+
+type Resolver = (value: any) => void
+
+export interface LspClient
+  request(method: string, params?: any): Promise<any>
+  notify(method: string, params?: any): void
+  on(method: string, handler: (params: any) => void): void
+  waitFor(method: string, match?: (params: any) => boolean, timeout?: number): Promise<any>
+  stop(): Promise<void>
+
+// Parse as many framed LSP messages as are fully present in `buffer`.
+// Returns the parsed messages and any trailing partial bytes.
+parseMessages := (buffer: Buffer): { messages: any[]; rest: Buffer } =>
+  messages: any[] := []
+  remaining .= buffer
+  loop
+    headerEnd := remaining.indexOf("\r\n\r\n")
+    break if headerEnd < 0
+    header := remaining.subarray(0, headerEnd).toString "ascii"
+    match := header.match /Content-Length: (\d+)/i
+    break unless match
+    length := parseInt match[1]!, 10
+    bodyStart := headerEnd + 4
+    break if remaining.length < bodyStart + length
+    body := remaining.subarray(bodyStart, bodyStart + length).toString "utf8"
+    messages.push JSON.parse(body)
+    remaining = remaining.subarray(bodyStart + length)
+  return { messages, rest: remaining }
+
+harnessDir := path.dirname fileURLToPath(import.meta.url)
+
+export function spawnLspServer(): LspClient
+  serverPath := path.resolve(harnessDir, "..", "dist", "server.js")
+  proc: ChildProcess := spawn "node", [serverPath, "--stdio"],
+    stdio: ["pipe", "pipe", "pipe"]
+
+  pending := new Map<number, Resolver>()
+  notificationHandlers := new Map<string, (params: any) => void>()
+  notificationLog := new Map<string, any[]>()
+  notificationWaiters := new Map<string, ((params: any) => void)[]>()
+  nextId .= 1
+  stdoutBuffer .= Buffer.alloc(0)
+
+  proc.stderr!.on "data", (chunk: Buffer) =>
+    // Forward server stderr so failures are debuggable.
+    process.stderr.write `[lsp-server] ${chunk.toString()}`
+
+  dispatchNotification := (method: string, params: any) =>
+    list := notificationLog.get(method) ?? []
+    list.push params
+    notificationLog.set method, list
+    notificationHandlers.get(method)?(params)
+    waiters := notificationWaiters.get(method)
+    if waiters?.length
+      notificationWaiters.set method, []
+      for w of waiters
+        w params
+
+  proc.stdout!.on "data", (chunk: Buffer) =>
+    stdoutBuffer = Buffer.concat [stdoutBuffer, chunk]
+    { messages, rest } := parseMessages stdoutBuffer
+    stdoutBuffer = rest
+    for msg of messages
+      if msg.id? and not msg.method?
+        // Response to a request
+        resolver := pending.get(msg.id)
+        if resolver
+          pending.delete msg.id
+          resolver msg.result ?? msg.error
+      else if msg.method?
+        dispatchNotification msg.method, msg.params
+
+  send := (msg: any) =>
+    json := JSON.stringify msg
+    header := `Content-Length: ${Buffer.byteLength(json, "utf8")}\r\n\r\n`
+    proc.stdin!.write header + json
+
+  client: LspClient :=
+    request: (method: string, params?: any) =>
+      id := nextId++
+      new Promise<any> (resolve) =>
+        pending.set id, resolve
+        send { jsonrpc: "2.0", id, method, params }
+
+    notify: (method: string, params?: any) =>
+      send { jsonrpc: "2.0", method, params }
+
+    on: (method: string, handler: (params: any) => void) =>
+      notificationHandlers.set method, handler
+
+    waitFor: (method: string, match?: (params: any) => boolean, timeout = 5000) =>
+      // First check if a matching notification has already arrived.
+      existing := notificationLog.get(method) ?? []
+      for params of existing
+        if not match? or match(params)
+          return Promise.resolve params
+      new Promise<any> (resolve, reject) =>
+        timer := setTimeout =>
+          idx := (notificationWaiters.get(method) ?? []).indexOf wrapper
+          if idx >= 0
+            notificationWaiters.get(method)!.splice idx, 1
+          reject new Error `Timed out waiting for ${method} after ${timeout}ms`
+        , timeout
+        wrapper := (params: any) =>
+          if not match? or match(params)
+            clearTimeout timer
+            resolve params
+          else
+            waiters := notificationWaiters.get(method) ?? []
+            waiters.push wrapper
+            notificationWaiters.set method, waiters
+        waiters := notificationWaiters.get(method) ?? []
+        waiters.push wrapper
+        notificationWaiters.set method, waiters
+
+    stop: =>
+      // Graceful LSP shutdown so the server flushes NODE_V8_COVERAGE
+      // files on normal exit. SIGTERM (proc.kill default) skips that.
+      new Promise<void> (resolve) =>
+        proc.once "exit", => resolve()
+        id := nextId++
+        send { jsonrpc: "2.0", id, method: "shutdown" }
+        send { jsonrpc: "2.0", method: "exit" }
+        // Fallback: if the server is wedged, hard-kill after 2s.
+        setTimeout =>
+          proc.kill()
+        , 2000
+
+  return client
+
+export docUri := (absPath: string) =>
+  pathToFileURL(absPath).href

@@ -1,0 +1,195 @@
+// Protocol-level tests that drive the built LSP server as a subprocess.
+// These complement the unit tests in service.civet by exercising the full
+// JSON-RPC roundtrip (initialize -> didOpen -> publishDiagnostics -> didClose).
+
+{ spawnLspServer, docUri, type LspClient } from ./lsp-harness.civet
+path from node:path
+assert from assert
+
+projectRoot := path.resolve "./integration/project-test"
+
+initializeClient := (client: LspClient) ->
+  rootUri := docUri(projectRoot)
+  await client.request "initialize", {
+    processId: process.pid
+    rootUri
+    capabilities: {}
+    workspaceFolders: [{ uri: rootUri, name: "project-test" }]
+  }
+  client.notify "initialized", {}
+
+describe "LSP protocol", ->
+  @timeout 15000
+
+  it "clears diagnostics when a file with errors is closed", ->
+    client := spawnLspServer()
+    try
+      await initializeClient client
+
+      errorPath := path.join(projectRoot, "proto-close.civet")
+      uri := docUri errorPath
+
+      client.notify "textDocument/didOpen", {
+        textDocument: {
+          uri
+          languageId: "civet"
+          version: 1
+          text: 'x: number := "not a number"'
+        }
+      }
+
+      // Wait for the error diagnostic
+      before := await client.waitFor "textDocument/publishDiagnostics",
+        (p) => p.uri is uri and p.diagnostics.length > 0
+
+      assert before.diagnostics.length > 0, "expected a diagnostic before close"
+
+      client.notify "textDocument/didClose", { textDocument: { uri } }
+
+      // Fix: server should publish an empty diagnostics array on close
+      after := await client.waitFor "textDocument/publishDiagnostics",
+        (p) => p.uri is uri and p.diagnostics.length is 0
+
+      assert.equal after.diagnostics.length, 0, "expected diagnostics cleared on close"
+    finally
+      await client.stop()
+
+  it "clears diagnostics when a watched file is deleted", ->
+    client := spawnLspServer()
+    try
+      await initializeClient client
+
+      errorPath := path.join(projectRoot, "proto-delete.civet")
+      uri := docUri errorPath
+
+      client.notify "textDocument/didOpen", {
+        textDocument: {
+          uri
+          languageId: "civet"
+          version: 1
+          text: 'y: number := "also not a number"'
+        }
+      }
+
+      before := await client.waitFor "textDocument/publishDiagnostics",
+        (p) => p.uri is uri and p.diagnostics.length > 0
+      assert before.diagnostics.length > 0, "expected a diagnostic before delete"
+
+      // FileChangeType.Deleted = 3 per LSP spec.
+      client.notify "workspace/didChangeWatchedFiles", {
+        changes: [{ uri, type: 3 }]
+      }
+
+      after := await client.waitFor "textDocument/publishDiagnostics",
+        (p) => p.uri is uri and p.diagnostics.length is 0
+
+      assert.equal after.diagnostics.length, 0,
+        "expected diagnostics cleared on watched-file delete"
+    finally
+      await client.stop()
+
+  it "ignores tsconfig delete and non-tsconfig create/change events", ->
+    // Exercises the fall-through arms of onDidChangeWatchedFiles:
+    //  - tsconfig.json Deleted (skipped, no reload)
+    //  - random file Changed (no match, skipped)
+    // The server must not crash and must continue producing diagnostics
+    // normally after these no-op events.
+    client := spawnLspServer()
+    try
+      await initializeClient client
+
+      tsConfigUri := docUri path.join(projectRoot, "tsconfig.json")
+      strayUri := docUri path.join(projectRoot, "stray.civet")
+      // Types per LSP spec: Created = 1, Changed = 2, Deleted = 3
+      client.notify "workspace/didChangeWatchedFiles", {
+        changes: [
+          { uri: tsConfigUri, type: 3 }
+          { uri: strayUri, type: 2 }
+          { uri: strayUri, type: 1 }
+        ]
+      }
+
+      // Prove the server is still alive and serving diagnostics afterwards.
+      livePath := path.join(projectRoot, "proto-live.civet")
+      liveUri := docUri livePath
+      client.notify "textDocument/didOpen", {
+        textDocument: {
+          uri: liveUri
+          languageId: "civet"
+          version: 1
+          text: 'console.log "live"'
+        }
+      }
+      diagnostics := await client.waitFor "textDocument/publishDiagnostics",
+        (p) => p.uri is liveUri
+      assert diagnostics, "server should continue producing diagnostics after no-op events"
+    finally
+      await client.stop()
+
+  it "settles diagnostics to the final version after rapid edits", ->
+    // Stress the change pipeline with back-to-back edits and confirm the
+    // last publishDiagnostics reflects the final text. Guards against the
+    // documented race where a slower in-flight diagnostic run for an older
+    // version publishes *after* the fast run for the newer version, leaving
+    // a stale result behind.
+    client := spawnLspServer()
+    try
+      await initializeClient client
+
+      racePath := path.join(projectRoot, "proto-race.civet")
+      uri := docUri racePath
+
+      // Collect every publishDiagnostics for this uri so we can inspect
+      // the tail after the dust settles.
+      allPublishes: any[] := []
+      client.on "textDocument/publishDiagnostics", (p: any) =>
+        allPublishes.push p if p.uri is uri
+
+      hasError := (d: any) =>
+        // Only count hard TypeScript errors; unused-local suggestions are
+        // noise for this settle-check.
+        d.severity is 1
+
+      client.notify "textDocument/didOpen", {
+        textDocument: {
+          uri
+          languageId: "civet"
+          version: 1
+          text: 'console.log "err" + 1 as number'
+        }
+      }
+      await client.waitFor "textDocument/publishDiagnostics",
+        (p) => p.uri is uri and p.diagnostics.some(hasError)
+
+      // Rapid-fire edits: clean -> error -> clean. Final text is error-free.
+      client.notify "textDocument/didChange", {
+        textDocument: { uri, version: 2 }
+        contentChanges: [{ text: 'console.log "ok"' }]
+      }
+      client.notify "textDocument/didChange", {
+        textDocument: { uri, version: 3 }
+        contentChanges: [{ text: 'console.log "err" + 1 as number' }]
+      }
+      client.notify "textDocument/didChange", {
+        textDocument: { uri, version: 4 }
+        contentChanges: [{ text: 'console.log "final ok"' }]
+      }
+
+      // Wait for the pipeline to settle to a non-error state.
+      await client.waitFor "textDocument/publishDiagnostics",
+        (p) => p.uri is uri and not p.diagnostics.some(hasError)
+      // Give any stale in-flight runs time to (wrongly) publish.
+      // Tradeoff: the fixed 1500 ms window catches stale publishes on a
+      // normal-speed host but could miss them on a very slow CI runner
+      // (stale publish lands *after* the sleep, tail check would false-green).
+      // Deterministic coverage would require injecting timing into the TS
+      // service — deferred, see PR discussion.
+      await new Promise<void> (r) => setTimeout r, 1500
+
+      tail := allPublishes[allPublishes.length - 1]
+      assert tail, "expected at least one publishDiagnostics"
+      errorDiags := tail.diagnostics.filter(hasError)
+      assert.equal errorDiags.length, 0,
+        `expected last publish to have no errors (final text is valid), got ${JSON.stringify errorDiags}`
+    finally
+      await client.stop()
