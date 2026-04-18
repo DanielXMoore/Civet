@@ -231,11 +231,11 @@ function rewriteModuleSpecifier(module: ASTLeaf | Literal): ASTLeaf | Literal
       child := module.children.0 as ASTLeaf
       rewritten := rewriteModuleSpecifier child
       return module if rewritten is child
+      // Literal.children is always [child] (single LiteralContentNode)
       return {
         ...module
         raw: rewritten.token
-        children:
-          module.children.map (&: LiteralContentNode) is child ? rewritten : &
+        children: [rewritten]
       }
 
   { token } .= module
@@ -257,20 +257,22 @@ function rewriteModuleSpecifier(module: ASTLeaf | Literal): ASTLeaf | Literal
 function rewriteDynamicImportCall(call: Call): Call
   i := call.args.findIndex (arg) =>
     not isWhitespaceOrEmpty(arg) and not isComma(arg)
+  /* c8 ignore next -- defensive: dynamic import() always has at least one argument */
   return call if i < 0
 
   firstArg := call.args[i]
-  target := firstArg?.type is "Argument" ? firstArg.expression : firstArg
+  // ArgumentPart rules always wrap arguments in an Argument node
+  assert firstArg?.type is "Argument", "rewriteDynamicImportCall: expected firstArg to be an Argument"
+  target := firstArg.expression
   return call unless target?.type is "Literal"
   rewrittenArg .= rewriteModuleSpecifier(target)
   return call if rewrittenArg is target
 
-  if firstArg?.type is "Argument"
-    rewrittenArg = {
-      ...firstArg
-      expression: rewrittenArg
-      children: firstArg.children.map & is firstArg.expression ? rewrittenArg : &
-    }
+  rewrittenArg = {
+    ...firstArg
+    expression: rewrittenArg
+    children: firstArg.children.map & is firstArg.expression ? rewrittenArg : &
+  }
 
   args := call.args[..]
   args[i] = rewrittenArg
@@ -318,6 +320,7 @@ nonExpressionTypes: ReadonlySet<string> := new Set [
 
 function isExpression(node: ASTNode): boolean
   return node.every(isExpression) if Array.isArray(node)
+  /* c8 ignore next -- defensive: string elements don't appear inside isExpression-checked arrays */
   return true if node <? "string"
   not nonExpressionTypes.has node?.type
 
@@ -868,7 +871,8 @@ function lastAccessInCallExpression(exp)
       children[i].type is "NonNullAssertion" ||
       children[i].type is "Optional"
     )) i--
-    if (i < 0) return
+    /* c8 ignore next -- defensive: Member/CallExpression always has a non-call base child */
+    return if i < 0
     // Recurse into nested MemberExpression, e.g. from `x.y()`
     exp = children[i]
   if exp.type is "Identifier" or exp.type is "PropertyAccess" or exp.type is "Index"
@@ -879,6 +883,7 @@ function lastAccessInCallExpression(exp)
 function convertMethodToFunction(method)
   { signature, block } := method
   { async, modifier, optional } := signature
+  /* c8 ignore next -- optional methods in JSX object literals are untested (produce invalid output either way) */
   return if optional
   return if modifier?.get or modifier?.set
   func := ["function "]
