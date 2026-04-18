@@ -17,6 +17,16 @@ interface ReplHandle
   close(): Promise<number?>
   proc: ChildProcess
 
+spawned: ChildProcess[] := []
+
+afterEach ->
+  // Kill any subprocess still running (e.g. if a test timed out or threw
+  // before close()); prevents orphaned REPLs from polluting later runs.
+  for proc of spawned
+    unless proc.killed or proc.exitCode?
+      proc.kill 'SIGKILL'
+  spawned.length = 0
+
 function spawnRepl(args: string[] = [], options: {} = {}): ReplHandle
   // The inline -e script imports repl() and runs it with the given options.
   // It keeps the event loop alive until repl exits (via process.exit).
@@ -30,6 +40,7 @@ function spawnRepl(args: string[] = [], options: {} = {}): ReplHandle
     cwd: REPO_ROOT
     stdio: ['pipe', 'pipe', 'pipe']
     env: process.env
+  spawned.push proc
 
   outChunks: string[] := []
   errChunks: string[] := []
@@ -163,9 +174,12 @@ describe "CLI repl()", ->
     r := spawnRepl []
     await r.waitForPrompt()
     r.write "throw new Error('boom')\n\n"
-    await r.waitForPrompt()
+    // node's repl surfaces the callback error as "Uncaught Error: boom" in its
+    // output stream before re-prompting; confirms the catch branch ran and the
+    // process survived to prompt again.
+    out := await r.waitForPrompt()
     await r.close()
-    assert true  // process stayed alive after caught error
+    assert.match out, /boom/, out
 
   it "handles top-level await", ->
     r := spawnRepl []
@@ -179,9 +193,9 @@ describe "CLI repl()", ->
     r := spawnRepl []
     await r.waitForPrompt()
     r.write "await Promise.reject(new Error('tla-fail'))\n\n"
-    await r.waitForPrompt()
+    out := await r.waitForPrompt()
     await r.close()
-    assert true
+    assert.match out, /tla-fail/, out
 
   it "handles multi-line continuation input", ->
     r := spawnRepl []
@@ -226,6 +240,7 @@ describe "CLI cli() → repl branch", ->
       cwd: REPO_ROOT
       stdio: ['pipe', 'pipe', 'pipe']
       env: process.env
+    spawned.push proc
 
     outChunks: string[] := []
     proc.stdout!.setEncoding 'utf8'
