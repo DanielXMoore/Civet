@@ -1,6 +1,9 @@
-'use strict';
+"use strict";
 
-const { reporters: { Base }, Runner } = require('mocha');
+const {
+  reporters: { Base },
+  Runner,
+} = require("mocha");
 const {
   EVENT_TEST_PASS,
   EVENT_TEST_FAIL,
@@ -9,7 +12,7 @@ const {
   EVENT_RUN_END,
 } = Runner.constants;
 
-const WIDTH = 120;
+const WIDTH = 80;
 
 function DotBatch(runner, options) {
   Base.call(this, runner, options);
@@ -22,7 +25,7 @@ function DotBatch(runner, options) {
 
   function write(ch) {
     if (col >= WIDTH) {
-      process.stdout.write('\n  ');
+      process.stdout.write("\n  ");
       col = 0;
     }
     process.stdout.write(ch);
@@ -31,37 +34,37 @@ function DotBatch(runner, options) {
 
   function flushBatch() {
     if (batchCount === 0) return;
-    const color = batchSlow ? 'bright yellow' : 'fast';
+    const color = batchSlow ? "bright yellow" : "fast";
     write(Base.color(color, Base.symbols.dot));
     batchCount = 0;
     batchSlow = false;
   }
 
-  runner.on(EVENT_RUN_BEGIN, () => process.stdout.write('\n  '));
+  runner.on(EVENT_RUN_BEGIN, () => process.stdout.write("\n  "));
 
   runner.on(EVENT_TEST_PASS, (test) => {
     batchCount++;
-    if (test.speed === 'slow') batchSlow = true;
+    if (test.speed === "slow") batchSlow = true;
     if (batchCount >= rate) flushBatch();
   });
 
   runner.on(EVENT_TEST_PENDING, () => {
-    write(Base.color('pending', Base.symbols.comma));
+    write(Base.color("pending", Base.symbols.comma));
   });
 
   runner.on(EVENT_TEST_FAIL, () => {
-    write(Base.color('fail', Base.symbols.bang));
+    write(Base.color("fail", Base.symbols.bang));
   });
 
   runner.once(EVENT_RUN_END, () => {
     flushBatch();
-    process.stdout.write('\n');
+    process.stdout.write("\n");
     self.epilogue();
   });
 }
 
-require('mocha/lib/utils').inherits(DotBatch, Base);
+require("mocha/lib/utils").inherits(DotBatch, Base);
 
-DotBatch.description = 'dot matrix, one dot per DOT_RATE passing tests';
+DotBatch.description = "dot matrix, one dot per DOT_RATE passing tests";
 
 module.exports = DotBatch;
