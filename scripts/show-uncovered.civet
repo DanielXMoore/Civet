@@ -6,12 +6,17 @@
  * formatted for easy reading by humans or LLM agents.
  *
  * Usage:
- *   civet scripts/show-uncovered.civet [file-pattern] [--context N]
+ *   civet scripts/show-uncovered.civet [file-pattern] [--context N] [--branches]
  *
  * Examples:
  *   civet scripts/show-uncovered.civet
  *   civet scripts/show-uncovered.civet typescript-service
  *   civet scripts/show-uncovered.civet --context 5
+ *   civet scripts/show-uncovered.civet parser.hera --branches
+ *
+ * With --branches: for each partial-branch line, also print which arm is
+ * uncovered (e.g. "arm 0: 42 hits  arm 1: 0 hits") so you can tell which
+ * side of an if/ternary needs a test.
  */
 
 { readFileSync, existsSync } from "fs"
@@ -20,6 +25,7 @@
 args := process.argv.slice 2
 contextIdx := args.indexOf "--context"
 CONTEXT := contextIdx !== -1 ? parseInt(args[contextIdx + 1], 10) : 3
+SHOW_BRANCHES := args.includes "--branches"
 patternArg := args.find (a, i) => !a.startsWith("--") and (contextIdx === -1 or i !== contextIdx + 1)
 
 coveragePath := resolve "coverage/coverage-final.json"
@@ -51,13 +57,26 @@ for [filePath, data] of Object.entries coverage
         uncoveredLines.add l
 
   // Collect lines with uncovered branches (statement may be covered but branch not)
+  // and map each line to the branch details (id + count + arm location)
   branchOnlyLines := new Set<number>
+  // All branches at each line, including covered siblings, so we can show
+  // "arm A: 42 hits  arm B: 0 hits" for ternaries where c8 tracks each arm
+  // as a separate branch entry.
+  allBranchesByLine := new Map<number, { id: string, count: number, col: number, uncovered: boolean }[]>
   for [id, counts] of Object.entries data.b
-    if counts.some (c) => c is 0
-      loc := data.branchMap[id]?.loc
-      continue unless loc
+    bm := data.branchMap[id]
+    loc := bm?.loc
+    continue unless loc
+    uncovered := counts.some (c) => c is 0
+    if uncovered
       for l of [loc.start.line..loc.end.line]
         branchOnlyLines.add l unless uncoveredLines.has l
+    line := loc.start.line
+    count := counts[0] ?? 0
+    col := (bm as any).locations?.[0]?.start?.column ?? loc.start.column
+    existing := allBranchesByLine.get(line) ?? []
+    existing.push { id, count, col, uncovered }
+    allBranchesByLine.set line, existing
 
   allUncovered := new Set [...uncoveredLines, ...branchOnlyLines]
 
@@ -112,5 +131,14 @@ for [filePath, data] of Object.entries coverage
         "   "
       lineNum := String(l).padStart 4
       console.log `  ${marker} ${lineNum}: ${lines[l - 1]}`
+      if SHOW_BRANCHES and allBranchesByLine.has l
+        // Only report if at least one branch at this line is uncovered
+        all := allBranchesByLine.get(l)!
+        if all.some((b) => b.uncovered)
+          summary := all
+            .sort((a, b) => a.col - b.col)
+            .map((b) => `col${b.col}:${b.count}${if b.uncovered then "×" else ""}`)
+            .join "  "
+          console.log `        ${summary}`
 
 console.log ""
