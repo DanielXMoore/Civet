@@ -80,6 +80,47 @@ parser_config.civet = {
 
 Then run `:TSInstall civet`.
 
+## Helix
+
+Clone the Civet repo and edit your `languages.toml` [config for helix](https://docs.helix-editor.com/languages.html)
+
+```toml
+[[grammar]]
+name = "civet"
+source = { path = "/path/to/civet/lsp/tree-sitter" }
+
+[language-server.civet-lsp]
+command = "civet-lsp"
+args = ["--stdio"]
+
+[[language]]
+name = "civet"
+scope = "source.civet"
+file-types = ["civet"]
+comment-token = "//"
+language-servers = ["civet-lsp"]
+grammar = "civet"
+```
+
+Tell helix to build the grammars.
+
+```shell
+hx -g build
+```
+
+To get syntax highlighting, copy the `highlights.scm` file into your configuration.
+
+```shell
+mkdir -p ~/.config/helix/runtime/queries/civet
+cp /path/to/civet/lsp/tree-sitter/queries/highlights.scm ~/.config/helix/runtime/queries/civet/
+```
+
+Finally, verify your Civet setup for helix
+
+```shell
+hx --health civet
+```
+
 ## Build tools
 
 - [unplugin](https://github.com/DanielXMoore/Civet/blob/main/source/unplugin) integrates Civet into Vite, esbuild, Astro, Farm, Rolldown, Rollup, and Webpack, including `.d.ts` generation (see [basic instructions](https://civet.dev/getting-started#building-a-project))
