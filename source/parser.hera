@@ -1454,7 +1454,7 @@ FieldDefinition
     }
 
   # NOTE: Added readonly semantic equivalent of const field assignment
-  InsertReadonly:readonly ClassElementName:id TypeSuffix?:typeSuffix __ ConstAssignment:ca MaybeNestedPostfixedCommaExpression ->
+  InsertReadonly:readonly ClassElementName:id TypeSuffix?:typeSuffix __ ConstAssignment:ca MaybeNestedPostfixedExpressionOrCommaLoop ->
     // Adjust position to space before assignment to make TypeScript remapping happier
     readonly.children[0].$loc = {
       pos: ca.$loc.pos - 1,
@@ -4632,13 +4632,23 @@ PostfixedExpression
     return attachPostfixStatementAsExpression(expression, post)
   Expression
 
+# Outside contexts where commas are too important (e.g. parameters/arguments),
+# postfixed loops can have comma expressions and spreads to accumulate multiple
+# items in the body, such as `pt.x, pt.y for pt of pts`
+CommaLoop
+  CommaExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ->
+    return attachPostfixStatementAsExpression(expression, [ws, post])
+
+PostfixedExpressionOrCommaLoop
+  CommaLoop
+  PostfixedExpression
+
 # Expression with postfixes *or* comma operators (mixing seems ambiguous)
 # Note that postfixed loops do allow commas though, for accumulating multiple
 # items per iteration
 PostfixedCommaExpression
   # Loops allow commas and spreads before the postfix
-  CommaExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ->
-    return attachPostfixStatementAsExpression(expression, [ws, post])
+  CommaLoop
   # Ifs just allow expressions
   Expression:expression ( _? PostfixStatement ):post ->
     return attachPostfixStatementAsExpression(expression, post)
@@ -5813,6 +5823,18 @@ MaybeNestedPostfixedExpression
     return $skip unless expression
     return expression
 
+MaybeNestedPostfixedExpressionOrCommaLoop
+  # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
+  # the second case, where they get checked by PrimaryExpression,
+  # which then allows for trailing binary operators etc.
+  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested PostfixedExpressionOrCommaLoop )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
+    return $skip unless expression
+    return expression unless trailing
+    return [ expression, trailing ]
+  ForbidImplicitFragment PostfixedExpressionOrCommaLoop?:expression RestoreImplicitFragment ->
+    return $skip unless expression
+    return expression
+
 MaybeNestedPostfixedCommaExpression
   # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
   # the second case, where they get checked by PrimaryExpression,
@@ -6200,7 +6222,7 @@ ExportDeclaration
     ]
   # NOTE: This covers all forms that can be directly export defaulted in TS.
   # NOTE: Using Expression to allow If/Switch expressions
-  Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedPostfixedExpression ):declaration ->
+  Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedPostfixedExpressionOrCommaLoop ):declaration ->
     return { type: "ExportDeclaration", declaration, ts: declaration.ts, children: $0 }
   Export __ ExportFromClause:exports __ FromClause ->
     return { type: "ExportDeclaration", ts: exports.ts, children: $0 }
@@ -6300,7 +6322,7 @@ LexicalDeclaration
   # NOTE: Added const/let shorthands
   # NOTE: Using Expression to allow for If/SwitchExpressions
   # NOTE: Using PostfixExpression to allow postfix if/unless/for
-  Loc:loc ( BindingPattern / BindingIdentifier ):pattern TypeSuffix?:typeSuffix NotDedented:ws ( ConstAssignment / LetAssignment ):assign MaybeNestedPostfixedCommaExpression:e ->
+  Loc:loc ( BindingPattern / BindingIdentifier ):pattern TypeSuffix?:typeSuffix NotDedented:ws ( ConstAssignment / LetAssignment ):assign MaybeNestedPostfixedExpressionOrCommaLoop:e ->
     return processAssignmentDeclaration(
       { $loc: loc, token: assign.decl }, // like InsertConst or InsertLet
       pattern, typeSuffix, ws, assign, e
@@ -6506,7 +6528,7 @@ TripleSingleStringCharacters
     return { $loc, token: $0 }
 
 CoffeeStringSubstitution
-  CoffeeSubstitutionStart AllowAll ( PostfixedExpression __ CloseBrace )? RestoreAll ->
+  CoffeeSubstitutionStart AllowAll ( PostfixedExpressionOrCommaLoop __ CloseBrace )? RestoreAll ->
     return $skip unless $3
     return [$1, ...$3]
 
@@ -6663,7 +6685,7 @@ _TemplateLiteral
 
 # NOTE: Simplified grammar
 TemplateSubstitution
-  SubstitutionStart AllowAll ( PostfixedExpression __ CloseBrace )? RestoreAll ->
+  SubstitutionStart AllowAll ( PostfixedExpressionOrCommaLoop __ CloseBrace )? RestoreAll ->
     return $skip unless $3
     return [$1, ...$3]
 
@@ -7587,7 +7609,7 @@ JSXShorthandString
   # NOTE: TemplateLiteral must be before StringLiteral,
   # so that CoffeeScript interpolated strings get checked first.
   StringLiteral
-  OpenBrace PostfixedExpression __ CloseBrace
+  OpenBrace PostfixedExpressionOrCommaLoop __ CloseBrace
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeName
 JSXAttributeName
@@ -7608,8 +7630,8 @@ JSXAttributeInitializer
 JSXAttributeValue
   # https://facebook.github.io/jsx/#prod-JSXDoubleStringCharacters
   # https://facebook.github.io/jsx/#prod-JSXSingleStringCharacters
-  # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
-  OpenBrace PostfixedExpression __ CloseBrace
+  # NOTE: Using PostfixedExpressionOrCommaLoop to allow If/Switch expressions and postfixes
+  OpenBrace PostfixedExpressionOrCommaLoop __ CloseBrace
   JSXElement
   JSXFragment
   InsertInlineOpenBrace:open InlineJSXAttributeValue:value InsertCloseBrace:close &JSXAttributeSpace ->
@@ -7893,8 +7915,8 @@ JSXChildExpression
       d.children.push(...d.splices)
     d.children.push(",void 0")
     return d
-  # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
-  Whitespace? ( DotDotDot Whitespace? )? PostfixedExpression
+  # NOTE: Using PostfixedExpressionOrCommaLoop to allow If/Switch expressions and postfixes
+  Whitespace? ( DotDotDot Whitespace? )? PostfixedExpressionOrCommaLoop
 
 IndentedJSXChildExpression
   PushIndent NestedJSXChildExpression? PopIndent ->
