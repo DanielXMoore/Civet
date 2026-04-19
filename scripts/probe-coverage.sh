@@ -25,9 +25,13 @@ range="$2"
 
 cd "$(dirname "$0")/.."
 
-# If stdin is piped (not a terminal) and non-empty, capture it.
+# If stdin is piped (not a terminal), capture it only when non-empty —
+# avoid wiping the previously-written snippet when invoked with no stdin.
 if [ ! -t 0 ]; then
-  cat > /tmp/probe-src.civet
+  captured="$(cat)"
+  if [ -n "$captured" ]; then
+    printf '%s' "$captured" > /tmp/probe-src.civet
+  fi
 fi
 
 if [ ! -f /tmp/probe-src.civet ]; then
