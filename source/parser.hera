@@ -80,14 +80,52 @@ import {
   typeOfJSX,
   wrapTypeInPromise,
 } from "./parser/lib.civet"
+import type {
+  ArrayBindingPattern,
+  ASTNode,
+  BlockStatement,
+  ObjectBindingPattern,
+} from "./parser/types.civet"
 
 /**
  * Globals
  */
-let filename              // filename currently being parsed
-let initialConfig         // input for parser config
-let config                // current parser config after directives
-let sync                  // synchronous mode: as much as possible without await
+let filename: string??        // filename currently being parsed
+let initialConfig: unknown | null              // input for parser config
+let config: any                                 // current parser config after directives
+let sync: boolean??           // synchronous mode: as much as possible without await
+
+// Parser state — mutable fields plus getters installed via
+// Object.defineProperties below.  Widened here so TS sees the full shape.
+interface ParserState
+  forbidClassImplicitCall: boolean[]
+  forbidIndentedApplication: boolean[]
+  forbidBracedApplication: boolean[]
+  forbidTrailingMemberProperty: boolean[]
+  forbidNestedBinaryOp: boolean[]
+  forbidNewlineBinaryOp: boolean[]
+  forbidImplicitFragment: boolean[]
+  forbidPipeline: boolean[]
+  JSXTagStack: unknown[]
+  indentLevels: { level: number, token?: string }[]
+  operators: Map<string, any>
+  helperRefs: any
+  prelude: any
+  lastIndent: any
+  // Getters installed via Object.defineProperties.  The *Forbidden fields
+  // are returned as booleans but the grammar bit-shifts them into a state key,
+  // so they're typed as number here (JS coerces either way).
+  readonly currentIndent: { level: number, token?: string }
+  readonly classImplicitCallForbidden: number
+  readonly indentedApplicationForbidden: number
+  readonly bracedApplicationForbidden: number
+  readonly trailingMemberPropertyForbidden: number
+  readonly nestedBinaryOpForbidden: number
+  readonly newlineBinaryOpForbidden: number
+  readonly implicitFragmentForbidden: number
+  readonly pipelineForbidden: number
+  readonly currentJSXTag: unknown
+
 export const state = {    // parser state
   // These get (re)set in Reset, but are included here for type inference
   forbidClassImplicitCall: [false],
@@ -99,7 +137,7 @@ export const state = {    // parser state
   forbidImplicitFragment: [false],
   forbidPipeline: [false],
   JSXTagStack: [undefined],
-}
+} as! ParserState
 
 export const getState = () => state
 export const getConfig = () => config
@@ -160,7 +198,7 @@ Object.defineProperties(state, {
   },
 })
 
-function setOperatorBehavior(name, behavior)
+function setOperatorBehavior(name: string, behavior: unknown)
   existing := state.operators.get(name)
   if existing and behavior // merge behaviors
     state.operators.set(name, {...existing, ...behavior})
@@ -188,7 +226,7 @@ export function getStateKey()
 
   return [stateInt, state.currentJSXTag]
 
-export function parseProgram(input, options)
+export function parseProgram(input: string, options?: { filename?: string, parseOptions?: unknown, sync?: boolean })
   filename = options?.filename
   initialConfig = options?.parseOptions
   sync = options?.sync
@@ -225,7 +263,7 @@ export { ParseError }
 Program
   # EOS allows for initial comment blocks and newlines,
   # when Init didn't already consume them.
-  Reset:reset Init:init EOS?:ws1 TopLevelStatements:statements __:ws2 ->
+  Reset:reset Init:init EOS?:ws1 TopLevelStatements:statements __:ws2 ::BlockStatement ->
     // NOTE: Wrap top level statements in a bare block so they have a parent
     program := {
       type: "BlockStatement",
@@ -621,7 +659,7 @@ PostfixedArgumentPart
     }
 
 BinaryOpExpression
-  UnaryExpression BinaryOpRHS* ->
+  UnaryExpression BinaryOpRHS* ::ASTNode ->
     return $1 unless $2.length
     return processBinaryOpExpression($0)
 
@@ -683,17 +721,17 @@ RHS
 # https://262.ecma-international.org/#prod-UnaryExpression
 UnaryExpression
   # NOTE: Added nested/array case, for e.g. indented await argument
-  IndentedApplicationAllowed UnaryOp+:pre ( ArrayLiteral / NestedArgumentList ):args !CallExpressionRest UnaryPostfix?:post ->
+  IndentedApplicationAllowed UnaryOp+:pre ( ArrayLiteral / NestedArgumentList ):args !CallExpressionRest UnaryPostfix?:post ::ASTNode ->
     return processUnaryNestedExpression(pre, args, post) ?? $skip
 
   # NOTE: Merged AwaitExpression with UnaryOp
   # https://262.ecma-international.org/#prod-AwaitExpression
   # NOTE: Eliminated left recursion
-  UnaryOp*:pre UnaryBody:exp UnaryPostfix?:post ->
+  UnaryOp*:pre UnaryBody:exp UnaryPostfix?:post ::ASTNode ->
     return processUnaryExpression(pre, exp, post)
 
 UnaryWithoutParenthesizedAssignment
-  UnaryOp*:pre UnaryWithoutParenthesizedAssignmentBody:exp UnaryPostfix?:post ->
+  UnaryOp*:pre UnaryWithoutParenthesizedAssignmentBody:exp UnaryPostfix?:post ::ASTNode ->
     return processUnaryExpression(pre, exp, post)
 
 UnaryBody
@@ -767,13 +805,13 @@ NWTypePostfix
 UpdateExpression
   # NOTE: Not allowing whitespace between prefix and postfix increment operators and operand
   # This is especially important for ++ to work as binary concat operator
-  UpdateExpressionSymbol:symbol !Whitespace UnaryWithoutParenthesizedAssignment:assigned ->
+  UpdateExpressionSymbol:symbol !Whitespace UnaryWithoutParenthesizedAssignment:assigned ::ASTNode ->
     return {
       type: "UpdateExpression",
       assigned,
       children: [symbol, assigned],
     }
-  LeftHandSideExpression ( UpdateExpressionSymbol /(?!\p{ID_Start}|[_$0-9(\[{])/ )? ->
+  LeftHandSideExpression ( UpdateExpressionSymbol /(?!\p{ID_Start}|[_$0-9(\[{])/ )? ::ASTNode ->
     return $1 unless $2
     return {
       type: "UpdateExpression",
@@ -799,7 +837,7 @@ UpdateExpressionSymbol
 AssignmentExpression
   # NOTE: ActualAssignment has highest precedence:
   # `x = y |> z` parses as `x = (y |> z)` not `(x = y) |> z`
-  _?:ws ActualAssignment:assign ->
+  _?:ws ActualAssignment:assign ::ASTNode ->
     return prepend(ws, assign)
   # NOTE: It is important for pipeline to have higher precedence than
   # usual binary operators, so that x |> & + 2 |> & * 3
@@ -819,11 +857,11 @@ NonPipelineAssignmentExpression
   ( EOS _? ) NonPipelineAssignmentExpressionTail
 
 SingleLineAssignmentExpression
-  _?:ws AssignmentExpressionTail:tail ->
+  _?:ws AssignmentExpressionTail:tail ::ASTNode ->
     return prepend(ws, tail)
 
 NonPipelineSingleLineAssignmentExpression
-  _?:ws NonPipelineAssignmentExpressionTail:tail ->
+  _?:ws NonPipelineAssignmentExpressionTail:tail ::ASTNode ->
     return prepend(ws, tail)
 
 AssignmentExpressionTail
@@ -844,7 +882,7 @@ ActualAssignment
   # NOTE: Consolidated assignment ops
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
-  ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedExpression ->
+  ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedExpression ::ASTNode ->
     $1 = $1.map((x) => [x[0], x[1], ...x[2]])
     $0 = [$1, $2]
     return {
@@ -863,7 +901,7 @@ NonPipelineActualAssignment
   # NOTE: Consolidated assignment ops
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
-  ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedNonPipelineExpression ->
+  ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedNonPipelineExpression ::ASTNode ->
     $1 = $1.map((x) => [x[0], x[1], ...x[2]])
     $0 = [$1, $2]
     return {
@@ -1054,24 +1092,37 @@ PipelineTailItem
 
 # https://262.ecma-international.org/#prod-PrimaryExpression
 PrimaryExpression
-  ObjectLiteral
+  ObjectLiteral ::ASTNode ->
+    return $1
   # NOTE: ObjectLiteral needs to be before ArrayLiteral to support `[x]: y`
-  ArrayLiteral
-  ThisLiteral
-  TemplateLiteral
+  ArrayLiteral ::ASTNode ->
+    return $1
+  ThisLiteral ::ASTNode ->
+    return $1
+  TemplateLiteral ::ASTNode ->
+    return $1
   # NOTE: TemplateLiteral must be before Literal, so that CoffeeScript
   # interpolated strings get checked first before StringLiteral.
-  Literal
-  FunctionExpression # NOTE: Must be before IdentiferExpression so `async function ...` isn't parsed as `async(function ...)`
-  IdentifierReference # NOTE: Must be below ObjectLiteral for inline objects `a: 1, b: 2` to not be shadowed by matching the first identifier
-  ClassExpression
-  RegularExpressionLiteral
-  OptimizedParenthesizedExpression
-  Placeholder
-  SymbolLiteral
+  Literal ::ASTNode ->
+    return $1
+  FunctionExpression ::ASTNode -> # NOTE: Must be before IdentiferExpression so `async function ...` isn't parsed as `async(function ...)`
+    return $1
+  IdentifierReference ::ASTNode -> # NOTE: Must be below ObjectLiteral for inline objects `a: 1, b: 2` to not be shadowed by matching the first identifier
+    return $1
+  ClassExpression ::ASTNode ->
+    return $1
+  RegularExpressionLiteral ::ASTNode ->
+    return $1
+  OptimizedParenthesizedExpression ::ASTNode ->
+    return $1
+  Placeholder ::ASTNode ->
+    return $1
+  SymbolLiteral ::ASTNode ->
+    return $1
   # https://facebook.github.io/jsx/#sec-jsx-PrimaryExpression
   # NOTE: Modified to parse multiple JSXElement/JSXFragments as one fragment
-  JSXImplicitFragment
+  JSXImplicitFragment ::ASTNode ->
+    return $1
 
 OptimizedParenthesizedExpression
   ParenthesizedExpression ->
@@ -2231,7 +2282,7 @@ BindingPattern
 # https://262.ecma-international.org/#prod-ObjectBindingPattern
 # NOTE: Simplified from spec
 ObjectBindingPattern
-  _?:ws1 OpenBrace:open ObjectBindingPatternContent:c __:ws2 CloseBrace:close ->
+  _?:ws1 OpenBrace:open ObjectBindingPatternContent:c __:ws2 CloseBrace:close ::ObjectBindingPattern ->
     properties := c.children
     return gatherBindingPatternTypeSuffix({
       type: "ObjectBindingPattern",
@@ -2261,7 +2312,7 @@ BindingPropertyList
 # https://262.ecma-international.org/#prod-ArrayBindingPattern
 # NOTE: Simplified from spec
 ArrayBindingPattern
-  _?:ws1 OpenBracket:open ArrayBindingPatternContent:c __:ws2 CloseBracket:close ->
+  _?:ws1 OpenBracket:open ArrayBindingPatternContent:c __:ws2 CloseBracket:close ::ArrayBindingPattern ->
     return gatherBindingPatternTypeSuffix({
       ...c, // names, blockPrefix, length
       type: "ArrayBindingPattern",
