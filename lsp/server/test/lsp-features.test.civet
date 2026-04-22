@@ -319,8 +319,9 @@ describe "LSP features (shared project server)", ->
           resolved := await client.request "completionItem/resolve", target
           assert resolved, "expected resolved auto-import completion"
     finally
+      // userPath was only `didOpen`-ed as an in-memory document, never
+      // written to disk — no on-disk cleanup needed.
       try fs.unlinkSync libPath
-      try fs.unlinkSync userPath
 
 // Tests below each need their own workspace / tsconfig / initialize, so they
 // spawn a dedicated server per test.  Keep this set small.
@@ -378,11 +379,24 @@ describe "LSP features (isolated workspaces)", ->
         30000
       )
 
-      // Second unchanged notification → no-op branch (new content equals cached)
+      // Let any leftover async work from the first reload's propagation
+      // settle so the no-op-skip assertion below only sees the effect of
+      // the second (unchanged-content) didChange.
+      await new Promise<void> (r) => setTimeout r, 500
+
+      // Second unchanged notification → no-op branch (new content equals cached).
+      // Count diagnostic publications during the settle window to prove the
+      // server *didn't* re-run diagnostics (which a broken no-op branch would).
+      extraPublishes .= 0
+      client.on "textDocument/publishDiagnostics", (p: any) =>
+        extraPublishes++ if p.uri is uri
       client.notify "workspace/didChangeWatchedFiles", {
         changes: [{ uri: tsConfigUri, type: 2 }]
       }
+      // Debounce is 300ms; 700ms is a comfortable margin past the timer.
       await new Promise<void> (r) => setTimeout r, 700
+      assert.equal extraPublishes, 0,
+        `expected no-op reload to skip diagnostics; got ${extraPublishes} extra publish(es)`
     finally
       await client.stop()
       fs.rmSync(tmpDir, { recursive: true, force: true })
