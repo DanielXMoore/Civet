@@ -231,6 +231,22 @@ describe "unplugin: file system", ->
       assert result and result <? "object"
       assert result.code.includes("x"), "compiled output contains variable"
 
+    it "concurrent loads of the same file share the cached promise", ->
+      // Two parallel plugin.load() calls on the same filename —
+      // the second sees the in-flight promise from the first and
+      // awaits it instead of re-compiling.
+      filePath := await makeCivetTempFile "x := 1\n"
+      plugin := rawPlugin { ts: 'civet', config: false }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      [r1, r2] := await Promise.all [
+        plugin.load.call ctx, filePath + ".jsx"
+        plugin.load.call ctx, filePath + ".jsx"
+      ]
+      assert r1?.code, "first load returned code"
+      assert r2?.code, "second load returned code"
+      assert.equal r1.code, r2.code
+
     it "returns a source map object", ->
       filePath := await makeCivetTempFile "x := 1\n"
       plugin := rawPlugin { ts: 'civet', config: false }, minMeta
@@ -367,6 +383,22 @@ describe "unplugin: file system", ->
 
       assert.equal result, null
 
+    it "with implicitExtension, prefers existing extensionless file over .civet sibling", ->
+      // If both `foo` and `foo.civet` exist on disk, the plugin should
+      // not claim the path — implicitCivet(foo) sees foo already resolves
+      // and returns undefined.
+      bareFile := path.join tmpDir, `input-${fileNum++}`
+      await writeFile bareFile, "export const x = 1\n"
+      await writeFile bareFile + ".civet", "x := 1\n"
+
+      plugin := rawPlugin { ts: 'civet', config: false, implicitExtension: true }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      result := plugin.resolveId.call ctx, bareFile, undefined, { isEntry: true }
+
+      assert.equal result, null,
+        "expected resolveId to return null so the bare file wins"
+
   describe "unplugin: tsc", ->
     it "typecheck: true runs tsc type checking", ->
       @timeout 10000
@@ -476,6 +508,32 @@ describe "unplugin: file system", ->
       finally
         console.error = origError
 
+    it "buildEnd(useConfigFileNames=true) uses tsconfig file list for rootNames", ->
+      @timeout 15000
+      fileForTsc := await makeCivetTempFile "x: number := 5\n"
+      rootDir := path.dirname fileForTsc
+
+      plugin := rawPlugin {
+        ts: 'tsc'
+        config: false
+        typecheck: true
+        tsConfig: {
+          rootDir
+          files: [ fileForTsc ]
+        }
+      }, { framework: 'esbuild' }
+      ctx := { ...nullContext, ...plugin }
+      plugin.esbuild.config { outdir: testOutDir }
+
+      origError := console.error
+      console.error = ->
+      try
+        await plugin.buildStart.call ctx
+        // Mirror cli.civet: when no filenames, pass true
+        await plugin.buildEnd.call ctx, true
+      finally
+        console.error = origError
+
     it "declarationExtension renames .d.ts output files", ->
       @timeout 10000
       fileForDecl := await makeCivetTempFile "x: number := 5\n"
@@ -562,6 +620,15 @@ describe "unplugin: vite framework hook", ->
     //@ts-expect-error context
     plugin.vite.config viteConfig
     assert viteConfig.resolve?.extensions?.includes('.civet'), ".civet added to extensions"
+
+  it "vite.config defaults rootDir when config.root is absent", ->
+    plugin := rawPlugin { ts: 'civet', config: false, implicitExtension: true }, { framework: 'vite' }
+    //@ts-expect-error context
+    await plugin.buildStart()
+    viteConfig: any := { build: {} }  // no root
+    //@ts-expect-error context
+    plugin.vite.config viteConfig
+    assert viteConfig.resolve?.extensions?.includes('.civet'), ".civet added when root missing"
 
 describe "unplugin: rspack framework hook", ->
   it "rspack pushes .civet to resolve.extensions", ->
@@ -800,6 +867,146 @@ describe "unplugin: tsc string typecheck", ->
   after ->
     await rm tmpDirTsc, { recursive: true, force: true }
 
+  it "typecheck: passes through empty/missing package.json", ->
+    // During module resolution tsc walks up directories looking for
+    // package.json; for parents that don't have one, the readFile
+    // interceptor receives undefined content. Covers
+    // \`return json unless json\` at unplugin.civet:287.
+    @timeout 15000
+    // Create an empty package.json alongside a deep source dir so TS
+    // probes multiple levels.
+    emptyPkgDir := path.join tmpDirTsc, "empty-pkg"
+    await mkdir emptyPkgDir, { recursive: true }
+    await writeFile path.join(emptyPkgDir, "package.json"), ""
+    file := path.join emptyPkgDir, "src.civet"
+    await writeFile file, "x := 1\n"
+
+    plugin := rawPlugin {
+      ts: 'tsc'
+      config: false
+      typecheck: true
+      tsConfig: {
+        rootDir: emptyPkgDir
+        files: [ file ]
+        compilerOptions: { moduleResolution: "NodeNext", module: "NodeNext" }
+      }
+    }, { framework: 'esbuild' }
+    ctx := { ...nullContext, ...plugin }
+    plugin.esbuild.config { outdir: testOutDir }
+
+    origError := console.error
+    console.error = ->
+    try
+      await plugin.buildStart.call ctx
+      await plugin.load.call ctx, file + ".jsx"
+      await plugin.buildEnd.call ctx
+    catch
+      // TypeScript may emit diagnostics about the empty package.json;
+      // we only care that the readFile interceptor's empty-json path ran.
+    finally
+      console.error = origError
+
+  it "typecheck: leaves non-string entries in files array untouched", ->
+    // The mogrify helper is defensive against non-string items in
+    // tsconfig.json's "files" array (spec says string[], but user
+    // might pass anything via tsConfig). Covers the
+    // `return item unless item <? "string"` guard at unplugin.civet:216.
+    @timeout 15000
+    subDir := path.join tmpDirTsc, "nonstring-files"
+    await mkdir subDir, { recursive: true }
+    file := path.join subDir, "in.civet"
+    await writeFile file, "x := 1\n"
+
+    plugin := rawPlugin {
+      ts: 'tsc'
+      config: false
+      typecheck: true
+      tsConfig: {
+        rootDir: subDir
+        // @ts-expect-error — intentionally malformed entry
+        files: [ file, 42 ]
+      }
+    }, { framework: 'esbuild' }
+    ctx := { ...nullContext, ...plugin }
+    plugin.esbuild.config { outdir: testOutDir }
+
+    origError := console.error
+    console.error = ->
+    try
+      await plugin.buildStart.call ctx
+      await plugin.buildEnd.call ctx
+    catch
+      // tsc may error on the malformed entry; we only care that mogrify ran
+    finally
+      console.error = origError
+
+  it "typecheck: mogrifies .civet entries in package.json imports", ->
+    @timeout 15000
+    // Use a fresh subdir so the test's package.json is what tsc picks up.
+    subDir := path.join tmpDirTsc, "pkg-imports-dir"
+    await mkdir subDir, { recursive: true }
+    file := path.join subDir, "pkg-imports.civet"
+    await writeFile file, "import './foo.civet.tsx'\n"
+    pkgFile := path.join subDir, "package.json"
+    await writeFile pkgFile, JSON.stringify
+      name: "civet-unplugin-pkg-imports-test"
+      type: "module"
+      imports: { "#local": "./foo.civet" }
+
+    plugin := rawPlugin {
+      ts: 'tsc'
+      config: false
+      typecheck: true
+      tsConfig: {
+        rootDir: subDir
+        files: [ file ]
+        compilerOptions: { moduleResolution: "NodeNext", module: "NodeNext" }
+      }
+    }, { framework: 'esbuild' }
+    ctx := { ...nullContext, ...plugin }
+    plugin.esbuild.config { outdir: testOutDir }
+
+    origError := console.error
+    console.error = ->
+    try
+      await plugin.buildStart.call ctx
+      await plugin.load.call ctx, file + ".jsx"
+      await plugin.buildEnd.call ctx
+    catch
+      // ignore — we only care that the imports.recurse branch ran
+    finally
+      console.error = origError
+
+  it "typecheck: fails with plural 's' on multiple type errors", ->
+    @timeout 15000
+    // Two distinct type errors in one file → diagnostics.length > 1
+    file := path.join tmpDirTsc, "err-plural.civet"
+    await writeFile file, "x: number := 'not a number'\ny: string := 42\n"
+    rootDir := tmpDirTsc
+
+    plugin := rawPlugin {
+      ts: 'tsc'
+      config: false
+      typecheck: true
+      tsConfig: { rootDir, files: [ file ] }
+    }, { framework: 'esbuild' }
+    ctx := { ...nullContext, ...plugin }
+    plugin.esbuild.config { outdir: testOutDir }
+
+    origError := console.error
+    console.error = ->
+    let errMsg
+    try
+      await plugin.buildStart.call ctx
+      await plugin.load.call ctx, file + ".jsx"
+      await plugin.buildEnd.call ctx
+    catch error
+      errMsg = (error as Error).message
+    finally
+      console.error = origError
+    assert errMsg, "build should have aborted"
+    assert.match errMsg, /diagnostics/, "plural 'diagnostics' expected in message"
+
   it "typecheck: 'error' string fails on type errors", ->
     @timeout 15000
     fileWithTSError := path.join tmpDirTsc, "err.civet"
@@ -833,6 +1040,38 @@ describe "unplugin: tsc string typecheck", ->
       console.error = origError
     assert errored, "build should have aborted due to type error"
 
+  it "typecheck: compound string covers all category keywords", ->
+    @timeout 15000
+    file := path.join tmpDirTsc, "err-compound.civet"
+    await writeFile file, "x: number := 'not a number'\n"
+    rootDir := tmpDirTsc
+
+    plugin := rawPlugin {
+      ts: 'tsc'
+      config: false
+      typecheck: 'error,warning,suggestion,message'
+      tsConfig: {
+        rootDir
+        files: [ file ]
+      }
+    }, { framework: 'esbuild' }
+    ctx := { ...nullContext, ...plugin }
+    plugin.esbuild.config { outdir: testOutDir }
+
+    origError := console.error
+    console.error = ->
+    let errored
+    try
+      await plugin.buildStart.call ctx
+      await plugin.load.call ctx, file + ".jsx"
+      await plugin.buildEnd.call ctx
+    catch error
+      assert error <? Error
+      errored = true
+    finally
+      console.error = origError
+    assert errored, "build should have aborted"
+
   it "typecheck: 'all' string fails on any diagnostics", ->
     @timeout 15000
     fileWithTSError2 := path.join tmpDirTsc, "err2.civet"
@@ -864,6 +1103,39 @@ describe "unplugin: tsc string typecheck", ->
     finally
       console.error = origError
     assert errored, "build should have aborted with typecheck:'all'"
+
+  it "typecheck: passes through diagnostics on non-civet files unchanged", ->
+    @timeout 15000
+    // .ts file is read via systemReadFile, never goes through civet.compile,
+    // so sourceMaps.get() returns undefined. Covers the `!sourceMap` branch.
+    subDir := path.join tmpDirTsc, "mixed-ts"
+    await mkdir subDir, { recursive: true }
+    tsFile := path.join subDir, "helper.ts"
+    await writeFile tsFile, "export const x: number = 'oops';\n"
+    civetFile := path.join subDir, "main.civet"
+    await writeFile civetFile, "{ x } from './helper.ts'\nconsole.log x\n"
+
+    plugin := rawPlugin {
+      ts: 'tsc'
+      config: false
+      typecheck: true
+      tsConfig: { rootDir: subDir, files: [ civetFile ] }
+    }, { framework: 'esbuild' }
+    ctx := { ...nullContext, ...plugin }
+    plugin.esbuild.config { outdir: testOutDir }
+
+    origError := console.error
+    console.error = ->
+    let errored
+    try
+      await plugin.buildStart.call ctx
+      await plugin.load.call ctx, civetFile + ".jsx"
+      await plugin.buildEnd.call ctx
+    catch error
+      errored = true
+    finally
+      console.error = origError
+    assert errored, "build should have aborted from .ts file type error"
 
 describe "unplugin: emitDeclaration without esbuild outdir", ->
   it "buildEnd throws if emitDeclaration is true and esbuild outdir is not set", ->

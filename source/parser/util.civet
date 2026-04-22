@@ -4,6 +4,7 @@ import type {
   ASTNodeObject
   ASTNodeParent
   ASTString
+  BlockStatement
   Children
   FunctionNode
   FunctionSignature
@@ -31,20 +32,22 @@ import {
 
 // Types need to be upfront to allow for TypeScript `asserts`
 assert: {
+  <T>(a: T, msg: string): asserts a
   equal(a: unknown, b: unknown, msg: string): asserts a is b
   notEqual(a: unknown, b: unknown, msg: string): void
   notNull<T>(a: T, msg: string): asserts a is NonNullable<T>
-} := {
-  equal(a, b, msg): void
-    /* c8 ignore next */
-    throw new Error(`Assertion failed [${msg}]: ${a} !== ${b}`) if a !== b
-  notEqual(a, b, msg): void
-    /* c8 ignore next */
-    throw new Error(`Assertion failed [${msg}]: ${a} === ${b}`) if a === b
-  notNull(a, msg)
-    /* c8 ignore next */
-    throw new Error(`Assertion failed [${msg}]: got null`) unless a?
-}
+} := Object.assign(
+  (a, msg): void =>
+    throw new Error(`Assertion failed [${msg}]`) unless a
+  {
+    equal(a, b, msg): void
+      throw new Error(`Assertion failed [${msg}]: ${a} !== ${b}`) if a !== b
+    notEqual(a, b, msg): void
+      throw new Error(`Assertion failed [${msg}]: ${a} === ${b}`) if a === b
+    notNull(a, msg)
+      throw new Error(`Assertion failed [${msg}]: got null`) unless a?
+  }
+)
 
 /**
  * Adds parent pointers to all nodes in the AST. Elements within
@@ -121,8 +124,7 @@ function isParent(node: ASTNode): node is ASTNode & IsParent
 function isToken(node: ASTNode): node is ASTNode & IsToken
   node? and node.token?
 
-function isEmptyBareBlock(node: ASTNode): boolean
-  if (node?.type !== "BlockStatement") return false
+function isEmptyBareBlock(node: BlockStatement): boolean
   { bare, expressions } := node
   return bare and
     expressions is like [], [ [, {type: "EmptyStatement"}, ...] ]
@@ -167,8 +169,8 @@ function isWhitespaceOrEmpty(node): boolean
   if (node.children) node = node.children
   if (!node.length) return true
   if (typeof node is "string") return /^\s*$/.test(node)
-  if (Array.isArray(node)) return node.every(isWhitespaceOrEmpty)
-  return false
+  assert Array.isArray(node), "isWhitespaceOrEmpty: unexpected node shape"
+  node.every(isWhitespaceOrEmpty)
 
 // Returns leading space as a string, or undefined if none
 function firstNonSpace(node: ASTNode): ASTNode
@@ -179,10 +181,7 @@ function firstNonSpace(node: ASTNode): ASTNode
         return first
     return undefined
   else if isParent node
-    if first := firstNonSpace node.children
-      return first
-    else
-      return node
+    return firstNonSpace node.children
   else if isToken node
     return if node.token is like /^[ \t]*$/
   else if node <? "string"
@@ -275,11 +274,10 @@ function stripTrailingImplicitComma(children: ASTNode[])
 function hasTrailingComment(node: ASTNode): boolean
   return false unless node?
   return true if node.type is "Comment"
-  if Array.isArray node
-    return hasTrailingComment node.-1
-  if "children" in node
-    return hasTrailingComment (node.children as Children).-1
-  false
+  return hasTrailingComment node.-1 if Array.isArray node
+  /* c8 ignore next -- defensive: AST recursion never lands on a bare leaf here */
+  return false unless isParent node
+  hasTrailingComment (node.children as Children).-1
 
 /**
  * Trims the first single space from the spacing array or node's children if present
@@ -351,14 +349,12 @@ function prepend(prefix: ASTNode, node: ASTNode): ASTNode
   return node if not prefix or prefix is like []
   if Array.isArray node
     [prefix, ...node]
-  else if isParent node
+  else
+    assert isParent(node), "prepend: can't glom into an AST leaf"
     {
       ...node
       children: [prefix, ...node.children]
     } as typeof node
-  // NOTE: Not glomming into an AST leaf; would need to flatten prefix
-  else
-    [prefix, node]
 
 function append(node: ASTNode, suffix: ASTNode): ASTNode
   return node if not suffix or suffix is like []
@@ -369,7 +365,6 @@ function append(node: ASTNode, suffix: ASTNode): ASTNode
       ...node
       children: [...node.children, suffix]
     } as typeof node
-  // NOTE: Not glomming into an AST leaf; would need to flatten suffix
   else
     [node, suffix]
 
@@ -378,10 +373,9 @@ function inplacePrepend(prefix: ASTNode, node: ASTNode): void
   return if Array.isArray(prefix) and not prefix.length
   if Array.isArray node
     node.unshift prefix
-  else if isParent node
-    node.children.unshift prefix
   else
-    throw new Error "Can't prepend to a leaf node"
+    assert isParent(node), "inplacePrepend: can't prepend to a leaf node"
+    node.children.unshift prefix
 
 // Convert (non-Template) Literal to actual JavaScript value
 function literalValue(literal: Literal)
@@ -410,6 +404,7 @@ function literalValue(literal: Literal)
           case "b": return parseInt(raw.replace(/0[bB]/, ""), 2)
           case "o": return parseInt(raw.replace(/0[oO]/, ""), 8)
       return parseInt(raw, 10)
+    /* c8 ignore next 2 -- literal subtype comes from the parser and is always one of the handled types */
     else
       throw new Error("Unrecognized literal " + JSON.stringify(literal))
 
@@ -504,7 +499,8 @@ function makeNumericLiteral(n: number): Literal
 * expression. You probably want the RegExp to start with `^`.
 */
 function startsWith(target: ASTNode, value: RegExp)
-  if (!target) return
+  /* c8 ignore next -- defensive: all callers pass a non-null AST target */
+  return unless target
   if Array.isArray target
     let i = 0
     let l = target.length
@@ -522,14 +518,14 @@ function startsWithPredicate<T extends ASTNodeObject>(node: ASTNode, predicate: 
   return undefined if not node? or node <? "string"
 
   if Array.isArray node
-    for each child of node
-      continue if skip child
-      return startsWithPredicate child, predicate
-    return
+    first := node.find (c) => not skip c
+    return unless first?
+    return startsWithPredicate first, predicate
 
   return node if predicate node
   return unless node.children?
   startsWithPredicate node.children, predicate
+
 
 /**
  * Does this expression have an `await` in it and thus needs to be `async`?
@@ -586,8 +582,7 @@ function deepCopy<T extends ASTNode>(root: T): T
  */
 function replaceNode(node: ASTNode, newNode: ASTNode, parent?: ASTNodeParent): void
   parent ??= (node as ASTNodeObject?)?.parent
-  unless parent?
-    throw new Error "replaceNode failed: node has no parent"
+  assert.notNull parent, "replaceNode: node has no parent"
 
   function recurse(children: ASTNode[]): boolean
     for each child, i of children
@@ -598,8 +593,7 @@ function replaceNode(node: ASTNode, newNode: ASTNode, parent?: ASTNodeParent): v
         return true if recurse child
     return false
 
-  unless recurse parent.children
-    throw new Error "replaceNode failed: didn't find child node in parent"
+  assert.notEqual recurse(parent.children), false, "replaceNode: didn't find child node in parent"
 
   // Adjust 'expression' etc. alias pointers
   for key, value in parent
@@ -618,12 +612,9 @@ function replaceNodes(root, predicate, replacer)
   return root unless root?
 
   array := Array.isArray(root) ? root : root.children
-
   unless array
-    if predicate root
-      return replacer root, root
-    else
-      return root
+    return replacer(root, root) if predicate root
+    return root
 
   for each node, i of array
     return unless node?
@@ -770,13 +761,11 @@ function skipIfOnlyWS(target)
  * Splice child from children/array, similar to Array.prototype.splice,
  * but specifying a child instead of an index.  Throw if child not found.
  */
-function spliceChild(node: ASTNodeObject | ASTNode[], child: ASTNode, del: number, ...replacements: ASTNode[])
-  children := Array.isArray(node) ? node : node.children
-  unless Array.isArray children
-    throw new Error "spliceChild: non-array node has no children field"
+function spliceChild(node: ASTNodeObject, child: ASTNode, del: number, ...replacements: ASTNode[])
+  { children } := node
+  assert Array.isArray(children), "spliceChild: non-array node has no children field"
   index := children.indexOf child
-  if index < 0
-    throw new Error "spliceChild: child not found"
+  assert.notEqual index, -1, "spliceChild: child not found"
   children.splice index, del, ...replacements
 
 /**

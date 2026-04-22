@@ -1,6 +1,7 @@
 { testCase, throws } from ./helper.civet
 { compile } from ../source/main.civet
 { serialize } from ../source/parser/comptime.civet
+vm from node:vm
 assert from assert
 
 declare global
@@ -275,6 +276,31 @@ describe "comptime", ->
     const options = {comptime: true}
   """
 
+  it "falls back to indirect eval when vm.runInContext is unavailable", =>
+    // Simulate browser environment: vm shim without runInContext.
+    origRunInContext := vm.runInContext
+    origCreateContext := vm.createContext
+    ;(vm as any).runInContext = undefined
+    ;(vm as any).createContext = undefined
+    try
+      output := await compile """
+        x := comptime 21 * 2
+      """, options
+      assert.match output, /42/, "eval fallback should inline the comptime value; got: " + output
+    finally
+      (vm as any).runInContext = origRunInContext
+      (vm as any).createContext = origCreateContext
+
+  it "skips comptime evaluation when compile already has errors", =>
+    // When the pre-comptime generate surfaces errors, comptime leaves the
+    // subtree alone so the error still appears in the output.
+    errors := []
+    output := await compile """
+      x := comptime x.
+    """, { ...options, errors }
+    assert errors.length > 0, "should have collected parse errors"
+    assert.doesNotMatch output, /\bNaN\b/, "comptime should not have evaluated"
+
 describe "serialize", ->
   it "numbers", =>
     assert.equal serialize(1), "1"
@@ -311,6 +337,12 @@ describe "serialize", ->
   it "custom classes", =>
     class Foo {}
     assert.throws (=> serialize new Foo()), /cannot serialize object with prototype/
+  it "object with unnamed prototype", =>
+    // Prototype chain terminates before Object, so val.constructor is undefined
+    // and the throw falls back to Object.getPrototypeOf val
+    proto := Object.create null
+    obj := Object.create proto
+    assert.throws => serialize obj
   it "arrow functions", =>
     assert.equal serialize((x: ???) => x), "(x) => x"
     // Using match instead of equal so it's not sensitive to the rest of the file
@@ -367,9 +399,16 @@ describe "serialize", ->
       serialize obj
       'Object.create(null,{"foo":{"value":1,"writable":true,"enumerable":true,"configurable":true},"bar":{"value":true,"writable":false,"enumerable":false,"configurable":false}})'
   it "typed arrays", =>
+    assert.equal serialize(new Int8Array [-1, 0, 1]), "new Int8Array([-1,0,1])"
+    assert.equal serialize(new Uint8Array [1, 2, 3]), "new Uint8Array([1,2,3])"
+    assert.equal serialize(new Int16Array [-1, 0, 1]), "new Int16Array([-1,0,1])"
+    assert.equal serialize(new Uint16Array [1, 2, 3]), "new Uint16Array([1,2,3])"
+    assert.equal serialize(new Int32Array [-1, 0, 1]), "new Int32Array([-1,0,1])"
     assert.equal serialize(new Uint32Array [1, 2, 3]), "new Uint32Array([1,2,3])"
+    assert.equal serialize(new Float32Array [1, 2, 3]), "new Float32Array([1,2,3])"
     assert.equal serialize(new Float64Array [1.0, 1.5, NaN]), "new Float64Array([1,1.5,NaN])"
     assert.equal serialize(new BigInt64Array [1n, 2n, 3n]), "new BigInt64Array([1n,2n,3n])"
+    assert.equal serialize(new BigUint64Array [1n, 2n, 3n]), "new BigUint64Array([1n,2n,3n])"
     assert.equal serialize(Buffer.from [1, 2, 3]), "Buffer.from([1,2,3])"
     assert.equal serialize(new Uint8ClampedArray [-1, 0, 2, 256]), "new Uint8ClampedArray([0,0,2,255])"
   it "classes", =>
