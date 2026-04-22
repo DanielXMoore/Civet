@@ -389,6 +389,10 @@ describe "LSP features (isolated workspaces)", ->
 
   it "handles initialize without any workspace folders", ->
     client := spawnLspServer()
+    // Use a dedicated empty tmp dir so parseJsonConfigFileContent's default
+    // include doesn't pull in the entire system tmp directory (which took
+    // ~1.5s on its own).
+    orphanDir := fs.mkdtempSync path.join(os.tmpdir(), "civet-orphan-")
     try
       await client.request "initialize", {
         processId: process.pid
@@ -398,7 +402,7 @@ describe "LSP features (isolated workspaces)", ->
       }
       client.notify "initialized", {}
 
-      orphanPath := path.join(os.tmpdir(), "civet-lsp-orphan.civet")
+      orphanPath := path.join(orphanDir, "orphan.civet")
       uri := docUri orphanPath
       client.notify "textDocument/didOpen", {
         textDocument: { uri, languageId: "civet", version: 1, text: 'console.log "orphan"' }
@@ -406,6 +410,7 @@ describe "LSP features (isolated workspaces)", ->
       await waitForDiag(client, (p) => p.uri is uri)
     finally
       await client.stop()
+      fs.rmSync(orphanDir, { recursive: true, force: true })
 
   it "uses node_modules ancestor as project path for a file in node_modules", ->
     client := spawnLspServer()
@@ -527,12 +532,15 @@ describe "LSP features (isolated workspaces)", ->
       list := result?.items ?? result
       assert Array.isArray(list), "expected completion items array"
 
+      // Swap to the exact-alias form ("@exact" without trailing slash).
+      // The server doesn't stamp `version` on publishDiagnostics, so just
+      // ask for completion directly — onCompletion awaits updating()
+      // internally, which drains the pending change for this uri.
       text2 := "x from @exact"
       client.notify "textDocument/didChange", {
         textDocument: { uri: docUriStr, version: 2 }
         contentChanges: [{ text: text2 }]
       }
-      await waitForDiag(client, (p) => p.uri is docUriStr and p.version is 2, WAIT).catch(=> null)
       await client.request "textDocument/completion", {
         textDocument: { uri: docUriStr }
         position: { line: 0, character: text2.length }
