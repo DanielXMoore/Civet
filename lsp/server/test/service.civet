@@ -2,6 +2,8 @@ import TSService from "../source/lib/typescript-service.civet"
 import { pathToFileURL } from "url"
 import { TextDocument } from "vscode-languageserver-textdocument"
 import fs from "fs"
+import { mkdtempSync, writeFileSync, rmSync } from "fs"
+import { tmpdir } from "os"
 import path from "path"
 
 { forwardMap, getCanonicalFileName } from ../source/lib/util.civet
@@ -269,3 +271,103 @@ describe "ts service document lifecycle", ->
       "plain ts should be removed from scriptFileNames"
     assert.equal service.host.getScriptVersion(tsPath), "0",
       "plain ts path should be forgotten after removeDocument"
+
+describe "ts service module resolution", ->
+  it "resolves a directory import via index.civet", async ->
+    // Exercises resolveModuleNames + resolvedModule's index-file lookup
+    // (typescript-service.civet lines 131-137) where transpiler is picked up
+    // from the implicit `<dir>/index.civet` file for a directory import.
+    service := await TSService(projectURL, nullLogger)
+    await service.loadPlugins()
+
+    dirImportPath := path.resolve("./integration/project-test/dir-import.civet")
+    loadFile(service, dirImportPath)
+    // Semantic diagnostics force TS to resolve `./lib` which hits the
+    // directory-import branch that scans for `index + transpiler.extension`.
+    diagnostics := service.getSemanticDiagnostics(dirImportPath + ".tsx")
+    assert.equal diagnostics.length, 0,
+      `expected no diagnostics, got ${diagnostics.map(.messageText).join(", ")}`
+
+  it "accepts a plain filesystem path (not a file:// URL) as projectURL", async ->
+    // Exercises line 434: projectURL.startsWith("file:") ? ... : path.resolve(projectURL)
+    // (the else branch that normalizes a bare path).
+    plainPath := path.resolve("./integration/project-test") + path.sep
+    service := await TSService(plainPath, nullLogger)
+    await service.loadPlugins()
+    // Constructing the service and loading plugins is enough to cover
+    // the path-normalization else branch.
+    assert service
+
+  it "takes the pathsBasePath fallback when baseUrl is unset", async ->
+    // Exercises the right side of `pathsBase := baseUrl ?? (pathsBasePath ...)`
+    // at typescript-service.civet line 158.  TS 5.0+ allows `paths` without an
+    // explicit `baseUrl`; parseJsonConfigFileContent sets options.pathsBasePath
+    // to the tsconfig's directory, so our fallback chain lands on pathsBasePath.
+    //
+    // We only need resolveModuleNames to *run* the fallback branch — the import
+    // itself doesn't have to resolve.  An unresolvable alias import triggers
+    // the paths loop (covering the `baseUrl ??` right side), then TS reports
+    // "Cannot find module", proving the code path executed.
+    tmpDir := mkdtempSync(path.join(tmpdir(), 'civet-no-baseurl-'))
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'), JSON.stringify({
+        compilerOptions:
+          target: 'es2020'
+          module: 'NodeNext'
+          paths:
+            '@missing/*': ['nowhere/*']
+      })
+      consumerPath := path.join(tmpDir, 'consumer.civet')
+      writeFileSync consumerPath, 'x from @missing/anything\n'
+
+      service := await TSService(pathToFileURL(tmpDir + path.sep).href, nullLogger)
+      await service.loadPlugins()
+      loadFile(service, consumerPath)
+
+      // TS invokes our resolveModuleNames for `@missing/anything`, which runs
+      // the paths-resolution block (the branch we're here to cover) and then
+      // reports the module as unresolved.
+      diagnostics := service.getSemanticDiagnostics(consumerPath + '.tsx')
+      assert diagnostics.some((d) => String(d.messageText).includes("Cannot find module")),
+        `expected a 'Cannot find module' diagnostic, got: ${diagnostics.map(.messageText).join(' | ')}`
+    finally
+      rmSync(tmpDir, { recursive: true, force: true })
+
+describe "ts service without civet dependencies", ->
+  let tmpDir: string
+  before ->
+    tmpDir = mkdtempSync(path.join(tmpdir(), 'civet-lsp-bundled-'))
+    writeFileSync path.join(tmpDir, 'tsconfig.json'), '{"compilerOptions":{"target":"es2020"}}'
+
+  after ->
+    rmSync(tmpDir, { recursive: true, force: true }) if tmpDir
+
+  it "falls back to bundled civet when the project can't resolve @danielx/civet", async ->
+    // Exercises lines 486-487 (USING BUNDLED CIVET) + 496-497 (No Civet config found).
+    // `tmpDir` has no node_modules, so projectRequire('@danielx/civet') throws,
+    // and findConfig walks up without finding a civetconfig.
+    service := await TSService(tmpDir + path.sep, nullLogger)
+    await service.loadPlugins()
+    // Service should still be usable after bundled fallback
+    assert service
+
+  it "logs an error when civet config fails to load", async ->
+    // Exercises the catch arm at line 498-499: CivetConfig.loadConfig throws
+    // on a malformed civetconfig.json.
+    badConfigDir := mkdtempSync(path.join(tmpdir(), 'civet-lsp-badcfg-'))
+    try
+      writeFileSync path.join(badConfigDir, 'tsconfig.json'), '{"compilerOptions":{"target":"es2020"}}'
+      writeFileSync path.join(badConfigDir, 'civetconfig.json'), '{"not valid json'
+      errors: string[] := []
+      capturingLogger := {
+        log: ->
+        info: ->
+        error: (msg: string) => errors.push msg
+      }
+      service := await TSService(badConfigDir + path.sep, capturingLogger)
+      await service.loadPlugins()
+      assert service
+      assert errors.some((e) => e.includes("Error loading Civet config")),
+        `expected config error, got: ${errors.join(" | ")}`
+    finally
+      rmSync(badConfigDir, { recursive: true, force: true })

@@ -20,6 +20,16 @@ describe "previewer", ->
       result := plain("{@linkcode https://example.com My Link}")
       assert.equal result, "[`My Link`](https://example.com)"
 
+    it "converts bare {@linkcode url} without text to backtick link", ->
+      // exercises previewer.civet line 21: {@linkcode} without description
+      // falls to `${text ? text.trim() : link}` else-branch
+      result := plain("{@linkcode https://example.com}")
+      assert.equal result, "[`https://example.com`](https://example.com)"
+
+    it "converts {@link url text} with description (text branch of line 24)", ->
+      result := plain("{@link https://example.com homepage}")
+      assert.equal result, "[homepage](https://example.com)"
+
   describe "getTagDocumentation", ->
     it "renders @param with doc", ->
       tag := { name: "param", text: [{kind: "text", text: "x - the value"}] } as any
@@ -83,6 +93,44 @@ describe "previewer", ->
       tag := { name: "author", text: [{kind: "text", text: "Jane Doe"}] } as any
       result := getTagDocumentation(tag)
       assert result?.includes("Jane Doe")
+
+    // These cover the augments/extends cases (lines 63-64) and the
+    // param/doc split with multiline doc (line 73 newline branch).
+    it "renders @augments as structured label", ->
+      tag := { name: "augments", text: [{kind: "text", text: "Base - adds foo"}] } as any
+      result := getTagDocumentation(tag)
+      assert result?.includes("@augments")
+      assert result?.includes("`Base`")
+
+    it "renders @extends as structured label", ->
+      tag := { name: "extends", text: [{kind: "text", text: "Base"}] } as any
+      result := getTagDocumentation(tag)
+      assert result?.includes("@extends")
+      assert result?.includes("`Base`")
+
+    it "renders @param with multi-line doc using newline joiner", ->
+      // exercises line 73: doc.match(/\r\n|\n/g) truthy branch
+      tag := { name: "param", text: [{kind: "text", text: "x - line1\nline2"}] } as any
+      result := getTagDocumentation(tag)
+      assert result?.includes("`x`")
+      assert result?.includes("line1")
+      assert result?.includes("line2")
+      assert result?.includes("  \n")
+
+    it "returns undefined for missing tag.text (getTagBodyText early-return)", ->
+      // exercises previewer.civet line 30: return unless tag.text
+      // Use a generic tag (not augments/extends/param/template) so it falls through
+      // to getTagBodyText, whose return-undefined surfaces as just the label.
+      tag := { name: "since", text: undefined } as any
+      result := getTagDocumentation(tag)
+      assert.equal result, "*@since*"
+
+    it "handles @param with missing tag.text (line 67 `or ''` branch)", ->
+      // exercises `plain(tag.text or '')` when tag.text is undefined
+      tag := { name: "param", text: undefined } as any
+      result := getTagDocumentation(tag)
+      // body.length won't be 3, so falls through to generic label emit
+      assert.equal result, "*@param*"
 
 describe "textRendering", ->
   describe "asPlainText", ->
@@ -256,3 +304,47 @@ describe "textRendering", ->
       tag := { name: "default", text: [{kind: "text", text: "42"}] } as any
       result := tagMd(tag)
       assert result.includes("```") and result.includes("42")
+
+    it "renders @augments as structured label", ->
+      // exercises textRendering.civet line 80 "augments" case
+      tag := { name: "augments", text: [{kind: "text", text: "Base - base class"}] } as any
+      result := tagMd(tag)
+      assert result.includes("@augments")
+      assert result.includes("`Base`")
+
+    it "renders @extends as structured label", ->
+      // exercises textRendering.civet line 80 "extends" case
+      tag := { name: "extends", text: [{kind: "text", text: "Base"}] } as any
+      result := tagMd(tag)
+      assert result.includes("@extends")
+      assert result.includes("`Base`")
+
+    it "renders @return (singular) with text", ->
+      // exercises textRendering.civet line 88 "return" case
+      tag := { name: "return", text: [{kind: "text", text: "the result"}] } as any
+      result := tagMd(tag)
+      assert result.includes("@return")
+
+    it "omits @return when text is empty", ->
+      tag := { name: "return", text: [] } as any
+      assert.equal tagMd(tag), ""
+
+    it "returns undefined for @template without type params", ->
+      // exercises textRendering.civet line 109 `params ? ... : undefined` false branch
+      tag := { name: "template", text: [{kind: "text", text: "just docs"}] } as any
+      // No typeParameterName parts -> params is empty -> undefined -> falls through
+      result := tagMd(tag)
+      // When getTagBody returns undefined, outer switch has no `if body?.length is 3`
+      // match, so it falls through to the generic label emit.
+      assert result.includes("@template")
+
+    it "renders link with target and falsy name/text (line 38 `or \"\"`)", ->
+      // Cover `currentLink.text or escapeBackTicks(currentLink.name or "")`
+      // falsy-right-side branch: name is also undefined so we hit the `or ""`.
+      parts := [
+        {kind: "link", text: "{@link "}
+        {kind: "linkName", text: "", target: { file: "foo.ts", start: { line: 1, offset: 1 } }}
+        {kind: "link", text: "}"}
+      ] as any
+      result := asPlainTextWithLinks(parts)
+      assert result.includes("command:_typescript.openJsDocLink")
