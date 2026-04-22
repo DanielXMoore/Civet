@@ -35,10 +35,11 @@ const cacheDir = path.resolve(__dirname, '../.cache/build');
 
 /**
  * Compute cache file path for a compiled source file.
+ * `mode` is included in the hash so JS and TS outputs land in separate slots.
  */
-function getCachePath({ source, filename, module }) {
+function getCachePath({ source, filename, module, mode = 'js' }) {
   const hash = crypto.createHash('sha1');
-  const parts = [heraVersion, civetVersion, civetSourceMtime, source, filename, module.toString()];
+  const parts = [heraVersion, civetVersion, civetSourceMtime, source, filename, module.toString(), mode];
   for (const part of parts) {
     hash.update(part).update('\0');
   }
@@ -78,4 +79,44 @@ function compileWithCache(source, filename, module = true) {
   return js;
 }
 
-module.exports = { compileWithCache };
+/**
+ * Compile a .civet or .hera file to TypeScript (for type-checking), returning
+ * `{ code, sourceMapLines }`.  Caches code and sourcemap lines on disk keyed the
+ * same way as `compileWithCache` but in a separate TS slot.
+ */
+function compileToTS(source, filename, module = true) {
+  const p = getCachePath({ source, filename, module, mode: 'ts' });
+  const codePath = p.replace(/\.mjs$/, '.ts');
+  const mapPath = p.replace(/\.mjs$/, '.map.json');
+  const cachedCode = readCache(codePath);
+  const cachedMap = readCache(mapPath);
+  if (cachedCode != null && cachedMap != null) {
+    return { code: cachedCode, sourceMapLines: JSON.parse(cachedMap) };
+  }
+
+  const type = filename.endsWith('.hera') ? 'hera' : 'civet';
+  let result;
+  if (type === 'hera') {
+    const heraResult = heraCompile(source, { filename, module, sourceMap: true });
+    result = civetCompile(heraResult.code, {
+      filename, js: false, sourceMap: true, sync: true,
+      parseOptions: { rewriteCivetImports: '.civet.tsx' },
+      upstreamSourceMap: heraResult.sourceMap,
+    });
+  } else {
+    result = civetCompile(source, {
+      filename, js: false, sourceMap: true, sync: true,
+      parseOptions: { rewriteCivetImports: '.civet.tsx' },
+    });
+  }
+
+  const lines = result.sourceMap?.lines ?? result.sourceMap?.data?.lines ?? [];
+  // Civet's rewriteTsImports only rewrites .civet imports; do the same for .hera
+  // so TS's module resolver finds our virtual .hera.tsx siblings.
+  const code = result.code.replace(/(\.hera)(?!\.tsx)(["'])/g, '$1.tsx$2');
+  writeCache(codePath, code);
+  writeCache(mapPath, JSON.stringify(lines));
+  return { code, sourceMapLines: lines };
+}
+
+module.exports = { compileWithCache, compileToTS };
