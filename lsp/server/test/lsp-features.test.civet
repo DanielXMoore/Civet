@@ -1,6 +1,12 @@
 // Protocol-level tests that exercise language features and lifecycle edges
-// the other test files don't cover.  Each test spawns a fresh server so the
-// server-level state (caches, watchers) starts clean.
+// the other test files don't cover.
+//
+// Layout: tests split into a "shared project" describe (one server spawned
+// once, reused across all tests; unique URIs per test to avoid state bleed)
+// and an "isolated" describe for tests that need their own workspace/tsconfig
+// (reload, custom paths, missing workspace folders).  Sharing one server
+// across the shared-project tests cuts ~15 TSService cold starts per run,
+// which under coverage dominated the wallclock.
 
 { spawnLspServer, docUri, type LspClient } from ./lsp-harness.civet
 path from node:path
@@ -34,165 +40,301 @@ initializeClient := (client: LspClient, opts: { workspaceFolders?: any, capabili
 waitForDiag := (client: LspClient, match: (p: any) => boolean, timeout = WAIT): Promise<any> =>
   client.waitFor("textDocument/publishDiagnostics", match, timeout)
 
-describe "LSP features", ->
+// Spawn a single server for the whole describe and reuse it.  Tests must use
+// unique URIs so one test's open documents don't leak into another's view.
+describe "LSP features (shared project server)", ->
   @timeout 60000
+
+  let client: LspClient
+  before ->
+    client = spawnLspServer()
+    // Enable workspaceFolders capability so the workspace-folder change test
+    // can exercise the matching listener without a dedicated server.
+    await initializeClient client,
+      capabilities:
+        workspace:
+          configuration: true
+          workspaceFolders: true
+
+  after ->
+    await client.stop() if client
 
   it "hover returns just the signature when no documentation exists", ->
     // Exercises the `documentation ?? ""` branch at server.civet line 272
     // when Previewer.plain returns an empty string for an undocumented symbol.
-    client := spawnLspServer()
-    try
-      await initializeClient client
+    uri := docUri path.join(projectRoot, "hover-plain.civet")
+    text := "foo := 42\nfoo + 1"
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
 
-      hoverPath := path.join(projectRoot, "hover-plain.civet")
-      uri := docUri hoverPath
-      text := "foo := 42\nfoo + 1"
-      client.notify "textDocument/didOpen", {
-        textDocument: { uri, languageId: "civet", version: 1, text }
-      }
-      await waitForDiag(client, (p) => p.uri is uri)
-
-      // hover on `foo` at the use site
-      result := await client.request "textDocument/hover", {
-        textDocument: { uri }
-        position: { line: 1, character: 1 }
-      }
-      assert result, "expected hover result"
-    finally
-      await client.stop()
+    result := await client.request "textDocument/hover", {
+      textDocument: { uri }
+      position: { line: 1, character: 1 }
+    }
+    assert result, "expected hover result"
 
   it "hover returns formatted documentation and tags", ->
-    client := spawnLspServer()
-    try
-      await initializeClient client
+    uri := docUri path.join(projectRoot, "hover-docs.civet")
+    text := """
+      /**
+       * A greet helper.
+       * @param name The name
+       * @returns the greeting
+       */
+      greet := (name: string) => `hi ${name}`
+      greet "world"
 
-      hoverPath := path.join(projectRoot, "hover.civet")
-      uri := docUri hoverPath
-      text := """
-        /**
-         * A greet helper.
-         * @param name The name
-         * @returns the greeting
-         */
-        greet := (name: string) => `hi ${name}`
-        greet "world"
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
 
-      """
-
-      client.notify "textDocument/didOpen", {
-        textDocument: { uri, languageId: "civet", version: 1, text }
-      }
-      await waitForDiag(client, (p) => p.uri is uri)
-
-      // hover on `greet` at the call site
-      lines := text.split "\n"
-      callLine := lines.findIndex (l) => l.startsWith "greet \""
-      result := await client.request "textDocument/hover", {
-        textDocument: { uri }
-        position: { line: callLine, character: 2 }
-      }
-      assert result, "expected hover result"
-      assert result.contents?.value, "expected markdown hover contents"
-      // The hover should include both documentation and rendered @param/@returns tags,
-      // exercising the Previewer.plain documentation path and info.tags?.map path.
-      value := result.contents.value <? 'string' ? result.contents.value : String(result.contents.value)
-      assert value.includes("greet"), "hover should mention the symbol"
-    finally
-      await client.stop()
+    lines := text.split "\n"
+    callLine := lines.findIndex (l) => l.startsWith "greet \""
+    result := await client.request "textDocument/hover", {
+      textDocument: { uri }
+      position: { line: callLine, character: 2 }
+    }
+    assert result, "expected hover result"
+    assert result.contents?.value, "expected markdown hover contents"
+    value := result.contents.value <? 'string' ? result.contents.value : String(result.contents.value)
+    assert value.includes("greet"), "hover should mention the symbol"
 
   it "semantic tokens returns valid token data for a civet file", ->
-    client := spawnLspServer()
-    try
-      await initializeClient client
+    uri := docUri path.join(projectRoot, "semtok.civet")
+    text := """
+      class Widget
+        @name := "x"
+        greet(): void
+          console.log @name
 
-      stPath := path.join(projectRoot, "semtok.civet")
-      uri := docUri stPath
-      text := """
-        class Widget
-          @name := "x"
-          greet(): void
-            console.log @name
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
 
-      """
-
-      client.notify "textDocument/didOpen", {
-        textDocument: { uri, languageId: "civet", version: 1, text }
-      }
-      await waitForDiag(client, (p) => p.uri is uri)
-
-      tokens := await client.request "textDocument/semanticTokens/full", {
-        textDocument: { uri }
-      }
-      assert tokens, "expected semantic tokens response"
-      assert Array.isArray(tokens.data), "expected tokens.data to be an array"
-      // Returns something non-trivial — exercises the remap loop and delta encoding
-      assert tokens.data.length > 0, "expected at least one token"
-    finally
-      await client.stop()
+    tokens := await client.request "textDocument/semanticTokens/full", {
+      textDocument: { uri }
+    }
+    assert tokens, "expected semantic tokens response"
+    assert Array.isArray(tokens.data), "expected tokens.data to be an array"
+    assert tokens.data.length > 0, "expected at least one token"
 
   it "completion resolve returns details for a symbol", ->
-    client := spawnLspServer()
-    try
-      await initializeClient client
+    uri := docUri path.join(projectRoot, "complete-resolve.civet")
+    text := """
+      x := "abc"
+      x.toUp
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
 
-      crPath := path.join(projectRoot, "complete-resolve.civet")
-      uri := docUri crPath
-      text := """
-        x := "abc"
-        x.toUp
-      """
-
-      client.notify "textDocument/didOpen", {
-        textDocument: { uri, languageId: "civet", version: 1, text }
-      }
-      await waitForDiag(client, (p) => p.uri is uri)
-
-      lines := text.split "\n"
-      useLine := lines.findIndex (l) => l.includes("x.toUp")
-      completions := await client.request "textDocument/completion", {
-        textDocument: { uri }
-        position: { line: useLine, character: lines[useLine].length }
-      }
-      list := completions?.items ?? completions
-      assert Array.isArray(list), "expected completion items array"
-      // Look for toUpperCase (a String method)
-      target := list.find (i: any) => i.label is "toUpperCase"
-      if target
-        resolved := await client.request "completionItem/resolve", target
-        assert resolved, "expected resolved completion"
-    finally
-      await client.stop()
+    lines := text.split "\n"
+    useLine := lines.findIndex (l) => l.includes("x.toUp")
+    completions := await client.request "textDocument/completion", {
+      textDocument: { uri }
+      position: { line: useLine, character: lines[useLine].length }
+    }
+    list := completions?.items ?? completions
+    assert Array.isArray(list), "expected completion items array"
+    target := list.find (i: any) => i.label is "toUpperCase"
+    if target
+      resolved := await client.request "completionItem/resolve", target
+      assert resolved, "expected resolved completion"
 
   it "emits diagnostics for a parse error with a civet syntax error", ->
-    // Exercises the ParseError branch inside updateDiagnosticsForDoc
-    client := spawnLspServer()
-    try
-      await initializeClient client
-
-      badPath := path.join(projectRoot, "parse-error.civet")
-      uri := docUri badPath
-      // A purposely broken Civet snippet to trigger ParseError
-      client.notify "textDocument/didOpen", {
-        textDocument: {
-          uri, languageId: "civet", version: 1
-          text: "x := ((("
-        }
+    uri := docUri path.join(projectRoot, "parse-error.civet")
+    client.notify "textDocument/didOpen", {
+      textDocument: {
+        uri, languageId: "civet", version: 1
+        text: "x := ((("
       }
-      diagnostics := await waitForDiag(client, (p) => p.uri is uri and p.diagnostics.length > 0)
-      assert diagnostics.diagnostics.length > 0, "expected at least one parse diagnostic"
+    }
+    diagnostics := await waitForDiag(client, (p) => p.uri is uri and p.diagnostics.length > 0)
+    assert diagnostics.diagnostics.length > 0, "expected at least one parse diagnostic"
+
+  it "handles workspace folder change notifications", ->
+    // Before hook opted into workspace.workspaceFolders capability, so the
+    // server registered the change listener — fire an event and verify the
+    // server is still processing requests afterwards.
+    client.notify "workspace/didChangeWorkspaceFolders", {
+      event:
+        added: []
+        removed: []
+    }
+
+    uri := docUri path.join(projectRoot, "folders-ping.civet")
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text: 'console.log "ok"' }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+  it "returns completions for a relative import statement", ->
+    uri := docUri path.join(projectRoot, "imp-rel.civet")
+    text := "x from ./a"
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    result := await client.request "textDocument/completion", {
+      textDocument: { uri }
+      position: { line: 0, character: text.length }
+    }
+    list := result?.items ?? result
+    assert Array.isArray(list), "expected completion items array"
+
+  it "document symbols report top-level declarations", ->
+    uri := docUri path.join(projectRoot, "symbols.civet")
+    text := """
+      export greet := (name: string) => `hi ${name}`
+      export class Widget
+        render(): string
+          "<div/>"
+
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    syms := await client.request "textDocument/documentSymbol", {
+      textDocument: { uri }
+    }
+    assert Array.isArray(syms), "expected documentSymbol array"
+    assert syms.length >= 1, "expected at least one symbol"
+
+  it "go-to-definition maps back to civet source", ->
+    uri := docUri path.join(projectRoot, "defs.civet")
+    text := """
+      greet := (name: string) => `hi ${name}`
+      greet "world"
+
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    defs := await client.request "textDocument/definition", {
+      textDocument: { uri }
+      position: { line: 1, character: 2 }
+    }
+    assert Array.isArray(defs), "expected definition array"
+
+    refs := await client.request "textDocument/references", {
+      textDocument: { uri }
+      position: { line: 0, character: 0 }
+      context: { includeDeclaration: true }
+    }
+    assert Array.isArray(refs), "expected references array"
+
+  it "rename finds locations and renames a local", ->
+    uri := docUri path.join(projectRoot, "rename.civet")
+    text := """
+      foo := 1
+      console.log foo + foo
+
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    result := await client.request "textDocument/rename", {
+      textDocument: { uri }
+      position: { line: 0, character: 0 }
+      newName: "bar"
+    }
+    assert result, "expected rename result"
+    if result.changes
+      edits := Object.values(result.changes)[0] as any[]
+      assert Array.isArray(edits) and edits.length >= 1, "expected rename edits"
+
+  it "completion with unresolvable path alias", ->
+    // Exercises resolvePathAliasDir returning undefined → aliasDir falsy branch.
+    uri := docUri path.join(projectRoot, "imp-alias.civet")
+    text := "x from @nonexistent/foo"
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    result := await client.request "textDocument/completion", {
+      textDocument: { uri }
+      position: { line: 0, character: text.length }
+    }
+    list := result?.items ?? result
+    assert Array.isArray(list), "expected completion items array"
+
+  it "completion for bare require without quotes", ->
+    // Exercises the `statement === 'require' AND qt is undefined` path
+    // at server.civet line 410 (require without quotes → skip import branch).
+    uri := docUri path.join(projectRoot, "req-bare.civet")
+    text := "require foo"
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    result := await client.request "textDocument/completion", {
+      textDocument: { uri }
+      position: { line: 0, character: text.length }
+    }
+    list := result?.items ?? result
+    assert Array.isArray(list), "expected completion items array"
+
+  it "completion resolve for an import suggestion", ->
+    // Write real files so TS's symbol index can find `doThing`.  Use a uri-
+    // unique basename so this test's writes don't collide with fixtures.
+    libPath := path.join(projectRoot, "lib-to-import.civet")
+    userPath := path.join(projectRoot, "user.civet")
+    try
+      fs.writeFileSync libPath, "export doThing := () => 42\n"
+      userUri := docUri userPath
+      text := "doThing"
+
+      client.notify "textDocument/didOpen", {
+        textDocument: { uri: docUri(libPath), languageId: "civet", version: 1, text: fs.readFileSync(libPath, "utf8") }
+      }
+      client.notify "textDocument/didOpen", {
+        textDocument: { uri: userUri, languageId: "civet", version: 1, text }
+      }
+      await waitForDiag(client, (p) => p.uri is userUri)
+
+      completion := await client.request "textDocument/completion", {
+        textDocument: { uri: userUri }
+        position: { line: 0, character: text.length }
+      }
+      list := (completion?.items ?? completion) as any[]
+      if list?
+        target := list.find (i: any) => i.label is "doThing" and i.data?.source
+        if target
+          resolved := await client.request "completionItem/resolve", target
+          assert resolved, "expected resolved auto-import completion"
     finally
-      await client.stop()
+      try fs.unlinkSync libPath
+      try fs.unlinkSync userPath
+
+// Tests below each need their own workspace / tsconfig / initialize, so they
+// spawn a dedicated server per test.  Keep this set small.
+describe "LSP features (isolated workspaces)", ->
+  @timeout 60000
 
   it "reloads TSService when a watched tsconfig.json changes", ->
     client := spawnLspServer()
-    // Work in a temp project so we can freely mutate its tsconfig.json
     tmpDir := fs.mkdtempSync(path.join(os.tmpdir(), "civet-lsp-reload-"))
     originalTsConfig := JSON.stringify({
-      compilerOptions: {
+      compilerOptions:
         strict: true
         module: "NodeNext"
         target: "es2020"
-      }
     }, null, 2)
     fs.writeFileSync path.join(tmpDir, "tsconfig.json"), originalTsConfig
 
@@ -215,26 +357,21 @@ describe "LSP features", ->
           text: 'unused := 1\nconsole.log "hi"'
         }
       }
-      // Wait for an initial diagnostics pass to make sure the service is up
       await waitForDiag(client, (p) => p.uri is uri)
 
-      // Now flip to noUnusedLocals and notify a watched-file change.
       newConfig := JSON.stringify({
-        compilerOptions: {
+        compilerOptions:
           strict: true
           module: "NodeNext"
           target: "es2020"
           noUnusedLocals: true
-        }
       }, null, 2)
       fs.writeFileSync path.join(tmpDir, "tsconfig.json"), newConfig
       tsConfigUri := docUri path.join(tmpDir, "tsconfig.json")
       client.notify "workspace/didChangeWatchedFiles", {
-        changes: [{ uri: tsConfigUri, type: 2 }]   // Changed = 2
+        changes: [{ uri: tsConfigUri, type: 2 }]
       }
 
-      // Wait for any publish after the reload debounce (300 ms) + TSService rebuild.
-      // Accept any diagnostic mentioning the unused local, regardless of severity.
       await waitForDiag(
         client
         (p) => p.uri is uri and p.diagnostics.some((d: any) => String(d.message).toLowerCase().includes("unused"))
@@ -245,15 +382,12 @@ describe "LSP features", ->
       client.notify "workspace/didChangeWatchedFiles", {
         changes: [{ uri: tsConfigUri, type: 2 }]
       }
-      // Give the debounce timer time to fire without producing a new diagnostic
       await new Promise<void> (r) => setTimeout r, 700
-
     finally
       await client.stop()
       fs.rmSync(tmpDir, { recursive: true, force: true })
 
   it "handles initialize without any workspace folders", ->
-    // Exercises server.civet lines 206-208 (baseDir undefined => warning + rootUri/rootDir = undefined)
     client := spawnLspServer()
     try
       await client.request "initialize", {
@@ -264,7 +398,6 @@ describe "LSP features", ->
       }
       client.notify "initialized", {}
 
-      // Still able to process a document even without a workspace
       orphanPath := path.join(os.tmpdir(), "civet-lsp-orphan.civet")
       uri := docUri orphanPath
       client.notify "textDocument/didOpen", {
@@ -274,45 +407,9 @@ describe "LSP features", ->
     finally
       await client.stop()
 
-  it "handles workspace folder change notifications", ->
-    // Exercises server.civet lines 221-223 where the server registers a
-    // workspace-folder change listener when the client advertises the capability.
-    client := spawnLspServer()
-    try
-      rootUri := docUri(projectRoot)
-      await client.request "initialize", {
-        processId: process.pid
-        rootUri
-        capabilities:
-          workspace:
-            configuration: true
-            workspaceFolders: true
-        workspaceFolders: [{ uri: rootUri, name: "project-test" }]
-      }
-      client.notify "initialized", {}
-
-      // Fire a workspace folder change; the server simply logs + moves on.
-      client.notify "workspace/didChangeWorkspaceFolders", {
-        event:
-          added: []
-          removed: []
-      }
-
-      // Prove the server is still alive by requesting diagnostics afterwards.
-      pingPath := path.join(projectRoot, "folders-ping.civet")
-      pingUri := docUri pingPath
-      client.notify "textDocument/didOpen", {
-        textDocument: { uri: pingUri, languageId: "civet", version: 1, text: 'console.log "ok"' }
-      }
-      await waitForDiag(client, (p) => p.uri is pingUri)
-    finally
-      await client.stop()
-
   it "uses node_modules ancestor as project path for a file in node_modules", ->
-    // Exercises getProjectPathFromSourcePath's node_modules branch (lines 116-121).
     client := spawnLspServer()
     tmpRoot := fs.mkdtempSync path.join(os.tmpdir(), "civet-nm-")
-    // node_modules/foo-pkg/index.civet
     fooDir := path.join tmpRoot, "node_modules", "foo-pkg"
     fs.mkdirSync fooDir, { recursive: true }
     fs.writeFileSync path.join(fooDir, "tsconfig.json"),
@@ -340,7 +437,6 @@ describe "LSP features", ->
       fs.rmSync(tmpRoot, { recursive: true, force: true })
 
   it "uses rootUri for files inside rootDir without an ancestor tsconfig", ->
-    // Exercises server.civet lines 130-132 (rootDir+sourcePath.startsWith branch).
     client := spawnLspServer()
     tmpRoot := fs.mkdtempSync path.join(os.tmpdir(), "civet-root-")
     try
@@ -366,7 +462,6 @@ describe "LSP features", ->
       fs.rmSync(tmpRoot, { recursive: true, force: true })
 
   it "falls back to dirname when rootDir unset or file outside rootDir", ->
-    // Exercises server.civet lines 133-134 (else branch: file outside rootDir)
     client := spawnLspServer()
     roots := [
       fs.mkdtempSync(path.join(os.tmpdir(), "civet-rootA-"))
@@ -382,8 +477,6 @@ describe "LSP features", ->
       }
       client.notify "initialized", {}
 
-      // Open a doc outside the declared workspace root so the server falls
-      // through to the URI.file(dirname) branch.
       outsidePath := path.join(roots[1], "outside.civet")
       client.notify "textDocument/didOpen", {
         textDocument: {
@@ -397,174 +490,7 @@ describe "LSP features", ->
       for r of roots
         fs.rmSync r, { recursive: true, force: true }
 
-  it "returns completions for a relative import statement", ->
-    // Exercises getCivetFileCompletions (relative branch) and path-completion glue.
-    client := spawnLspServer()
-    try
-      await initializeClient client
-
-      impPath := path.join(projectRoot, "imp-rel.civet")
-      impUri := docUri impPath
-      text := "x from ./a"
-      client.notify "textDocument/didOpen", {
-        textDocument: { uri: impUri, languageId: "civet", version: 1, text }
-      }
-      await waitForDiag(client, (p) => p.uri is impUri)
-
-      // Cursor at the end of "./a" — triggers the relative-path completion branch
-      result := await client.request "textDocument/completion", {
-        textDocument: { uri: impUri }
-        position: { line: 0, character: text.length }
-      }
-      list := result?.items ?? result
-      assert Array.isArray(list), "expected completion items array"
-    finally
-      await client.stop()
-
-  it "document symbols report top-level declarations", ->
-    // Exercises onDocumentSymbol -> convertNavTree with sourcemap for civet
-    client := spawnLspServer()
-    try
-      await initializeClient client
-
-      symPath := path.join(projectRoot, "symbols.civet")
-      uri := docUri symPath
-      text := """
-        export greet := (name: string) => `hi ${name}`
-        export class Widget
-          render(): string
-            "<div/>"
-
-      """
-      client.notify "textDocument/didOpen", {
-        textDocument: { uri, languageId: "civet", version: 1, text }
-      }
-      await waitForDiag(client, (p) => p.uri is uri)
-
-      syms := await client.request "textDocument/documentSymbol", {
-        textDocument: { uri }
-      }
-      assert Array.isArray(syms), "expected documentSymbol array"
-      assert syms.length >= 1, "expected at least one symbol"
-    finally
-      await client.stop()
-
-  it "go-to-definition maps back to civet source", ->
-    client := spawnLspServer()
-    try
-      await initializeClient client
-
-      defsPath := path.join(projectRoot, "defs.civet")
-      uri := docUri defsPath
-      text := """
-        greet := (name: string) => `hi ${name}`
-        greet "world"
-
-      """
-      client.notify "textDocument/didOpen", {
-        textDocument: { uri, languageId: "civet", version: 1, text }
-      }
-      await waitForDiag(client, (p) => p.uri is uri)
-
-      defs := await client.request "textDocument/definition", {
-        textDocument: { uri }
-        position: { line: 1, character: 2 }   // inside `greet "world"`
-      }
-      assert Array.isArray(defs), "expected definition array"
-
-      refs := await client.request "textDocument/references", {
-        textDocument: { uri }
-        position: { line: 0, character: 0 }
-        context: { includeDeclaration: true }
-      }
-      assert Array.isArray(refs), "expected references array"
-    finally
-      await client.stop()
-
-  it "rename finds locations and renames a local", ->
-    client := spawnLspServer()
-    try
-      await initializeClient client
-
-      renPath := path.join(projectRoot, "rename.civet")
-      uri := docUri renPath
-      text := """
-        foo := 1
-        console.log foo + foo
-
-      """
-      client.notify "textDocument/didOpen", {
-        textDocument: { uri, languageId: "civet", version: 1, text }
-      }
-      await waitForDiag(client, (p) => p.uri is uri)
-
-      result := await client.request "textDocument/rename", {
-        textDocument: { uri }
-        position: { line: 0, character: 0 }
-        newName: "bar"
-      }
-      // Either a WorkspaceEdit (with `changes` dict) or null if no locations.
-      assert result, "expected rename result"
-      if result.changes
-        edits := Object.values(result.changes)[0] as any[]
-        assert Array.isArray(edits) and edits.length >= 1, "expected rename edits"
-    finally
-      await client.stop()
-
-  it "completion with unresolvable path alias", ->
-    // Exercises resolvePathAliasDir returning undefined → aliasDir falsy branch
-    // at server.civet line 439 `aliasDir ? findCivetFilesInDir(aliasDir) : []`.
-    client := spawnLspServer()
-    try
-      await initializeClient client
-
-      impPath := path.join(projectRoot, "imp-alias.civet")
-      impUri := docUri impPath
-      // Use an alias prefix that won't match any tsconfig paths entry
-      text := "x from @nonexistent/foo"
-      client.notify "textDocument/didOpen", {
-        textDocument: { uri: impUri, languageId: "civet", version: 1, text }
-      }
-      await waitForDiag(client, (p) => p.uri is impUri)
-
-      // Cursor at end: triggers alias completion branch
-      result := await client.request "textDocument/completion", {
-        textDocument: { uri: impUri }
-        position: { line: 0, character: text.length }
-      }
-      list := result?.items ?? result
-      assert Array.isArray(list), "expected completion items array"
-    finally
-      await client.stop()
-
-  it "completion for bare require without quotes", ->
-    // Exercises the `statement === 'require' AND qt is undefined` path
-    // at server.civet line 410 (require without quotes → skip import branch).
-    client := spawnLspServer()
-    try
-      await initializeClient client
-
-      reqPath := path.join(projectRoot, "req-bare.civet")
-      reqUri := docUri reqPath
-      text := "require foo"
-      client.notify "textDocument/didOpen", {
-        textDocument: { uri: reqUri, languageId: "civet", version: 1, text }
-      }
-      await waitForDiag(client, (p) => p.uri is reqUri)
-
-      // Cursor on the bare identifier `foo` — qt empty, require statement
-      result := await client.request "textDocument/completion", {
-        textDocument: { uri: reqUri }
-        position: { line: 0, character: text.length }
-      }
-      list := result?.items ?? result
-      assert Array.isArray(list), "expected completion items array"
-    finally
-      await client.stop()
-
   it "completion with a non-glob path alias", ->
-    // Exercises resolvePathAliasDir's non-glob branch (replacement without `*`)
-    // at server.civet line 344 (`else` side of `if replacement.endsWith('*')`).
     client := spawnLspServer()
     tmpDir := fs.mkdtempSync path.join(os.tmpdir(), "civet-alias-")
     fs.mkdirSync path.join(tmpDir, "target"), { recursive: true }
@@ -573,8 +499,8 @@ describe "LSP features", ->
       compilerOptions:
         baseUrl: "."
         paths:
-          "@mod/*": ["target"]      // non-glob replacement
-          "@exact":  ["target"]      // exact alias (covers the else-if branch)
+          "@mod/*": ["target"]
+          "@exact":  ["target"]
     })
     try
       rootUri := docUri(tmpDir)
@@ -594,7 +520,6 @@ describe "LSP features", ->
       }
       await waitForDiag(client, (p) => p.uri is docUriStr)
 
-      // Cursor right after `@mod/` — alias prefix matches, resolves to target/
       result := await client.request "textDocument/completion", {
         textDocument: { uri: docUriStr }
         position: { line: 0, character: text.length }
@@ -602,7 +527,6 @@ describe "LSP features", ->
       list := result?.items ?? result
       assert Array.isArray(list), "expected completion items array"
 
-      // Also try the exact alias without trailing slash
       text2 := "x from @exact"
       client.notify "textDocument/didChange", {
         textDocument: { uri: docUriStr, version: 2 }
@@ -616,39 +540,3 @@ describe "LSP features", ->
     finally
       await client.stop()
       fs.rmSync(tmpDir, { recursive: true, force: true })
-
-  it "completion resolve for an import suggestion", ->
-    // Exercises completion resolve including additional text edits for imports.
-    client := spawnLspServer()
-    libPath := path.join(projectRoot, "lib-to-import.civet")
-    userPath := path.join(projectRoot, "user.civet")
-    try
-      await initializeClient client
-
-      fs.writeFileSync libPath, "export doThing := () => 42\n"
-      userUri := docUri userPath
-      text := "doThing"
-
-      client.notify "textDocument/didOpen", {
-        textDocument: { uri: docUri(libPath), languageId: "civet", version: 1, text: fs.readFileSync(libPath, "utf8") }
-      }
-      client.notify "textDocument/didOpen", {
-        textDocument: { uri: userUri, languageId: "civet", version: 1, text }
-      }
-      await waitForDiag(client, (p) => p.uri is userUri)
-
-      completion := await client.request "textDocument/completion", {
-        textDocument: { uri: userUri }
-        position: { line: 0, character: text.length }
-      }
-      list := (completion?.items ?? completion) as any[]
-      if list?
-        // Look for the `doThing` entry with a source attribution (auto-import candidate).
-        target := list.find (i: any) => i.label is "doThing" and i.data?.source
-        if target
-          resolved := await client.request "completionItem/resolve", target
-          assert resolved, "expected resolved auto-import completion"
-    finally
-      try fs.unlinkSync libPath
-      try fs.unlinkSync userPath
-      await client.stop()
