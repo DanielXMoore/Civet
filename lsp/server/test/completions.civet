@@ -1,0 +1,440 @@
+// Unit tests for lib/completions.civet helpers.  These are all pure functions
+// so we can drive each branch with synthetic inputs without spawning a server.
+
+assert from assert
+{ TextDocument } from vscode-languageserver-textdocument
+{ CompletionItemKind, CompletionItemTag } from vscode-languageserver
+{ ScriptElementKind, ScriptElementKindModifier } from typescript
+{ mkdtempSync, mkdirSync, writeFileSync, rmSync } from node:fs
+{ tmpdir } from node:os
+path from node:path
+
+{
+  adjustCursorForEmptyQuotes
+  appendClosingQuoteToPathCompletions
+  convertCompletions
+  createCivetFileCompletions
+  extractImportPath
+  findCivetFilesInDir
+  getCurrentLineText
+  getFileExtensionModifier
+  likelyImportContext
+  measureTokenLength
+  parseErrorRange
+  resolvePathAliasDir
+} from ../source/lib/completions.civet
+
+describe "completions helpers", ->
+
+  describe "likelyImportContext", ->
+    it "matches `from` at EOL", ->
+      assert likelyImportContext("x from ")
+    it "matches `import` at EOL", ->
+      assert likelyImportContext("import ")
+    it "matches `require` at EOL", ->
+      assert likelyImportContext("require ")
+    it "matches with opening quote", ->
+      assert likelyImportContext("x from '")
+    it "does not match arbitrary text", ->
+      assert not likelyImportContext("const x = 1")
+
+  describe "extractImportPath", ->
+    it "returns undefined when cursor isn't inside a path group", ->
+      assert.equal extractImportPath("const x = 1", 0), undefined
+
+    it "extracts a quoted from-path when cursor is inside", ->
+      line := 'x from "foo"'
+      cursor := line.indexOf('foo')
+      result := extractImportPath(line, cursor)
+      assert result
+      assert.equal result!.statement, "from"
+      assert.equal result!.path, "foo"
+      assert.equal result!.qt, '"'
+
+    it "extracts an unquoted path when cursor is on it", ->
+      line := "x from ./a"
+      cursor := line.length
+      result := extractImportPath(line, cursor)
+      assert result
+      assert.equal result!.path, "./a"
+      assert.equal result!.qt, undefined
+
+    it "extracts require with parenthesis", ->
+      line := "require('./mod')"
+      cursor := line.indexOf('./mod')
+      result := extractImportPath(line, cursor)
+      assert result
+      assert.equal result!.statement, "require"
+      assert.equal result!.path, "./mod"
+
+  describe "getCurrentLineText", ->
+    it "returns the line without the trailing newline", ->
+      doc := TextDocument.create("file:///a.civet", "civet", 0, "first\nsecond\nthird")
+      assert.equal getCurrentLineText(doc, { line: 1, character: 0 }), "second"
+
+    it "returns the last line even without a trailing newline", ->
+      doc := TextDocument.create("file:///a.civet", "civet", 0, "only")
+      assert.equal getCurrentLineText(doc, { line: 0, character: 0 }), "only"
+
+  describe "adjustCursorForEmptyQuotes", ->
+    it "returns 1 for text starting with double-quote pair", ->
+      assert.equal adjustCursorForEmptyQuotes('""'), 1
+    it "returns 1 for single-quote pair", ->
+      assert.equal adjustCursorForEmptyQuotes("''"), 1
+    it "returns 2 for space + quote pair", ->
+      // one space, then quotes → shift past the space AND the opening quote
+      assert.equal adjustCursorForEmptyQuotes(' ""'), 2
+    it "returns 0 when no empty quote pair follows", ->
+      assert.equal adjustCursorForEmptyQuotes("abc"), 0
+      assert.equal adjustCursorForEmptyQuotes(""), 0
+      assert.equal adjustCursorForEmptyQuotes("\"x\""), 0  // not empty
+
+  describe "getFileExtensionModifier", ->
+    it "returns the file-extension modifier when one is present", ->
+      assert.equal getFileExtensionModifier(new Set([".ts"])), ".ts"
+      assert.equal getFileExtensionModifier(new Set([".tsx"])), ".tsx"
+      assert.equal getFileExtensionModifier(new Set([".json"])), ".json"
+
+    it "returns '' when no file-extension modifier is present", ->
+      // exercises the `return ''` fallthrough after the for-loop
+      assert.equal getFileExtensionModifier(new Set), ""
+      assert.equal getFileExtensionModifier(new Set(["optional"])), ""
+      assert.equal getFileExtensionModifier(new Set(["deprecated", "optional"])), ""
+
+    it "returns the first matching modifier", ->
+      // Set iteration order preserves insertion in JS
+      result := getFileExtensionModifier(new Set(["optional", ".ts"]))
+      assert.equal result, ".ts"
+
+  describe "resolvePathAliasDir", ->
+    it "returns undefined when paths is unset", ->
+      assert.equal resolvePathAliasDir({}, "@foo"), undefined
+
+    it "returns undefined when baseUrl is unset", ->
+      assert.equal resolvePathAliasDir({ paths: { "@foo/*": ["lib/*"] } }, "@foo/x"), undefined
+
+    it "returns undefined when baseUrl isn't absolute", ->
+      assert.equal resolvePathAliasDir({ baseUrl: "./relative", paths: { "@foo/*": ["lib/*"] } }, "@foo/x"), undefined
+
+    it "returns undefined when the alias resolves to a non-existent directory", ->
+      // (imported above)
+      // (imported above)
+      // (imported above)
+      root := mkdtempSync(path.join(tmpdir(), "civet-alias-test-"))
+      try
+        result := resolvePathAliasDir(
+          { baseUrl: root, paths: { "@nope/*": ["doesnotexist/*"] } }
+          "@nope/anything"
+        )
+        assert.equal result, undefined
+      finally
+        rmSync(root, { recursive: true, force: true })
+
+    it "resolves a glob alias to an existing directory", ->
+      // (imported above)
+      // (imported above)
+      // (imported above)
+      root := mkdtempSync(path.join(tmpdir(), "civet-alias-test-"))
+      mkdirSync(path.join(root, "lib", "sub"), { recursive: true })
+      try
+        result := resolvePathAliasDir(
+          { baseUrl: root, paths: { "@lib/*": ["lib/*"] } }
+          "@lib/sub"
+        )
+        assert.equal result, path.join(root, "lib", "sub")
+      finally
+        rmSync(root, { recursive: true, force: true })
+
+    it "resolves an exact alias (no trailing *) to an existing directory", ->
+      // (imported above)
+      // (imported above)
+      // (imported above)
+      root := mkdtempSync(path.join(tmpdir(), "civet-alias-test-"))
+      mkdirSync(path.join(root, "lib"))
+      try
+        result := resolvePathAliasDir(
+          { baseUrl: root, paths: { "@helpers": ["lib"] } }
+          "@helpers"
+        )
+        assert.equal result, path.join(root, "lib")
+      finally
+        rmSync(root, { recursive: true, force: true })
+
+    it "prefers the longest matching alias prefix", ->
+      // (imported above)
+      // (imported above)
+      // (imported above)
+      root := mkdtempSync(path.join(tmpdir(), "civet-alias-test-"))
+      mkdirSync(path.join(root, "short", "inner"), { recursive: true })
+      mkdirSync(path.join(root, "long",  "inner"), { recursive: true })
+      try
+        result := resolvePathAliasDir(
+          { baseUrl: root, paths: { "@": ["short"], "@specific/*": ["long/*"] } }
+          "@specific/inner"
+        )
+        assert.equal result, path.join(root, "long", "inner")
+      finally
+        rmSync(root, { recursive: true, force: true })
+
+  describe "findCivetFilesInDir", ->
+    it "returns filenames for an existing directory", ->
+      // (imported above)
+      // (imported above)
+      // (imported above)
+      dir := mkdtempSync(path.join(tmpdir(), "civet-find-test-"))
+      try
+        writeFileSync(path.join(dir, "a.civet"), "")
+        writeFileSync(path.join(dir, "b.civet"), "")
+        writeFileSync(path.join(dir, "c.txt"), "")
+        result := findCivetFilesInDir(dir)
+        assert result.includes("a.civet")
+        assert result.includes("b.civet")
+        assert not result.includes("c.txt")
+      finally
+        rmSync(dir, { recursive: true, force: true })
+
+    it "returns [] for a non-existent directory (readDirectory returns empty)", ->
+      result := findCivetFilesInDir("/definitely/not/a/real/path/123456789")
+      assert Array.isArray(result)
+      assert.equal result.length, 0
+
+  describe "createCivetFileCompletions", ->
+    it "turns filenames into CompletionItem[]", ->
+      items := createCivetFileCompletions(["a.civet", "b.civet"], "/x.civet", { line: 0, character: 0 })
+      assert.equal items.length, 2
+      assert.equal items[0].label, "a.civet"
+      assert.equal items[0].kind, CompletionItemKind.File
+
+    it "returns [] for empty input", ->
+      assert.equal createCivetFileCompletions([], "/x.civet", { line: 0, character: 0 }).length, 0
+
+  describe "appendClosingQuoteToPathCompletions", ->
+    it "returns unchanged when no suffix is specified", ->
+      items := [{ label: "a", kind: CompletionItemKind.File }]
+      result := appendClosingQuoteToPathCompletions(items, undefined)
+      assert.strictEqual result, items
+
+    it "appends the suffix to File/Module label + insertText", ->
+      items := [
+        { label: "a", kind: CompletionItemKind.File }
+        { label: "b", kind: CompletionItemKind.Module }
+        { label: "c", kind: CompletionItemKind.Variable }
+      ]
+      result := appendClosingQuoteToPathCompletions(items, '"')
+      assert.equal result[0].insertText, 'a"'
+      assert.equal result[1].insertText, 'b"'
+      // non-file/module items are skipped
+      assert.equal result[2].insertText, undefined
+
+    it "does not double-append if suffix is already there", ->
+      items := [{ label: "a\"", kind: CompletionItemKind.File }]
+      result := appendClosingQuoteToPathCompletions(items, '"')
+      assert.equal result[0].insertText, "a\""
+
+    it "appends to textEdit.newText when present", ->
+      items := [{
+        label: "a", kind: CompletionItemKind.File
+        textEdit: { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, newText: "a" }
+      }]
+      result := appendClosingQuoteToPathCompletions(items, "'")
+      assert.equal result[0].textEdit!.newText, "a'"
+
+  describe "measureTokenLength", ->
+    text := "hello world\n@name := 1\ntrailing"
+
+    it "measures a regular identifier", ->
+      // offset 0 = 'h'; identifier is "hello"
+      { length } := measureTokenLength(text, 0, 99)
+      assert.equal length, 5
+
+    it "includes leading @ as part of the token", ->
+      offset := text.indexOf("@name")
+      { length } := measureTokenLength(text, offset, 99)
+      assert.equal length, "@name".length
+
+    it "clamps remaining to line end (before newline)", ->
+      offset := text.indexOf("world")
+      { remaining } := measureTokenLength(text, offset, 99)
+      // "world" + no more on that line
+      assert.equal remaining, "world".length
+
+    it "handles a position on the last line with no trailing newline", ->
+      // exercises `if lineEnd < 0 then civetText.length else lineEnd`
+      offset := text.indexOf("trailing")
+      { remaining } := measureTokenLength(text, offset, 99)
+      assert.equal remaining, "trailing".length
+
+    it "falls back to defaultLen when regex does not match", ->
+      // A position starting with whitespace has no identifier prefix
+      offset := text.indexOf(" world")   // space before "world"
+      { length } := measureTokenLength(text, offset, 42)
+      assert.equal length, 42
+
+  describe "parseErrorRange", ->
+    it "produces a range from numeric line/column", ->
+      err := {
+        name: "ParseError"
+        message: "file.civet:3:7 unexpected token"
+        line: 3
+        column: 7
+      } as any
+      { start, end, message } := parseErrorRange(err)
+      // 1-based → 0-based: line 3 col 7 → line 2 char 6
+      assert.equal start.line, 2
+      assert.equal start.character, 6
+      assert.equal end.line, 2
+      assert.equal end.character, 10  // column + 3
+      // message has the filename:line:column prefix stripped
+      assert.equal message, "unexpected token"
+
+    it "coerces string line/column to numbers", ->
+      // exercises the `<? "number" ? ... : parseInt(...)` branches
+      err := {
+        name: "ParseError"
+        message: "x"
+        line: "5"
+        column: "2"
+      } as any
+      { start, end } := parseErrorRange(err)
+      assert.equal start.line, 4
+      assert.equal start.character, 1
+      assert.equal end.line, 4
+
+  describe "convertCompletions", ->
+    doc := TextDocument.create("file:///a.ts", "typescript", 0, "const x = 1")
+
+    mk := (entries: any[]) => ({ entries, isGlobalCompletion: false, isMemberCompletion: false, isNewIdentifierLocation: false } as any)
+
+    it "returns [] for undefined input", ->
+      assert.equal convertCompletions(undefined, doc, "/a.ts", { line: 0, character: 0 }).length, 0
+
+    it "maps a basic entry", ->
+      items := convertCompletions(
+        mk [{ name: "foo", kind: ScriptElementKind.variableElement, sortText: "a" }]
+        doc, "/a.ts", { line: 0, character: 0 }
+      )
+      assert.equal items.length, 1
+      assert.equal items[0].label, "foo"
+      assert.equal items[0].kind, CompletionItemKind.Variable
+      assert.equal items[0].sortText, "a"
+
+    it "falls back to insertText when name is empty (entry.name || ...)", ->
+      // exercises line 1348 `label: entry.name || (entry.insertText ?? '')`
+      items := convertCompletions(
+        mk [{ name: "", kind: ScriptElementKind.variableElement, sortText: "a", insertText: "wibble" }]
+        doc, "/a.ts", { line: 0, character: 0 }
+      )
+      assert.equal items[0].label, "wibble"
+
+    it "labels defaults to empty string when both name and insertText are empty", ->
+      // entry.insertText ?? '' right side
+      items := convertCompletions(
+        mk [{ name: "", kind: ScriptElementKind.variableElement, sortText: "a" }]
+        doc, "/a.ts", { line: 0, character: 0 }
+      )
+      assert.equal items[0].label, ""
+
+    it "sets labelDetails from sourceDisplay", ->
+      items := convertCompletions(
+        mk [{ name: "f", kind: ScriptElementKind.variableElement, sortText: "a", sourceDisplay: [{ text: "./x" }] }]
+        doc, "/a.ts", { line: 0, character: 0 }
+      )
+      assert.equal items[0].labelDetails?.description, "./x"
+
+    it "uses entry.source with hasAction when sourceDisplay is absent (relative to rootDir)", ->
+      // exercises `else if entry.source and entry.hasAction` then `if rootDir`
+      items := convertCompletions(
+        mk [{ name: "f", kind: ScriptElementKind.variableElement, sortText: "a", source: "/root/lib/x.ts", hasAction: true }]
+        doc, "/a.ts", { line: 0, character: 0 }
+        undefined, undefined, "/root"
+      )
+      // (imported above)
+      assert.equal items[0].labelDetails?.description, path.relative("/root", "/root/lib/x.ts")
+
+    it "uses entry.source verbatim when rootDir is unset", ->
+      // exercises the `else entry.source` arm
+      items := convertCompletions(
+        mk [{ name: "f", kind: ScriptElementKind.variableElement, sortText: "a", source: "/somewhere/x.ts", hasAction: true }]
+        doc, "/a.ts", { line: 0, character: 0 }
+      )
+      assert.equal items[0].labelDetails?.description, "/somewhere/x.ts"
+
+    it "merges entry.labelDetails when present", ->
+      items := convertCompletions(
+        mk [{
+          name: "f", kind: ScriptElementKind.variableElement, sortText: "a"
+          sourceDisplay: [{ text: "./x" }]
+          labelDetails: { detail: " (extra)" }
+        }]
+        doc, "/a.ts", { line: 0, character: 0 }
+      )
+      assert.equal items[0].labelDetails?.description, "./x"
+      assert.equal items[0].labelDetails?.detail, " (extra)"
+
+    it "sets preselect when isRecommended", ->
+      items := convertCompletions(
+        mk [{ name: "f", kind: ScriptElementKind.variableElement, sortText: "a", isRecommended: true }]
+        doc, "/a.ts", { line: 0, character: 0 }
+      )
+      assert.equal items[0].preselect, true
+
+    it "sets filterText when provided", ->
+      items := convertCompletions(
+        mk [{ name: "f", kind: ScriptElementKind.variableElement, sortText: "a", filterText: "fil" }]
+        doc, "/a.ts", { line: 0, character: 0 }
+      )
+      assert.equal items[0].filterText, "fil"
+
+    it "builds a textEdit when replacementSpan is present", ->
+      items := convertCompletions(
+        mk [{
+          name: "hi", kind: ScriptElementKind.variableElement, sortText: "a"
+          replacementSpan: { start: 0, length: 5 }
+        }]
+        doc, "/a.ts", { line: 0, character: 0 }
+      )
+      assert items[0].textEdit
+      assert.equal items[0].textEdit!.newText, "hi"
+
+    it "textEdit.newText falls back to '' when entry has no insertText or name", ->
+      // exercises `entry.insertText ?? entry.name ?? ''` empty-string tail
+      items := convertCompletions(
+        mk [{
+          name: "", kind: ScriptElementKind.variableElement, sortText: "a"
+          replacementSpan: { start: 0, length: 1 }
+        }]
+        doc, "/a.ts", { line: 0, character: 0 }
+      )
+      assert.equal items[0].textEdit!.newText, ""
+
+    it "applies file-extension kindModifier when completing file paths", ->
+      // exercises the CompletionItemKind.File branch of getFileExtensionModifier usage
+      items := convertCompletions(
+        mk [{
+          name: "mod", kind: ScriptElementKind.scriptElement, sortText: "a"
+          kindModifiers: ".ts"
+        }]
+        doc, "/a.ts", { line: 0, character: 0 }
+        undefined, true   // showFileExtensions
+      )
+      assert.equal items[0].label, "mod.ts"
+
+    it "marks optional with '?' suffix", ->
+      items := convertCompletions(
+        mk [{
+          name: "x", kind: ScriptElementKind.memberVariableElement, sortText: "a"
+          kindModifiers: ScriptElementKindModifier.optionalModifier
+        }]
+        doc, "/a.ts", { line: 0, character: 0 }
+      )
+      assert items[0].label.endsWith("?")
+
+    it "tags deprecated entries", ->
+      items := convertCompletions(
+        mk [{
+          name: "x", kind: ScriptElementKind.variableElement, sortText: "a"
+          kindModifiers: ScriptElementKindModifier.deprecatedModifier
+        }]
+        doc, "/a.ts", { line: 0, character: 0 }
+      )
+      assert items[0].tags?.includes(CompletionItemTag.Deprecated)

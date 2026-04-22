@@ -1,0 +1,307 @@
+// Pure helpers for converting TypeScript completions to LSP completions,
+// extracting import paths from line text, resolving tsconfig path aliases,
+// and shaping completion items.  Extracted from server.civet so they can be
+// unit-tested without spawning the full server (server.civet has top-level
+// `connection.listen()` side effects that make it unsafe to import from a
+// test).
+
+{
+  type TextDocument
+  type Position
+} from vscode-languageserver-textdocument
+
+{
+  type CompletionItem
+  CompletionItemKind
+  CompletionItemTag
+} from vscode-languageserver
+
+ts from typescript
+{ sys: tsSys, ScriptElementKindModifier } := ts
+path from node:path
+
+* as Previewer from ./previewer.civet
+{
+  getCompletionItemKind
+  parseKindModifier
+  remapPosition
+  type SourcemapLines
+} from ./util.civet
+
+{ type ParseError } from @danielx/civet
+
+export civetFileExtension := '.civet'
+
+// -- import-context detection ------------------------------------------------
+
+export looksLikeImportContext := /\b(from|import|require)(\s+['"]?)?$/
+
+export function likelyImportContext(text: string): boolean
+  looksLikeImportContext.test(text)
+
+// -- import-path extraction --------------------------------------------------
+
+// Extract information about an import statement under the cursor.
+export importPathExtractor := /\b(?<statement>from|import|require)\b[ \t]*(?:[\(][ \t]*)?(?:(?<qt>')(?<path>[^']*)(?<endqt>'?)|(?<qt>")(?<path>[^"]*)(?<endqt>")?|(?<path>[^;"'\s=>]*))/gd
+
+export type ImportPathMatchIterator = RegExpStringIterator< RegExpExecArray & {
+  groups: { statement: ('from'|'import'|'require'), path: string, qt: '"'|"'"|undefined , endqt: '"'|"'"|undefined }
+  indices: { groups: { statement: [number, number], path: [number, number], qt: [number, number], endqt: [number, number] } }
+}>
+
+export function extractImportPath(lineText: string, cursorOffset: number)
+  matches := lineText.matchAll(importPathExtractor) as ImportPathMatchIterator
+  for match of matches
+    if cursorOffset >= match.indices.groups.path[0]
+        and cursorOffset <= match.indices.groups.path[1]
+      return match.groups
+  return // undefined means no match
+
+// -- current-line text fetching ----------------------------------------------
+
+lineEnding := /[\n\r]+$/g
+/** Get the content of the current line (with the trailing newline removed.) */
+export function getCurrentLineText(document: TextDocument, position: Position): string
+  document.getText({
+    start: { character: 0, line: position.line     }
+    end:   { character: 0, line: position.line + 1 }
+  }).replace(lineEnding, '')
+
+// -- path-alias resolution ---------------------------------------------------
+
+// Resolve a TypeScript tsconfig `paths` alias (e.g. "@lib/*") to an existing
+// filesystem directory, preferring the longest matching alias prefix.  Uses
+// baseUrl (@deprecated in TS 5.0+ but still honored) as the resolution root.
+export function resolvePathAliasDir(
+  compilationSettings: ts.CompilerOptions
+  importPath: string
+): string | undefined
+  { paths } := compilationSettings
+  return unless paths
+  baseUrl := (compilationSettings as { baseUrl?: string }).baseUrl
+  return unless baseUrl and path.isAbsolute(baseUrl)
+
+  candidates: { resolvedDir: string, aliasPattern: string }[] := []
+
+  for [pattern, replacements] of Object.entries(paths)
+    if pattern.endsWith '*'
+      aliasPrefix := pattern.slice(0, -1)
+      if importPath.startsWith aliasPrefix
+        pathAfterAlias := importPath.slice(aliasPrefix.length)
+        for replacement of replacements
+          replacementBase := if replacement.endsWith('*') then replacement.slice(0, -1) else replacement
+          resolvedDir := path.resolve(baseUrl, replacementBase, pathAfterAlias)
+          if tsSys.directoryExists resolvedDir
+            candidates.push { aliasPattern: aliasPrefix, resolvedDir }
+    else if importPath is pattern
+      for replacement of replacements
+        resolvedDir := path.resolve(baseUrl, replacement)
+        if tsSys.directoryExists resolvedDir
+          candidates.push { resolvedDir, aliasPattern: pattern }
+
+  candidates
+    .sort((a, b) => b.aliasPattern.length - a.aliasPattern.length)
+    .at(0)
+    ?.resolvedDir
+
+// -- civet file discovery ----------------------------------------------------
+
+export function findCivetFilesInDir(searchDir: string): string[]
+  try
+    tsSys
+      .readDirectory(searchDir, [civetFileExtension], undefined, undefined, 1)
+      .map((f) => path.basename(f))
+  /* c8 ignore next 2 */
+  catch
+    []
+
+export function createCivetFileCompletions(
+  files: string[]
+  sourcePath: string
+  position: Position
+): CompletionItem[]
+  files.map (file) =>
+    label: file
+    kind: CompletionItemKind.File
+    insertText: file
+    sortText: `${0}_${file}`
+    data: {
+      sourcePath
+      position
+      name: file
+      source: undefined
+      data: undefined
+    }
+
+// -- closing-quote adjustment ------------------------------------------------
+
+export function appendClosingQuoteToPathCompletions(
+  completions: CompletionItem[]
+  closingQuoteSuffix: "'" | '"' | undefined
+): CompletionItem[]
+  return completions unless closingQuoteSuffix
+
+  for completion of completions
+    if completion.kind !== CompletionItemKind.File and completion.kind !== CompletionItemKind.Module
+      continue
+    if completion.textEdit and
+        not completion.textEdit.newText.endsWith(closingQuoteSuffix)
+      completion.textEdit.newText += closingQuoteSuffix
+    if completion.label <? 'string'
+      completion.insertText ??= completion.label
+    if completion.insertText <? 'string' and
+        not completion.insertText.endsWith(closingQuoteSuffix)
+      completion.insertText += closingQuoteSuffix
+
+  completions
+
+// -- empty-quote cursor adjustment ------------------------------------------
+
+// When the cursor is just before an empty `""` or `''` pair (as Civet's
+// transpile emits at EOF `import from ` → `import from ""`), shift past the
+// leading space (if any) and the opening quote so TS's completion offset
+// lands inside the quotes where module-path completions fire.
+// Returns the cursor delta to apply (0 if no adjustment).
+export function adjustCursorForEmptyQuotes(text: string): number
+  match := text.match(/^( ?)(""|'')/)
+  if match then match[1].length + 1 else 0
+
+// -- file-extension kindModifier --------------------------------------------
+
+// https://github.com/typescript-language-server/typescript-language-server/blob/e91bd52a47c05ffd946e0abd27f242eb631b7604/src/completion.ts#L188
+fileExtensionKindModifiers := new Set<string>([
+  ScriptElementKindModifier.dtsModifier
+  ScriptElementKindModifier.tsModifier
+  ScriptElementKindModifier.tsxModifier
+  ScriptElementKindModifier.jsModifier
+  ScriptElementKindModifier.jsxModifier
+  ScriptElementKindModifier.jsonModifier
+  ScriptElementKindModifier.dmtsModifier
+  ScriptElementKindModifier.mtsModifier
+  ScriptElementKindModifier.mjsModifier
+  ScriptElementKindModifier.dctsModifier
+  ScriptElementKindModifier.ctsModifier
+  ScriptElementKindModifier.cjsModifier
+])
+
+export function getFileExtensionModifier(kindModifiers: Set<string>): string
+  for modifier of kindModifiers
+    return modifier if fileExtensionKindModifiers.has(modifier)
+  return ''
+
+// -- TS → LSP completion conversion -----------------------------------------
+
+// Convert a ts.CompletionInfo into LSP CompletionItems.  `rootDir` is passed
+// in explicitly (instead of read from module state) so this function is pure
+// and unit-testable; pass the server's current rootDir, or undefined if the
+// server has no workspace folder.
+export function convertCompletions(
+  completions: ts.CompletionInfo?
+  document: TextDocument
+  sourcePath: string
+  position: Position
+  sourcemapLines?: SourcemapLines
+  showFileExtensions?: boolean
+  rootDir?: string
+): CompletionItem[]
+  return [] unless completions
+
+  // Partial simulation of MyCompletionItem in
+  // https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
+  { entries } := completions
+
+  items: CompletionItem[] := []
+  for entry of entries
+    kind := getCompletionItemKind(entry.kind)
+
+    // https://github.com/typescript-language-server/typescript-language-server/blob/e91bd52a47c05ffd946e0abd27f242eb631b7604/src/completion.ts#L106
+    item: CompletionItem := {
+      label: entry.name || (entry.insertText ?? '')
+      kind
+      data: {
+        sourcePath, position
+        name: entry.name, source: entry.source, data: entry.data
+        kindModifiers: entry.kindModifiers
+      }
+    }
+
+    if entry.sourceDisplay
+      item.labelDetails = { description: Previewer.plain(entry.sourceDisplay) }
+    else if entry.source and entry.hasAction
+      item.labelDetails = { description: if rootDir then path.relative(rootDir, entry.source) else entry.source }
+    if entry.labelDetails
+      item.labelDetails = { ...item.labelDetails, ...entry.labelDetails }
+
+    if entry.isRecommended
+      item.preselect = entry.isRecommended
+    item.insertText = entry.insertText or item.label
+    if entry.filterText
+      item.filterText = entry.filterText
+    if entry.sortText
+      item.sortText = entry.sortText
+    if entry.replacementSpan
+      { start, length } := entry.replacementSpan
+      begin .= document.positionAt(start)
+      end .= document.positionAt(start + length)
+      if sourcemapLines
+        begin = remapPosition(begin, sourcemapLines)
+        end = remapPosition(end, sourcemapLines)
+      item.textEdit = {
+        range: { start: begin, end }
+        newText: entry.insertText ?? entry.name ?? ''
+      }
+    if entry.kindModifiers
+      kindModifiers := parseKindModifier(entry.kindModifiers)
+      if kind is CompletionItemKind.File and showFileExtensions
+        extension := getFileExtensionModifier(kindModifiers)
+        if extension and !entry.name.toLowerCase().endsWith(extension)
+          item.label += extension
+          item.insertText += extension
+      if kindModifiers.has(ScriptElementKindModifier.optionalModifier)
+        item.label += '?'
+      if kindModifiers.has(ScriptElementKindModifier.deprecatedModifier)
+        item.tags = [CompletionItemTag.Deprecated]
+
+    items.push item
+
+  return items
+
+// -- ParseError → LSP range --------------------------------------------------
+
+// Compute the source-file range a ParseError should attach to.  Handles the
+// Civet v0.x shape where `line` and `column` may have been emitted as strings
+// instead of numbers (some serializer paths stringify them).
+export function parseErrorRange(e: ParseError): {
+  start: Position
+  end: Position
+  message: string
+}
+  start: Position := { line: 0, character: 0 }
+  end: Position := { line: 0, character: 10 }
+  // Remove leading filename:line:column from message
+  message := e.message.replace(/^\S+ /, "")
+  line := e.line <? "number" ? e.line : parseInt(e.line, 10)
+  column := e.column <? "number" ? e.column : parseInt(e.column, 10)
+  // Convert 1-based to 0-based
+  start.line = end.line = line - 1
+  start.character = column - 1
+  end.character = column + 3
+  { start, end, message }
+
+// -- semantic token length measurement --------------------------------------
+
+// Given the source (civet) text and a remapped offset, measure how long the
+// identifier at that position is in the source, clamped to the end of the
+// line.  Used to size semantic tokens after remapping from transpiled TS
+// back to civet (e.g. `@name` → `this.name`).  Falls back to `defaultLen`
+// when the position doesn't sit at an identifier.
+export function measureTokenLength(
+  civetText: string
+  offset: number
+  defaultLen: number
+): { length: number, remaining: number }
+  lineEnd := civetText.indexOf('\n', offset)
+  remaining := (if lineEnd < 0 then civetText.length else lineEnd) - offset
+  match := civetText.slice(offset, offset + remaining).match(/^[@#]?\w+/)
+  length := if match then match[0].length else defaultLen
+  { length, remaining }
