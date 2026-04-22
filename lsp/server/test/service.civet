@@ -298,6 +298,41 @@ describe "ts service module resolution", ->
     // the path-normalization else branch.
     assert service
 
+  it "takes the pathsBasePath fallback when baseUrl is unset", async ->
+    // Exercises the right side of `pathsBase := baseUrl ?? (pathsBasePath ...)`
+    // at typescript-service.civet line 158.  TS 5.0+ allows `paths` without an
+    // explicit `baseUrl`; parseJsonConfigFileContent sets options.pathsBasePath
+    // to the tsconfig's directory, so our fallback chain lands on pathsBasePath.
+    //
+    // We only need resolveModuleNames to *run* the fallback branch — the import
+    // itself doesn't have to resolve.  An unresolvable alias import triggers
+    // the paths loop (covering the `baseUrl ??` right side), then TS reports
+    // "Cannot find module", proving the code path executed.
+    tmpDir := mkdtempSync(path.join(tmpdir(), 'civet-no-baseurl-'))
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'), JSON.stringify({
+        compilerOptions:
+          target: 'es2020'
+          module: 'NodeNext'
+          paths:
+            '@missing/*': ['nowhere/*']
+      })
+      consumerPath := path.join(tmpDir, 'consumer.civet')
+      writeFileSync consumerPath, 'x from @missing/anything\n'
+
+      service := await TSService(pathToFileURL(tmpDir + path.sep).href, nullLogger)
+      await service.loadPlugins()
+      loadFile(service, consumerPath)
+
+      // TS invokes our resolveModuleNames for `@missing/anything`, which runs
+      // the paths-resolution block (the branch we're here to cover) and then
+      // reports the module as unresolved.
+      diagnostics := service.getSemanticDiagnostics(consumerPath + '.tsx')
+      assert diagnostics.some((d) => String(d.messageText).includes("Cannot find module")),
+        `expected a 'Cannot find module' diagnostic, got: ${diagnostics.map(.messageText).join(' | ')}`
+    finally
+      rmSync(tmpDir, { recursive: true, force: true })
+
 describe "ts service without civet dependencies", ->
   let tmpDir: string
   before ->
