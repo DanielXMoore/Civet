@@ -13,6 +13,8 @@ import type {
   ASTNodeObject
   ASTRef
   ArrowFunction
+  AssignmentExpression
+  AssignmentExpressionLHS
   Binding
   BlockStatement
   BreakStatement
@@ -55,6 +57,7 @@ import type {
   TypeArguments
   TypeNode
   TypeSuffix
+  UpdateExpression
   WSNode
 } from ./types.civet
 
@@ -1112,13 +1115,13 @@ function processBindingPatternLHS(lhs: ASTNode, tail: ASTNode[]): void
 function processAssignments(statements: ASTNode): void
   // Move assignments/updates within LHS of assignments/updates
   // to run earlier via comma operator
-  for each exp of gatherRecursiveAll statements, .type is "AssignmentExpression" or .type is "UpdateExpression"
+  for each exp of gatherRecursiveAll<AssignmentExpression | UpdateExpression> statements, (n): n is AssignmentExpression | UpdateExpression => n.type is "AssignmentExpression" or n.type is "UpdateExpression"
     checkValidLHS exp.assigned
 
     function extractAssignment(lhs: ASTNodeObject)
-      expr .= lhs
+      expr: ASTNodeObject .= lhs
       while expr.type is "ParenthesizedExpression"
-        expr = expr.expression
+        expr = expr.expression as ASTNodeObject
       if expr.type is like "AssignmentExpression", "UpdateExpression"
         if expr.type is "UpdateExpression" and
             expr.children[0] is expr.assigned  // postfix update
@@ -1135,10 +1138,10 @@ function processAssignments(statements: ASTNode): void
       when "AssignmentExpression"
         continue unless exp.lhs
         for each lhsPart of exp.lhs
-          if newLhs := extractAssignment(lhsPart[1])
+          if newLhs := extractAssignment(lhsPart[1] as ASTNodeObject)
             lhsPart[1] = newLhs
       when "UpdateExpression"
-        if newLhs := extractAssignment(exp.assigned)
+        if newLhs := extractAssignment(exp.assigned as ASTNodeObject)
           i := exp.children.indexOf(exp.assigned)
           exp.assigned = exp.children[i] = newLhs
     exp.children.unshift(...pre) if pre#
@@ -1148,12 +1151,14 @@ function processAssignments(statements: ASTNode): void
     if exp.type is "UpdateExpression"
       { assigned } := exp
       ref := makeRef()
-      newMemberExp := unchainOptionalMemberExpression assigned, ref, (children) =>
-        exp.children.map & is assigned ? children : &
+      newMemberExp := unchainOptionalMemberExpression(assigned as MemberExpression | CallExpression, ref, (children: ASTNode[]) =>
+        exp.children.map & is assigned ? children : &) as MemberExpression | CallExpression & { usesRef?: boolean, hoistDec?: ASTNode }
 
       if newMemberExp !== assigned
-        if newMemberExp.usesRef
-          newMemberExp.hoistDec = {
+        assert newMemberExp <? "object" and not Array.isArray(newMemberExp), "expected object"
+        nme := newMemberExp as { usesRef?: boolean, hoistDec?: ASTNode }
+        if nme.usesRef
+          nme.hoistDec = {
             type: "Declaration"
             children: ["let ", ref]
             names: []
@@ -1168,8 +1173,9 @@ function processAssignments(statements: ASTNode): void
     // if this assignment is at the statement level,
     // the last operator isn't special, and
     // no operator might shortcut
-    if blockContainingStatement(exp) and !$1.-1?.-1?.special and
-       not isShortCircuitOp($1.-1?.-1)
+    lastOp := $1.-1?.-1 as BinaryOp | undefined
+    if blockContainingStatement(exp) and !(lastOp as ASTLeaf & {special?: boolean})?.special and
+       not isShortCircuitOp(lastOp)
       if ref := prependStatementExpressionBlock(
         {type: "Initializer", expression: $2, children: [undefined, undefined, $2]}
         exp
@@ -1179,9 +1185,9 @@ function processAssignments(statements: ASTNode): void
         $2 = ref
 
     // identifier=, xor=, ++=
-    if $1.some &.-1.special
+    if $1.some (t: AssignmentExpressionLHS[number]) => (t[-1] as ASTLeaf & { special?: boolean }).special
       [, lhs, , op] := $1[0]
-      { call, omitLhs } := op
+      { call, omitLhs } := op as ASTLeaf & { call?: ASTNode; omitLhs?: boolean }
       // Wrap right-hand side with call
       index := exp.children.indexOf($2)
       assert.notEqual index, -1, "processAssignments: $2 must be directly in exp.children"
