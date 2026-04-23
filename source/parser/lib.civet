@@ -41,6 +41,7 @@ import type {
   MemberExpression
   MethodDefinition
   NormalCatchParameter
+  ObjectBindingPatternContent
   ObjectExpression
   ParametersNode
   ParenthesizedExpression
@@ -1022,7 +1023,7 @@ function convertObjectToJSXAttributes(obj: ObjectExpression)
 /**
  * Returns a new MethodDefinition node.
  */
-function makeGetterMethod(name, ws, value, returnType, block?: BlockStatement, kind: { token: "get" | "set" } = { token: "get" }, autoReturn: boolean = true): MethodDefinition
+function makeGetterMethod(name: ASTNode, ws: ASTNode, value: ASTNode, returnType: ASTNode, block?: BlockStatement, kind: { token: "get" | "set" } = { token: "get" }, autoReturn: boolean = true): MethodDefinition
   { token } := kind
   ws = trimFirstSpace ws
   let setVal
@@ -1078,7 +1079,7 @@ function makeGetterMethod(name, ws, value, returnType, block?: BlockStatement, k
     parameters
   }
 
-function processBindingPatternLHS(lhs, tail): void
+function processBindingPatternLHS(lhs: ASTNode, tail: ASTNode[]): void
   // Expand AtBindingProperty (@x shorthand in object patterns) to x: this.x
   adjustAtBindings lhs, true
   // In assignment (non-binding) context, @x can be used directly as this.x
@@ -1089,11 +1090,11 @@ function processBindingPatternLHS(lhs, tail): void
     atBinding.type = undefined
     atBinding.children = thisExpr
     // Update blockPrefixes that use this ref as a rest identifier (e.g. [...@x, y] = z)
-    for each nodeWithPrefix of gatherRecursiveAll lhs, (n) => n.blockPrefix
-      { blockPrefix } := nodeWithPrefix
-      blockPrefix.children = blockPrefix.children.map (c) => c is ref ? thisExpr : c
+    for each nodeWithPrefix of gatherRecursiveAll lhs, (n: ASTNodeObject) => (n as {blockPrefix?: unknown}).blockPrefix
+      { blockPrefix } := nodeWithPrefix as { blockPrefix: {children: ASTNode[]} }
+      blockPrefix.children = blockPrefix.children.map (c: ASTNode) => c is ref ? thisExpr : c
   // Also handle AtBindings inside blockPrefixes (e.g. post-rest @x in [a, ..., @x] = y)
-  for each nodeWithPrefix of gatherRecursiveAll lhs, (n) => n.blockPrefix
+  for each nodeWithPrefix of gatherRecursiveAll lhs, (n: ASTNodeObject) => (n as {blockPrefix?: unknown}).blockPrefix
     { blockPrefix } := nodeWithPrefix
     for each atBinding of gatherRecursiveAll blockPrefix, .type is "AtBinding"
       atBinding.type = undefined
@@ -1129,7 +1130,7 @@ function processAssignments(statements): void
         // TODO: use ref to avoid duplicating function calls
         return expr.assigned
 
-    const pre = [], post = []
+    const pre: ASTNode[] = [], post: ASTNode[] = []
     switch exp.type
       when "AssignmentExpression"
         continue unless exp.lhs
@@ -1311,7 +1312,7 @@ function processAssignments(statements): void
       assert.notEqual index, -1, "processAssignments tail: $2 must be directly in exp.children"
       exp.children.splice(index + 1, 0, ...tail)
 
-function unchainOptionalMemberExpression(exp: MemberExpression | CallExpression, ref: ASTRef, innerExp: (exp) => ASTNode)
+function unchainOptionalMemberExpression(exp: MemberExpression | CallExpression, ref: ASTRef, innerExp: (exp: ASTNode[]) => ASTNode)
   j .= 0
   { children } := exp
   usesRef .= false
@@ -1366,7 +1367,7 @@ function unchainOptionalMemberExpression(exp: MemberExpression | CallExpression,
   else // Unchanged
     exp
 
-function attachPostfixStatementAsExpression(exp, post: [WSNode, IfStatement | IterationStatement | DoStatement | ForStatement])
+function attachPostfixStatementAsExpression(exp: ASTNode, post: [WSNode, IfStatement | IterationStatement | DoStatement | ForStatement])
   postfixStatement := post[1]
 
   switch postfixStatement.type
@@ -1968,12 +1969,12 @@ function processPlaceholders(statements: StatementTuple[]): void
 
   return
 
-function reorderBindingRestProperty(props)
-  const names = props.flatMap((p) => p.names)
+function reorderBindingRestProperty(props: ObjectBindingPatternContent)
+  const names = props.flatMap((p: ObjectBindingPatternContent[number]) => (p as { names?: string[] }).names ?? [])
 
   let restIndex = -1
   let restCount = 0
-  props.forEach(({ type }, i) => {
+  props.forEach(({ type }: { type?: string }, i: number) => {
     if (type is "BindingRestProperty") {
       if (restIndex < 0) restIndex = i
       restCount++
@@ -2026,18 +2027,24 @@ function reorderBindingRestProperty(props)
 
   return { children, names }
 
-function typeOfJSX(node, config)
+// JSX nodes aren't formally declared in types.civet yet;
+// these functions read type/tag/jsxChildren/expression only.
+type JSXLikeNode = { type: string; tag?: string; jsxChildren?: JSXLikeNode[]; expression?: ASTNode }
+type JSXConfig = { solid?: boolean; server?: boolean; client?: boolean }
+
+function typeOfJSX(node: JSXLikeNode, config: JSXConfig): ASTNode
   switch node.type
     when "JSXElement"
       typeOfJSXElement node, config
     when "JSXFragment"
       typeOfJSXFragment node, config
 
-function typeOfJSXElement(node, config)
+function typeOfJSXElement(node: JSXLikeNode, config: JSXConfig): ASTNode
   if config.solid
     if config.server and not config.client  // server only
       return ["string"]
     { tag } := node
+    return unless tag
     // "An intrinsic element always begins with a lowercase letter,
     // and a value-based element always begins with an uppercase letter."
     // [https://www.typescriptlang.org/docs/handbook/jsx.html]
@@ -2050,10 +2057,10 @@ function typeOfJSXElement(node, config)
     else  // client only (default)
       return clientType
 
-function collectJSXFragmentTypes(node, config)
-  type := []
-  let lastType
-  for child of node.jsxChildren
+function collectJSXFragmentTypes(node: JSXLikeNode, config: JSXConfig): ASTNode[]
+  type: ASTNode[] := []
+  let lastType: string?
+  for child of node.jsxChildren ?? []
     switch child.type
       when "JSXText"
         // Solid combines multiple consecutive texts into one string
@@ -2071,7 +2078,7 @@ function collectJSXFragmentTypes(node, config)
     lastType = child.type
   return type
 
-function typeOfJSXFragment(node, config)
+function typeOfJSXFragment(node: JSXLikeNode, config: JSXConfig): ASTNode
   if config.solid
     type .= collectJSXFragmentTypes node, config
     // Solid doesn't wrap single fragment child in an array
