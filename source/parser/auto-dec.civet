@@ -1,6 +1,10 @@
 import type {
   ASTNode
+  ASTNodeObject
+  AssignmentExpression
   BlockStatement
+  Declaration
+  StatementTuple
 } from ./types.civet
 
 import {
@@ -10,6 +14,7 @@ import {
 
 import {
   isFunction
+  isToken
 } from ./util.civet
 
 import {
@@ -19,45 +24,44 @@ import {
 
 { getConfig } from "../parser.hera"
 
-function findDecs(statements: ASTNode)
+function findDecs(statements: ASTNode): Set<string>
   declarations := gatherNodes statements, .type is "Declaration"
   declarationNames := declarations.flatMap .names
   globals := getConfig().globals or []
 
   return new Set globals ++ declarationNames
 
-function createConstLetDecs(statements, scopes, letOrConst: "let" | "const"): void
-  function findVarDecs(statements, decs): Set<string>
+function createConstLetDecs(statements: StatementTuple[], scopes: Set<string>[], letOrConst: "let" | "const"): void
+  function findVarDecs(statements: StatementTuple[]): Set<string>
     declarationNames := gatherRecursive statements, (node) =>
-      node.type is "Declaration" and
-      node.children and
-      node.children# > 0 and
-      node.children[0].token and
-      node.children[0].token.startsWith("var") or
+      (node.type is "Declaration" and
+       node.children# > 0 and
+       isToken(node.children[0]) and
+       node.children[0].token.startsWith("var")) or
       node.type is "FunctionExpression"
-    .filter .type is "Declaration"
+    .filter((node): node is Declaration => node.type is "Declaration")
     .flatMap .names
     new Set declarationNames
 
   declaredIdentifiers .= findVarDecs statements
 
-  function hasDec(name)
-    declaredIdentifiers.has(name) or scopes.some .has name
+  function hasDec(name: string): boolean
+    declaredIdentifiers.has(name) or scopes.some((s: Set<string>) => s.has name)
 
-  function gatherBlockOrOther(statement)
-    gatherNodes statement,
-      .type is "BlockStatement" or
-      .type is "AssignmentExpression" or
-      .type is "Declaration"
-    .flatMap (node) =>
+  function gatherBlockOrOther(statement: ASTNode): ASTNodeObject[]
+    gatherNodes statement, (node) =>
+      node.type is "BlockStatement" or
+      node.type is "AssignmentExpression" or
+      node.type is "Declaration"
+    .flatMap (node: ASTNodeObject): ASTNodeObject[] =>
       if node.type is "BlockStatement"
         // bare blocks is not a safe position to insert let declaration
-        node.bare ? gatherBlockOrOther(node.expressions) : node
+        node.bare ? gatherBlockOrOther(node.expressions) : [node]
       else
         // AssignmentExpression and Declaration always have non-empty children
         [...gatherBlockOrOther(node.children), node]
 
-  currentScope .= new Set
+  currentScope .= new Set<string>
   scopes.push currentScope
 
   fnNodes := gatherNodes statements, isFunction
@@ -66,7 +70,7 @@ function createConstLetDecs(statements, scopes, letOrConst: "let" | "const"): vo
   targetStatements: StatementTuple[] .= []
   for each statement of statements
     nodes := gatherBlockOrOther statement
-    undeclaredIdentifiers .= []
+    undeclaredIdentifiers: string[] .= []
     for each node of nodes
       if node.type is "BlockStatement"
         block .= node
@@ -77,15 +81,16 @@ function createConstLetDecs(statements, scopes, letOrConst: "let" | "const"): vo
           createConstLetDecs(block.expressions, scopes, letOrConst)
           scopes.pop()
         else if forNode?
-          scopes.push new Set forNode.declaration.names
+          scopes.push new Set forNode.declaration?.names
           createConstLetDecs(block.expressions, scopes, letOrConst)
           scopes.pop()
         else
           createConstLetDecs(block.expressions, scopes, letOrConst)
         continue
       // Assignment and Declaration all use 'names'.
-      names := node.names.filter (name) => not hasDec name
-      if node.type is "AssignmentExpression"
+      asgnOrDec := node as AssignmentExpression | Declaration
+      names := (asgnOrDec.names ?? []).filter (name: string) => not hasDec name
+      if asgnOrDec.type is "AssignmentExpression"
         undeclaredIdentifiers.push ...names
       for each name of names
         currentScope.add name
@@ -94,38 +99,39 @@ function createConstLetDecs(statements, scopes, letOrConst: "let" | "const"): vo
       indent .= statement[0]
       // Is this statement a simple assignment like 'a = 1'?
       firstIdentifier .= gatherNodes(statement[1], .type is "Identifier")[0]
+      s1 := statement[1] as ASTNodeObject
       if (undeclaredIdentifiers# is 1
-        and statement[1].type is "AssignmentExpression"
-        and statement[1].names# is 1
-        and statement[1].names[0] is undeclaredIdentifiers[0]
-        and firstIdentifier and firstIdentifier.names == undeclaredIdentifiers[0]
+        and s1.type is "AssignmentExpression"
+        and s1.names?# is 1
+        and s1.names![0] is undeclaredIdentifiers[0]
+        and firstIdentifier and (firstIdentifier.names as unknown as string) == undeclaredIdentifiers[0]
         and gatherNodes(statement[1], .type is "ObjectBindingPattern")# is 0)
-        statement[1].children.unshift [`${letOrConst} `]
+        s1.children.unshift [`${letOrConst} `]
       else
-        tail .= "\n"
+        tail: string? .= "\n"
         // Does this statement start with a newline?
-        if gatherNodes(indent, .token and .token.endsWith("\n"))#
+        if gatherNodes(indent, (n) => isToken(n) and n.token.endsWith("\n"))#
           tail = undefined
         // Have to use 'let' instead of 'const' if the assignment is inside an expression
         targetStatements.push [indent, {
           type: "Declaration"
           children: ["let ", ...undeclaredIdentifiers.join(", ")]
           names: undeclaredIdentifiers
-        }, tail]
+        } as Declaration, tail]
     targetStatements.push(statement)
 
   scopes.pop()
   statements.splice(0, statements#, ...targetStatements)
 
 // CoffeeScript compatible automatic var insertion
-function createVarDecs(block: BlockStatement, scopes, pushVar?): void
+function createVarDecs(block: BlockStatement, scopes: Set<string>[], pushVar?: (name: string) => void): void
   // NOTE: var and let/const have different scoping rules
   // need to keep var scopes when entering functions and within a var scope keep
   // track of lexical scopes within blocks
-  function hasDec(name)
-    return scopes.some .has name
+  function hasDec(name: string): boolean
+    return scopes.some((s: Set<string>) => s.has name)
 
-  function findAssignments(statements, decs)
+  function findAssignments(statements: ASTNode, decs: Set<string>): AssignmentExpression[]
     assignmentStatements .= gatherNodes statements, .type is "AssignmentExpression"
 
     if assignmentStatements#
@@ -134,23 +140,25 @@ function createVarDecs(block: BlockStatement, scopes, pushVar?): void
         findAssignments assignmentStatements.map((s) => s.children), decs
 
     // Ignore assignment statements for public static class assignments, which don't need declaration
-    assignmentStatements.filter !(&.parent?.type is "CoffeeClassPublic")
+    assignmentStatements.filter((a): a is AssignmentExpression =>
+      a.type is "AssignmentExpression" and a.parent?.type !== "CoffeeClassPublic")
 
   // Let descendent blocks add the var at the outer enclosing function scope
-  pushVar ?= (name: string) =>
+  pushVar ?= (name: string): void =>
     varIds.push(name)
     decs.add(name)
 
   { expressions: statements } := block
   decs := findDecs statements
   scopes.push decs
-  varIds := []
-  assignmentStatements := findAssignments statements, scopes
-  undeclaredIdentifiers := assignmentStatements.flatMap ?.names or []
+  varIds: string[] := []
+  assignmentStatements := findAssignments statements, scopes[0]
+  undeclaredIdentifiers := assignmentStatements.flatMap (a) => a?.names ?? []
 
   // Unique, undeclared identifiers in this scope
-  undeclaredIdentifiers.filter((x, i, a) => {
+  undeclaredIdentifiers.filter((x: string, i: number, a: string[]) => {
     if (!hasDec(x)) return a.indexOf(x) is i
+    return false
   }).forEach(pushVar)
 
   const fnNodes = gatherNodes(statements, isFunction)
@@ -181,14 +189,15 @@ function createVarDecs(block: BlockStatement, scopes, pushVar?): void
     // get indent from first statement
     const indent = getIndent(statements[0])
     let delimiter = ";"
-    if statements[0][1]?.parent?.root
+    s1 := statements[0][1] as ASTNodeObject | undefined
+    if s1?.parent?.type is "BlockStatement" and s1.parent.root
       delimiter = ";\n"
     // TODO: Declaration ast node
     braceBlock block
     statements.unshift([indent, {
       type: "Declaration"
       children: ["var ", varIds.join(", ")]
-    }, delimiter])
+    } as Declaration, delimiter])
 
   scopes.pop()
 

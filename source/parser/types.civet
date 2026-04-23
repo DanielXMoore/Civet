@@ -98,6 +98,7 @@ export type OtherNode =
   | CommentNode
   | ComputedPropertyName
   | ConditionFragment
+  | DeclarationCondition
   | DefaultClause
   | ElisionElement
   | ElseClause
@@ -122,6 +123,7 @@ export type OtherNode =
   | PinProperty
   | Placeholder
   | PostRestBindingElements
+  | Property
   | PropertyAccess
   | PropertyBind
   | PropertyGlob
@@ -130,6 +132,7 @@ export type OtherNode =
   | ReturnValue
   | SliceExpression
   | SpreadElement
+  | SpreadProperty
   | Star
   | ThisType
   | TypeArgument
@@ -279,6 +282,25 @@ export type UpdateExpression = ASTParent &
   type: "UpdateExpression"
   assigned: ASTNode
 
+// Nodes that may carry a `hoistDec` attached by declaration-flow transforms.
+// The attach sites include parser.hera:7945 (LexicalDeclaration in JSX),
+// ref.civet:60 (makeRefAssignment), pipe.civet:241/255, lib.civet:1140/1271/
+// 1286, declaration.civet:311, for.civet:456. Any of these writers can
+// retarget an existing AST object, so we model `hoistDec` on a common
+// helper union that `block.civet:hoistRefDecs` narrows back to.
+export type HasHoistDec = ASTNodeObject & {
+  hoistDec?: ASTNode
+}
+
+// Nodes that may carry a `blockPrefix` spread-in from
+// ArrayBindingPatternContent / ObjectBindingPatternContent (parser.hera:2317
+// and adjustBindingElements) or created by declaration.civet:322.
+// Used by binding.civet:insertRestSplices to walk for spliced rest-element
+// emissions across parameter lists, binding patterns, and destructuring LHS.
+export type HasBlockPrefix = ASTNodeObject & {
+  blockPrefix?: ASTNode
+}
+
 export type AssignmentExpression = ASTParent &
   type: "AssignmentExpression"
   names: string[] | null
@@ -286,6 +308,10 @@ export type AssignmentExpression = ASTParent &
   assigned: ASTNode
   expression: ExpressionNode | ASTRef
   hoistDec?: ASTNode
+  // binding.civet:199 marks an injected this-assignment as already-formatted
+  // JS so function.civet:1089 preserves its children verbatim instead of
+  // re-wrapping with indent/delimiter.
+  js?: boolean
 
 export type AssignmentExpressionLHS = [undefined, NonNullable<ASTNode>, [WSNode, [string, WSNode]], ASTLeaf][]
 
@@ -338,6 +364,15 @@ export type IndentNode = ASTNode
 export type StatementTuple = [IndentNode, ASTNode, StatementDelimiter?]
 
 export type Condition = ParenthesizedExpression
+
+// parser.hera:5553 emits a DeclarationCondition wrapper when an if/while/
+// switch condition is parsed as a LexicalDeclaration (`if x := ...`).
+// declaration.civet:processDeclarationCondition later mutates this node in
+// place into an AssignmentExpression (with `pattern`, `ref`, and optional
+// `hoistDec`/`statementDeclaration` fields) via Object.assign.
+export type DeclarationCondition = ASTParent &
+  type: "DeclarationCondition"
+  declaration: Declaration
 
 export type ParenthesizedExpression = ASTParent &
   type: "ParenthesizedExpression"
@@ -498,6 +533,10 @@ export type PropertyGlob = ASTParent &
   type: "PropertyGlob"
   dot: ASTNode
   object: ObjectExpression
+  // declaration.civet:dynamizeImportDeclarationExpression sets `reversed: true`
+  // to emit `(...).{ name }` for dynamic named imports; lib.civet:680 reads
+  // the flag to swap name/value when flattening the glob.
+  reversed?: boolean
 
 export type Call = ASTParent &
   type: "Call"
@@ -536,6 +575,10 @@ export type ASTRef = ASTObject &
    */
   names?: [ASTString]
   children?: [ASTString]
+  // binding.civet:161 / ref.civet:112 attach $loc to refs originating from
+  // source locations (e.g. `@id`); populateRefs consumes it and propagates
+  // the loc onto the resolved child token.
+  $loc?: Loc
 
 export type AtBinding =
   type: "AtBinding"
@@ -590,7 +633,11 @@ export type Declaration = ASTParent &
   bindings: Binding[]
   decl: "let" | "const" | "var"
   splices?: unknown
-  thisAssignments?: ThisAssignments
+  // declaration.civet:94 wraps each ThisAssignments entry in a StatementTuple
+  // before attaching to the Declaration (so downstream emit can treat them as
+  // sibling block statements); the raw ThisAssignments form stays available
+  // for callers that operate on the pre-wrapped list.
+  thisAssignments?: ThisAssignments | StatementTuple[]
   // Should placeholders in contents be lifted above the parent block,
   // because they actual came from code outside the block?
   implicitLift?: boolean
@@ -735,6 +782,9 @@ export type BindingRestElement = ASTParent &
   typeSuffix?: TypeSuffix?
   binding: BindingIdentifier | BindingPattern | EmptyBinding
   initializer?: undefined // rest elements don't accept initializers
+  // parser.hera:2333 BindingElementList spreads [...element, delim] so a
+  // rest element entering via BindingElement inherits the list delimiter.
+  delim?: ASTNode
 
 export type EmptyBinding = ASTParent &
   type: "EmptyBinding"
@@ -746,6 +796,12 @@ export type ElisionElement = ASTParent &
   typeSuffix?: undefined
   names: string[]
   initializer?: undefined // holes don't have initializers
+  // parser.hera:2333 BindingElementList spreads [...element, delim] so holes
+  // carry the following comma as delim.
+  delim?: ASTNode
+  // walker-union convenience: holes have no binding (ArrayBindingPatternContent
+  // sites destructure `.binding?` uniformly).
+  binding?: undefined
 
 export type Placeholder = ASTObject &
   type: "Placeholder"
@@ -798,6 +854,9 @@ export type PinProperty = ASTParent &
   value: PinPattern
   delim: ASTNode
   typeSuffix?: undefined
+  // walker-union convenience: pin properties don't carry an initializer
+  // (ObjectBindingPatternContent destructures `.initializer?` uniformly).
+  initializer?: undefined
 
 export type AtBindingProperty = ASTParent &
   type: "AtBindingProperty"
@@ -846,11 +905,16 @@ export type SpreadProperty = ASTParent &
 
 export type Property = ASTParent &
   type: "Property"
-  name: string
+  // parser.hera NamedProperty/SnugNamedProperty: `name` is a PropertyName AST
+  // node (Literal / ComputedPropertyName / Identifier), not a bare string.
+  name: PropertyName
   names: string[]
   value: ASTNode
   implicitName?: boolean
   usesRef?: boolean
+  // parser.hera:2307 attaches a delimiter to properties inside comma-delimited
+  // object-expression property lists.
+  delim?: ASTNode
 
 export type ArrayExpression = ASTParent &
   type: "ArrayExpression"
@@ -1154,7 +1218,20 @@ export type VoidType = ASTLeafWithType "VoidType"
 
 export type TypeLiteralNode = ASTLeaf | ASTString | VoidType
 
-export type ThisAssignments = ([string, ASTRef] | AssignmentExpression)[]
+// binding.civet:162 pushes a 4-tuple source-mapped form when the `@` token
+// carries a Loc (so the generated `this.` / id tokens remain sourcemappable);
+// binding.civet:169 falls back to the compact `[string, ASTRef]` form when
+// there is no loc to attach.  binding.civet:199 also pushes a minimal
+// `js:true`-marked AssignmentExpression shape for injected TS parameter-
+// property this-assignments (function.civet:1089 inspects `.js` to preserve
+// the pre-formatted children verbatim).  All flavors are consumed by
+// function.civet.
+export type ThisAssignments = (
+  | [string, ASTRef]
+  | [ASTLeaf, ASTLeaf, string, ASTRef]
+  | AssignmentExpression
+  | { type: "AssignmentExpression", children: ASTNode[], js: true }
+)[]
 
 export type WithClause = ASTParent &
   type: "WithClause"
