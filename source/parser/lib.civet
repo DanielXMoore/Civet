@@ -12,6 +12,7 @@ import type {
   ASTNode
   ASTNodeObject
   ASTRef
+  ArrowFunction
   Binding
   BlockStatement
   BreakStatement
@@ -28,7 +29,9 @@ import type {
   ElseClause
   FinallyClause
   ForStatement
+  FunctionExpression
   FunctionSignature
+  Identifier
   IfStatement
   Initializer
   IterationStatement
@@ -42,6 +45,8 @@ import type {
   ParametersNode
   ParenthesizedExpression
   Placeholder
+  Property
+  SpreadProperty
   StatementNode
   StatementTuple
   SwitchStatement
@@ -217,8 +222,8 @@ function adjustIndexAccess(dot: AccessStart): AccessStart
     }
   else
     dot = replaceNodes deepCopy(dot),
-      (node) => node.token is ".",
-      (node) => ({ ...node, token: "[" })
+      (node: ASTNode) => (node as ASTLeaf)?.token is ".",
+      (node: ASTLeaf) => ({ ...node, token: "[" })
 
   return dot
 
@@ -375,8 +380,13 @@ function expressionizeIfStatement(statement: IfStatement): ASTNode
     children
   }
 
-function expressionizeTypeIf([ifOp, condition, t, e])
-  children := [
+function expressionizeTypeIf([ifOp, condition, t, e]: [
+  ASTLeaf & {negated?: boolean}
+  ASTNode & {negated?: boolean}
+  ASTNode
+  [ASTNode, ASTNode, ...ASTNode[]]?
+])
+  children: ASTNode[] := [
     "("
     trimFirstSpace condition
     "?"
@@ -403,28 +413,32 @@ function expressionizeTypeIf([ifOp, condition, t, e])
  *
  * [See More](../test/object.civet)
  */
-function handleThisPrivateShorthands(value)
-  if value.privateShorthand
-    value = value.children[1].children[1]
+// Values carry optional privateShorthand/thisShorthand flags set by the
+// HashThis grammar rule (see parser.hera near "HashThis").
+type ThisShorthandNode = MemberExpression & { privateShorthand?: boolean; thisShorthand?: boolean }
 
-    return [value, false]
+function handleThisPrivateShorthands(value: ASTNode): [ASTNode, boolean?]
+  v := value as ThisShorthandNode | undefined
+  if v?.privateShorthand
+    inner := v.children[1] as ThisShorthandNode
+    return [inner.children[1], false]
 
-  if value.type is "MemberExpression" or value.type is "CallExpression"
-    suppressPrefix .= value.thisShorthand
-    value = {
-      ...value,
-      children: value.children.map (c, i) =>
+  if v?.type is "MemberExpression" or v?.type is "CallExpression"
+    suppressPrefix: boolean? .= v.thisShorthand
+    updated := {
+      ...v
+      children: v.children.map (c: ASTNode, i: number) =>
         if i is 0
-          let s
+          let s: boolean?
           [c, s] = handleThisPrivateShorthands c
           suppressPrefix ||= s
 
         c
     }
 
-    return [value, suppressPrefix]
+    return [updated as ASTNode, suppressPrefix]
 
-  return [value, value.thisShorthand]
+  return [value, v?.thisShorthand]
 
 function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause[], ElseClause?, FinallyClause?])
   [t, , b, cs, e, f] .= $0
@@ -839,10 +853,11 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
 // * unary suffix applied to above
 // * comma operators applied to above
 function makeExpressionStatement(expression: ASTNode): ASTNode
-  if Array.isArray(expression) and expression[1]?[0]?[0]?[1]?.token is "," // CommaExpression
+  arr := expression as [ASTNode, [ASTNode, [ASTNode, ASTLeaf]][], ...ASTNode[]]
+  if Array.isArray(expression) and arr[1]?[0]?[0]?[1]?.token is "," // CommaExpression
     [
-      makeExpressionStatement expression[0]
-      expression[1].map [comma, exp] => // CommaDelimiter AssignmentExpression
+      makeExpressionStatement arr[0]
+      arr[1].map ([comma, exp]: [ASTNode, ASTNode]) => // CommaDelimiter AssignmentExpression
         [comma, makeExpressionStatement exp]
     ]
   else if expression?.type is "ObjectExpression" or
@@ -880,7 +895,7 @@ function lastAccessInCallExpression(exp)
 
 // Given a MethodDefinition, convert into a FunctionExpression.
 // Returns undefined if the method is a getter or setter.
-function convertMethodToFunction(method)
+function convertMethodToFunction(method: MethodDefinition)
   { signature, block } := method
   { async, modifier, optional } := signature
 
@@ -910,8 +925,8 @@ function convertMethodToFunction(method)
     block
   }
 
-function convertFunctionToMethod(id, exp)
-  fnTokenIndex := exp.children.findIndex (c) -> c?.token?.startsWith("function")
+function convertFunctionToMethod(id: Identifier, exp: FunctionExpression)
+  fnTokenIndex := exp.children.findIndex (c: ASTNode) -> (c as ASTLeaf)?.token?.startsWith("function")
   // copy
   children := exp.children.slice()
   // Replace "function" and move the generator slot ahead of id so a "*"
@@ -926,11 +941,11 @@ function convertFunctionToMethod(id, exp)
     children
   }
 
-function convertArrowFunctionToMethod(id, exp)
+function convertArrowFunctionToMethod(id: Identifier, exp: ArrowFunction): MethodDefinition
   block := {...exp.block} // prepare for bracing
-  children := exp.children.filter((c) -> !(Array.isArray(c) && c[c.length-1]?.token?.includes("=>"))).map((c) -> c === exp.block ? block : c)
+  children := exp.children.filter((c: ASTNode) -> !(Array.isArray(c) && (c[c.length-1] as ASTLeaf)?.token?.includes("=>"))).map((c: ASTNode) -> c === exp.block ? block : c)
   children.unshift(id)
-  exp = {
+  method: MethodDefinition := {
     ...exp,
     type: "MethodDefinition",
     name: id.name,
@@ -939,9 +954,9 @@ function convertArrowFunctionToMethod(id, exp)
     children,
     autoBind: true
   }
-  block.parent = exp // needed by braceBlock
+  block.parent = method // needed by braceBlock
   braceBlock(block)
-  exp
+  method
 
 // Convert NamedImports into equivalent ObjectExpression or ObjectBindingPattern
 function convertNamedImportsToObject(node, pattern?: boolean)
