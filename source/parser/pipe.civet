@@ -1,7 +1,10 @@
 type {
+  ArrowFunction
   ASTNode
+  ASTNodeObject
   AssignmentExpression
   Call
+  ParenthesizedExpression
   ThrowStatement
 } from ./types.civet
 { gatherRecursiveAll } from ./traversal.civet
@@ -9,6 +12,8 @@ type {
   addParentPointers
   checkValidLHS
   clone
+  isASTNodeObject
+  isToken
   makeLeftHandSideExpression
   makeNode
   removeHoistDecs
@@ -30,14 +35,19 @@ type ExprWithComments
 
 function constructInvocation(fn: ExprWithComments, arg: ASTNode!)
   // Unwrap ampersand blocks
-  expr .= fn.expr
-  while expr.type is "ParenthesizedExpression"
-    expr = expr.expression
-  if expr.ampersandBlock
-    { ref, body } := expr
+  expr: NonNullable<ASTNode> .= fn.expr
+  while isASTNodeObject(expr) and expr.type is "ParenthesizedExpression"
+    expr = (expr as ParenthesizedExpression).expression
+  if isASTNodeObject(expr) and expr.type is "ArrowFunction" and expr.ampersandBlock
+    arrow := expr as ArrowFunction & { ref: ASTNodeObject, body: ASTNode }
+    { ref, body } := arrow
 
-    ref.type = "PipedExpression"
-    ref.children = [makeLeftHandSideExpression(arg)]
+    // We mutate the ref in place to a synthetic "PipedExpression" — not a
+    // declared AST node type, but the generator only looks at .children
+    // for non-leaf nodes, so the renamed type tag is harmless.
+    asMut := ref as unknown as { type: string, children: ASTNode[] }
+    asMut.type = "PipedExpression"
+    asMut.children = [makeLeftHandSideExpression(arg)]
     updateParentPointers ref
 
     return makeNode {
@@ -47,16 +57,18 @@ function constructInvocation(fn: ExprWithComments, arg: ASTNode!)
     }
 
   expr = fn.expr
-  lhs .= expr
+  lhs: ASTNodeObject .= expr as ASTNodeObject
   // NewExpressions get handled specially later
   unless lhs.type is "NewExpression"
-    lhs = makeLeftHandSideExpression(lhs)!
+    lhs = makeLeftHandSideExpression(lhs)! as ASTNodeObject
 
-  // Attach comments
+  // Attach comments — by this point lhs is a NewExpression or a wrapped LHS,
+  // both of which carry .children.
+  lhsChildren := (lhs as ASTNodeObject & { children: ASTNode[] }).children
   comment .= skipIfOnlyWS(fn.trailingComment)
-  if (comment) lhs.children.push comment
+  if comment then lhsChildren.push comment
   comment = skipIfOnlyWS(fn.leadingComment)
-  if (comment) lhs.children.splice(1, 0, comment)
+  if comment then lhsChildren.splice(1, 0, comment)
 
   args := [arg]
   call: Call := {
@@ -84,33 +96,36 @@ function constructInvocation(fn: ExprWithComments, arg: ASTNode!)
 
 function constructPipeStep(fn: ExprWithComments, arg: ASTNode!, returning: ASTNode??): [ASTNode, ASTNode??]
   returning = null unless returning
-  children .= [[fn.leadingComment, fn.expr, fn.trailingComment].map(skipIfOnlyWS), " ", arg]
+  children: ASTNode[] .= [[fn.leadingComment, fn.expr, fn.trailingComment].map(skipIfOnlyWS), " ", arg]
 
-  // Handle special non-function cases
-  switch fn.expr.token
-    when "await"
-      children = processUnaryExpression([fn.expr], arg, undefined)
-      continue switch
-    when "yield"
-      return [
-        children
-        returning
-      ]
-    when "throw"
-      statement: ThrowStatement := { type: "ThrowStatement", children }
-      return
-        . {
+  // Handle special non-function cases.  fn.expr is the bare keyword token
+  // for await/yield/throw/return.  Guard with isToken so .token narrows.
+  if isToken fn.expr
+    switch fn.expr.token
+      when "await"
+        children = processUnaryExpression([fn.expr], arg, undefined) as ASTNode[]
+        continue switch  // fall through to "yield" arm
+      when "yield"
+        return [children, returning] as! [ASTNode, ASTNode??]
+      when "throw"
+        statement: ThrowStatement := { type: "ThrowStatement", children }
+        return [
+          {
             type: "StatementExpression"
             statement
             children: [statement]
-          }
-        . null
-    when "return"
-      // Return ignores ||> returning argument
-      return [{
-        type: "ReturnStatement"
-        children
-      }, null]
+          } as ASTNode
+          null
+        ]
+      when "return"
+        // Return ignores ||> returning argument
+        return [
+          {
+            type: "ReturnStatement"
+            children
+          } as ASTNode
+          null
+        ]
 
   return [
     constructInvocation(fn, arg)
@@ -120,7 +135,7 @@ function constructPipeStep(fn: ExprWithComments, arg: ASTNode!, returning: ASTNo
 // head: expr
 // body: [ws, pipe, ws, expr][]
 
-function processPipelineExpressions(statements): void
+function processPipelineExpressions(statements: ASTNode): void
   for each s of gatherRecursiveAll statements, .type is "PipelineExpression"
     [ws, , body] := s.children
     [, arg] .= s.children
