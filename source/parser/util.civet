@@ -13,6 +13,7 @@ import type {
   IsToken
   IterationStatement
   Literal
+  NumericLiteral
   Parameter
   ParametersNode
   Parent
@@ -31,20 +32,21 @@ import {
 } from ./traversal.civet
 
 // Types need to be upfront to allow for TypeScript `asserts`
-assert: {
-  <T>(a: T, msg: string): asserts a
-  equal(a: unknown, b: unknown, msg: string): asserts a is b
+// Note: arrow form `(...) => asserts a` is required because Civet currently
+// mis-emits the colon-form `(...): asserts a` as `asserts<a>`.
+assert: ((a: unknown, msg: string) => asserts a) & {
+  equal(a: unknown, b: unknown, msg: string): void
   notEqual(a: unknown, b: unknown, msg: string): void
   notNull<T>(a: T, msg: string): asserts a is NonNullable<T>
 } := Object.assign(
-  (a, msg): void =>
+  (a: unknown, msg: string): void =>
     throw new Error(`Assertion failed [${msg}]`) unless a
   {
-    equal(a, b, msg): void
+    equal(a: unknown, b: unknown, msg: string): void
       throw new Error(`Assertion failed [${msg}]: ${a} !== ${b}`) if a !== b
-    notEqual(a, b, msg): void
+    notEqual(a: unknown, b: unknown, msg: string): void
       throw new Error(`Assertion failed [${msg}]: ${a} === ${b}`) if a === b
-    notNull(a, msg)
+    notNull(a: unknown, msg: string): void
       throw new Error(`Assertion failed [${msg}]: got null`) unless a?
   }
 )
@@ -53,7 +55,7 @@ assert: {
  * Adds parent pointers to all nodes in the AST. Elements within
  * arrays of nodes receive the closest non-array object parent.
  */
-function addParentPointers(node: ASTNode, parent?: ASTNodeObject): void
+function addParentPointers(node: ASTNode, parent?: ASTNodeParent): void
   if (not node?) return
   if (typeof node !== "object") return
 
@@ -87,14 +89,14 @@ function removeParentPointers(node: ASTNode): void
       removeParentPointers child
     return
 
-  node.parent = null
+  node.parent = undefined
   if isParent node
     for child of node.children
       removeParentPointers child
 
 // If node is not an ASTNodeObject, wrap it in a special "Wrapper" node
 // so that it can have a parent (second argument).
-function maybeWrap(node: ASTNode, parent: ASTNodeObject?): ASTNodeObject
+function maybeWrap(node: ASTNode, parent: ASTNodeParent?): ASTNodeObject
   unless isASTNodeObject node
     updateParentPointers node = {
       type: 'Wrapper'
@@ -161,7 +163,7 @@ function isStatement(node: ASTNode): node is StatementNode
     node.type?  // forbid leaf
     statementTypes.has node.type
 
-function isWhitespaceOrEmpty(node): boolean
+function isWhitespaceOrEmpty(node: any): boolean
   if (!node) return true
   if (node.type is "Ref") return false
   if (node.token) return /^\s*$/.test(node.token)
@@ -258,14 +260,17 @@ function isLoopStatement(node: ASTNodeObject): node is IterationStatement
  * Returns the node whose `token` is ",", or else undefined.
  */
 function isComma(node: ASTNode): (ASTLeaf & { token: "," }) | undefined
-  if node?.token is ","
-    node
-  else if Array.isArray(node) and node.-1?.token is ","
-    node.-1
+  if isToken(node) and node.token is ","
+    node as ASTLeaf & { token: "," }
+  else if Array.isArray(node)
+    last := node.-1
+    if isToken(last) and last.token is ","
+      last as ASTLeaf & { token: "," }
 
 function stripTrailingImplicitComma(children: ASTNode[])
   last := children.-1
-  if isComma(last) and last.implicit
+  comma := isComma(last)
+  if comma?.implicit
     children[...-1]
   else
     children
@@ -287,34 +292,35 @@ function insertTrimmingSpace<T extends ASTNode>(target: T, c: string): T
   return target unless target?
 
   if Array.isArray target
-    return c if target.length is 0
+    return c as! T if target.length is 0
 
-    for each e, i of target
+    return (for each e, i of target
       if i is 0
         insertTrimmingSpace(e, c)
       else
-        e
+        e) as! T
   else if isParent target
     oldChildren := target.children
-    target = {
+    newTarget := {
       ...target
       children: insertTrimmingSpace target.children, c
-    }
+    } as typeof target
     // Preserve aliased properties
-    for key in target
-      i := oldChildren.indexOf target[key]
+    for key in newTarget
+      i := oldChildren.indexOf (newTarget as any)[key]
       if i >= 0
-        target[key] = target.children[i]
-    target
+        (newTarget as any)[key] = newTarget.children[i]
+    return newTarget as! T
   else if isToken target
-    {
-      ...target
-      token: target.token.replace(/^ ?/, c)
-    }
+    leaf := target as ASTLeaf
+    return {
+      ...leaf
+      token: leaf.token.replace(/^ ?/, c)
+    } as! T
   else if target <? "string"
-    target.replace(/^ ?/, c)
+    return target.replace(/^ ?/, c) as! T
   else
-    target
+    return target
 
 /**
  * Trims the first single space from the spacing array or node's children if present
@@ -409,29 +415,21 @@ function literalValue(literal: Literal)
 
 /** TypeScript type for given literal */
 function literalType(literal: Literal | RegularExpressionLiteral | TemplateLiteral): TypeNode
-  let t: ASTString
-  switch literal.type
-    when "RegularExpressionLiteral"
-      t = "RegExp"
-    when "TemplateLiteral"
-      t = "string"
+  // The sole caller `typeOfExpression` filters out NullLiteral and never
+  // passes a Literal whose subtype is RegularExpressionLiteral (those arrive
+  // with `type = "RegularExpressionLiteral"` and are handled above), so the
+  // listed cases are exhaustive at runtime.
+  t: ASTString := switch literal.type
+    when "RegularExpressionLiteral" then "RegExp"
+    when "TemplateLiteral" then "string"
     when "Literal"
-      // Literal.subtype is "NullLiteral" | "BooleanLiteral" | "NumericLiteral"
-      // | "StringLiteral" | "RegularExpressionLiteral".  The sole caller
-      // typeOfExpression filters NullLiteral and never passes a Literal whose
-      // subtype is RegularExpressionLiteral (those arrive with type
-      // "RegularExpressionLiteral" and are handled above), so only the three
-      // cases below are reachable.
       switch literal.subtype
-        when "BooleanLiteral"
-          t = "boolean"
+        when "BooleanLiteral" then "boolean"
         when "NumericLiteral"
-          if literal.raw.endsWith 'n'
-            t = "bigint"
-          else
-            t = "number"
-        when "StringLiteral"
-          t = "string"
+          if literal.raw.endsWith 'n' then "bigint" else "number"
+        when "StringLiteral" then "string"
+        else "unknown"
+    else "unknown"
   {}
     type: "TypeLiteral"
     t
@@ -504,7 +502,7 @@ function startsWith(target: ASTNode, value: RegExp)
     let i = 0
     let l = target.length
     while i < l
-      const t = target[i]
+      const t = target[i] as any
       break if t and (t.length or t.token or t.children)
       i++
     if i < l
@@ -595,9 +593,10 @@ function replaceNode(node: ASTNode, newNode: ASTNode, parent?: ASTNodeParent): v
   assert.notEqual recurse(parent.children), false, "replaceNode: didn't find child node in parent"
 
   // Adjust 'expression' etc. alias pointers
-  for key, value in parent
+  parentAny := parent as any
+  for key, value in parentAny
     if value is node
-      parent[key] = newNode
+      parentAny[key] = newNode
 
   if isASTNodeObject newNode
     newNode.parent = parent
@@ -607,18 +606,22 @@ function replaceNode(node: ASTNode, newNode: ASTNode, parent?: ASTNodeParent): v
 /**
  * Replace all nodes that match predicate with replacer(node)
  */
-function replaceNodes(root, predicate, replacer)
+function replaceNodes(
+  root: ASTNode
+  predicate: (node: ASTNodeObject) => boolean
+  replacer: (node: ASTNodeObject, root: ASTNode) => ASTNode
+): ASTNode
   return root unless root?
 
-  array := Array.isArray(root) ? root : root.children
+  array := Array.isArray(root) ? root : (root as ASTNodeParent).children
   unless array
-    return replacer(root, root) if predicate root
+    return replacer(root as ASTNodeObject, root) if predicate(root as ASTNodeObject)
     return root
 
   for each node, i of array
     return unless node?
-    if predicate node
-      array[i] = replacer node, root
+    if predicate(node as ASTNodeObject)
+      array[i] = replacer(node as ASTNodeObject, root)
     else
       replaceNodes node, predicate, replacer
 
@@ -667,18 +670,18 @@ function makeLeftHandSideExpression(expression: ASTNode)
   while [ item ] := expression
     expression = item
   if isASTNodeObject expression
-    return expression if expression.token
-    return expression if expression.parenthesized
-    return expression if skipParens.has expression.type
+    return expression if isToken expression
+    return expression if (expression as { parenthesized?: boolean }).parenthesized
+    return expression if expression.type and skipParens.has expression.type
     // `new Foo` and `new Foo.Bar` need parenthesization;
     // `new Foo(args)` does not
     return expression if expression.type is "NewExpression" and
       expression.expression.children.some ?.type is "Call"
     return expression if expression.type is "MemberExpression" and
       not startsWithPredicate(expression, .type is "ObjectExpression")
-  parenthesizeExpression expression
+  parenthesizeExpression expression as NonNullable<ASTNode>
 
-function parenthesizeExpression(expression: ASTNode)
+function parenthesizeExpression(expression: NonNullable<ASTNode>)
   makeNode {
     type: "ParenthesizedExpression"
     children: ["(", expression, ")"]
@@ -741,7 +744,7 @@ function makeNode<T extends ASTNodeObject>(node: T): T
  * Used to ignore the result of __ if it is only whitespace
  * Useful to preserve spacing around comments
  */
-function skipIfOnlyWS(target)
+function skipIfOnlyWS(target: any): any
   if (!target) return target
   if (Array.isArray(target)) {
     if (target.length is 1) {
@@ -761,7 +764,7 @@ function skipIfOnlyWS(target)
  * but specifying a child instead of an index.  Throw if child not found.
  */
 function spliceChild(node: ASTNodeObject, child: ASTNode, del: number, ...replacements: ASTNode[])
-  { children } := node
+  children := (node as { children?: ASTNode[] }).children
   assert Array.isArray(children), "spliceChild: non-array node has no children field"
   index := children.indexOf child
   assert.notEqual index, -1, "spliceChild: child not found"
@@ -799,7 +802,7 @@ const typeNeedsNoParens = new Set [
  * Parenthesize type if it might need it in some contexts.
  */
 function parenthesizeType(type: ASTNode)
-  return type if typeNeedsNoParens.has type.type
+  return type if isASTNodeObject(type) and type.type and typeNeedsNoParens.has type.type
   makeNode
     type: "TypeParenthesized"
     ts: true
@@ -863,7 +866,6 @@ function wrapIIFE(expressions: StatementTuple[], asyncFlag?: boolean, generatorS
       type: "FunctionExpression"
       signature
       parameters
-      returnType: undefined
       async
       block
       generator
@@ -874,7 +876,6 @@ function wrapIIFE(expressions: StatementTuple[], asyncFlag?: boolean, generatorS
       type: "ArrowFunction"
       signature
       parameters
-      returnType: undefined
       async
       block
       children: [ ...signature.children, "=>", block ]
@@ -919,7 +920,7 @@ function wrapIIFE(expressions: StatementTuple[], asyncFlag?: boolean, generatorS
 
   return exp
 
-function wrapWithReturn(expression?: ASTNode, parent: Parent = expression?.parent, semi = false): ASTNode
+function wrapWithReturn(expression?: ASTNode, parent: Parent = isASTNodeObject(expression) ? expression.parent : undefined, semi = false): ASTNode
   children := expression ? ["return ", expression] : ["return"]
   children.unshift ";" if semi
 
