@@ -685,7 +685,7 @@ BinaryOpRHS
     return $skip if op[1].token is ">" and op[0].length is 0
     // NOTE: Flatten NotDedentedBinaryOp into whitespace and operator
     return [...op, ...rhs]
-  !NewlineBinaryOpAllowed SingleLineBinaryOpRHS
+  !NewlineBinaryOpAllowed SingleLineBinaryOpRHS -> $2
 
 IsLike
   Is _? ( OmittedNegation _? )?:negated Like ->
@@ -754,7 +754,9 @@ MaybeNestedCoffeeDoBody
 CoffeeDoBody
   # NOTE: This is a little hacky to match CoffeeScript's behavior
   # https://coffeescript.org/#try:do%20x%20%2B%20y%0Ado%20x%20%3D%20y%0Ado%20-%3E%20x%20%3D%201
-  ArrowFunction / ( LeftHandSideExpression !( __ AssignmentOpSymbol ) ) / Expression
+  ArrowFunction
+  LeftHandSideExpression !( __ AssignmentOpSymbol ) -> [$1, undefined]
+  Expression
 
 UnaryWithoutParenthesizedAssignmentBody
   UpdateExpression
@@ -1105,9 +1107,11 @@ PrimaryExpression
   # interpolated strings get checked first before StringLiteral.
   Literal ::ASTNode ->
     return $1
-  FunctionExpression ::ASTNode -> # NOTE: Must be before IdentiferExpression so `async function ...` isn't parsed as `async(function ...)`
+  # NOTE: Must be before IdentiferExpression so `async function ...` isn't parsed as `async(function ...)`
+  FunctionExpression ::ASTNode ->
     return $1
-  IdentifierReference ::ASTNode -> # NOTE: Must be below ObjectLiteral for inline objects `a: 1, b: 2` to not be shadowed by matching the first identifier
+  # NOTE: Must be below ObjectLiteral for inline objects `a: 1, b: 2` to not be shadowed by matching the first identifier
+  IdentifierReference ::ASTNode ->
     return $1
   ClassExpression ::ASTNode ->
     return $1
@@ -1204,7 +1208,7 @@ ClassDeclaration
 
 # https://262.ecma-international.org/#prod-ClassExpression
 ClassExpression
-  Decorators?:decorators ( Abstract __ )?:abstract Class !":" ClassBinding?:binding ClassHeritage?:heritage ClassBody:body ->
+  Decorators?:decorators ( Abstract __ )?:abstract Class:class_ !":" ClassBinding?:binding ClassHeritage?:heritage ClassBody:body ->
     return {
       type: "ClassExpression",
       decorators,
@@ -1214,7 +1218,7 @@ ClassExpression
       name: binding?.[0].name,
       heritage,
       body,
-      children: $0,
+      children: [decorators, abstract, class_, binding, heritage, body],
     }
 
 ClassBinding
@@ -1369,7 +1373,7 @@ ClassBracedContent
   NestedClassElements
   # based on SingleLineStatements
   ForbidNewlineBinaryOp ( ( _? !EOS ) ClassElement StatementDelimiter )*:stmts RestoreNewlineBinaryOp ->
-    return stmts
+    return stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
 
 NestedClassElements
   PushIndent NestedClassElement*:elements PopIndent ->
@@ -1464,7 +1468,7 @@ AccessModifier
 
     return {
       ts: true,
-      children: $0
+      children: [$1, $2]
     }
 
 # https://262.ecma-international.org/#prod-FieldDefinition
@@ -1609,7 +1613,7 @@ LeftHandSideExpression
   ( New !( "." / ":" ) __ )+ CallExpression:expression ->
     return {
       type: "NewExpression",
-      children: $0,
+      children: [...$1.flatMap(([new_, _assert, ws]) => [new_, ws]), expression],
       expression,
     }
   CallExpression
@@ -2015,7 +2019,7 @@ PropertyBindExplicitArguments
 
 SuperProperty
   Super MemberBracketContent
-  Super !PropertyAccessModifier PropertyAccess
+  Super !PropertyAccessModifier PropertyAccess -> [$1, $3]
 
 MetaProperty
   New Dot Target
@@ -2171,7 +2175,7 @@ ParameterElement
 
 ParameterElementDelimiter
   _? Comma
-  &( __ [)\]}] )
+  &( __ [)\]}] ) -> undefined
   &EOS InsertComma -> $2
 
 # https://262.ecma-international.org/#prod-BindingIdentifier
@@ -3108,8 +3112,8 @@ SingleLineStatements
   # NOTE: Statement can start with __ via AssignmentExpression.
   # Force staying on the same line via !/\n/ assertion.
   ForbidNewlineBinaryOp ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter )*:stmts ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter? )?:last RestoreNewlineBinaryOp ->
-    expressions := [...stmts]
-    expressions.push(last) if last
+    expressions := stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
+    expressions.push([last[0][0], last[1], last[2]]) if last
 
     children := [expressions]
     children.push(["\n"]) if hasTrailingComment(expressions)
@@ -3139,8 +3143,8 @@ BracedObjectSingleLineStatements
 
 PostfixedSingleLineStatements
   ( ( _? !EOS ) StatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) StatementListItem SemicolonDelimiter? )?:last ->
-    children := [...stmts]
-    children.push(last) if last
+    children := stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
+    children.push([last[0][0], last[1], last[2]]) if last
 
     return {
       type: "BlockStatement",
@@ -3151,8 +3155,8 @@ PostfixedSingleLineStatements
 
 PostfixedSingleLineNoCommaStatements
   ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter? )?:last ->
-    children := [...stmts]
-    children.push(last) if last
+    children := stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
+    children.push([last[0][0], last[1], last[2]]) if last
 
     return {
       type: "BlockStatement",
@@ -3425,7 +3429,7 @@ ArrayLiteralContent
   # by dedented commas
   #NestedImplicitObjectLiteral ( __ Comma NestedImplicitObjectLiteral )*
   # First check for properly indented list items
-  NestedElementList &( __ CloseBracket )
+  NestedElementList &( __ CloseBracket ) -> $1
   # Next check for a line of items followed by properly indented list items;
   # first line should not use indented applications because they may be
   # lines of list items
@@ -3462,7 +3466,7 @@ ArrayElementDelimiter
   # Ideally it would be nice to insert a trailing comma before newline followed by closing bracket, but in practice
   # it is difficult to keep the correct number of commas for elision elements. This is also closer to keeping source
   # verbatim.
-  &( __ "]" )
+  &( __ "]" ) -> undefined
   &EOS InsertComma -> $2
 
 ElementListWithIndentedApplicationForbidden
@@ -3489,7 +3493,7 @@ SingleLineElementList
 ElementListRest
   # NOTE: Within ElementList, forbid newlines (EOS) before and after comma,
   # to correctly handle indentation and nested lists
-  ( _? Comma !EOS ) ArrayElementExpression
+  ( _? Comma !EOS ) ArrayElementExpression -> [[$1[0], $1[1]], $2]
 
 # NOTE: Modified and simplified from the spec
 ArrayElementExpression
@@ -3698,12 +3702,12 @@ BracedObjectLiteralContent
 # NOTE: Nested implicit object literal starts with an indentation.
 # All properties can be spaced out and must have a colon.
 NestedImplicitObjectLiteral
-  InsertOpenBrace PushIndent AllowPipeline NestedImplicitPropertyDefinitions?:properties RestorePipeline PopIndent InsertNewline InsertIndent InsertCloseBrace ->
+  InsertOpenBrace:open PushIndent AllowPipeline NestedImplicitPropertyDefinitions?:properties RestorePipeline PopIndent InsertNewline:newline InsertIndent:indent InsertCloseBrace:close ->
     return $skip unless properties
     return {
       type: "ObjectExpression",
       properties,
-      children: $0,
+      children: [open, properties, newline, indent, close],
     }
 
 NestedImplicitPropertyDefinitions
@@ -3780,7 +3784,7 @@ InlineObjectPropertyDelimiter
 ObjectPropertyDelimiter
   _? Comma
   # Object closing delimits the property, as do end of array or parenthetical
-  &( __ [)\]}] )
+  &( __ [)\]}] ) -> undefined
   &EOS InsertComma ->
     return { ...$2, implicit: true }
 
@@ -4063,7 +4067,7 @@ MethodDefinition
   MethodSignature:signature !(PropertyAccess / ExplicitPropertyGlob / UnaryPostfix / NonNullAssertion) BracedBlock?:block ->
     return {
       type: "MethodDefinition",
-      children: $0,
+      children: [signature, block],
       name: signature.name,
       signature,
       block,
@@ -5198,9 +5202,10 @@ ForStatementParameters
     }
   # NOTE: Added optional parens
   InsertOpenParen __ ( LexicalDeclaration / VariableStatement / CommaExpression? ):declaration __ Semicolon CommaExpression? Semicolon (!EOS ExpressionWithIndentedApplicationForbidden)? InsertCloseParen ->
+    increment := $8?[1]
     return {
       declaration,
-      children: $0,
+      children: [$1, $2, declaration, $4, $5, $6, $7, increment, $9],
     }
 
   # https://262.ecma-international.org/#prod-ForInOfStatement
@@ -5925,9 +5930,9 @@ MaybeParenNestedExpression
   &EOS ( ArrayLiteral / ObjectLiteral ) -> $2
   # Value after `return` needs to be wrapped in parentheses
   # if it starts on another line.
-  &EOS InsertSpace InsertOpenParen PushIndent ( Nested Expression )?:exp PopIndent AllowedTrailingCallExpressions? InsertNewline InsertIndent InsertCloseParen ->
+  &EOS InsertSpace:space InsertOpenParen:open PushIndent ( Nested Expression )?:exp PopIndent AllowedTrailingCallExpressions?:trailing InsertNewline:newline InsertIndent:indent InsertCloseParen:close ->
     return $skip unless exp
-    return $0.slice(1)
+    return [space, open, exp, trailing, newline, indent, close]
 
 # https://262.ecma-international.org/#prod-ImportDeclaration
 ImportDeclaration
@@ -6316,7 +6321,7 @@ ExportSpecifier
     return { ts: true, children: $0 }
 
 ImplicitExportSpecifier
-  !Default ModuleExportName ( __ As __ ModuleExportName )?
+  !Default ModuleExportName ( __ As __ ModuleExportName )? -> [$2, $3]
 
 # https://262.ecma-international.org/#prod-Declaration
 Declaration
@@ -6844,17 +6849,19 @@ ExpressionDelimiter
   &EOS InsertComma -> $2
 
 SimpleStatementDelimiter
-  &EOS
+  # Hera 0.9.0 returns `true` for assertions; normalize to undefined here
+  # so downstream delimiter checks (e.g. insertSemicolon) treat missing delim as falsy.
+  &EOS -> undefined
   SemicolonDelimiter
 
 StatementDelimiter
-  &EOS
+  &EOS -> undefined
   SemicolonDelimiter
   # Allow for closing a block within the same line as a nested statement
   ClosingDelimiter
 
 ClosingDelimiter
-  &( __ ( "}" / ")" / "]" ) )
+  &( __ ( "}" / ")" / "]" ) ) -> undefined
 
 SemicolonDelimiter
   _? Semicolon TrailingComment ->
@@ -6864,7 +6871,7 @@ SemicolonDelimiter
     }
 
 NonIdContinue
-  /(?!\p{ID_Continue})/
+  /(?!\p{ID_Continue})/ -> undefined
 
 Loc
   "" ->
@@ -7564,6 +7571,8 @@ JSXAttribute
 
   # https://facebook.github.io/jsx/#prod-JSXAttribute
   JSXAttributeName:name ( JSXAttributeInitializer / &JSXAttributeSpace ):value ->
+    // Hera 0.9.0: `&JSXAttributeSpace` assertion now yields `true`; normalize to falsy.
+    value = undefined if value <? "boolean"
     if name.type is "ComputedPropertyName"
       if value
         // Strip off equals sign and whitespace from JSXAttributeInitializer
@@ -7578,10 +7587,10 @@ JSXAttribute
         value = "true"
       return ["{...{", name, ": ", value, "}}"]
     else
-      return $0
+      return [name, value]
 
   # NOTE: Adding ...foo shorthand for {...foo}
-  InsertInlineOpenBrace DotDotDot InlineJSXAttributeValue InsertCloseBrace &JSXAttributeSpace
+  InsertInlineOpenBrace DotDotDot InlineJSXAttributeValue InsertCloseBrace &JSXAttributeSpace -> [$1, $2, $3, $4]
 
   # NOTE: @foo and @@foo shorthands
   # for foo={this.foo} and foo={this.foo.bind(this)}
@@ -8194,8 +8203,8 @@ BasicInterfaceProperty
 
 InterfacePropertyDelimiter
   _? ( Semicolon / Comma )
-  &( __ CloseBrace )
-  &EOS
+  &( __ CloseBrace ) -> undefined
+  &EOS -> undefined
 
 # Namespace blocks are like self-contained modules
 ModuleOrEmptyBlock
@@ -8309,7 +8318,7 @@ NestedEnumProperties
     return $skip unless props#
     return {
       properties: props.flat().map((p) => p.property),
-      children: $0,
+      children: [props],
     }
 
 NestedEnumPropertyLine
@@ -8333,7 +8342,9 @@ TypeProperty
 
 TypeIndexSignature
   # NOTE: QuestionMark will be parsed by following TypeSuffix
-  ( [+-]? Readonly NotDedented )? OpenBracket TypeIndex CloseBracket ( __ [+-] &( _? QuestionMark ) )?
+  ( [+-]? Readonly NotDedented )?:prefix OpenBracket:open TypeIndex:index CloseBracket:close ( __ [+-] &( _? QuestionMark ) )?:suffix ->
+    suffix = [suffix[0], suffix[1]] if suffix
+    return [prefix, open, index, close, suffix]
 
 TypeIndex
   __ Identifier TypeSuffix
@@ -8594,7 +8605,7 @@ TypeTuple
 
 TypeTupleContent
   # First check for properly indented list items
-  NestedTypeElementList &( __ CloseBracket )
+  NestedTypeElementList &( __ CloseBracket ) -> $1
   # Next check for a line of items followed by properly indented list items;
   # first line should not use indented applications because they may be
   # lines of list items
@@ -8614,10 +8625,14 @@ TypeElementList
   TypeBulletedTuple -> [$1]
   !EOS TypeElement:first ( ( _? Comma !EOS ) TypeElement )*:rest ->
     return [first] unless rest#
+    delim := [rest[0][0][0], rest[0][0][1]]
     return [
-      append(first, rest[0][0])
+      append(first, delim)
     ].concat(
-      rest.map(([_, e], i) => append(e, rest[i+1]?.[0]))
+      rest.map(([_, e], i) =>
+        nextDelim := rest[i+1] and [rest[i+1][0][0], rest[i+1][0][1]]
+        append(e, nextDelim)
+      )
     )
 
 TypeElement
@@ -8819,8 +8834,8 @@ InlineBasicInterfaceProperty
 InlineInterfacePropertyDelimiter
   ( _? Semicolon ) / CommaDelimiter
   &( SameLineOrIndentedFurther InlineBasicInterfaceProperty ) InsertComma -> $2
-  &( __  ( ":" / ")" / "]" / "}" ) )
-  &EOS
+  &( __  ( ":" / ")" / "]" / "}" ) ) -> undefined
+  &EOS -> undefined
 
 TypeBinaryOp
   "|" ->
@@ -8981,7 +8996,7 @@ TypeInitializer
 
 TypeParameterDelimiter
   _? Comma
-  &( __ ">" )
+  &( __ ">" ) -> undefined
   &EOS InsertComma -> $2
 
 # TypeScript's this: T syntax in function parameters
