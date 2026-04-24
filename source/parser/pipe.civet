@@ -1,7 +1,10 @@
 type {
   ASTNode
+  ASTNodeObject
+  ASTRef
   AssignmentExpression
   Call
+  PipelineExpression
   ThrowStatement
 } from ./types.civet
 { gatherRecursiveAll } from ./traversal.civet
@@ -28,35 +31,36 @@ type ExprWithComments
   leadingComment: ASTNode
   trailingComment: ASTNode
 
-function constructInvocation(fn: ExprWithComments, arg: ASTNode!)
+function constructInvocation(fn: ExprWithComments, arg: ASTNode!): ASTNode
   // Unwrap ampersand blocks
-  expr .= fn.expr
+  expr .= fn.expr as ASTNode & {type?: string, expression?: ASTNode, ampersandBlock?: boolean, ref?: ASTRef, body?: ASTNode}
   while expr.type is "ParenthesizedExpression"
-    expr = expr.expression
+    expr = expr.expression as typeof expr
   if expr.ampersandBlock
-    { ref, body } := expr
+    ref := expr.ref as unknown as {type: string, children: ASTNode[]}
+    body := expr.body
 
     ref.type = "PipedExpression"
     ref.children = [makeLeftHandSideExpression(arg)]
-    updateParentPointers ref
+    updateParentPointers ref as unknown as ASTNodeObject
 
-    return makeNode {
+    return makeNode({
       type: "UnwrappedExpression"
       expression: body
       children: [skipIfOnlyWS(fn.leadingComment), body, skipIfOnlyWS(fn.trailingComment)]
-    }
+    } as unknown as ASTNodeObject) as ASTNode
 
-  expr = fn.expr
-  lhs .= expr
+  expr = fn.expr as typeof expr
+  lhs .= expr as ASTNode & {type?: string, expression?: ASTNode, children?: ASTNode[]}
   // NewExpressions get handled specially later
   unless lhs.type is "NewExpression"
-    lhs = makeLeftHandSideExpression(lhs)!
+    lhs = makeLeftHandSideExpression(lhs)! as typeof lhs
 
   // Attach comments
   comment .= skipIfOnlyWS(fn.trailingComment)
-  if (comment) lhs.children.push comment
+  if (comment) lhs.children!.push comment
   comment = skipIfOnlyWS(fn.leadingComment)
-  if (comment) lhs.children.splice(1, 0, comment)
+  if (comment) lhs.children!.splice(1, 0, comment)
 
   args := [arg]
   call: Call := {
@@ -66,34 +70,34 @@ function constructInvocation(fn: ExprWithComments, arg: ASTNode!)
   }
   // Turn `|> new Foo` into `new Foo(arg)` by adding to existing CallExpression
   if lhs.type is "NewExpression"
-    { expression } .= lhs
+    expression .= lhs.expression as ASTNode
     expression = {
       type: "CallExpression"
       children: [ expression, call ]
-    }
+    } as unknown as ASTNode
     {
       ...lhs
       expression
-      children: lhs.children.map & is lhs.expression ? expression : &
-    }
+      children: lhs.children!.map & is lhs.expression ? expression : &
+    } as unknown as ASTNode
   else
     {
       type: "CallExpression"
       children: [lhs, call]
-    }
+    } as unknown as ASTNode
 
 function constructPipeStep(fn: ExprWithComments, arg: ASTNode!, returning: ASTNode??): [ASTNode, ASTNode??]
   returning = null unless returning
-  children .= [[fn.leadingComment, fn.expr, fn.trailingComment].map(skipIfOnlyWS), " ", arg]
+  children: ASTNode[] .= [[fn.leadingComment, fn.expr, fn.trailingComment].map(skipIfOnlyWS) as ASTNode, " ", arg]
 
   // Handle special non-function cases
-  switch fn.expr.token
+  switch (fn.expr as ASTNode & {token?: string}).token
     when "await"
-      children = processUnaryExpression([fn.expr], arg, undefined)
+      children = processUnaryExpression([fn.expr], arg, undefined) as ASTNode[]
       continue switch
     when "yield"
       return [
-        children
+        children as unknown as ASTNode
         returning
       ]
     when "throw"
@@ -103,14 +107,14 @@ function constructPipeStep(fn: ExprWithComments, arg: ASTNode!, returning: ASTNo
             type: "StatementExpression"
             statement
             children: [statement]
-          }
+          } as unknown as ASTNode
         . null
     when "return"
       // Return ignores ||> returning argument
       return [{
         type: "ReturnStatement"
         children
-      }, null]
+      } as unknown as ASTNode, null]
 
   return [
     constructInvocation(fn, arg)
@@ -120,34 +124,36 @@ function constructPipeStep(fn: ExprWithComments, arg: ASTNode!, returning: ASTNo
 // head: expr
 // body: [ws, pipe, ws, expr][]
 
-function processPipelineExpressions(statements): void
+function processPipelineExpressions(statements: ASTNode): void
   for each s of gatherRecursiveAll statements, .type is "PipelineExpression"
-    [ws, , body] := s.children
-    [, arg] .= s.children
+    sAny := s as PipelineExpression & {hoistDec?: ASTNode, parent?: ASTNodeObject}
+    [ws, , body] := sAny.children as [ASTNode, ASTNode, [ASTNode, ASTNode & {token?: string, $loc?: any}, ASTNode, ASTNode][]]
+    [, argInit] := sAny.children
+    arg .= argInit as ASTNode & {type?: string, children?: ASTNode[]}
 
-    children := [ws]
-    comma := blockContainingStatement(s) ? ";" : ","
+    children: ASTNode[] := [ws]
+    comma := blockContainingStatement(s as ASTNodeObject) ? ";" : ","
 
-    let usingRef = null
+    let usingRef: ASTRef | undefined = undefined
 
     for each step, i of body
       const [leadingComment, pipe, trailingComment, expr] = step
       const returns = pipe.token is "||>"
-      let ref, result,
-        returning = returns ? arg : null
+      let ref: ASTRef | undefined, result: ASTNode & {type?: string, children?: ASTNode[]},
+        returning: ASTNode | undefined = (returns ? arg : undefined) as ASTNode | undefined
 
       if pipe.token is "|>="
-        let initRef
+        let initRef: ASTNode | undefined
         if i is 0
           checkValidLHS arg
 
           :outer switch arg.type
             when "MemberExpression"
               // If there is only a single access then we don't need a ref
-              break if arg.children.length <= 2
+              break if arg.children!.length <= 2
               continue switch
             when "CallExpression"
-              const access = arg.children.pop()
+              const access = arg.children!.pop()
               // processAssignments will check that this is a valid
               // last access to assign to
 
@@ -155,12 +161,12 @@ function processPipelineExpressions(statements): void
               initRef = {
                 type: "AssignmentExpression"
                 children: [usingRef, " = ", arg, comma]
-              }
+              } as unknown as ASTNode
 
               arg = {
                 type: "MemberExpression"
                 children: [usingRef, access]
-              }
+              } as typeof arg
 
           // assignment node
           lhs := [[
@@ -168,7 +174,7 @@ function processPipelineExpressions(statements): void
             arg
             []
             { token: "=", children: [" = "] }
-          ]]
+          ]] as unknown as AssignmentExpression["lhs"]
 
           Object.assign s, {
             type: "AssignmentExpression"
@@ -176,26 +182,26 @@ function processPipelineExpressions(statements): void
             names: null
             lhs
             assigned: arg
-            expression: children
+            expression: children as unknown as AssignmentExpression["expression"]
           } satisfies AssignmentExpression
 
           // Clone so that the same node isn't on the left and right because splice manipulation
           // moves things around and can cause a loop in the graph
-          arg = clone arg
+          arg = clone(arg) as typeof arg
           removeHoistDecs arg
 
           // except keep the ref the same
-          if arg.children[0].type is "Ref"
-            arg.children[0] = usingRef
+          if (arg.children![0] as ASTNode & {type?: string})?.type is "Ref"
+            arg.children![0] = usingRef as ASTNode
 
         else
           children.unshift({
             type: "Error",
-            $loc: pipe.token.$loc,
+            $loc: (pipe as ASTNode & {$loc?: any}).$loc
             message: "Can't use |>= in the middle of a pipeline",
-          })
+          } as unknown as ASTNode)
       else
-        if (i is 0) s.children = children
+        if (i is 0) sAny.children = children as typeof sAny.children
 
       if returns and (ref = needsRef(arg))
         // Use the existing ref if present
@@ -206,57 +212,58 @@ function processPipelineExpressions(statements): void
             type: "AssignmentExpression"
             children: [usingRef, " = ", arg]
           }, ")"],
-        }
+        } as typeof arg
         returning = usingRef
 
       [result, returning] = constructPipeStep
         {
           leadingComment: skipIfOnlyWS(leadingComment)
           trailingComment: skipIfOnlyWS(trailingComment)
-          expr
+          expr: expr!
         }
         arg
         returning
+      as [typeof result, typeof returning]
 
       if result.type is "ReturnStatement"
         // Attach errors/warnings if there are more steps
         if i < body.length - 1
-          result.children.push({
+          result.children!.push({
             type: "Error",
             message: "Can't continue a pipeline after returning",
-          })
-        arg = result
+          } as unknown as ASTNode)
+        arg = result as typeof arg
         if children.-1 is ","
           children.pop()
-          children.push(";")
+          children.push(";" as ASTNode)
         break
 
       if returning
-        arg = returning
-        children.push(result, comma)
+        arg = returning as typeof arg
+        children.push(result, comma as ASTNode)
       else
-        arg = result
+        arg = result as typeof arg
 
     if usingRef
-      s.hoistDec = {
+      sAny.hoistDec = {
         type: "Declaration",
         children: ["let ", usingRef],
         names: [],
-      }
+      } as unknown as ASTNode
 
     children.push(arg)
 
     // Wrap with parens because comma operator has low precedence
     if !children.some(?.type is "ReturnStatement") and children.some & is ","
-      { parent } := s
-      parenthesizedExpression := makeLeftHandSideExpression { ...s }
+      { parent } := sAny
+      parenthesizedExpression := makeLeftHandSideExpression { ...sAny }
       Object.assign s, parenthesizedExpression, {
         parent
         hoistDec: undefined
       }
 
     // Update parent pointers
-    addParentPointers(s, s.parent)
+    addParentPointers(s, sAny.parent)
 
 export {
   processPipelineExpressions
