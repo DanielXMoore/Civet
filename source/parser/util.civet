@@ -163,15 +163,23 @@ function isStatement(node: ASTNode): node is StatementNode
     node.type?  // forbid leaf
     statementTypes.has node.type
 
-function isWhitespaceOrEmpty(node: any): boolean
-  if (!node) return true
-  if (node.type is "Ref") return false
-  if (node.token) return /^\s*$/.test(node.token)
-  if (node.children) node = node.children
-  if (!node.length) return true
-  if (typeof node is "string") return /^\s*$/.test(node)
-  assert Array.isArray(node), "isWhitespaceOrEmpty: unexpected node shape"
-  node.every(isWhitespaceOrEmpty)
+function isWhitespaceOrEmpty(node: ASTNode): boolean
+  return true unless node?
+  if isASTNodeObject node
+    return false if node.type is "Ref"
+    if isToken node
+      return /^\s*$/.test node.token
+    // Recurse into a parent's children, treating an empty children list
+    // as "empty / whitespace".
+    if isParent node
+      return true unless node.children.length
+      return node.children.every isWhitespaceOrEmpty
+    return false
+  if node <? "string"
+    return /^\s*$/.test node
+  // Array case: empty arrays are "empty"; non-empty must be all whitespace.
+  return true unless node.length
+  return node.every isWhitespaceOrEmpty
 
 // Returns leading space as a string, or undefined if none
 function firstNonSpace(node: ASTNode): ASTNode
@@ -305,11 +313,13 @@ function insertTrimmingSpace<T extends ASTNode>(target: T, c: string): T
       ...target
       children: insertTrimmingSpace target.children, c
     } as typeof target
-    // Preserve aliased properties
+    // After cloning, restore named-property aliases that pointed into
+    // children (e.g. `expression`, `block`).  Iteration is by string key,
+    // so widen at the indexed assignment sites.
+    asRecord := newTarget as Record<string, ASTNode>
     for key in newTarget
-      i := oldChildren.indexOf (newTarget as any)[key]
-      if i >= 0
-        (newTarget as any)[key] = newTarget.children[i]
+      i := oldChildren.indexOf asRecord[key]
+      asRecord[key] = newTarget.children[i] if i >= 0
     return newTarget as! T
   else if isToken target
     leaf := target as ASTLeaf
@@ -565,14 +575,15 @@ function deepCopy<T extends ASTNode>(root: T): T
       else if node?.type is "Ref"
         copied.set node, node
       else
-        obj: any := {}
-        copied.set node, obj
+        obj := {} as Record<string, ASTNode>
+        copied.set node, obj as! ASTNode
+        nodeRecord := node as Record<string, ASTNode>
         for key in node
-          value := (node as any)[key]
+          value := nodeRecord[key]
           if key is "parent"
             // If parent is within deep copy, use that
             // Otherwise, don't copy to avoid copying outside subtree
-            obj.parent = copied.get(value) ?? value
+            obj.parent = (copied.get(value) ?? value) as ASTNode
           else
             obj[key] = recurse value
 
@@ -749,19 +760,16 @@ function makeNode<T extends ASTNodeObject>(node: T): T
  * Used to ignore the result of __ if it is only whitespace
  * Useful to preserve spacing around comments
  */
-function skipIfOnlyWS(target: any): any
-  if (!target) return target
-  if (Array.isArray(target)) {
-    if (target.length is 1) {
-      return skipIfOnlyWS(target[0])
-    } else if (target.every((e) => (skipIfOnlyWS(e) is undefined))) {
+function skipIfOnlyWS(target: ASTNode): ASTNode
+  return target unless target?
+  if Array.isArray target
+    if target.length is 1
+      return skipIfOnlyWS target[0]
+    if target.every (e) => skipIfOnlyWS(e) is undefined
       return undefined
-    }
     return target
-  }
-  if (target.token != null and target.token.trim() is '') {
+  if isToken(target) and target.token.trim() is ''
     return undefined
-  }
   return target
 
 /**
