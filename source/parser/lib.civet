@@ -15,6 +15,7 @@ import type {
   ASTNodeObject
   ASTRef
   Binding
+  BindingProperty
   BlockStatement
   BreakStatement
   Call
@@ -32,6 +33,7 @@ import type {
   ForStatement
   FunctionExpression
   FunctionSignature
+  ASTString
   Identifier
   IfStatement
   Index
@@ -43,6 +45,7 @@ import type {
   MemberExpression
   MethodDefinition
   NormalCatchParameter
+  ObjectBindingPattern
   ObjectExpression
   ParametersNode
   ParenthesizedExpression
@@ -192,7 +195,7 @@ import {
 
 function addPostfixStatement(statement: StatementNode, ws: ASTNode, post: IterationStatement | ForStatement | IfStatement)
   expressions := [
-    ...(post as any).blockPrefix or []
+    ...(post.blockPrefix ?? [])
     ["", statement]
   ]
 
@@ -418,28 +421,30 @@ function expressionizeTypeIf([ifOp, condition, t, e]: [
  *
  * [See More](../test/object.civet)
  */
-function handleThisPrivateShorthands(value: any): [any, any]
-  if value.privateShorthand
-    value = value.children[1].children[1]
+function handleThisPrivateShorthands(value: NonNullable<ASTNode>): [NonNullable<ASTNode>, boolean]
+  return [value, false] unless isASTNodeObject value
 
-    return [value, false]
+  if value.type is "MemberExpression" and value.privateShorthand
+    // Strip `this.#x` -> `#x`
+    inner := (value.children[1] as MemberExpression).children[1]
+    return [inner!, false]
 
   if value.type is "MemberExpression" or value.type is "CallExpression"
-    suppressPrefix .= value.thisShorthand
-    value = {
+    me := value as MemberExpression
+    suppressPrefix .= !!me.thisShorthand
+    rewritten := {
       ...value,
-      children: value.children.map (c: any, i: number) =>
-        if i is 0
-          let s
-          [c, s] = handleThisPrivateShorthands c
+      children: value.children.map (c, i) =>
+        if i is 0 and c?
+          [r, s] := handleThisPrivateShorthands c
           suppressPrefix ||= s
-
+          return r
         c
-    }
+    } as typeof value
 
-    return [value, suppressPrefix]
+    return [rewritten, suppressPrefix]
 
-  return [value, value.thisShorthand]
+  return [value, !!(value as MemberExpression).thisShorthand]
 
 function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause[], ElseClause?, FinallyClause?])
   [t, , b, cs, e, f] .= $0
@@ -688,15 +693,19 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
           continue
 
         suppressPrefix .= false
-        anyPart := part as any
-        name .= anyPart.name
-        value .= anyPart.value ?? name
-        wValue := getTrimmingSpace anyPart.value
+        // SpreadProperty has no .name, only .value.  Property carries both.
+        let name: ASTNode
+        if part.type is "Property"
+          name = part.name
+        else
+          name = ""
+        value .= part.value ?? name
+        wValue := getTrimmingSpace part.value
 
         [value, suppressPrefix] = handleThisPrivateShorthands value
 
         // Not yet needed:
-        [name, value] = [value, name] if (glob as any).reversed
+        [name, value] = [value, name] if glob.reversed
 
         unless suppressPrefix // Don't prefix @ shorthand
           if value.type is "StringLiteral"
@@ -857,11 +866,18 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
 // * anonymous function expression
 // * unary suffix applied to above
 // * comma operators applied to above
+// A `CommaExpression` produced by the grammar at parser.hera:370 takes the
+// shape `[expr0, [[CommaDelimiter, expr], ...]]` where each `CommaDelimiter`
+// is `[whitespace, commaLeaf]`.  Spelling it out so the deep navigation
+// below typechecks without a cast.
+type CommaTail = [[ ASTNode, ASTLeaf ], ASTNode][]
+
 function makeExpressionStatement(expression: ASTNode): ASTNode
-  if Array.isArray(expression) and ((expression[1] as any)?[0]?[0]?[1]?.token) is "," // CommaExpression
+  if Array.isArray(expression) and
+     ((expression[1] as CommaTail)?[0]?[0]?[1]?.token) is ","
     [
       makeExpressionStatement expression[0]
-      (expression[1] as any).map ([comma, exp]: [ASTNode, ASTNode]) => // CommaDelimiter AssignmentExpression
+      (expression[1] as CommaTail).map ([comma, exp]) =>
         [comma, makeExpressionStatement exp]
     ]
   else if isASTNodeObject(expression) and (
@@ -973,23 +989,30 @@ function convertArrowFunctionToMethod(id: Identifier, exp: ArrowFunction): Metho
   braceBlock(block)
   newExp
 
-// Convert NamedImports into equivalent ObjectExpression or ObjectBindingPattern
-function convertNamedImportsToObject(node: any, pattern?: boolean): any
-  properties := node.specifiers.map (specifier: any) =>
+// Convert NamedImports into equivalent ObjectExpression or ObjectBindingPattern.
+// `node` is the parser's NamedImports node (or DynamicNamedImports), shaped
+// `{ specifiers: { ts?, source, binding, children }[], names, children }`.
+type NamedImportLike = ASTNodeObject & {
+  specifiers: { ts?: boolean, source: ASTNode, binding: ASTNode, children: ASTNode[] }[]
+  names: string[]
+  children: ASTNode[]
+}
+
+function convertNamedImportsToObject(node: NamedImportLike, pattern?: boolean): ObjectExpression | ObjectBindingPattern
+  properties := node.specifiers.map (specifier) =>
     if specifier.ts
-      { type: "Error", message: "cannot use `type` in dynamic import" }
-    else
-      { source, binding } := specifier
-      delim := specifier.children.-1
-      {
-        type: pattern ? "BindingProperty" : "Property"
-        name: source
-        value: binding unless source is binding
-        delim
-        children: source is binding
-          ? [ source, delim ]
-          : [ source, ":", binding, delim ]
-      }
+      return { type: "Error", message: "cannot use `type` in dynamic import" } as ASTError
+    { source, binding } := specifier
+    delim := specifier.children.-1
+    {
+      type: pattern ? "BindingProperty" : "Property"
+      name: source
+      value: binding unless source is binding
+      delim
+      children: source is binding
+        ? [ source, delim ]
+        : [ source, ":", binding, delim ]
+    } as! Property | BindingProperty
 
   {
     type: pattern ? "ObjectBindingPattern" : "ObjectExpression"
@@ -1000,39 +1023,41 @@ function convertNamedImportsToObject(node: any, pattern?: boolean): any
       properties
       node.children.-1 // }
     ]
-  }
+  } as! (ObjectExpression | ObjectBindingPattern)
 
 // Convert an ObjectExpression (with `properties`)
 // into a set of JSX attributes.
 // {foo} is equivalent to foo={foo}, and
 // {foo, bar: baz} is equivalent to foo={foo} and bar={baz}.
 // {...foo} is a special case.
-function convertObjectToJSXAttributes(obj: ObjectExpression)
-  parts: any[] := [] // JSX attributes
-  rest: any[] := []  // parts that need to be in {...rest} form
+function convertObjectToJSXAttributes(obj: ObjectExpression): ASTNode[]
+  parts: ASTNode[] := [] // JSX attributes
+  rest: ASTNode[] := []  // parts that need to be in {...rest} form
   for part, i of obj.properties
-    if (part as any).usesRef
+    // .usesRef is only declared on Property; SpreadProperty/Method/Error
+    // never carry it at runtime, so the `in` check narrows safely.
+    if part.type is "Property" and part.usesRef
       rest.push part
       continue
-    if (i > 0) parts.push(' ')
+    if i > 0 then parts.push ' '
     switch part.type
       when "Property"
-        if (part.name as unknown as { type?: string }).type is "ComputedPropertyName"
-          rest.push(part)
+        if isASTNodeObject(part.name) and part.name.type is "ComputedPropertyName"
+          rest.push part
         else
-          parts.push([part.name, '={', trimFirstSpace(part.value), '}'])
+          parts.push [part.name as ASTNode, '={', trimFirstSpace(part.value), '}']
       when "SpreadProperty"
-        parts.push(['{', part.dots, part.value, '}'])
+        parts.push ['{', part.dots, part.value, '}']
       when "MethodDefinition"
-        const func = convertMethodToFunction(part)
+        func := convertMethodToFunction part
         if func
-          parts.push([part.name, '={', convertMethodToFunction(part), '}'])
+          parts.push [part.name, '={', func, '}']
         else
-          rest.push(part)
+          rest.push part
   if rest#
     parts.push " " if parts# and parts.-1 is not " "
-    parts.push(["{...{", ...rest, "}}"])
-  return parts
+    parts.push ["{...{", ...rest, "}}"]
+  parts
 
 /**
  * Returns a new MethodDefinition node.
