@@ -8,10 +8,12 @@
 
 import type {
   AccessStart
+  ASTError
   ASTLeaf
   ASTNode
   ASTNodeObject
   ASTRef
+  Binding
   BlockStatement
   BreakStatement
   Call
@@ -34,7 +36,6 @@ import type {
   Label
   LabelledStatement
   Literal
-  LiteralContentNode
   MemberExpression
   MethodDefinition
   NormalCatchParameter
@@ -42,6 +43,8 @@ import type {
   ParametersNode
   ParenthesizedExpression
   Placeholder
+  Property
+  SpreadProperty
   StatementNode
   StatementTuple
   SwitchStatement
@@ -75,6 +78,7 @@ import {
   hasYield
   inplaceInsertTrimmingSpace
   inplacePrepend
+  isASTNodeObject
   insertTrimmingSpace
   isComma
   isEmptyBareBlock
@@ -183,7 +187,7 @@ import {
 
 function addPostfixStatement(statement: StatementNode, ws: ASTNode, post: IterationStatement | ForStatement | IfStatement)
   expressions := [
-    ...post.blockPrefix or []
+    ...(post as any).blockPrefix or []
     ["", statement]
   ]
 
@@ -217,8 +221,9 @@ function adjustIndexAccess(dot: AccessStart): AccessStart
     }
   else
     dot = replaceNodes deepCopy(dot),
-      (node) => node.token is ".",
-      (node) => ({ ...node, token: "[" })
+      (node) => (node as ASTLeaf).token is ".",
+      (node) => ({ ...node, token: "[" } as ASTNode)
+    as AccessStart
 
   return dot
 
@@ -271,7 +276,7 @@ function rewriteDynamicImportCall(call: Call): Call
     ...firstArg
     expression: rewrittenArg
     children: [rewrittenArg]
-  }
+  } as! typeof rewrittenArg
 
   args := call.args[..]
   args[i] = rewrittenArg
@@ -375,8 +380,13 @@ function expressionizeIfStatement(statement: IfStatement): ASTNode
     children
   }
 
-function expressionizeTypeIf([ifOp, condition, t, e])
-  children := [
+function expressionizeTypeIf([ifOp, condition, t, e]: [
+  { negated: boolean }
+  ASTNodeObject & { negated: boolean }
+  ASTNode
+  [ASTNode, ASTNode, ...ASTNode[]] | undefined
+])
+  children: ASTNode[] := [
     "("
     trimFirstSpace condition
     "?"
@@ -403,7 +413,7 @@ function expressionizeTypeIf([ifOp, condition, t, e])
  *
  * [See More](../test/object.civet)
  */
-function handleThisPrivateShorthands(value)
+function handleThisPrivateShorthands(value: any): [any, any]
   if value.privateShorthand
     value = value.children[1].children[1]
 
@@ -413,7 +423,7 @@ function handleThisPrivateShorthands(value)
     suppressPrefix .= value.thisShorthand
     value = {
       ...value,
-      children: value.children.map (c, i) =>
+      children: value.children.map (c: any, i: number) =>
         if i is 0
           let s
           [c, s] = handleThisPrivateShorthands c
@@ -461,7 +471,7 @@ function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause[],
             type: "Initializer"
             expression: ref
             children: [ "", " = ", ref ]
-          bindings: Bindings[] := [{
+          bindings: Binding[] := [{
             type: "Binding"
             names: pattern.names
             pattern
@@ -548,10 +558,11 @@ function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause[],
     c = c!  // absent catch clause would have been created above
     // `let ok = true` before try
     ok := makeRef 'ok'
-    hoistDec =
+    hoistDec = {
       type: "Declaration"
       children: [ "let ", ok, " = true" ]
       names: []
+    } as! Declaration
     // `ok = false` inside catch block
     replaceNode
       c.block
@@ -659,25 +670,28 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
           parts.push part
           continue
         if part.type is "MethodDefinition"
-          parts.push
+          parts.push {
             type: "Error"
             message: "Glob pattern cannot have method definition"
+          } as ASTError
           continue
-        if part.value and part.value.type is not in ["CallExpression", "MemberExpression", "Identifier", "StringLiteral", "ComputedPropertyName"] as (string?)[]
-          parts.push
+        if part.value and (part.value as ASTNodeObject).type is not in ["CallExpression", "MemberExpression", "Identifier", "StringLiteral", "ComputedPropertyName"] as (string?)[]
+          parts.push {
             type: "Error"
             message: `Glob pattern must have call or member expression value, found ${JSON.stringify(part.value)}`
+          } as ASTError
           continue
 
         suppressPrefix .= false
-        name .= part.name
-        value .= part.value ?? name
-        wValue := getTrimmingSpace part.value
+        anyPart := part as any
+        name .= anyPart.name
+        value .= anyPart.value ?? name
+        wValue := getTrimmingSpace anyPart.value
 
         [value, suppressPrefix] = handleThisPrivateShorthands value
 
         // Not yet needed:
-        [name, value] = [value, name] if glob.reversed
+        [name, value] = [value, name] if (glob as any).reversed
 
         unless suppressPrefix // Don't prefix @ shorthand
           if value.type is "StringLiteral"
@@ -707,7 +721,7 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
             children: part.children.slice(0, 2) // whitespace, ...
               .concat(value, part.delim)
             usesRef: Boolean ref
-          }
+          } as! SpreadProperty
         else
           parts.push {
             type: part.type
@@ -719,17 +733,17 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
               isWhitespaceOrEmpty(part.children[0]) and part.children[0]
               name
               isWhitespaceOrEmpty(part.children[2]) and part.children[2]
-              part.children[3]?.token is ":" ? part.children[3] : ":"
+              (part.children[3] as ASTLeaf?)?.token is ":" ? part.children[3] : ":"
               value
               part.delim // comma delimiter
             ]
             usesRef: Boolean ref
-          }
+          } as! Property
       object: ObjectExpression :=
         type: "ObjectExpression"
         children: [
           glob.object.children.0 // {
-          ...parts
+          ...parts as ASTNode[]
           glob.object.children.-1 // whitespace and }
         ]
         properties: parts
@@ -839,17 +853,18 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
 // * unary suffix applied to above
 // * comma operators applied to above
 function makeExpressionStatement(expression: ASTNode): ASTNode
-  if Array.isArray(expression) and expression[1]?[0]?[0]?[1]?.token is "," // CommaExpression
+  if Array.isArray(expression) and ((expression[1] as any)?[0]?[0]?[1]?.token) is "," // CommaExpression
     [
       makeExpressionStatement expression[0]
-      expression[1].map [comma, exp] => // CommaDelimiter AssignmentExpression
+      (expression[1] as any).map ([comma, exp]: [ASTNode, ASTNode]) => // CommaDelimiter AssignmentExpression
         [comma, makeExpressionStatement exp]
     ]
-  else if expression?.type is "ObjectExpression" or
-          (expression?.type is "FunctionExpression" and not expression.id) or
-          (expression?.type is "UnaryExpression" and not expression.pre?# and
-           expression.expression is not
-           makeExpressionStatement expression.expression)
+  else if isASTNodeObject(expression) and (
+            expression.type is "ObjectExpression" or
+            (expression.type is "FunctionExpression" and not expression.id) or
+            (expression.type is "UnaryExpression" and not expression.pre?# and
+             expression.expression is not
+             makeExpressionStatement expression.expression))
     makeLeftHandSideExpression expression
   else
     expression
@@ -861,7 +876,7 @@ The return value should have a `name` property (for "Identifier",
 "PropertyAcess", and "Index"), or have `type` of "Index" (for `[computed]`),
 or be undefined.
 */
-function lastAccessInCallExpression(exp)
+function lastAccessInCallExpression(exp: any): any
   while exp.type is "MemberExpression" or exp.type is "CallExpression"
     { children } := exp
     i .= children# - 1
@@ -880,7 +895,7 @@ function lastAccessInCallExpression(exp)
 
 // Given a MethodDefinition, convert into a FunctionExpression.
 // Returns undefined if the method is a getter or setter.
-function convertMethodToFunction(method)
+function convertMethodToFunction(method: any): any
   { signature, block } := method
   { async, modifier, optional } := signature
 
@@ -910,8 +925,8 @@ function convertMethodToFunction(method)
     block
   }
 
-function convertFunctionToMethod(id, exp)
-  fnTokenIndex := exp.children.findIndex (c) -> c?.token?.startsWith("function")
+function convertFunctionToMethod(id: any, exp: any): any
+  fnTokenIndex := exp.children.findIndex (c: any) -> c?.token?.startsWith("function")
   // copy
   children := exp.children.slice()
   // Replace "function" and move the generator slot ahead of id so a "*"
@@ -926,9 +941,9 @@ function convertFunctionToMethod(id, exp)
     children
   }
 
-function convertArrowFunctionToMethod(id, exp)
+function convertArrowFunctionToMethod(id: any, exp: any): any
   block := {...exp.block} // prepare for bracing
-  children := exp.children.filter((c) -> !(Array.isArray(c) && c[c.length-1]?.token?.includes("=>"))).map((c) -> c === exp.block ? block : c)
+  children := exp.children.filter((c: any) -> !(Array.isArray(c) && c[c.length-1]?.token?.includes("=>"))).map((c: any) -> c === exp.block ? block : c)
   children.unshift(id)
   exp = {
     ...exp,
@@ -944,8 +959,8 @@ function convertArrowFunctionToMethod(id, exp)
   exp
 
 // Convert NamedImports into equivalent ObjectExpression or ObjectBindingPattern
-function convertNamedImportsToObject(node, pattern?: boolean)
-  properties := node.specifiers.map (specifier) =>
+function convertNamedImportsToObject(node: any, pattern?: boolean): any
+  properties := node.specifiers.map (specifier: any) =>
     if specifier.ts
       { type: "Error", message: "cannot use `type` in dynamic import" }
     else
@@ -978,16 +993,16 @@ function convertNamedImportsToObject(node, pattern?: boolean)
 // {foo, bar: baz} is equivalent to foo={foo} and bar={baz}.
 // {...foo} is a special case.
 function convertObjectToJSXAttributes(obj: ObjectExpression)
-  parts := [] // JSX attributes
-  rest := []  // parts that need to be in {...rest} form
+  parts: any[] := [] // JSX attributes
+  rest: any[] := []  // parts that need to be in {...rest} form
   for part, i of obj.properties
-    if part.usesRef
+    if (part as any).usesRef
       rest.push part
       continue
     if (i > 0) parts.push(' ')
     switch part.type
       when "Property"
-        if part.name.type is "ComputedPropertyName"
+        if (part.name as unknown as { type?: string }).type is "ComputedPropertyName"
           rest.push(part)
         else
           parts.push([part.name, '={', trimFirstSpace(part.value), '}'])
@@ -1007,7 +1022,7 @@ function convertObjectToJSXAttributes(obj: ObjectExpression)
 /**
  * Returns a new MethodDefinition node.
  */
-function makeGetterMethod(name, ws, value, returnType, block?: BlockStatement, kind: { token: "get" | "set" } = { token: "get" }, autoReturn: boolean = true): MethodDefinition
+function makeGetterMethod(name: any, ws: any, value: any, returnType: any, block?: BlockStatement, kind: { token: "get" | "set" } = { token: "get" }, autoReturn: boolean = true): MethodDefinition
   { token } := kind
   ws = trimFirstSpace ws
   let setVal
