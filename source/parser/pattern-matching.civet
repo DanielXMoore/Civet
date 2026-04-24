@@ -3,6 +3,7 @@ import type {
   ASTNode
   ASTNodeObject
   ASTRef
+  ASTString
   BindingProperty
   BindingRestElement
   BindingRestProperty
@@ -66,16 +67,17 @@ function processPatternTest(lhs: ASTNode, patterns: PatternExpression[]): ASTNod
   { ref, refAssignmentComma } := maybeRefAssignment lhs, "m"
 
   conditionExpression := patterns
-  .map getPatternConditions ., ref
-  .map flatJoin ., " && "
+  .map (p: PatternExpression) => getPatternConditions p, ref
+  .map (arr: ASTNode[][]) => flatJoin arr, " && "
   |> flatJoin ., " || "
 
-  makeLeftHandSideExpression makeNode
+  makeLeftHandSideExpression makeNode {
     type: "PatternTest"
     children: [
       ...refAssignmentComma
       conditionExpression
     ]
+  } as ASTNodeObject
 
 function processPatternMatching(statements: ASTNode): void
   gatherRecursiveAll(statements, .type is "SwitchStatement")
@@ -129,8 +131,8 @@ function processPatternMatching(statements: ASTNode): void
         // TODO: multiple binding patterns
 
         conditionExpression: ASTNode[] := patterns
-        .map getPatternConditions ., ref
-        .map flatJoin ., " && "
+        .map (p: PatternExpression) => getPatternConditions p, ref
+        .map (arr: ASTNode[][]) => flatJoin arr, " && "
         |> flatJoin ., " || "
 
         condition: Condition := makeNode {
@@ -168,8 +170,9 @@ function processPatternMatching(statements: ASTNode): void
         refAssignmentComma = []
         prev = e.block.expressions if e?
 
-      s.type = "PatternMatchingStatement"
-      s.children = root
+      sMut := s as ASTNodeObject as { type: string, children: ASTNode[] }
+      sMut.type = "PatternMatchingStatement"
+      sMut.children = root
       updateParentPointers s
 
   gatherRecursiveAll(statements,
@@ -191,12 +194,12 @@ function processPatternMatching(statements: ASTNode): void
 function getPatternConditions(
   pattern: PatternExpression,
   ref: ASTNode,
-  conditions: ASTNode[] = [],
-): ASTNode[]
+  conditions: ASTNode[][] = [],
+): ASTNode[][]
   switch pattern.type
     when "ArrayBindingPattern"
       const { elements, length } = pattern,
-        hasRest = elements.some((e) => e.rest),
+        hasRest = elements.some((el) => el.type is "BindingRestElement"),
         l = (length - +hasRest).toString(),
         lengthCheck = hasRest
         ? [ref, ".length >= ", l]
@@ -208,21 +211,23 @@ function getPatternConditions(
       )
 
       // recursively collect nested conditions
-      elements.forEach(({ children: [, e] }, i) => {
-        const subRef = [ref, "[", i.toString(), "]"]
-        getPatternConditions(e, subRef, conditions)
-      })
+      elements.forEach (element, i) =>
+        return unless element.children
+        const [, e] = element.children
+        const subRef = [ref, "[", i.toString(), "]"] as ASTNode
+        getPatternConditions(e as PatternExpression, subRef, conditions)
 
       // collect post rest conditions
       { blockPrefix } := pattern
       if blockPrefix
-        postElements := blockPrefix.children[1]
-        { length: postLength } := postElements
+        postElements := blockPrefix.children[1] as ArrayBindingPatternContent
+        const postLength = postElements.length
 
-        postElements.forEach(({ children: [, e] }, i) => {
-          const subRef = [ref, "[", ref, ".length - ", (postLength + i).toString(), "]"]
-          getPatternConditions(e, subRef, conditions)
-        })
+        postElements.forEach (element, i) =>
+          return unless element.children
+          const [, e] = element.children
+          const subRef = [ref, "[", ref, ".length - ", (postLength + i).toString(), "]"] as ASTNode
+          getPatternConditions(e as PatternExpression, subRef, conditions)
 
     when "ObjectBindingPattern"
       conditions.push
@@ -233,19 +238,21 @@ function getPatternConditions(
         switch p.type
           when "PinProperty", "BindingProperty"
             { name, value } := p
-            let subRef
-            switch name.type
+            let subRef: ASTNode
+            nameAny := name as unknown as {type?: string, expression?: ASTNode, name?: string}
+            switch nameAny.type
               when "ComputedPropertyName"
-                conditions.push([name.expression, " in ", ref])
+                conditions.push([nameAny.expression as ASTNode, " in ", ref])
                 subRef = [ref, name]
               when "StringLiteral", "NumericLiteral"
                 conditions.push([name, " in ", ref])
                 subRef = [ref, "[", name, "]"]
               when "Identifier"
-                conditions.push(["'", name.name, "' in ", ref])
-                subRef = [ref, ".", name.name]
+                idName := nameAny.name as string
+                conditions.push(["'", idName, "' in ", ref])
+                subRef = [ref, ".", idName]
 
-            getPatternConditions(value, subRef, conditions) if value
+            getPatternConditions(value as PatternExpression, subRef!, conditions) if value
 
     when "ConditionFragment"
       { rhs } .= pattern
@@ -253,8 +260,8 @@ function getPatternConditions(
       if rhs#
         [ first, ...rest ] .= rhs
         [ ws, ...op ] .= first
-        ws = [" "].concat ws
-        first = [ ws, ...op ]
+        ws = [" " as ASTNode, ...(ws as ASTNode[] ?? [])] as ASTNode
+        first = [ ws, ...op ] as typeof first
         rhs = [ first, ...rest ]
       conditions.push processBinaryOpExpression [ref, rhs]
 
@@ -300,21 +307,21 @@ function getPatternBlockPrefix(
       return unless pattern.binding
 
   // Gather bindings
-  [splices, thisAssignments] .= gatherBindingCode(pattern)
+  [splicesRaw, thisAssignmentsRaw] := gatherBindingCode(pattern)
   patternBindings := nonMatcherBindings(pattern)
-  typeSuffix = patternBindings.typeSuffix if "typeSuffix" in patternBindings
+  typeSuffix = (patternBindings as {typeSuffix?: ASTNode}).typeSuffix if patternBindings? and "typeSuffix" in patternBindings
   subbindings := gatherSubbindings patternBindings
   simplifyBindingProperties patternBindings
   simplifyBindingProperties subbindings
 
-  splices = splices.flatMap (s) => [", ", nonMatcherBindings(s)]
-  thisAssignments = thisAssignments.map ['', &, ";"]
+  splices := (splicesRaw as ASTNodeObject[]).flatMap (s) => [", " as ASTNode, nonMatcherBindings(s)]
+  thisAssignments := (thisAssignmentsRaw as ASTNode[]).map (a) => ['' as ASTNode, a, ";" as ASTNode] as StatementTuple
 
   duplicateDeclarations := aggregateDuplicateBindings([patternBindings, splices, subbindings])
 
   blockPrefix: StatementTuple[] := []
   if ref or subbindings# or splices#
-    children: ASTNode[] := [decl]
+    children: ASTNode[] := [decl as ASTNode]
     if ref
       children.push patternBindings, typeSuffix, " = ", ref
     children.push ...subbindings
@@ -324,32 +331,35 @@ function getPatternBlockPrefix(
     blockPrefix.push ['', {
       type: "Declaration"
       children
-      decl
+      decl: decl as "let" | "const" | "var"
       names: []
       bindings: [] // avoid implicit return of any bindings
-    }, ";"]
+    } as ASTNode, ";"]
   blockPrefix.push ...thisAssignments
-  blockPrefix.push ...duplicateDeclarations.map ['', &, ";"]
+  blockPrefix.push ...duplicateDeclarations.map (d) => ['' as ASTNode, d, ";" as ASTNode] as StatementTuple
   return unless blockPrefix#
   blockPrefix
 
 function elideMatchersFromArrayBindings(elements: ArrayBindingPatternContent): ArrayBindingPatternContent
+  results: ArrayBindingPatternContent := []
   for each element of elements
     switch element.type
       when "BindingRestElement", "ElisionElement"
-        element
+        results.push element
       when "BindingElement"
-        switch element.binding.type
+        bindingType := (element.binding as unknown as {type?: string}).type
+        switch bindingType
           when "Literal", "RegularExpressionLiteral", "StringLiteral", "PinPattern"
-            element.delim
+            results.push element.delim as ArrayBindingPatternContent[number]
           else
-            binding := nonMatcherBindings element.binding
-            makeNode {
+            binding := nonMatcherBindings element.binding as ASTNodeObject
+            results.push makeNode({
               ...element
-              binding
+              binding: binding as typeof element.binding
               children: element.children.map (c) =>
                 c is element.binding ? binding : c
-            }
+            }) as ArrayBindingPatternContent[number]
+  results
 
 function elideMatchersFromPropertyBindings(properties: ObjectBindingPatternContent): ObjectBindingPatternContent
   for each p of properties
@@ -357,39 +367,41 @@ function elideMatchersFromPropertyBindings(properties: ObjectBindingPatternConte
       when "BindingProperty", "PinProperty"
         { children, name, value } := p
         [ws] := children
+        nameAny := name as unknown as {type?: string}
+        valueAny := value as unknown as {name?: string, subtype?: string, type?: string, pattern?: ASTNodeObject, binding?: ASTNode}
 
         shouldElide := (or)
-          name.type is "NumericLiteral" and !value?.name
-          name.type is "ComputedPropertyName" and value?.subtype is "NumericLiteral"
+          nameAny.type is "NumericLiteral" and !valueAny?.name
+          nameAny.type is "ComputedPropertyName" and valueAny?.subtype is "NumericLiteral"
         if shouldElide
           continue
         else
 
           let contents: (BindingProperty | PinProperty)?
-          switch value?.type
+          switch valueAny?.type
             when "ArrayBindingPattern", "ObjectBindingPattern"
-              bindings := nonMatcherBindings value
+              bindings := nonMatcherBindings value as ASTNodeObject
               contents = {
                 ...p
-                value: bindings
+                value: bindings as typeof p.value
                 children: [ws, name, bindings && ": ", bindings, p.delim]
-              }
+              } as typeof contents
             when "Identifier", undefined
               contents = p
             when "NamedBindingPattern"
-              bindings := nonMatcherBindings value.pattern
+              bindings := nonMatcherBindings (value as ASTNodeObject & {pattern: ASTNodeObject}).pattern
               contents = {
                 ...p
-                subbinding: if bindings?.type is like "ArrayBindingPattern", "ObjectBindingPattern", "Identifier"
+                subbinding: if (bindings as {type?: string})?.type is like "ArrayBindingPattern", "ObjectBindingPattern", "Identifier"
                   . bindings
                   . " = "
                   . name
-              }
+              } as typeof contents
               // Similar to `simplifyBindingProperties`,
               // simplify `{name: name}` to just `{name}`
               // This occurs because the parser expands `{name^: pattern}`
               // into `{name: name^pattern}`
-              if p.name is value.binding
+              if p.name is (value as ASTNodeObject & {binding: ASTNode}).binding
                 contents!.children = [ws, name, p.delim]
             else // "Literal", "RegularExpressionLiteral", "StringLiteral"
               contents = undefined
@@ -403,42 +415,42 @@ function elideMatchersFromPropertyBindings(properties: ObjectBindingPatternConte
 function nonMatcherBindings(pattern: ASTNodeObject): ASTNodeObject?
   switch pattern.type
     when "ArrayBindingPattern", "PostRestBindingElements"
-      elements := elideMatchersFromArrayBindings pattern.elements
+      elements := elideMatchersFromArrayBindings pattern.elements as ArrayBindingPatternContent
       node := makeNode {
         ...pattern
         elements
         children: pattern.children.map & is pattern.elements ? elements : &
-      }
+      } as ASTNodeObject & {typeSuffix?: ASTNode}
       typePattern := {
         ...node
         typeSuffix: undefined
         elements: elements.filter (element) => element?.type?
-      }
-      node.typeSuffix = gatherBindingPatternTypeSuffix(typePattern).typeSuffix
+      } as ASTNodeObject as Parameters<typeof gatherBindingPatternTypeSuffix>[0]
+      node.typeSuffix = (gatherBindingPatternTypeSuffix(typePattern) as {typeSuffix?: ASTNode}).typeSuffix
       node
     when "ObjectBindingPattern"
       properties := elideMatchersFromPropertyBindings pattern.properties
-      gatherBindingPatternTypeSuffix makeNode {
+      gatherBindingPatternTypeSuffix makeNode({
         ...pattern
         typeSuffix: undefined
         properties
         children: pattern.children.map & is pattern.properties ? properties : &
-      }
+      } as ASTNodeObject) as Parameters<typeof gatherBindingPatternTypeSuffix>[0]
     when "NamedBindingPattern"
-      bindings := nonMatcherBindings pattern.pattern
+      bindings := nonMatcherBindings pattern.pattern as ASTNodeObject
       makeNode {
         ...pattern
-        typeSuffix: bindings?.typeSuffix
+        typeSuffix: (bindings as {typeSuffix?: ASTNode})?.typeSuffix
         subbinding:
-          if bindings?.type is like "ArrayBindingPattern", "ObjectBindingPattern", "Identifier"
+          if (bindings as {type?: string})?.type is like "ArrayBindingPattern", "ObjectBindingPattern", "Identifier"
             [ bindings, " = ", pattern.binding ]
       }
     when "ConditionFragment"
-      pattern.binding
+      pattern.binding as ASTNodeObject?
     else
       pattern
 
-function aggregateDuplicateBindings(bindings)
+function aggregateDuplicateBindings(bindings: ASTNode)
   props := gatherRecursiveAll bindings,
     ($): $ is BindingProperty | BindingRestProperty | Identifier | BindingRestElement => (or)
       $.type is "BindingProperty"
@@ -453,7 +465,9 @@ function aggregateDuplicateBindings(bindings)
   propsGroupedByName := new Map<string, ASTNodeObject[]>
 
   for each p of props
-    { name, value } := p
+    pAny := p as ASTNode & {name?: ASTNode & {name?: string}, value?: ASTNode & {type?: string, name?: string}}
+    name := pAny.name
+    value := pAny.value
 
     // JavaScript does not bind a property that gets matched against
     // an array or object pattern
@@ -463,13 +477,14 @@ function aggregateDuplicateBindings(bindings)
 
     // This is to handle aliased props, non-aliased props, and binding identifiers in arrays
     const key = value?.name or name?.name or name
-    if key?.type is "NumericLiteral" or key?.type is "ComputedPropertyName"
+    if (key as {type?: string})?.type is "NumericLiteral" or (key as {type?: string})?.type is "ComputedPropertyName"
       continue
 
-    if propsGroupedByName.has key
-      propsGroupedByName.get(key)!.push(p)
+    keyStr := key as string
+    if propsGroupedByName.has keyStr
+      propsGroupedByName.get(keyStr)!.push(p)
     else
-      propsGroupedByName.set key, [p]
+      propsGroupedByName.set keyStr, [p]
 
   propsGroupedByName.forEach (shared, key) =>
     return unless key
@@ -493,7 +508,7 @@ function aggregateDuplicateBindings(bindings)
       return ref
 
     // Gather duplicates in an array
-    declarations.push
+    declarations.push {
       type: "Declaration"
       children: [
         "const ", key, " = [",
@@ -502,6 +517,7 @@ function aggregateDuplicateBindings(bindings)
       ]
       names: []
       bindings: [] // avoid implicit return of any bindings
+    } as unknown as ASTNode
 
   return declarations
 
@@ -514,17 +530,20 @@ function aliasBinding(p: ASTNodeObject, ref: ASTRef): void
     // Array element binding
     // TODO: This ignores `name` and `names` properties of Identifier and
     // hackily converts it to a container for a Ref.
-    p.children[0] = ref
+    p.children[0] = ref as unknown as ASTString
   else if p.type is "BindingRestElement"
-    aliasBinding p.binding, ref
-  else if p.value?.type is "Identifier"
-    // aliased property binding
-    aliasBinding p.value, ref
+    aliasBinding p.binding as ASTNodeObject, ref
   else
-    // non-aliased property binding
-    p.value = ref
-    index := p.children.indexOf p.name
-    p.children.splice index + 1, 0, ": ", ref
+    pAny := p as ASTNode & {value?: ASTNode & {type?: string}, name?: ASTNode, children?: ASTNode[]}
+    if pAny.value?.type is "Identifier"
+      // aliased property binding
+      aliasBinding pAny.value as ASTNodeObject, ref
+    else
+      // non-aliased property binding
+      pAny.value = ref
+      return unless pAny.children
+      index := pAny.children.indexOf pAny.name
+      pAny.children.splice index + 1, 0, ": ", ref
 
 export {
   getPatternConditions
