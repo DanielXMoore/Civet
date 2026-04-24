@@ -5,10 +5,12 @@ import type {
   BinaryOpLeaf
   ChainOp
   Existence
+  PatternExpression
 } from ./types.civet
 
 import {
   assert
+  isASTNodeObject
   makeLeftHandSideExpression
   replaceNode
   trimFirstSpace
@@ -149,37 +151,42 @@ function processExpandedBinaryOpExpression(expandedOps: ASTNode[])
       let a: ASTNode = start === i - 2
         ? expandedOps[start]
         : expandedOps.slice(start, i - 1)
-      let wsOp: any = expandedOps[i - 1]
+      // expandedOps alternates expression / __ / op / __ / ...; the slots
+      // immediately around `op` are the surrounding whitespace nodes.
+      let wsOp: ASTNode = expandedOps[i - 1]
       //let op = expandedOps[i]
-      let wsB: any = expandedOps[i + 1]
-      let b: any = end === i + 2
+      let wsB: ASTNode = expandedOps[i + 1]
+      // `b` is either a single expression (the immediate right operand) or
+      // an array of [expr, ws, op, ws, expr, ...] when this is a chained
+      // arguments-associative operator.
+      let b: ASTNode | ASTNode[] = end === i + 2
         ? expandedOps[i + 2]
         : expandedOps.slice(i + 2, end + 1)
-      if leaf.assoc is "arguments"
+      if leaf.assoc is "arguments" and Array.isArray b
         i .= 2
         while i < b.length
-          if prec is getPrecedence b[i]
-            unless b[i].token is leaf.token
+          if prec is getPrecedence(b[i] as BinaryOp)
+            unless (b[i] as BinaryOpLeaf).token is leaf.token
               error ?=
                 type: "Error"
-                message: `arguments operator ${leaf.token} used at same precedence level as ${b[i].token} to the right`
+                message: `arguments operator ${leaf.token} used at same precedence level as ${(b[i] as BinaryOpLeaf).token} to the right`
             b[i] = ","
           i += 4
       else
-        b = processExpandedBinaryOpExpression b
+        b = processExpandedBinaryOpExpression b as ASTNode[]
 
       if leaf.token is "instanceof"
-        // Ensure space around `instanceof`
-        if wsOp.length is 0
+        // Ensure space around `instanceof`.  wsOp / wsB come from the
+        // grammar's `__` slot, which is either a string or an array of
+        // whitespace/comment tokens — both expose `.length`.
+        if (wsOp as string | ASTNode[]).length is 0
           wsOp = " "
-        if wsB.length is 0
+        if (wsB as string | ASTNode[]).length is 0
           wsB = " "
 
         // typeof shorthand: x instanceof "string" -> typeof x === "string"
-        if b is like {
-          type: "Literal"
-          children: [ {type: "StringLiteral"}, ... ]
-        }
+        if isASTNodeObject(b) and b.type is "Literal" and
+           b.subtype is "StringLiteral"
           a = ["typeof ", makeLeftHandSideExpression(a)]
           if leaf.negated
             op = leaf = { ...leaf, token: "!==", negated: false }
@@ -192,7 +199,8 @@ function processExpandedBinaryOpExpression(expandedOps: ASTNode[])
 
       let children: ASTNode[], type: string?
       if op.type is "PatternTest"
-        children = [processPatternTest a, b]
+        // PatternTest's RHS is the parsed pattern list — always an array here.
+        children = [processPatternTest a, b as PatternExpression[]]
       else if op.type is "ChainOp"
         children = [a, wsOp, "&&", wsB, b]
         // Parenthesize chain if it is surrounded by operator with precedence
@@ -209,19 +217,19 @@ function processExpandedBinaryOpExpression(expandedOps: ASTNode[])
         wsOp = trimFirstSpace wsOp
         if leaf.reversed
           wsB = trimFirstSpace wsB
-          children = [wsOp, leaf.call, "(", wsB, b, ", ", a, ")", (leaf as any).suffix]
+          children = [wsOp, leaf.call, "(", wsB, b, ", ", a, ")", leaf.suffix]
         else
-          children = [wsOp, leaf.call, "(", a, ",", wsB, b, ")", (leaf as any).suffix]
+          children = [wsOp, leaf.call, "(", a, ",", wsB, b, ")", leaf.suffix]
         type = "CallExpression"
       else if leaf.method
         wsOp = trimFirstSpace wsOp
         wsB = trimFirstSpace wsB
         if leaf.reversed
-          b = makeLeftHandSideExpression b unless b.type is "CallExpression"
+          b = makeLeftHandSideExpression b unless isASTNodeObject(b) and b.type is "CallExpression"
           b = dotNumericLiteral b
           children = [wsB, b, wsOp, ".", leaf.method, "(", a, ")"]
         else
-          a = makeLeftHandSideExpression a unless (a as any).type is "CallExpression"
+          a = makeLeftHandSideExpression a unless isASTNodeObject(a) and a.type is "CallExpression"
           a = dotNumericLiteral a
           children = [a, wsOp, ".", leaf.method, "(", wsB, b, ")"]
         type = "CallExpression"
