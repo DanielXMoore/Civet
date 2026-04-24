@@ -29,5 +29,5 @@ fi
 # Baseline typecheck errors at time of the parser-types-refactor landing.
 # Drop this number as we fix the underlying diagnostics; set to 0 to disallow
 # any typecheck errors once the baseline is cleared.  Override via env.
-CIVET_TYPECHECK_MAX_ERRORS="${CIVET_TYPECHECK_MAX_ERRORS:-763}" \
+CIVET_TYPECHECK_MAX_ERRORS="${CIVET_TYPECHECK_MAX_ERRORS:-760}" \
   node_modules/.bin/civet scripts/typecheck.civet
