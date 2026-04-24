@@ -8,6 +8,7 @@
 
 import type {
   AccessStart
+  ArrowFunction
   ASTError
   ASTLeaf
   ASTNode
@@ -29,8 +30,11 @@ import type {
   ElseClause
   FinallyClause
   ForStatement
+  FunctionExpression
   FunctionSignature
+  Identifier
   IfStatement
+  Index
   Initializer
   IterationStatement
   Label
@@ -43,6 +47,7 @@ import type {
   ParametersNode
   ParenthesizedExpression
   Placeholder
+  PropertyAccess
   Property
   SpreadProperty
   StatementNode
@@ -876,46 +881,51 @@ The return value should have a `name` property (for "Identifier",
 "PropertyAcess", and "Index"), or have `type` of "Index" (for `[computed]`),
 or be undefined.
 */
-function lastAccessInCallExpression(exp: any): any
-  while exp.type is "MemberExpression" or exp.type is "CallExpression"
-    { children } := exp
+function lastAccessInCallExpression(exp: ASTNode): Identifier | PropertyAccess | Index | undefined
+  while isASTNodeObject(exp) and (exp.type is "MemberExpression" or exp.type is "CallExpression")
+    children := exp.children
     i .= children# - 1
-    while (i >= 0 and children[i] <? "object" and (
-      children[i].type is "Call" ||
-      children[i].type is "NonNullAssertion" ||
-      children[i].type is "Optional"
-    )) i--
+    while i >= 0
+      child := children[i]
+      break unless isASTNodeObject(child) and (
+        child.type is "Call" or
+        child.type is "NonNullAssertion" or
+        child.type is "Optional"
+      )
+      i--
 
     assert i >= 0, "lastAccessInCallExpression: no base access found"
 
     // Recurse into nested MemberExpression, e.g. from `x.y()`
     exp = children[i]
+  return unless isASTNodeObject exp
   if exp.type is "Identifier" or exp.type is "PropertyAccess" or exp.type is "Index"
     exp
 
 // Given a MethodDefinition, convert into a FunctionExpression.
 // Returns undefined if the method is a getter or setter.
-function convertMethodToFunction(method: any): any
+function convertMethodToFunction(method: MethodDefinition): FunctionExpression?
   { signature, block } := method
   { async, modifier, optional } := signature
 
-  return if modifier?.get or modifier?.set
-  func := ["function "]
+  return undefined if modifier?.get or modifier?.set
+  func: ASTNode[] := ["function "]
   if async?
     // put `function` after `async`
     func.unshift async
     // ensure space after `async` (absent in e.g. `async* f()`)
-    if async# and not async.-1?.#
+    last := async.-1
+    if async# and not (last as ASTLeaf | ASTString | undefined)?.length
       async.push " "
 
-  sigChildren := signature.children.slice(1)
+  sigChildren := signature.children.slice(1) as ASTNode[]
   if optional
     optIdx := sigChildren.indexOf optional
     sigChildren.splice optIdx, 1 if optIdx >= 0
 
   return {
     ...signature
-    id: signature.name
+    id: signature.id
     signature
     type: "FunctionExpression"
     children: [
@@ -923,12 +933,13 @@ function convertMethodToFunction(method: any): any
       block
     ]
     block
-  }
+  } as! FunctionExpression
 
-function convertFunctionToMethod(id: any, exp: any): any
-  fnTokenIndex := exp.children.findIndex (c: any) -> c?.token?.startsWith("function")
+function convertFunctionToMethod(id: Identifier, exp: FunctionExpression): MethodDefinition
+  fnTokenIndex := exp.children.findIndex (c) ->
+    c? <? "object" and "token" in c and (c.token as string?)?.startsWith("function")
   // copy
-  children := exp.children.slice()
+  children := exp.children.slice() as ASTNode[]
   // Replace "function" and move the generator slot ahead of id so a "*"
   // later pushed by processSignature (for implicit yield) lands before id.
   children.splice(fnTokenIndex, 2, children[fnTokenIndex+1], id)
@@ -939,13 +950,17 @@ function convertFunctionToMethod(id: any, exp: any): any
     name: id.name,
     signature: { ...exp.signature, id, name: id.name },
     children
-  }
+  } as! MethodDefinition
 
-function convertArrowFunctionToMethod(id: any, exp: any): any
-  block := {...exp.block} // prepare for bracing
-  children := exp.children.filter((c: any) -> !(Array.isArray(c) && c[c.length-1]?.token?.includes("=>"))).map((c: any) -> c === exp.block ? block : c)
+function convertArrowFunctionToMethod(id: Identifier, exp: ArrowFunction): MethodDefinition
+  block := {...exp.block} as BlockStatement // prepare for bracing
+  children := exp.children
+    .filter (c) ->
+      not (Array.isArray(c) and ((c.-1 as ASTLeaf?)?.token?.includes("=>")))
+    .map (c) =>
+      c is exp.block ? block : c
   children.unshift(id)
-  exp = {
+  newExp := {
     ...exp,
     type: "MethodDefinition",
     name: id.name,
@@ -953,10 +968,10 @@ function convertArrowFunctionToMethod(id: any, exp: any): any
     block,
     children,
     autoBind: true
-  }
-  block.parent = exp // needed by braceBlock
+  } as! MethodDefinition
+  block.parent = newExp // needed by braceBlock
   braceBlock(block)
-  exp
+  newExp
 
 // Convert NamedImports into equivalent ObjectExpression or ObjectBindingPattern
 function convertNamedImportsToObject(node: any, pattern?: boolean): any
@@ -1073,12 +1088,16 @@ function makeGetterMethod(name: any, ws: any, value: any, returnType: any, block
       }
       name
       returnType
-    }
+    } as! FunctionSignature
     block
     parameters
   }
 
-function processBindingPatternLHS(lhs, tail): void
+// `lhs` here is a fully-narrowed binding-pattern subtree.  `tail` collects
+// extra ASTNode emit fragments (splices/thisAssignments/subbindings).  We
+// keep both as `ASTNode` because the gatherRecursive walks across many
+// node shapes and re-typing each access wouldn't add safety here.
+function processBindingPatternLHS(lhs: ASTNode, tail: ASTNode[]): void
   // Expand AtBindingProperty (@x shorthand in object patterns) to x: this.x
   adjustAtBindings lhs, true
   // In assignment (non-binding) context, @x can be used directly as this.x

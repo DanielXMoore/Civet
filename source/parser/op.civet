@@ -1,6 +1,8 @@
 import type {
+  ASTError
   ASTNode
   BinaryOp
+  BinaryOpLeaf
   ChainOp
   Existence
 } from ./types.civet
@@ -54,13 +56,18 @@ precedenceRelational := precedenceMap.get("==")!
 precedenceCustomDefault := precedenceMap.get("custom")!
 
 function getPrecedence(op: BinaryOp): number
+  // Bare operator strings — look up directly.
+  if op <? "string"
+    return precedenceMap.get(op) ?? precedenceCustomDefault
   if op.type is "PatternTest"
-    precedenceRelational
-  else if op.prec <? "number"
-    op.prec
-  else
-    precedenceMap.get(op.prec ?? op.token) ??
-    if op.relational then precedenceRelational else precedenceCustomDefault
+    return precedenceRelational
+  if op.type is "ChainOp"
+    return op.prec
+  // Otherwise: BinaryOpLeaf (ASTLeaf with `special` and operator metadata).
+  if op.prec <? "number"
+    return op.prec
+  precedenceMap.get(op.prec ?? op.token) ??
+  if op.relational then precedenceRelational else precedenceCustomDefault
 
 /**
  * Return whether the operator short-circuits, i.e., skips evaluating
@@ -69,8 +76,10 @@ function getPrecedence(op: BinaryOp): number
  * support for short-circuiting custom operators in the future.
  */
 function isShortCircuitOp(op: BinaryOp): boolean
-  if {token} := op
-    return isShortCircuitOp token
+  // Recurse on .token of leaf operators.
+  if op? <? "object" and "token" in op and op.token?
+    return isShortCircuitOp op.token
+  return false unless op <? "string"
   // Strip = from ||=, &&=, ??=
   if op.endsWith("=") and not op.endsWith("==")
     op = op[<-1]
@@ -99,21 +108,26 @@ function processExpandedBinaryOpExpression(expandedOps: ASTNode[])
       // operator is at the same precedence level as op.
       function advanceLeft(allowEqual: boolean): boolean
         while start >= 4
-          prevPrec := getPrecedence expandedOps[start - 2]
+          prevPrec := getPrecedence expandedOps[start - 2] as BinaryOp
           unless prevPrec > prec or (allowEqual and prevPrec is prec)
             return prevPrec is prec
           start -= 4
         false
       function advanceRight(allowEqual: boolean): boolean
         while end + 4 < expandedOps.length
-          nextPrec := getPrecedence expandedOps[end + 2]
+          nextPrec := getPrecedence expandedOps[end + 2] as BinaryOp
           unless nextPrec > prec or (allowEqual and nextPrec is prec)
             return nextPrec is prec
           end += 4
         false
 
-      let error
-      switch op.assoc
+      let error: ASTError?
+      // .assoc / .token narrowing: PatternTest and ChainOp variants reach
+      // here too, but their `.assoc` is undefined at runtime so they take
+      // the "left" branch.  Only the BinaryOpLeaf variant carries the
+      // metadata fields below; we re-derive `leaf` whenever `op` mutates.
+      let leaf: BinaryOpLeaf = op as BinaryOpLeaf
+      switch leaf.assoc
         when "left", undefined
           advanceLeft true
           advanceRight false
@@ -122,39 +136,42 @@ function processExpandedBinaryOpExpression(expandedOps: ASTNode[])
           advanceRight true
         when "non"
           if advanceLeft(false) or advanceRight(false)
-            error =
+            error = {
               type: "Error"
-              message: `non-associative operator ${op.token} used at same precedence level without parenthesization`
+              message: `non-associative operator ${leaf.token} used at same precedence level without parenthesization`
+            }
         when "arguments"
           if advanceLeft false
-            error =
+            error = {
               type: "Error"
-              message: `arguments operator ${op.token} used at same precedence level as ${expandedOps[start - 2].token} to the left`
+              message: `arguments operator ${leaf.token} used at same precedence level as ${(expandedOps[start - 2] as BinaryOpLeaf).token} to the left`
+            }
           advanceRight true
 
-      let a = start === i - 2
+      let a: ASTNode = start === i - 2
         ? expandedOps[start]
         : expandedOps.slice(start, i - 1)
-      let wsOp = expandedOps[i - 1]
+      let wsOp: any = expandedOps[i - 1]
       //let op = expandedOps[i]
-      let wsB = expandedOps[i + 1]
-      let b = end === i + 2
+      let wsB: any = expandedOps[i + 1]
+      let b: any = end === i + 2
         ? expandedOps[i + 2]
         : expandedOps.slice(i + 2, end + 1)
-      if op.assoc is "arguments"
+      if leaf.assoc is "arguments"
         i .= 2
         while i < b.length
           if prec is getPrecedence b[i]
-            unless b[i].token is op.token
-              error ?=
+            unless b[i].token is leaf.token
+              error ?= {
                 type: "Error"
-                message: `arguments operator ${op.token} used at same precedence level as ${b[i].token} to the right`
+                message: `arguments operator ${leaf.token} used at same precedence level as ${b[i].token} to the right`
+              }
             b[i] = ","
           i += 4
       else
         b = processExpandedBinaryOpExpression b
 
-      if op.token is "instanceof"
+      if leaf.token is "instanceof"
         // Ensure space around `instanceof`
         if wsOp.length is 0
           wsOp = " "
@@ -167,16 +184,16 @@ function processExpandedBinaryOpExpression(expandedOps: ASTNode[])
           children: [ {type: "StringLiteral"}, ... ]
         }
           a = ["typeof ", makeLeftHandSideExpression(a)]
-          if op.negated
-            op = { ...op, token: "!==", negated: false }
+          if leaf.negated
+            op = leaf = { ...leaf, token: "!==", negated: false }
           else
-            op = { ...op, token: "===" }
+            op = leaf = { ...leaf, token: "===" }
 
-      if op.asConst
+      if leaf.asConst
         a = makeAsConst a
         b = makeAsConst b
 
-      let children, type: string?
+      let children: ASTNode[], type: string?
       if op.type is "PatternTest"
         children = [processPatternTest a, b]
       else if op.type is "ChainOp"
@@ -185,42 +202,42 @@ function processExpandedBinaryOpExpression(expandedOps: ASTNode[])
         // in between && (where this will end up being) and relational
         // (which the chain should simulate).
         if (start-2 >= 0 and
-            getPrecedence(expandedOps[start-2]) >= precedenceAnd and
-            expandedOps[start-2].token is not '&&') or
+            getPrecedence(expandedOps[start-2] as BinaryOp) >= precedenceAnd and
+            (expandedOps[start-2] as BinaryOpLeaf).token is not '&&') or
             (end+2 < expandedOps.length and
-            getPrecedence(expandedOps[end+2]) >= precedenceAnd and
-            expandedOps[end+2].token is not '&&')
+            getPrecedence(expandedOps[end+2] as BinaryOp) >= precedenceAnd and
+            (expandedOps[end+2] as BinaryOpLeaf).token is not '&&')
           children = ["(", ...children, ")"]
-      else if op.call
+      else if leaf.call
         wsOp = trimFirstSpace wsOp
-        if op.reversed
+        if leaf.reversed
           wsB = trimFirstSpace wsB
-          children = [wsOp, op.call, "(", wsB, b, ", ", a, ")", op.suffix]
+          children = [wsOp, leaf.call, "(", wsB, b, ", ", a, ")", (leaf as any).suffix]
         else
-          children = [wsOp, op.call, "(", a, ",", wsB, b, ")", op.suffix]
+          children = [wsOp, leaf.call, "(", a, ",", wsB, b, ")", (leaf as any).suffix]
         type = "CallExpression"
-      else if op.method
+      else if leaf.method
         wsOp = trimFirstSpace wsOp
         wsB = trimFirstSpace wsB
-        if op.reversed
+        if leaf.reversed
           b = makeLeftHandSideExpression b unless b.type is "CallExpression"
           b = dotNumericLiteral b
-          children = [wsB, b, wsOp, ".", op.method, "(", a, ")"]
+          children = [wsB, b, wsOp, ".", leaf.method, "(", a, ")"]
         else
-          a = makeLeftHandSideExpression a unless a.type is "CallExpression"
+          a = makeLeftHandSideExpression a unless (a as any).type is "CallExpression"
           a = dotNumericLiteral a
-          children = [a, wsOp, ".", op.method, "(", wsB, b, ")"]
+          children = [a, wsOp, ".", leaf.method, "(", wsB, b, ")"]
         type = "CallExpression"
       else
         children = [a, wsOp, op, wsB, b]
-        if (op.negated) children = ["(", ...children, ")"]
-      if (op.negated) children.unshift("!")
+        if (leaf.negated) children = ["(", ...children, ")"]
+      if (leaf.negated) children.unshift("!")
       children.push error if error?
 
       expandedOps.splice(start, end - start + 1, {
         type
         children
-      })
+      } as! ASTNode)
       i = start + 2
     else
       i += 4
@@ -238,14 +255,19 @@ const asConst =
   ts: true,
   children: [" as const"]
 
-function makeAsConst(node: ASTNode)
+function makeAsConst(node: ASTNode): ASTNode
   // TS allows "as const" assertions for string, number, boolean, array,
   // and object literals (and enum members), but not for null/undefined.
-  if (node.type is "Literal" and node.raw is not "null") or
-      node.type is "ArrayExpression" or node.type is "ObjectExpression"
-    { ...node, children: [...node.children, asConst] }
-  else
-    node
+  return node unless node? <? "object"
+  return node if Array.isArray node
+  switch node.type
+    when "Literal"
+      return node if node.raw is "null"
+    when "ArrayExpression", "ObjectExpression"
+      // OK
+    else
+      return node
+  { ...node, children: [...node.children!, asConst] } as ASTNode
 
 function isExistence(exp: ASTNode): Existence?
   if exp?.type is "ParenthesizedExpression" and exp.implicit

@@ -29,5 +29,5 @@ fi
 # Baseline typecheck errors.  Drop this number as we fix the underlying
 # diagnostics; set to 0 to disallow any typecheck errors once the baseline
 # is cleared.  Override via env.
-CIVET_TYPECHECK_MAX_ERRORS="${CIVET_TYPECHECK_MAX_ERRORS:-660}" \
+CIVET_TYPECHECK_MAX_ERRORS="${CIVET_TYPECHECK_MAX_ERRORS:-567}" \
   node_modules/.bin/civet scripts/typecheck.civet
