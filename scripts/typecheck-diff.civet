@@ -1,0 +1,117 @@
+#!/usr/bin/env civet
+/**
+ * typecheck-diff.civet
+ *
+ * Compare two typecheck logs and print the symmetric difference:
+ *   - errors present in <new> but not in <old>  (regressions)
+ *   - errors present in <old> but not in <new>  (fixed)
+ *
+ * Diagnostics are matched by (file, line, column, code, message).  Line
+ * numbers can shift across edits, so we also fuzz-match by (file, code,
+ * message) — if an error with the same code+message exists for the same
+ * file in both logs, it's considered "moved" and not reported.
+ *
+ * Usage:
+ *   pnpm typecheck > /tmp/before.log
+ *   ...edit...
+ *   pnpm typecheck > /tmp/after.log
+ *   civet scripts/typecheck-diff.civet /tmp/before.log /tmp/after.log
+ */
+
+{ readFileSync } from "node:fs"
+
+[oldPath, newPath] := process.argv.slice 2
+unless oldPath and newPath
+  console.error "usage: typecheck-diff <old.log> <new.log>"
+  process.exit 1
+
+type Diag =
+  file: string
+  line: number
+  column: number
+  code: string
+  message: string
+
+function stripAnsi(s: string): string
+  s.replace /\x1b\[[0-9;]*m/g, ""
+
+// Each diagnostic block starts with `path:line:col - error TSnnnn: message`
+// and may be followed by indented continuation lines.  We treat the whole
+// block as the diagnostic for fingerprinting.
+function parse(logPath: string): Diag[]
+  raw := stripAnsi readFileSync(logPath, "utf8")
+  out: Diag[] := []
+  current: Diag? .= undefined
+  for line of raw.split /\r?\n/
+    headMatch := line.match /^([^:\s][^:]*):(\d+):(\d+) - error (TS\d+): (.*)$/
+    if headMatch
+      out.push current if current
+      current = {
+        file: headMatch[1]
+        line: parseInt headMatch[2], 10
+        column: parseInt headMatch[3], 10
+        code: headMatch[4]
+        message: headMatch[5]
+      }
+    // (continuation lines are folded into message implicitly via the head
+    // already capturing the first line; sub-notes are rare and noisy)
+  out.push current if current
+  out
+
+function exactKey(d: Diag): string
+  `${d.file}:${d.line}:${d.column}:${d.code}:${d.message}`
+
+function fuzzyKey(d: Diag): string
+  // Drop line/col so a moved-but-otherwise-identical error matches.
+  `${d.file}:${d.code}:${d.message}`
+
+function indexBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]>
+  m := new Map<string, T[]>
+  for item of items
+    k := keyFn item
+    bucket := m.get k
+    if bucket
+      bucket.push item
+    else
+      m.set k, [item]
+  m
+
+oldDiags := parse oldPath
+newDiags := parse newPath
+
+function diff(left: Diag[], right: Diag[]): Diag[]
+  // Items present in `left` but not consumable from `right` (matched by
+  // fuzzyKey ignoring line/col, so simple line shifts don't show as drift).
+  rightFuzzy := indexBy right, fuzzyKey
+  out: Diag[] := []
+  for d of left
+    bucket := rightFuzzy.get fuzzyKey(d)
+    if bucket and bucket.length > 0
+      bucket.shift()
+      continue
+    out.push d
+  out
+
+regressions := diff newDiags, oldDiags
+fixed := diff oldDiags, newDiags
+
+function summarize(label: string, diags: Diag[])
+  return if diags.length is 0
+  console.log `${label} (${diags.length}):`
+  // Group by file for readability.
+  byFile := new Map<string, Diag[]>
+  for d of diags
+    bucket := byFile.get(d.file) ?? []
+    bucket.push d
+    byFile.set d.file, bucket
+  for [file, list] of byFile
+    console.log `  ${file}`
+    for d of list
+      console.log `    ${d.line}:${d.column} ${d.code} ${d.message}`
+
+console.log `Old: ${oldDiags.length} diagnostics  →  New: ${newDiags.length} diagnostics`
+console.log `Net: ${newDiags.length - oldDiags.length >= 0 ? "+" : ""}${newDiags.length - oldDiags.length}`
+console.log ""
+summarize "Regressions", regressions
+console.log "" if regressions.length and fixed.length
+summarize "Fixed", fixed
