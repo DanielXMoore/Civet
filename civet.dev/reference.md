@@ -2803,6 +2803,13 @@ let i: number?
 let x: string??
 </Playground>
 
+One exception: immediately inside a tuple type, `T?` means an
+[optional element](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-3-0.html#optional-elements-in-tuple-types):
+
+<Playground>
+let name: [string, string, string?]
+</Playground>
+
 To allow for type inference and the initial `undefined` value:
 
 <Playground>
