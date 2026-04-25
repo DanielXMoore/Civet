@@ -26,13 +26,14 @@ initializeClient := (client: LspClient, opts: { workspaceFolders?: any, capabili
     opts.workspaceFolders
   else
     [{ uri: rootUri, name: "project-test" }]
-  await client.request "initialize", {
+  result := await client.request "initialize", {
     processId: process.pid
     rootUri: folders?.[0]?.uri ?? null
     capabilities: opts.capabilities ?? {}
     workspaceFolders: folders
   }
   client.notify "initialized", {}
+  result
 
 // Helper to wait for diagnostics matching the given uri predicate with a
 // coverage-friendly timeout.  Defined outside the describe so Civet parses it
@@ -46,11 +47,12 @@ describe "LSP features (shared project server)", ->
   @timeout 60000
 
   let client: LspClient
+  let init: any
   before ->
     client = spawnLspServer()
     // Enable workspaceFolders capability so the workspace-folder change test
     // can exercise the matching listener without a dedicated server.
-    await initializeClient client,
+    init = await initializeClient client,
       capabilities:
         workspace:
           configuration: true
@@ -123,6 +125,61 @@ describe "LSP features (shared project server)", ->
     assert tokens, "expected semantic tokens response"
     assert Array.isArray(tokens.data), "expected tokens.data to be an array"
     assert tokens.data.length > 0, "expected at least one token"
+
+  it "semantic tokens marks civet comments as comments", ->
+    uri := docUri path.join(projectRoot, "semtok-coffee-comment.civet")
+    text := '''
+      "civet coffeeComment"
+      ### coffee block
+      still block ###
+      /* js block
+      still js block */
+      # coffee line
+      value := 1 // trailing js
+    '''
+    lines := text.split "\n"
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    tokens := await client.request "textDocument/semanticTokens/full", {
+      textDocument: { uri }
+    }
+    assert tokens, "expected semantic tokens response"
+
+    commentIndex := init.capabilities.semanticTokensProvider.legend.tokenTypes.indexOf("comment")
+    assert commentIndex >= 0, 'expected "comment" in semantic token legend'
+
+    decoded: { line: number, character: number, length: number, tokenType: number }[] := []
+    line .= 0
+    char .= 0
+    for i of [0...tokens.data.length] by 5
+      deltaLine := tokens.data[i]
+      deltaChar := tokens.data[i + 1]
+      length := tokens.data[i + 2]
+      tokenType := tokens.data[i + 3]
+      if deltaLine > 0
+        line += deltaLine
+        char = deltaChar
+      else
+        char += deltaChar
+      decoded.push { line, character: char, length, tokenType }
+
+    expectedComments := [
+      { text: '### coffee block', character: 0 }
+      { text: 'still block ###', character: 0 }
+      { text: '/* js block', character: 0 }
+      { text: 'still js block */', character: 0 }
+      { text: '# coffee line', character: 0 }
+      { text: '// trailing js', character: lines.find((line) => line.includes('// trailing js'))!.indexOf('//') }
+    ]
+
+    for expected of expectedComments
+      lineIndex := lines.findIndex (line) => line.includes expected.text
+      token := decoded.find (token) =>
+        token.line is lineIndex and token.character is expected.character and token.tokenType is commentIndex
+      assert token, `expected a comment token for '${expected.text}' at ${lineIndex}:${expected.character}`
 
   it "completion resolve returns details for a symbol", ->
     uri := docUri path.join(projectRoot, "complete-resolve.civet")

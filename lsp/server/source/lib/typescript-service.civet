@@ -51,6 +51,7 @@ interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithF
 export interface FileMeta
   sourcemapLines: SourceMap["lines"]?
   transpiledDoc: TextDocument?
+  commentRanges: { pos: number, length: number }[]?
   parseErrors: (Error | ParseError)[]?
   fatal: boolean // whether errors were fatal during compilation, so no doc
 
@@ -70,6 +71,7 @@ interface Transpiler
   compile(path: string, source: string): {
     code: string
     sourceMap?: SourceMap
+    commentRanges?: { pos: number, length: number }[]
     errors?: (Error | ParseError)[]
   }?
 
@@ -388,16 +390,13 @@ function TSHost(
     return snapshot
   }
 
-  function createOrUpdateMeta(path: string, transpiledDoc: TextDocument, sourcemapLines?: SourceMap["lines"], parseErrors?: (Error | ParseError)[], fatal: boolean = false) {
+  function createOrUpdateMeta(path: string, update: FileMeta & { transpiledDoc: TextDocument }) {
     path = getCanonicalFileName path
     meta .= fileMetaData.get(path)
     if !meta
-      fileMetaData.set(path, { sourcemapLines, transpiledDoc, parseErrors, fatal } as FileMeta)
+      fileMetaData.set(path, update)
     else
-      meta.transpiledDoc = transpiledDoc
-      meta.sourcemapLines = sourcemapLines
-      meta.parseErrors = parseErrors
-      meta.fatal = fatal
+      Object.assign(meta, update)
   }
 
   function doTranspileAndUpdateMeta(transpiledDoc: TextDocument, version: number, transpiler: Transpiler, sourcePath: string, sourceCode: string): string | undefined {
@@ -406,14 +405,26 @@ function TSHost(
       var result = transpiler.compile(sourcePath, sourceCode)
     } catch (e: unknown) {
       // Add parse errors to meta
-      createOrUpdateMeta(sourcePath, transpiledDoc, undefined, [e as Error], true)
+      createOrUpdateMeta(sourcePath, {
+        transpiledDoc
+        sourcemapLines: undefined
+        commentRanges: undefined
+        parseErrors: [e as Error]
+        fatal: true
+      })
       return
     }
 
     return unless result
-    { code: transpiledCode, sourceMap, errors } := result
-    sourceMapLines := sourceMap?.lines
-    createOrUpdateMeta(sourcePath, transpiledDoc, sourceMapLines, errors, false)
+    { code: transpiledCode, sourceMap, commentRanges, errors } := result
+    sourcemapLines := sourceMap?.lines
+    createOrUpdateMeta(sourcePath, {
+      transpiledDoc
+      sourcemapLines
+      commentRanges
+      parseErrors: errors
+      fatal: false
+    })
     TextDocument.update(transpiledDoc, [{ text: transpiledCode }], version)
     transpiledCode
   }
@@ -546,18 +557,43 @@ function TSService(projectURL = "./", logger: Logger = console)
 
   function transpileCivet(path: string, source: string)
     errors: ParseError[] := []
-    // `Civet` may be resolved from the project at runtime, so TS loses `sync: true` narrowing.
-    result := Civet.compile(source, {
+    options: CompileOptions & { sync: true } := {}
       ...civetConfig
       filename: path
-      sourceMap: true
       errors
       // We don't process comptime in LSP so don't need async yet
       sync: true
-      comptime: false
-    }) as { code: string; sourceMap: CivetSourceMap }
+      parseOptions: {}
+        ...civetConfig.parseOptions
+        comptime: false
 
-    { ...result, errors }
+    // Civet 0.9.4 introduced `new SourceMap` API
+    [major, minor, patch] := CivetVersion.split(".").map(Number)
+    if major is 0 and (minor < 9 or minor is 9 and patch < 4)
+      result := Civet.compile source, { ...options, sourceMap: true }
+      return { ...result, errors }
+
+    // Re-use the single parse for both code generation and comment extraction.
+    options.ast = true
+    ast := Civet.compile source, options
+    sourceMap := new Civet.SourceMap source, path
+    code := Civet.generate ast, {}
+      ...options
+      sourceMap
+    commentRanges := collectCommentRanges(ast)
+
+    {
+      code
+      sourceMap
+      commentRanges
+      errors
+    }
+
+  function collectCommentRanges(ast: unknown)
+    comments := Civet.lib.gatherRecursiveAll(ast, (node: any) =>
+      node?.type is "Comment" and node.$loc?.length > 0
+    ) as { $loc: { pos: number, length: number } }[]
+    comments.map (comment) => comment.$loc
 
 /**
  * Returns the extension of the file including the dot.
