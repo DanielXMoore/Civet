@@ -142,3 +142,51 @@ suite 'Semantic Tokens', =>
       remaining := lineText.length - token.character
       assert token.length <= remaining,
         `Token at ${token.line}:${token.character} (type: ${token.tokenType}) has length ${token.length} but only ${remaining} chars remain on line: "${lineText}"`
+
+  test 'Marks Civet comments as semantic comments', async =>
+    docUri := getDocUri('coffee-comment.civet')
+    await activate(docUri)
+    sourceDoc := await vscode.workspace.openTextDocument(docUri)
+    lines := sourceDoc.getText().split('\n')
+
+    legend := await commands.executeCommand('vscode.provideDocumentSemanticTokensLegend', docUri) as SemanticTokensLegend | undefined
+    tokens := await poll
+      () => commands.executeCommand('vscode.provideDocumentSemanticTokens', docUri) as Promise<SemanticTokens | undefined>
+      (v) => (v?.data?.length or 0) > 0
+
+    assert legend, 'Expected semantic tokens legend'
+    assert tokens, 'Expected semantic tokens'
+
+    commentIndex := legend.tokenTypes.indexOf('comment')
+    assert commentIndex >= 0, 'Expected "comment" in token types legend'
+
+    decoded: { line: number, character: number, length: number, tokenType: number }[] := []
+    line .= 0
+    char .= 0
+    for i of [0...tokens.data.length] by 5
+      deltaLine := tokens.data[i]
+      deltaChar := tokens.data[i + 1]
+      length := tokens.data[i + 2]
+      tokenType := tokens.data[i + 3]
+      if deltaLine > 0
+        line += deltaLine
+        char = deltaChar
+      else
+        char += deltaChar
+      decoded.push { line, character: char, length, tokenType }
+
+    trailingLine := lines.find (line) => line.includes('// trailing js')
+    expectedComments := [
+      { text: '### coffee block', character: 0 }
+      { text: 'still block ###', character: 0 }
+      { text: '/* js block', character: 0 }
+      { text: 'still js block */', character: 0 }
+      { text: '# coffee line', character: 0 }
+      { text: '// trailing js', character: trailingLine?.indexOf('//') ?? -1 }
+    ]
+
+    for expected of expectedComments
+      lineIndex := lines.findIndex (line) => line.includes expected.text
+      token := decoded.find (token) =>
+        token.line is lineIndex and token.character is expected.character and token.tokenType is commentIndex
+      assert token, `Expected a semantic comment token for "${expected.text}" at ${lineIndex}:${expected.character}`
