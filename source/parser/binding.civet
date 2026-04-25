@@ -3,15 +3,20 @@ import type {
   ArrayBindingPatternContent
   AssignmentExpression
   AssignmentExpressionLHS
-  ASTLeaf
   ASTNode
+  ASTNodeObject
+  ASTRef
   AtBinding
-  AtBindingProperty
   BindingProperty
   BindingRestElement
   Children
   HasSubbinding
   ObjectBindingPattern
+  Parameter
+  PinPattern
+  PinProperty
+  PostRestBindingElements
+  StatementTuple
   ThisAssignments
 } from ./types.civet
 
@@ -24,6 +29,7 @@ import {
 } from ./ref.civet
 
 import {
+  isToken
   parenthesizeType
   trimFirstSpace
   updateParentPointers
@@ -35,39 +41,35 @@ import {
  * see test/function.civet binding pattern
  */
 function adjustAtBindings(statements: ASTNode, asThis = false): void
-  for each origBinding of gatherRecursiveAll statements, .type is "AtBindingProperty"
-    // Mutated into a Property when asThis; widen with `as!` so field-level
-    // type/ref reassignments below typecheck.  Explicit `| undefined` is
-    // required because the project enables exactOptionalPropertyTypes.
-    binding := origBinding as! Omit<AtBindingProperty, "type" | "ref"> & {
-      type: AtBindingProperty["type"] | "Property"
-      ref: AtBindingProperty["ref"] | undefined
-    }
-    { ref } := origBinding
+  for each binding of gatherRecursiveAll statements, .type is "AtBindingProperty"
+    { ref, binding: atBinding } := binding
 
     if asThis
       // Convert from @x to x: this.x keeping any whitespace or initializer to the right
-      atBinding := binding.binding as! Omit<AtBinding, "type"> & { type: AtBinding["type"] | undefined }
       atBinding.children.pop()
-      atBinding.type = undefined
+      // Drop the AtBinding type tag — the children get inlined into the
+      // Property below, so this fragment doesn't carry a node type anymore.
+      delete (atBinding as { type?: AtBinding["type"] }).type
 
       // Build source-mapped "this." from the @ token's location
       atLoc := atBinding.at?.$loc
       thisNode: ASTNode := if atLoc
-        { $loc: atLoc, token: "this." } as! ASTNode
+        { $loc: atLoc, token: "this." }
       else
         "this."
 
       // Insert key: this.key after the leading whitespace (index 0) so whitespace stays at front
       binding.children.splice(1, 0, ref.id, ": ", thisNode, ref.base)
-      binding.type = "Property"
-      binding.ref = undefined
+      // Mutate AtBindingProperty → Property in place
+      mut := binding as unknown as { type: "Property", ref?: ASTRef }
+      mut.type = "Property"
+      delete mut.ref
     else
       unless ref.names?[0] is ref.base
         binding.children.unshift(ref.base, ": ")
 
 function adjustBindingElements(elements: ArrayBindingPatternContent)
-  names := elements.flatMap (e) => (e as! { names?: string[] }).names or []
+  names := elements.flatMap (e) => e.names or []
   { length } := elements
 
   let blockPrefix: ASTNode,
@@ -108,7 +110,7 @@ function adjustBindingElements(elements: ArrayBindingPatternContent)
         type: "PostRestBindingElements"
         elements
         children: ["[", elements, "] = ", restIdentifier, ".splice(-", l.toString(), ")"]
-        names: after.flatMap (p) => (p as! { names?: string[] }).names or []
+        names: after.flatMap (p) => p.names or []
       }
 
     return {
@@ -158,16 +160,26 @@ function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: bool
   thisAssignments: ThisAssignments := []
   splices: unknown[] := []
 
+  // Discriminated union the gather predicate may return.  Each branch
+  // matches one of the inner if-arms.  Use the actual property types for
+  // blockPrefix (StatementTuple[] | PostRestBindingElements) rather than
+  // ASTNode so the intersection with the existing AST union is clean
+  // under exactOptionalPropertyTypes.
+  type BlockPrefix = StatementTuple[] | PostRestBindingElements
+  type SpliceMatch =
+    | (ASTNodeObject & { blockPrefix: BlockPrefix })
+    | (Parameter & { accessModifier: NonNullable<Parameter["accessModifier"]> })
+    | AtBinding
+    | PinPattern
+    | PinProperty
+
   function insertRestSplices(s: ASTNode, p: unknown[], thisAssignments: ThisAssignments): void
-    for each let n of gatherRecursiveAll(s, (n) => !!((or)
-      // `blockPrefix` and `accessModifier` are dynamically attached
-      // (see ParametersNode, ForStatement, etc.); use `in` so the
-      // predicate compiles without per-call narrowing.
-      'blockPrefix' in n and !!n.blockPrefix
-      opts?.injectParamProps and 'accessModifier' in n and !!n.accessModifier
-      n.type is "AtBinding"
-      opts?.assignPins and n.type is like "PinPattern", "PinProperty"
-    ))
+    for each let n of gatherRecursiveAll s, ($): $ is SpliceMatch => !!((or)
+      'blockPrefix' in $ and !!$.blockPrefix
+      opts?.injectParamProps and 'accessModifier' in $ and !!$.accessModifier
+      $.type is "AtBinding"
+      opts?.assignPins and $.type is like "PinPattern", "PinProperty"
+    )
       // Insert `this` assignments
       if n.type is "AtBinding"
         { ref, at } := n
@@ -177,8 +189,8 @@ function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: bool
           // Set $loc on ref so populateRefs propagates it to the child
           ref.$loc = { pos: atLoc.pos + 1, length: id.length }
           thisAssignments.push [
-            { $loc: atLoc, token: "this." } as! ASTLeaf
-            { $loc: ref.$loc, token: id } as! ASTLeaf
+            { $loc: atLoc, token: "this." }
+            { $loc: ref.$loc, token: id }
             " = "
             ref
           ]
@@ -222,10 +234,11 @@ function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: bool
           thisAssignments.push assign
         continue
 
-      // Reaching here means the gatherRecursiveAll predicate matched on
-      // `'blockPrefix' in n` (the AtBinding / Pin* / Parameter branches
-      // already returned above).  Cast so consumers see ASTNode directly.
-      blockPrefix := (n as { blockPrefix: ASTNode }).blockPrefix
+      // Other matched branches all `continue`'d; only the
+      // `{ blockPrefix }` arm of SpliceMatch reaches here.  TS can't
+      // subtract the option-gated branches (assignPins / injectParamProps),
+      // so cast to that arm explicitly.
+      { blockPrefix } := n as ASTNodeObject & { blockPrefix: BlockPrefix }
       p.push blockPrefix
 
       // Search for any further nested splices, and at bindings
@@ -239,7 +252,9 @@ function arrayElementHasTrailingComma(elementNode: ArrayBindingPatternContent[nu
   /* c8 ignore next -- defensive: ASTError elements aren't reached here in happy paths */
   return false if elementNode.type is "Error"
   const lastChild = elementNode.children.-1
-  return Array.isArray(lastChild) and (lastChild[lastChild.length - 1] as { token?: string } | undefined)?.token is ","
+  return false unless Array.isArray(lastChild)
+  const lastToken = lastChild.-1
+  return isToken(lastToken) and lastToken.token is ","
 
 // If an Array or ObjectBindingPattern doesn't have a typeSuffix, this function
 // extracts one from typeSuffixes for the binding properties (if present).
