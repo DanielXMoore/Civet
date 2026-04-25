@@ -1,5 +1,6 @@
 type {
   ArrowFunction
+  ASTLeaf
   ASTNode
   ASTNodeObject
   AssignmentExpression
@@ -128,41 +129,47 @@ function constructPipeStep(fn: ExprWithComments, arg: ASTNode!, returning: ASTNo
         ]
 
   return [
-    constructInvocation(fn, arg)
+    constructInvocation(fn, arg) as ASTNode
     returning
   ]
 
 // head: expr
 // body: [ws, pipe, ws, expr][]
 
-function processPipelineExpressions(statements: ASTNode): void
-  for each s of gatherRecursiveAll statements, .type is "PipelineExpression"
-    [ws, , body] := s.children
-    [, arg] .= s.children
+type PipeArg = ASTNode! & { type?: string, children?: ASTNode[], $loc?: { pos: number, length: number } }
 
-    children := [ws]
+function processPipelineExpressions(statements: ASTNode): void
+  for each pipelineExp of gatherRecursiveAll statements, .type is "PipelineExpression"
+    // Pipeline children mutate during processing — alias to a wider shape
+    // so the assignments below typecheck without per-line casts.
+    s := pipelineExp as! ASTNodeObject & { children: ASTNode[], hoistDec?: ASTNode, parent?: ASTNodeObject }
+    [ws, , body] := s.children as [ASTNode, ASTNode, [ASTNode, ASTLeaf, ASTNode, ASTNode][]]
+    [, argInit] := s.children as [ASTNode, PipeArg, ASTNode]
+    arg: PipeArg .= argInit
+
+    children: ASTNode[] := [ws]
     comma := blockContainingStatement(s) ? ";" : ","
 
-    let usingRef = null
+    let usingRef: ASTNode | null = null
 
     for each step, i of body
       const [leadingComment, pipe, trailingComment, expr] = step
       const returns = pipe.token is "||>"
-      let ref, result,
-        returning = returns ? arg : null
+      let ref: ASTNode?, result: ASTNode,
+        returning: ASTNode | null = returns ? arg : null
 
       if pipe.token is "|>="
-        let initRef
+        let initRef: ASTNode?
         if i is 0
           checkValidLHS arg
 
           :outer switch arg.type
             when "MemberExpression"
               // If there is only a single access then we don't need a ref
-              break if arg.children.length <= 2
+              break if arg.children!.length <= 2
               continue switch
             when "CallExpression"
-              const access = arg.children.pop()
+              const access = arg.children!.pop()
               // processAssignments will check that this is a valid
               // last access to assign to
 
@@ -170,7 +177,7 @@ function processPipelineExpressions(statements: ASTNode): void
               initRef = {
                 type: "AssignmentExpression"
                 children: [usingRef, " = ", arg, comma]
-              }
+              } as! ASTNode
 
               arg = {
                 type: "MemberExpression"
@@ -192,23 +199,23 @@ function processPipelineExpressions(statements: ASTNode): void
             lhs
             assigned: arg
             expression: children
-          } satisfies AssignmentExpression
+          } as! AssignmentExpression
 
           // Clone so that the same node isn't on the left and right because splice manipulation
           // moves things around and can cause a loop in the graph
-          arg = clone arg
+          arg = clone(arg) as! PipeArg
           removeHoistDecs arg
 
           // except keep the ref the same
-          if arg.children[0].type is "Ref"
-            arg.children[0] = usingRef
+          if (arg.children![0] as { type?: string }).type is "Ref"
+            arg.children![0] = usingRef!
 
         else
           children.unshift({
             type: "Error",
-            $loc: pipe.token.$loc,
+            $loc: (pipe.token as ASTNode & { $loc?: { pos: number, length: number } } as ASTNode & { $loc?: { pos: number, length: number } }).$loc,
             message: "Can't use |>= in the middle of a pipeline",
-          })
+          } as! ASTNode)
       else
         if (i is 0) s.children = children
 
@@ -220,44 +227,44 @@ function processPipelineExpressions(statements: ASTNode): void
           children: ["(", {
             type: "AssignmentExpression"
             children: [usingRef, " = ", arg]
-          }, ")"],
-        }
+          } as! ASTNode, ")"],
+        } as! PipeArg
         returning = usingRef
 
       [result, returning] = constructPipeStep
         {
           leadingComment: skipIfOnlyWS(leadingComment)
           trailingComment: skipIfOnlyWS(trailingComment)
-          expr
+          expr: expr as! NonNullable<ASTNode>
         }
         arg
-        returning
+        returning ?? null
 
-      if result.type is "ReturnStatement"
+      if result is like { type: "ReturnStatement" }
         // Attach errors/warnings if there are more steps
         if i < body.length - 1
           result.children.push({
             type: "Error",
             message: "Can't continue a pipeline after returning",
           })
-        arg = result
+        arg = result as! PipeArg
         if children.-1 is ","
           children.pop()
           children.push(";")
         break
 
       if returning
-        arg = returning
+        arg = returning as! PipeArg
         children.push(result, comma)
       else
-        arg = result
+        arg = result as! PipeArg
 
     if usingRef
       s.hoistDec = {
         type: "Declaration",
         children: ["let ", usingRef],
         names: [],
-      }
+      } as! ASTNode
 
     children.push(arg)
 
