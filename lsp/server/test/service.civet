@@ -15,6 +15,9 @@ nullLogger :=
   info: ->
   error: ->
 
+bundledCivetMain := path.resolve("../../dist/main.js")
+bundledCivetConfig := path.resolve("../../dist/config.js")
+
 loadFile := (service: Awaited<ReturnType<typeof TSService>>, path: string) ->
   document := TextDocument.create(pathToFileURL(path).href, "civet", 0, fs.readFileSync(path, "utf8"))
   service.host.addOrUpdateDocument(document)
@@ -371,3 +374,96 @@ describe "ts service without civet dependencies", ->
         `expected config error, got: ${errors.join(" | ")}`
     finally
       rmSync(badConfigDir, { recursive: true, force: true })
+
+describe "ts service with partial project civet packages", ->
+  tmpDirs: string[] := []
+
+  after ->
+    for tmpDir of tmpDirs
+      rmSync tmpDir, { recursive: true, force: true }
+
+  writeFakeProjectCivet := (options: { version: string, includeLib?: boolean, includeConfig?: boolean }) ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-lsp-partial-project-'
+    tmpDirs.push tmpDir
+
+    writeFileSync path.join(tmpDir, 'tsconfig.json'),
+      '{"compilerOptions":{"target":"es2020"}}'
+    samplePath := path.join tmpDir, 'sample.civet'
+    writeFileSync samplePath, '// comment\nx := 1\n'
+
+    packageDir := path.join tmpDir, 'node_modules', '@danielx', 'civet'
+    fs.mkdirSync packageDir, recursive: true
+    exports: Record<string, string> :=
+      '.': './index.cjs'
+      './package.json': './package.json'
+    exports['./config'] = './config.js' if options.includeConfig ?? true
+    writeFileSync path.join(packageDir, 'package.json'), JSON.stringify {}
+      name: '@danielx/civet'
+      version: options.version
+      main: 'index.cjs'
+      exports
+
+    if options.includeConfig ?? true
+      writeFileSync path.join(packageDir, 'config.js'),
+        `module.exports = require(${JSON.stringify bundledCivetConfig});\n`
+
+    if options.includeLib ?? true
+      writeFileSync path.join(packageDir, 'index.cjs'),
+        `module.exports = require(${JSON.stringify bundledCivetMain});\n`
+    else
+      writeFileSync path.join(packageDir, 'index.cjs'), ```
+        const real = require(${JSON.stringify bundledCivetMain});
+        const { lib, ...rest } = real;
+        module.exports = rest;
+      ```
+
+    { tmpDir, samplePath }
+
+  it "falls back to bundled lib when project civet is missing lib export", async ->
+    { tmpDir, samplePath } := writeFakeProjectCivet
+      version: '0.11.7'
+      includeLib: false
+
+    errors: string[] := []
+    capturingLogger :=
+      log: ->
+      info: ->
+      error: (msg: string) => errors.push msg
+
+    service := await TSService(pathToFileURL(tmpDir + path.sep).href, capturingLogger)
+    loadFile(service, samplePath)
+    meta := service.host.getMeta(samplePath)
+
+    assert meta?.commentRanges?.length, 'expected bundled lib fallback to collect comment ranges'
+    assert errors.some((msg) => msg.includes('MISSING lib EXPORT')),
+      `expected missing lib warning, got: ${errors.join(' | ')}`
+
+  it "logs the missing config module when project civet is missing config module", async ->
+    { tmpDir } := writeFakeProjectCivet
+      version: '0.11.7'
+      includeConfig: false
+
+    infos: string[] := []
+    capturingLogger :=
+      log: ->
+      info: (msg: string) => infos.push msg
+      error: ->
+
+    service := await TSService(pathToFileURL(tmpDir + path.sep).href, capturingLogger)
+    await service.loadPlugins()
+
+    assert service
+    assert infos.some((msg) => msg.includes('PROJECT CIVET 0.11.7 IS MISSING CONFIG MODULE')),
+      `expected missing config log, got: ${infos.join(' | ')}`
+
+  it "uses the legacy compile path when project civet predates 0.9.4", async ->
+    { tmpDir, samplePath } := writeFakeProjectCivet
+      version: '0.9.3'
+
+    service := await TSService(pathToFileURL(tmpDir + path.sep).href, nullLogger)
+    loadFile(service, samplePath)
+    meta := service.host.getMeta(samplePath)
+
+    assert meta?.sourcemapLines, 'expected legacy compile path to populate sourcemap lines'
+    assert.equal meta?.commentRanges, undefined,
+      'legacy compile path should not collect comment ranges even when the input contains comments'
