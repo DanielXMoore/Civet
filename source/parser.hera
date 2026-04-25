@@ -82,10 +82,12 @@ import {
 } from "./parser/lib.civet"
 import type {
   ArrayBindingPattern,
+  AssignmentExpressionLHS,
   ASTNode,
   BlockStatement,
   ObjectBindingPattern,
   StatementTuple,
+  WithClause,
 } from "./parser/types.civet"
 
 /**
@@ -268,7 +270,7 @@ Program
   # when Init didn't already consume them.
   Reset:reset Init:init EOS?:ws1 TopLevelStatements:statements __:ws2 ::BlockStatement ->
     // NOTE: Wrap top level statements in a bare block so they have a parent
-    program := {
+    program: BlockStatement := {
       type: "BlockStatement",
       expressions: statements,
       children: [reset, init, ws1, statements, ws2],
@@ -447,17 +449,18 @@ ImplicitArguments
 
 ExplicitArguments
   OpenParen:open AllowAll ( PostfixedArgumentList ( __ Comma )? )?:args __:ws RestoreAll CloseParen:close ->
+    let resolvedArgs: ASTNode[]
     if args
       if args[1] // trailing comma
-        args = [ ...args[0], args[1] ]
+        resolvedArgs = [ ...args[0], args[1] ]
       else // no trailing comma
-        args = args[0]
+        resolvedArgs = args[0]
     else // no arguments
-      args = []
+      resolvedArgs = []
     return {
       type: "Call",
-      args,
-      children: [open, args, ws, close],
+      args: resolvedArgs,
+      children: [open, resolvedArgs, ws, close],
     }
 
 # Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
@@ -725,7 +728,8 @@ RHS
 UnaryExpression
   # NOTE: Added nested/array case, for e.g. indented await argument
   IndentedApplicationAllowed UnaryOp+:pre ( ArrayLiteral / NestedArgumentList ):args !CallExpressionRest UnaryPostfix?:post ::ASTNode ->
-    return processUnaryNestedExpression(pre, args, post) ?? $skip
+    // hera's $skip return path isn't reflected in the rule's `::Type`.
+    return processUnaryNestedExpression(pre, args, post) ?? $skip as ASTNode
 
   # NOTE: Merged AwaitExpression with UnaryOp
   # https://262.ecma-international.org/#prod-AwaitExpression
@@ -888,16 +892,18 @@ ActualAssignment
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
   ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedExpression ::ASTNode ->
-    $1 = $1.map((x) => [x[0], x[1], ...x[2]])
-    $0 = [$1, $2]
+    // Spread each WAssignmentOp `[ws, op]` pair into the enclosing lhs-part
+    // tuple so consumers can index ws at [2] and op at [3].
+    lhs := $1.map((x) => [x[0], x[1], ...x[2]]) as! AssignmentExpressionLHS
+    children := [lhs, $2]
     return {
       type: "AssignmentExpression",
-      children: $0,
+      children,
       // NOTE: This null marks the assignment for later processing to distinguish it
       // from fake assignments that only add a name to a scope
       names: null,
-      lhs: $1,
-      assigned: $1[0][1],
+      lhs,
+      assigned: lhs[0][1],
       expression: $2,
     }
 
@@ -907,16 +913,16 @@ NonPipelineActualAssignment
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
   ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedNonPipelineExpression ::ASTNode ->
-    $1 = $1.map((x) => [x[0], x[1], ...x[2]])
-    $0 = [$1, $2]
+    lhs := $1.map((x) => [x[0], x[1], ...x[2]]) as! AssignmentExpressionLHS
+    children := [lhs, $2]
     return {
       type: "AssignmentExpression",
-      children: $0,
+      children,
       // NOTE: This null marks the assignment for later processing to distinguish it
       // from fake assignments that only add a name to a scope
       names: null,
-      lhs: $1,
-      assigned: $1[0][1],
+      lhs,
+      assigned: lhs[0][1],
       expression: $2,
     }
 
@@ -940,22 +946,22 @@ YieldExpression
 ArrowFunction
   ThinArrowFunction
   ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:returnType FatArrow:arrow FatArrowBody:expOrBlock ->
-    async = [] unless async
+    asyncTokens: ASTNode[] := async ?? []
 
     return {
       type: "ArrowFunction",
       signature: {
         modifier: {
-          async: !!async#,
+          async: !!asyncTokens#,
         },
         parameters,
         returnType,
       },
       parameters,
       returnType,
-      async,
+      async: asyncTokens,
       block: expOrBlock,
-      children: [async, parameters, returnType, arrow, expOrBlock ],
+      children: [asyncTokens, parameters, returnType, arrow, expOrBlock ],
     }
 
 FatArrow
@@ -1249,11 +1255,12 @@ WithClause
   # Also allows for arbitrary expressions
   NotDedented With PushIndent ( Nested Expression _? Comma? )*:targets PopIndent ->
     return $skip unless targets#
-    targets = targets.map(($) => $.slice(0, -1)) // strip Comma?
+    // Drop the trailing Comma? — consumers only read [0] and [1].
+    stripped := targets.map(($) => $.slice(0, -1)) as! WithClause["targets"]
     return {
       type: "WithClause",
       children: $0,
-      targets,
+      targets: stripped,
     }
   NotDedented With NotDedented:ws ExtendsTarget:t ( _? Comma NotDedented ExtendsTarget )*:rest ->
     return {
@@ -1339,8 +1346,8 @@ ImplementsToken
     return { children }
 
   NotDedented "implements" NonIdContinue ->
-    $2 = { $loc, token: $2 }
-    return [$1, $2]
+    impl := { $loc, token: $2 }
+    return [$1, impl]
 
 ImplementsShorthand
   "<:" ->
@@ -2578,8 +2585,8 @@ FunctionDeclaration
 FunctionSignature
   # NOTE: Merged in async and generator with optionals
   ( Async _ )?:async Function:func ( _? Star )?:generator ( _? NWBindingIdentifier )?:wid _?:w Parameters:parameters ReturnTypeSuffix?:returnType ->
-    async = [] unless async
-    generator = [] unless generator
+    asyncTokens: ASTNode[] := async ?? []
+    generatorTokens: ASTNode[] := generator ?? []
 
     id := wid?.[1]
     return {
@@ -2588,16 +2595,16 @@ FunctionSignature
       name: id?.name,
       parameters,
       returnType,
-      async,
-      generator,
+      async: asyncTokens,
+      generator: generatorTokens,
       modifier: {
-        async: !!async#,
-        generator: !!generator#,
+        async: !!asyncTokens#,
+        generator: !!generatorTokens#,
       },
       block: null,
       children: !parameters.implicit
-        ? [ async, func, generator, wid, w, parameters, returnType ]
-        : [ async, func, generator, wid, parameters, w, returnType ],
+        ? [ asyncTokens, func, generatorTokens, wid, w, parameters, returnType ]
+        : [ asyncTokens, func, generatorTokens, wid, parameters, w, returnType ],
           // move whitespace w to after implicit () in parameters
     }
 
@@ -2678,16 +2685,16 @@ FunctionExpression
     }
   # Assignment version based on ActualAssignment rule
   OpenParen:open ( NotDedented UpdateExpression WAssignmentOp )+:lhs __:ws2 CloseParen:close ->
-    lhs = lhs.map((x) => [x[0], x[1], ...x[2]])
+    flatLhs := lhs.map((x) => [x[0], x[1], ...x[2]]) as! AssignmentExpressionLHS
     refB := makeRef("b")
     fn := makeAmpersandFunction({
       ref: refB,
       body: {
         type: "AssignmentExpression",
-        children: [ lhs, ws2, refB ],
+        children: [ flatLhs, ws2, refB ],
         names: null,
-        lhs,
-        assigned: lhs[0][1],
+        lhs: flatLhs,
+        assigned: flatLhs[0][1],
         expression: refB,
       },
     })
@@ -2762,27 +2769,26 @@ OperatorDeclaration
 # and parameters are required (to be useful).
 OperatorSignature
   ( Async _ )?:async Operator:op ( _ Function )?:func ( _? Star )?:generator _:w1 Identifier:id OperatorBehavior?:behavior _?:w2 NonEmptyParameters:parameters ReturnTypeSuffix?:returnType ->
-    async = [] unless async
-    generator = [] unless generator
+    asyncTokens: ASTNode[] := async ?? []
+    generatorTokens: ASTNode[] := generator ?? []
     // Add "function" (if not already one) to replace "operator"
-    unless func
-      func = { $loc: op.$loc, token: "function" }
-    else
-      func = [ trimFirstSpace(func[0]), func[1] ]
+    funcTokens: ASTNode := func
+      ? [ trimFirstSpace(func[0]), func[1] ]
+      : { $loc: op.$loc, token: "function" }
     return {
       type: "FunctionSignature",
       id,
       name: id.name,
       parameters,
       returnType,
-      async,
-      generator,
+      async: asyncTokens,
+      generator: generatorTokens,
       modifier: {
-        async: !!async#,
-        generator: !!generator#,
+        async: !!asyncTokens#,
+        generator: !!generatorTokens#,
       },
       block: null,
-      children: [ async, func, generator, w1, id, behavior?.error, w2, parameters, returnType ],
+      children: [ asyncTokens, funcTokens, generatorTokens, w1, id, behavior?.error, w2, parameters, returnType ],
       behavior,
     }
 
@@ -2829,8 +2835,8 @@ OperatorAssociativity
 
 ThinArrowFunction
   ( Async _ )?:async ThinArrowParameters:parameters ReturnTypeSuffix?:returnType _?:ws ThinArrow:arrow ( BracedObjectSingleLineStatements / NoCommaBracedOrEmptyBlock ):block ->
-    async = [] unless async
-    generator: ASTNode[] := []
+    asyncTokens: ASTNode[] := async ?? []
+    generatorTokens: ASTNode[] := []
 
     // Assuming there's anything before the arrow, use input whitespace `ws`
     // instead of leading space from block generated by OpenBrace or braceBlock
@@ -2844,23 +2850,23 @@ ThinArrowFunction
       id: undefined,
       parameters,
       returnType,
-      async,
-      generator,
+      async: asyncTokens,
+      generator: generatorTokens,
       block,
       signature: {
         name: undefined,
-        async,
-        generator,
+        async: asyncTokens,
+        generator: generatorTokens,
         modifier: {
-          async: !!async#,
-          generator: !!generator#,
+          async: !!asyncTokens#,
+          generator: !!generatorTokens#,
         },
         returnType,
       },
       children: [
-        async,
+        asyncTokens,
         { $loc: arrow.$loc, token: "function" },
-        generator,
+        generatorTokens,
         parameters,
         returnType,
         ws,
