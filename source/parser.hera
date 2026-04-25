@@ -3565,20 +3565,20 @@ NestedBulletedArray
 BulletedArray
   InsertOpenBracket:open ( ArrayBullet NestedArrayBullet* )?:content InsertCloseBracket:close ->
     return $skip unless content
-    content = [
+    flat: ASTNode[] := [
       ...trimFirstSpace(content[0]), // replace first space with bracket
       ...content[1].flat(),
     ]
 
     // Remove implicit comma from last element
-    last .= content[content# - 1]
-    if last.children?.at(-1)?.implicit
-      content[content# - 1] = last =
-        { ...last, children: last.children.slice(0, -1) }
+    last .= flat[flat# - 1] as { children?: ASTNode[] } | undefined
+    if last?.children?.at(-1)?.implicit
+      flat[flat# - 1] = last =
+        { ...last, children: last.children!.slice(0, -1) }
 
     return {
       type: "ArrayExpression",
-      children: [open, ...content, close],
+      children: [open, ...flat, close],
     }
 
 NestedArrayBullet
@@ -3934,8 +3934,9 @@ PropertyDefinition
       ({name} = last)
       return $skip unless name
 
-    // Private name becomes public
-    if name[0] is "#" then name = name.slice(1)
+    // Private name becomes public (only applies to bare-string names —
+    // ComputedPropertyName form keeps its `#` inside the expression).
+    if typeof name is "string" and name[0] is "#" then name = name.slice(1)
 
     // { y? } → { ...((y != null) && {y}) }
     if not pre# and post?.token is "?" and value.type is "Identifier"
@@ -4092,13 +4093,15 @@ MethodDefinition
     value := [ base, rest ]
 
     unless rest#
-      let name
+      let name: string | undefined
       if base.type is "MemberExpression"
         lastAccess := lastAccessInCallExpression(base)
-        if lastAccess
+        // Only Identifier/PropertyAccess carry .name (Index does not).
+        if lastAccess and lastAccess.type is not "Index"
           ({ name } = lastAccess)
 
-      if not name then ({ name } = base)
+      if not name and base.type is not "Index"
+        name = (base as { name?: string }).name
       return $skip unless name
 
       // Remove leading # from private identifier since it makes no
@@ -4148,6 +4151,7 @@ MethodDefinition
         }
 
     lastAccess := lastAccessInCallExpression({children: rest})
+    return $skip if lastAccess?.type is "Index" or not lastAccess?
     { name } := lastAccess
 
     return makeGetterMethod(name, ws, value, returnType, block, kind)
@@ -4168,18 +4172,18 @@ MethodModifier
     }
   # NOTE: Merged async and generator into MethodModifier
   ( Async __ )?:async ( Star __ )?:generator ->
-    async = [] unless async
-    generator = [] unless generator
+    asyncTokens: ASTNode[] := async ?? []
+    generatorTokens: ASTNode[] := generator ?? []
     return {
-      async,
-      generator,
+      async: asyncTokens,
+      generator: generatorTokens,
       modifier: {
-        async: !!async#,
+        async: !!asyncTokens#,
         get: false,
         set: false,
-        generator: !!generator#,
+        generator: !!generatorTokens#,
       },
-      children: [ async, generator ],
+      children: [ asyncTokens, generatorTokens ],
     }
 
 # TypeScript method signature
@@ -7513,7 +7517,8 @@ JSXAttributes
         }
         return JSON.parse(c)
       }
-      [strings, exprs] := [[], []]
+      strings: ASTNode[] := []
+      exprs: ASTNode[] := []
       classes.forEach (c) =>
         if isBraced c
           exprs.push(unbrace(c))
@@ -7530,7 +7535,10 @@ JSXAttributes
           exprs.unshift(JSON.stringify(stringPart), ", ")
         if exprs# is 1
           // Single expression doesn't need array, filter, or join.
-          root .= exprs[0]
+          // root is unwrapped through array/object layers via duck typing
+          // (length/slice/children); typing each shape would crowd the
+          // logic with guards, so leave it permissive here.
+          let root: any = exprs[0]
           // Remove trailing whitespace, e.g. in JSXShorthandString rule
           while root# and isWhitespaceOrEmpty(root[root#-1])
             root = root.slice(0, -1)
@@ -8278,8 +8286,8 @@ EnumDeclaration
               // TS further restricts this to past enum members,
               // but we don't need to enforce that here.
               init = replaceNodes(deepCopy(property.initializer),
-                (n) => n.type is "Identifier" and names.has(n.name),
-                (n) => [id, '["', n.name, '"]'])
+                (n) => n.type is "Identifier" and names.has((n as { name: string }).name),
+                (n) => [id, '["', (n as { name: string }).name, '"]'])
               value := init[init# - 1]
               isString = value.type is "TemplateLiteral" or
                 (value.type is "Literal" and value.subtype is "StringLiteral")
