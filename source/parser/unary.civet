@@ -3,6 +3,7 @@ import type {
   ASTLeaf
   ASTNode
   Existence
+  Loc
 } from ./types.civet
 
 import {
@@ -15,28 +16,32 @@ import {
   trimFirstSpace
 } from ./util.civet
 
-function processUnaryExpression(pre: ASTNode[], exp: ASTNode, post?: ASTNode[]): ASTNode
+// `post` is loosely typed: at runtime it can be a bare ASTLeaf (the `?`
+// postfix), an ASTNode[] (other postfix shapes), or undefined.  We
+// distinguish below via `'token' in post` and an `as!` reshape on the
+// `?` branch.
+function processUnaryExpression(pre: ASTNode[], exp: ASTNode, post?: ASTNode[] | ASTLeaf): ASTNode
   return exp unless pre# or post
   // Handle "?" postfix
-  if post?.token is "?"
-    post =
-      $loc: post.$loc
-      token: " != null"
+  if post? and 'token' in post and post.token is "?"
+    postLeaf := post as! { $loc?: Loc, token: string }
+    postLeaf.token = " != null"
 
     if pre.length
-      lastPre := pre.-1
+      lastPre := pre.-1!
+      lastPreView := lastPre as! ASTLeaf & ASTNode[]
       // Check for `!a?`
-      if lastPre.token is "!"
-        post.token = " == null"
+      if 'token' in lastPre and lastPreView.token is "!"
+        postLeaf.token = " == null"
         pre = pre.slice(0, -1)
       // Check for `not a?`
-      else if lastPre.length is 2 and lastPre[0].token is "!"
-        post.token = " == null"
+      else if Array.isArray(lastPre) and lastPreView.length is 2 and (lastPreView[0] as! { token?: string }).token is "!"
+        postLeaf.token = " == null"
         pre = pre.slice(0, -1)
     existence: Existence :=
       type: "Existence"
       expression: exp
-      children: [exp, post]
+      children: [exp, postLeaf as! ASTNode]
       parent: undefined
     exp = makeLeftHandSideExpression(existence)
     if pre.length
@@ -63,22 +68,22 @@ function processUnaryExpression(pre: ASTNode[], exp: ASTNode, post?: ASTNode[]):
 
   // Await ops
   while l := pre.length
-    last := pre[l - 1]
+    last := pre[l - 1] as! { type?: string, op?: ASTNode, children?: ASTNode[] }
     if last.type is "Await"
       if last.op
-        if exp.type !== "ParenthesizedExpression"
+        if (exp as { type?: string } | undefined)?.type !== "ParenthesizedExpression"
           exp = ["(", exp, ")"]
 
         exp =
           type: "CallExpression"
-          children: [...last.children, "Promise", last.op, exp]
+          children: [...last.children!, "Promise", last.op, exp]
         pre = pre.slice(0, -1)
       else
         if firstNonSpace(exp) is like /^[ \t]*\n/, {token: /^[ \t]*\n/}
-          exp = parenthesizeExpression exp
+          exp = parenthesizeExpression exp!
         exp =
           type: "AwaitExpression"
-          children: [...last.children, exp]
+          children: [...last.children!, exp]
         pre = pre.slice(0, -1)
     else
       break
@@ -92,11 +97,11 @@ function processUnaryExpression(pre: ASTNode[], exp: ASTNode, post?: ASTNode[]):
   }
 
 function processUnaryNestedExpression(pre: ASTNode[], args: ArrayExpression | ASTNode[], post: ASTNode[])
-  isArray := args.type is "ArrayExpression"
+  isArray := !Array.isArray(args) and args.type is "ArrayExpression"
   unless isArray
-    args = stripTrailingImplicitComma args
+    args = stripTrailingImplicitComma args as ASTNode[]
   // Special handling of multiple nested arguments, or any array argument
-  if isArray or args# > 2 // 2 = 1 argument + 1 delimiter
+  if isArray or (args as ASTNode[]).length > 2 // 2 = 1 argument + 1 delimiter
     // Multiple arguments only defined for await and await operators
     last := pre.-1
     return unless last is like {type: "Await"}
