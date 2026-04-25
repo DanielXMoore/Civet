@@ -6,6 +6,7 @@ import type {
   Loc
   ObjectExpression
   ParenthesizedExpression
+  Property
   StatementTuple
 } from ./types.civet
 
@@ -90,7 +91,7 @@ function bracedBlock(block: BlockStatement): BlockStatement
   block
 
 function makeEmptyBlock(loc?: Loc): BlockStatement
-  const expressions = []
+  const expressions: StatementTuple[] = []
   open: ASTNode := if loc then { $loc: loc, token: "{" } else "{"
   close: ASTNode := if loc then { $loc: { pos: loc.pos + loc.length, length: 0 }, token: "}" } else "}"
   return {
@@ -131,23 +132,24 @@ function getIndent(statement: StatementTuple)
   indent .= statement?.[0]
   return indent unless Array.isArray(indent)
 
-  indent = indent.flat(Infinity)
+  // Cast through `unknown[]` to avoid TS recursive flat() depth-tracking
+  indent = (indent as unknown[]).flat(Infinity as 1) as ASTNode[]
 
-  indent
-  .filter (n) => n and !(n.type is "Comment")
-  .map .token
+  (indent as ASTNode[])
+  .filter (n) => isToken(n) and !(n.type is "Comment")
+  .map (n) => (n as { token: string }).token
 
 function hoistRefDecs(statements: StatementTuple[]): void
-  gatherRecursiveAll(statements, (s) => s.hoistDec)
+  gatherRecursiveAll(statements, (s) => 'hoistDec' in s and !!s.hoistDec)
     .forEach (node) =>
-      { hoistDec } := node
-      node.hoistDec = null
+      hoistDec := (node as { hoistDec: ASTNode }).hoistDec
+      (node as { hoistDec?: ASTNode }).hoistDec = undefined
 
       { ancestor, child } := findAncestor node, (ancestor) =>
-        ancestor.type is "BlockStatement" and (!ancestor.bare or ancestor.root)
+        !!(ancestor.type is "BlockStatement" and (!ancestor.bare or ancestor.root))
 
       assert ancestor, "hoistRefDecs: ancestor not found"
-      insertHoistDec(ancestor, child, hoistDec)
+      insertHoistDec(ancestor as BlockStatement, child, hoistDec)
 
       return
 
@@ -208,15 +210,18 @@ function processBlocks(statements: StatementTuple[]): void
         (block.expressions[0][1] as ParenthesizedExpression).expression
       // Unwrap braces
       unbraceBlock block
-      // Remove implicit names added to props
-      for each prop, i of object.properties
+      // Remove implicit names added to props.  The `for every` filter above
+      // already ensures every property is type "Property"; cast here to
+      // reflect that without an extra runtime check.
+      for each prop of object.properties as Property[]
         // Remove implicit square brackets around e.g. template strings
-        if prop.name is like {type: "ComputedPropertyName", implicit: true}
-          replaceNode prop.name, prop.name.expression, prop
+        propName := prop.name as ASTNode
+        if propName is like {type: "ComputedPropertyName", implicit: true}
+          replaceNode propName, (propName as { expression: ASTNode }).expression, prop
         // Remove implicit commas between properties; implicit-name props are
         // all identifiers, so the next prop can never start with a character
         // that would need a semicolon to break ASI.
-        if prop.delim?.implicit
+        if (prop.delim as { implicit?: boolean } | undefined)?.implicit
           replaceNode prop.delim, undefined, prop
           prop.delim = undefined
         // Remove implicit `name: ` added to properties
