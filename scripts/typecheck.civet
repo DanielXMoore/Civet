@@ -86,64 +86,8 @@ origReadDirectory := baseSystem.readDirectory.bind baseSystem
 function isVirtual(filename: string): boolean
   filename.endsWith(".civet.tsx") or filename.endsWith(".hera.tsx")
 
-// @danielx/hera/dist/machine.ts is a 708-line runtime file whose recursive
-// `$C`/`$S`/`$EVENT_C` generic signatures stack-overflow TS's analyzer when
-// it's pulled in via module resolution.  hera doesn't ship a `machine.d.ts`
-// shadow, and TS's resolver prefers `.ts` over `.d.ts` for exports like
-// `"./lib": "./dist/machine.js"`.  We shim here by:
-//   1. Hiding any node_modules/**/*.ts whose adjacent .d.ts would give
-//      TypeScript a lighter-weight declaration (virtual in our case).
-//   2. Returning a synthetic minimal .d.ts for hera's machine.
-heraMachineStub := """
-  // Synthesized stub for @danielx/hera/dist/machine (see scripts/typecheck.civet).
-  // Enough declarations to satisfy the generated parser.hera output without
-  // feeding TS the 708-line recursive-generics runtime source.
-  export interface ParserContext { [key: string]: any }
-  export interface ParseState { [key: string]: any }
-  export type Loc = { pos: number; length: number }
-  export interface Parser<T> { (ctx: ParserContext, state: ParseState): any }
-  export interface ParserOptions<G> { [key: string]: any }
-  export interface HeraGrammar { [key: string]: any }
-
-  // $TS / $TR / $TV accept the generated handler functions.  We type each
-  // positional slot ($skip .. $9) as explicit `any` so hera-generated
-  // handlers don't trip noImplicitAny / implicit-any-on-binding-element.
-  type HandlerFn = (
-    $skip: any, $loc: Loc, $0: any,
-    $1: any, $2: any, $3: any, $4: any,
-    $5: any, $6: any, $7: any, $8: any, $9: any
-  ) => any
-  export const $TS: (parser: any, fn: HandlerFn) => Parser<any>
-  export const $TR: (parser: any, fn: HandlerFn) => Parser<any>
-  export const $TV: (parser: any, fn: HandlerFn) => Parser<any>
-  export const $T: (parser: any, fn: HandlerFn) => Parser<any>
-
-  export const $C: any, $E: any, $EVENT: any, $EVENT_C: any, $EXPECT: any,
-    $L: any, $N: any, $P: any, $Q: any, $R: any, $R$0: any, $S: any,
-    $TEXT: any, $Y: any, Validator: any
-
-  export class ParseError extends Error {
-    name: string
-    header: string
-    body: string | undefined
-    filename: string
-    line: number
-    column: number
-    offset: number
-    constructor(
-      header: string,
-      body: string | undefined,
-      filename: string,
-      line: number,
-      column: number,
-      offset: number,
-    )
-  }
-  """
-function isHeraMachineDts(filename: string): boolean
-  /\/@danielx\/hera\/dist\/machine\.d\.ts$/.test filename
-function isHeraMachineTs(filename: string): boolean
-  /\/@danielx\/hera\/dist\/machine\.ts$/.test filename
+// Hera ≥ 0.9.1 ships a real machine.d.ts, so no shim is needed — TS picks
+// up the published declarations directly.
 
 system: System := {
   ...baseSystem
@@ -151,8 +95,6 @@ system: System := {
     if isVirtual filename
       return true if fsMap.has filename
       return origFileExists filename.slice(0, -4)
-    return true if isHeraMachineDts filename
-    return false if isHeraMachineTs filename
     origFileExists filename
   readFile: (filename, encoding) ->
     if isVirtual filename
@@ -163,7 +105,6 @@ system: System := {
       code := compileSource srcPath
       fsMap.set filename, code
       return code
-    return heraMachineStub if isHeraMachineDts filename
     result := origReadFile filename, encoding
     if result is undefined and process.env.TYPECHECK_DEBUG
       console.error `readFile miss: ${filename}`
@@ -235,14 +176,33 @@ function realSourceFile(realPath: string)
   origFileCache.set realPath, sf
   sf
 
-// Suppress diagnostics on .hera files that don't reflect user-actionable bugs:
-//   6133 / 6196 / 6192 — "declared but never read" for preamble imports that
-//     happen to be used only by rule handlers whose references hera optimises
-//     away (e.g. type-only imports referenced only in ::Type annotations).
-//   7006 / 7031 — noImplicitAny on positional $1..$9 args and destructuring
-//     patterns inside hera-generated handlers; the grammar author didn't
-//     write those and can't annotate them without editing hera.
-heraSuppressedCodes := new Set<number> [6133, 6196, 6192, 7006, 7031]
+// Suppress diagnostics on .hera files that don't reflect user-actionable
+// bugs.  Hera generates an IIFE-per-rule handler that takes the parser's
+// matched tuple positionally; TypeScript's view of those parameters and
+// the handler's mutation of `$$r.value` exposes a lot of noise the
+// grammar author can't fix without editing hera itself.
+//
+//   6133 / 6196 / 6192 — "declared but never read" for preamble imports
+//     used only by rule handlers whose references hera optimises away
+//     (e.g. type-only imports referenced only in ::Type annotations).
+//   7006 / 7031 — noImplicitAny on positional $1..$9 args / destructuring.
+//   2322 / 2353 / 2740 — handler return shape doesn't match the parser
+//     tuple's `.value` type (hera's mutation pattern).
+//   18046 — `unknown` from positional tuple args (`$$value[i]`).
+//   7022 / 7023 — implicit any on the IIFE itself / circular handler refs.
+//   2345 / 2339 / 2488 / 2698 — handler-arg shape probes that fail because
+//     the upstream parser type is `unknown`.
+heraSuppressedCodes := new Set<number> [
+  6133, 6196, 6192,            // unused preamble imports
+  7006, 7031,                  // implicit-any on $args
+  2322, 2353, 2740,            // handler return vs .value tuple
+  18046, 18048,                // unknown / possibly-undefined positional args
+  2571,                        // dot-access on unknown positional args
+  7022, 7023,                  // implicit return / circular
+  2345, 2339, 2488, 2698,      // probes against unknown args
+  2367,                        // hera-generated `($$m) !== SKIP` (void vs {})
+  7053,                        // index access via `binding?.[0]` etc.
+]
 
 function remap(d: Diagnostic): Diagnostic?
   { file } := d
