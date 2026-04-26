@@ -10,8 +10,10 @@ import type {
   Declaration
   ExpressionNode
   IfStatement
+  ImportDeclaration
   Initializer
   IterationStatement
+  ObjectExpression
   ParenthesizedExpression
   StatementTuple
   SwitchStatement
@@ -48,6 +50,7 @@ import {
   insertTrimmingSpace
   isExit
   isWhitespaceOrEmpty
+  makeDecl
   makeLeftHandSideExpression
   makeNode
   parenthesizeExpression
@@ -91,34 +94,39 @@ function processAssignmentDeclaration(decl: ASTLeaf, pattern: Binding["pattern"]
   [splices, assignments] .= gatherBindingCode pattern
 
   splices = splices.map (s) => [", ", s]
-  thisAssignments := assignments.map (a) => ["", a, ";"] as const
+  thisAssignments := assignments.map (a) => ["", a, ";"] as ASTNode[]
 
   typeSuffix ??= pattern.typeSuffix if "typeSuffix" in pattern
   initializer := makeNode
     type: "Initializer"
     expression: e
     children: [ws, assign, e]
+  // pattern is BindingIdentifier | BindingPattern; some variants (Literal,
+  // RegularExpressionLiteral, PinPattern) don't statically declare `names`.
+  // In a real declaration the pattern always carries names at runtime.
+  names: string[] := (pattern as { names?: string[] }).names ?? []
   binding := makeNode {
     type: "Binding"
+    names
     pattern
     initializer
     splices
     typeSuffix
     thisAssignments
     children: [pattern, typeSuffix, initializer]
-  }
+  } as Binding
 
   children := [decl, binding]
 
   makeNode {
     type: "Declaration"
-    pattern.names
-    decl
+    names
+    decl: decl.token as "let" | "const" | "var"
     bindings: [binding]
     splices
     thisAssignments
     children
-  }
+  } as Declaration
 
 function processDeclarations(statements: StatementTuple[]): void
   for each declaration of gatherRecursiveAll statements, .type is "Declaration"
@@ -190,7 +198,7 @@ function prependStatementExpressionBlock(initializer: Initializer, statement: AS
   // Handle nested statement expression
   let ws: Whitespace
   if Array.isArray(exp) and exp# is 2 and isWhitespaceOrEmpty exp[0]
-    ws = exp[0]
+    ws = exp[0] as! Whitespace
     exp = exp[1]!
 
   return unless exp is like {type: "StatementExpression"}
@@ -218,15 +226,10 @@ function prependStatementExpressionBlock(initializer: Initializer, statement: AS
           type: "AssignmentExpression"
           children: [ref, " = ", resultNode]
 
-      refDec :=
-        type: "Declaration"
-        children: ["let ", ref]
-
-      // @ts-ignore
-      pre.unshift ["", refDec, ";"]
+      pre.unshift ["", makeDecl("let", ["let ", ref]), ";"]
     else
       wrapIterationReturningResults statement, => undefined
-      ref = initializer.expression = initializer.children[2] = statement.resultsRef
+      ref = initializer.expression = initializer.children[2] = statement.resultsRef!
   else
     ref = initializer.expression = initializer.children[2] = makeRef()
 
@@ -236,11 +239,7 @@ function prependStatementExpressionBlock(initializer: Initializer, statement: AS
         type: "AssignmentExpression"
         children: [ref, " = ", resultNode]
 
-    refDec :=
-      type: "Declaration"
-      children: ["let ", ref]
-
-    pre.unshift ["", refDec, ";"]
+    pre.unshift ["", makeDecl("let", ["let ", ref]), ";"]
 
   // Insert the statement from the statement expression
   // (and any helper declarations) into the containing block
@@ -255,8 +254,16 @@ function prependStatementExpressionBlock(initializer: Initializer, statement: AS
 
   return ref
 
-function processDeclarationCondition(condition, rootCondition, parent: ASTNodeParent): void
-  return unless condition.type is "DeclarationCondition"
+// `condition` here is the synthesized `DeclarationCondition` node — that
+// discriminant isn't part of the canonical types.civet union, so we cast
+// to a structural shape that exposes the fields we touch downstream.
+function processDeclarationCondition(condRaw: ASTNode, rootCondition: ASTNode, parent: ASTNodeParent): void
+  return unless condRaw? and 'type' in condRaw and (condRaw as { type?: string }).type is "DeclarationCondition"
+  condition := condRaw as! ASTNodeParent & {
+    declaration: Declaration
+    children: ASTNode[]
+    parent?: ASTNodeParent
+  }
 
   { decl, bindings } := condition.declaration as Declaration
   // TODO: Add support for `let` and `const` declarations with multiple bindings in conditions
@@ -308,10 +315,7 @@ function processDeclarationCondition(condition, rootCondition, parent: ASTNodePa
     Object.assign condition, {
       type: "AssignmentExpression"
       children
-      hoistDec: unless simple
-        type: "Declaration"
-        children: ["let ", ref, typeSuffix]
-        names: []
+      hoistDec: unless simple then makeDecl "let", ["let ", ref, typeSuffix]
       pattern
       ref
     }
@@ -319,7 +323,7 @@ function processDeclarationCondition(condition, rootCondition, parent: ASTNodePa
   // condition wasn't previously a child, so now needs parent pointers
   updateParentPointers condition, parent
 
-  rootCondition.blockPrefix = getPatternBlockPrefix(pattern, ref, decl, typeSuffix)
+  (rootCondition as { blockPrefix: StatementTuple[] | undefined }).blockPrefix = getPatternBlockPrefix(pattern, ref, decl, typeSuffix)
 
 function processDeclarationConditions(node: ASTNode): void
   gatherRecursiveAll node,
@@ -343,10 +347,10 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
 
   processDeclarationCondition expression, condition.expression, s
 
-  { ref, pattern } := expression
+  { ref, pattern } := expression as { ref?: ASTNode, pattern?: ASTNode }
 
   if pattern
-    conditions := getPatternConditions(pattern, ref)
+    conditions := getPatternConditions(pattern as! Parameters<typeof getPatternConditions>[0], ref!)
     .filter (c) =>
       switch c
         // We already check whether the ref is truthy, so it's non-null
@@ -361,7 +365,7 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
     if conditions#
       children .= condition.children
       // For negated conditions, put conditions inside the negation
-      if s.negated
+      if 'negated' in s and s.negated
         assert
           condition.expression is like {
             type: 'UnaryExpression',
@@ -369,7 +373,7 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
           }
           "Unsupported negated condition"
 
-        { children } = condition.expression.children[1] as ParenthesizedExpression
+        { children } = (condition.expression as { children: ASTNode[] }).children[1] as ParenthesizedExpression
       children.unshift "("
       for each c of conditions
         children.push " && ", c
@@ -377,8 +381,8 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
 
   // Move declaration to after the statement for until loops,
   // and for unless conditions with a guaranteed exit in the then clause.
-  { blockPrefix } := condition.expression
-  if s.negated and blockPrefix and
+  { blockPrefix } := condition.expression as { blockPrefix?: StatementTuple[] }
+  if 'negated' in s and s.negated and blockPrefix and
     (s.type is "IfStatement" and isExit(s.then) or
     s.type is "IterationStatement")
 
@@ -417,12 +421,12 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
       if s.negated
         if e?
           block := blockWithPrefix blockPrefix, e.block
-          e.children = e.children.map & is e.block ? block : &
+          e.children = e.children.map((c) => c is e.block ? block : c) as typeof e.children
           e.block = block
           updateParentPointers e
       else
         block := blockWithPrefix blockPrefix, s.then
-        s.children = s.children.map & is s.then ? block : &
+        s.children = s.children.map (c) => c is s.then ? block : c
         s.then = block
         updateParentPointers s
 
@@ -430,7 +434,7 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
       return unless blockPrefix
       { children, block } := s
       newBlock := blockWithPrefix blockPrefix, block
-      s.children = children.map & is block ? newBlock : &
+      s.children = children.map (c) => c is block ? newBlock : c
       updateParentPointers s
 
     when "SwitchStatement"
@@ -442,11 +446,10 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
       // Only add a declaration when a temp ref was needed (non-simple initializer).
       // For simple initializers (literals, identifiers), blockPrefix already has
       // the full declaration; adding a declStatement would produce invalid JS like `let 0;`.
-      if not statementDeclaration and condition.expression.hoistDec
-        declStatement: StatementTuple := ["", [{
-          type: "Declaration",
-          children: ["let ", ...condition.expression.children],
-        }], ";"]
+      condExp := condition.expression as { hoistDec?: ASTNode, children: ASTNode[] }
+      if not statementDeclaration and condExp.hoistDec
+        synthDecl := makeDecl "let", ["let ", ...condExp.children]
+        declStatement: StatementTuple := ["", [synthDecl], ";"]
         blockPrefix.unshift declStatement
 
       // Wrap switch in a block to properly scope declarations.
@@ -463,15 +466,18 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
       s.parent = block
 
 // Convert FromClause into arguments for dynamic import
-function dynamizeFromClause(from)
+function dynamizeFromClause(from: ASTNode[]): ASTNode[]
   from = from[1..]  // remove 'from'
   from = trimFirstSpace from
-  if assert := from.-1?.assertion
-    from.-1.children |>= .filter (is not assert)
+  if assert := (from.-1 as { assertion?: { keyword: string, object: ASTNode } } | undefined)?.assertion
+    (from.-1 as! { children: ASTNode[] }).children |>= .filter (a) => a is not assert
     from.push ", {", assert.keyword, ":", assert.object, "}"
   ["(", ...from, ")"]
 
-function dynamizeImportDeclaration(decl)
+function dynamizeImportDeclaration(decl: ImportDeclaration & {
+  imports: ASTNode & { star?: ASTNode & { names?: string[] }, binding?: ASTNode & { names?: string[] }, specifiers?: ASTNode & { names?: string[] }, names?: string[], children?: ASTNode[] }
+  from: ASTNode[]
+})
   { imports } := decl
   { star, binding, specifiers } .= imports
   justDefault := binding and not specifiers and not star
@@ -482,9 +488,9 @@ function dynamizeImportDeclaration(decl)
       else
         binding
     else
-      convertNamedImportsToObject(imports, true)
+      convertNamedImportsToObject(imports as! Parameters<typeof convertNamedImportsToObject>[0], true)
   c := "const"
-  expression := [
+  expression: ASTNode[] := [
     if justDefault then "("
     {type: "Await", children: ["await"]}
     " "
@@ -499,7 +505,7 @@ function dynamizeImportDeclaration(decl)
   }
   bindings := [{
     type: "Binding"
-    names: pattern.names
+    names: (pattern as { names?: string[] }).names ?? []
     pattern
     initializer
     children: [pattern, initializer]
@@ -518,11 +524,11 @@ function dynamizeImportDeclaration(decl)
     }
     bindings.push
       type: "Binding"
-      names: binding.names
+      names: binding.names!
       pattern: pattern2
       initializer: initializer2
       children: [pattern2, initializer2]
-    pattern3 := convertNamedImportsToObject(imports.children.at(-1), true)
+    pattern3 := convertNamedImportsToObject((imports.children!.at(-1) as! Parameters<typeof convertNamedImportsToObject>[0]), true)
     initializer3: Initializer := {
       type: "Initializer"
       expression: pattern
@@ -530,13 +536,13 @@ function dynamizeImportDeclaration(decl)
     }
     bindings.push
       type: "Binding"
-      names: specifiers.names
+      names: specifiers.names ?? []
       pattern: pattern3
       initializer: initializer3
       children: [pattern3, initializer3]
   {
     type: "Declaration"
-    names: imports.names
+    names: imports.names!
     bindings
     decl: c
     children: [
@@ -545,8 +551,13 @@ function dynamizeImportDeclaration(decl)
     ]
   }
 
-function dynamizeImportDeclarationExpression($0: [ASTNode, Whitespace, ASTNode, Whitespace, ASTNode])
-  [imp, ws1, imports, ws2, from] := $0
+function dynamizeImportDeclarationExpression(
+  imp: ASTNode
+  ws1: Whitespace
+  imports: ASTNode
+  ws2: Whitespace
+  from: ASTNode[]
+)
   awaitExpression: AwaitExpression :=
     type: "AwaitExpression"
     children: []
@@ -573,7 +584,7 @@ function dynamizeImportDeclarationExpression($0: [ASTNode, Whitespace, ASTNode, 
     when "Star"
       parenthesizeExpression awaitExpression
     when "Declaration" // named imports
-      object := convertNamedImportsToObject imports
+      object := convertNamedImportsToObject(imports as! Parameters<typeof convertNamedImportsToObject>[0]) as ObjectExpression
       processCallMemberExpression
         type: "CallExpression"
         children: []

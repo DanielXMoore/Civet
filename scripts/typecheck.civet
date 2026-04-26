@@ -30,6 +30,23 @@ type System = import("typescript").System
 
 projectRoot := resolve "."
 
+// --- argv: optional file filter ---------------------------------------------
+// Positional args narrow diagnostics to the listed source files (substring
+// match against the diagnostic's relative file path).  The TS Program is
+// still built over the full project so cross-file types resolve correctly;
+// only reporting is filtered.  Compile failures are filtered the same way.
+//
+// Examples:
+//   pnpm typecheck                      # all files
+//   pnpm typecheck source/parser/op     # files whose path contains this
+//   pnpm typecheck op.civet pipe.civet  # multiple filters (OR'd)
+fileFilters := process.argv.slice(2).filter (a) => a is not "--"
+function fileMatchesFilter(path: string): boolean
+  return true if fileFilters.length is 0
+  for filter of fileFilters
+    return true if path.includes filter
+  false
+
 // --- tsconfig ----------------------------------------------------------------
 
 tsconfigPath := ts.findConfigFile projectRoot, ts.sys.fileExists
@@ -69,52 +86,8 @@ origReadDirectory := baseSystem.readDirectory.bind baseSystem
 function isVirtual(filename: string): boolean
   filename.endsWith(".civet.tsx") or filename.endsWith(".hera.tsx")
 
-// @danielx/hera/dist/machine.ts is a 708-line runtime file whose recursive
-// `$C`/`$S`/`$EVENT_C` generic signatures stack-overflow TS's analyzer when
-// it's pulled in via module resolution.  hera doesn't ship a `machine.d.ts`
-// shadow, and TS's resolver prefers `.ts` over `.d.ts` for exports like
-// `"./lib": "./dist/machine.js"`.  We shim here by:
-//   1. Hiding any node_modules/**/*.ts whose adjacent .d.ts would give
-//      TypeScript a lighter-weight declaration (virtual in our case).
-//   2. Returning a synthetic minimal .d.ts for hera's machine.
-heraMachineStub := """
-  // Synthesized stub for @danielx/hera/dist/machine (see scripts/typecheck.civet).
-  // Enough declarations to satisfy the generated parser.hera output without
-  // feeding TS the 708-line recursive-generics runtime source.
-  export interface ParserContext { [key: string]: any }
-  export interface ParseState { [key: string]: any }
-  export type Loc = { pos: number; length: number }
-  export interface Parser<T> { (ctx: ParserContext, state: ParseState): any }
-  export interface ParserOptions<G> { [key: string]: any }
-  export interface HeraGrammar { [key: string]: any }
-
-  // $TS / $TR / $TV accept the generated handler functions.  We type each
-  // positional slot ($skip .. $9) as explicit `any` so hera-generated
-  // handlers don't trip noImplicitAny / implicit-any-on-binding-element.
-  type HandlerFn = (
-    $skip: any, $loc: Loc, $0: any,
-    $1: any, $2: any, $3: any, $4: any,
-    $5: any, $6: any, $7: any, $8: any, $9: any
-  ) => any
-  export const $TS: (parser: any, fn: HandlerFn) => Parser<any>
-  export const $TR: (parser: any, fn: HandlerFn) => Parser<any>
-  export const $TV: (parser: any, fn: HandlerFn) => Parser<any>
-  export const $T: (parser: any, fn: HandlerFn) => Parser<any>
-
-  export const $C: any, $E: any, $EVENT: any, $EVENT_C: any, $EXPECT: any,
-    $L: any, $N: any, $P: any, $Q: any, $R: any, $R$0: any, $S: any,
-    $TEXT: any, $Y: any, Validator: any
-
-  export class ParseError {
-    name: string; message: string; header: string; body: string
-    filename: string; line: number | string; column: number | string
-    offset: number
-  }
-  """
-function isHeraMachineDts(filename: string): boolean
-  /\/@danielx\/hera\/dist\/machine\.d\.ts$/.test filename
-function isHeraMachineTs(filename: string): boolean
-  /\/@danielx\/hera\/dist\/machine\.ts$/.test filename
+// Hera ≥ 0.9.1 ships a real machine.d.ts, so no shim is needed — TS picks
+// up the published declarations directly.
 
 system: System := {
   ...baseSystem
@@ -122,8 +95,6 @@ system: System := {
     if isVirtual filename
       return true if fsMap.has filename
       return origFileExists filename.slice(0, -4)
-    return true if isHeraMachineDts filename
-    return false if isHeraMachineTs filename
     origFileExists filename
   readFile: (filename, encoding) ->
     if isVirtual filename
@@ -134,7 +105,6 @@ system: System := {
       code := compileSource srcPath
       fsMap.set filename, code
       return code
-    return heraMachineStub if isHeraMachineDts filename
     result := origReadFile filename, encoding
     if result is undefined and process.env.TYPECHECK_DEBUG
       console.error `readFile miss: ${filename}`
@@ -206,14 +176,22 @@ function realSourceFile(realPath: string)
   origFileCache.set realPath, sf
   sf
 
-// Suppress diagnostics on .hera files that don't reflect user-actionable bugs:
-//   6133 / 6196 / 6192 — "declared but never read" for preamble imports that
-//     happen to be used only by rule handlers whose references hera optimises
-//     away (e.g. type-only imports referenced only in ::Type annotations).
-//   7006 / 7031 — noImplicitAny on positional $1..$9 args and destructuring
-//     patterns inside hera-generated handlers; the grammar author didn't
-//     write those and can't annotate them without editing hera.
-heraSuppressedCodes := new Set<number> [6133, 6196, 6192, 7006, 7031]
+// Suppress diagnostics on .hera files that don't reflect user-actionable
+// bugs *yet*.  With `language: 'civet'` enabled in the hera compile,
+// most of the previous noise (unknown propagation through handler args,
+// `.value` tuple mutation, etc.) disappears — but two categories remain:
+//
+//   6133 / 6196 / 6192 — "declared but never read" for preamble imports
+//     that are referenced only through paths hera's optimizer prunes.
+//   7006 / 7031 — implicit-any on handler-body lambda params and
+//     destructuring patterns; the upstream type would flow correctly
+//     once individual rules carry a `::Type` annotation, but most rules
+//     don't yet.  Once the grammar is fully `::Type`-annotated these
+//     should drop to 0 and the suppression can be removed.
+heraSuppressedCodes := new Set<number> [
+  6133, 6196, 6192,            // unused preamble imports
+  7006, 7031,                  // implicit-any on handler-body callbacks
+]
 
 function remap(d: Diagnostic): Diagnostic?
   { file } := d
@@ -260,6 +238,9 @@ function remap(d: Diagnostic): Diagnostic?
 all := [...ts.getPreEmitDiagnostics(program)]
   .map remap
   .filter (d): d is Diagnostic => d?
+  .filter (d): boolean =>
+    return true unless d.file
+    fileMatchesFilter d.file.fileName
 
 formatHost := {
   getCurrentDirectory: -> projectRoot
@@ -270,27 +251,37 @@ formatHost := {
 if all.length
   process.stderr.write ts.formatDiagnosticsWithColorAndContext all, formatHost
 
-if compileFailures.size
-  console.error `\nCivet compile failures (${compileFailures.size}):`
-  for [file, msg] of compileFailures
+filteredFailures: [string, string][] := []
+for [file, msg] of compileFailures
+  filteredFailures.push [file, msg] if fileMatchesFilter file
+if filteredFailures.length
+  console.error `\nCivet compile failures (${filteredFailures.length}):`
+  for [file, msg] of filteredFailures
     console.error `  ${file}: ${msg.split("\n")[0]}`
 
-total := all.length + compileFailures.size
+total := all.length + filteredFailures.length
 
 // Regression gate: CIVET_TYPECHECK_MAX_ERRORS sets the allowed diagnostic count
 // (compile failures always fail).  Lets CI catch regressions without requiring
 // us to fix the full baseline up-front; drop the env var once baseline hits 0.
+// File-filter mode skips the gate entirely (it's an iteration tool, not CI).
 maxErrors := parseInt(process.env.CIVET_TYPECHECK_MAX_ERRORS ?? '0', 10) || 0
-regressed := all.length > maxErrors or compileFailures.size > 0
+filterMode := fileFilters.length > 0
+regressed := not filterMode and (all.length > maxErrors or filteredFailures.length > 0)
 
 if total
-  console.error `\n${total} problem${total is 1 ? '' : 's'} reported (diagnostics: ${all.length}, compile failures: ${compileFailures.size}).`
+  console.error `\n${total} problem${total is 1 ? '' : 's'} reported (diagnostics: ${all.length}, compile failures: ${filteredFailures.length}).`
   if regressed
     if all.length > maxErrors
       console.error `Typecheck regression: ${all.length} diagnostics exceeds baseline ${maxErrors}.`
     process.exit 1
+  else if filterMode
+    process.exit 0
   else
     console.error `Within baseline of ${maxErrors} diagnostics; not failing.`
     process.exit 0
 
-console.log `Typecheck OK (${fsMap.size} source file${fsMap.size is 1 ? '' : 's'}).`
+if filterMode
+  console.log `Typecheck OK for filter [${fileFilters.join(", ")}] (${fsMap.size} source file${fsMap.size is 1 ? '' : 's'}).`
+else
+  console.log `Typecheck OK (${fsMap.size} source file${fsMap.size is 1 ? '' : 's'}).`

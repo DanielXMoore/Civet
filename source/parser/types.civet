@@ -115,6 +115,7 @@ export type OtherNode =
   | NonNullAssertion
   | NormalCatchParameter
   | ObjectBindingPattern
+  | Optional
   | Parameter
   | ParametersNode
   | PatternClause
@@ -122,9 +123,11 @@ export type OtherNode =
   | PinProperty
   | Placeholder
   | PostRestBindingElements
+  | Property
   | PropertyAccess
   | PropertyBind
   | PropertyGlob
+  | SpreadProperty
   | RangeExpression
   | ReturnTypeAnnotation
   | ReturnValue
@@ -191,6 +194,8 @@ export type ASTError =
   offset?: number
   parent?: Parent
   children?: never
+  /** When true, the error fires only in JS-output mode. */
+  js?: boolean
   // Fields that walkers probe on list-element / property unions that
   // include ASTError.  Typed as undefined here to let destructuring
   // succeed without adding real shape — an ASTError never carries these.
@@ -213,6 +218,8 @@ export type ASTLeaf =
   token: string
   /** token before any rewriting */
   input?: string
+  /** Set by `InsertComma` etc. for tokens synthesised by the parser */
+  implicit?: boolean
   parent?: Parent
   children?: never
 
@@ -226,35 +233,48 @@ export type CommentNode =
   parent?: Parent
   children?: never
 
-export type BinaryOp = (string &
-  name?: never
-  spaced?: never
-  special?: never
-  relational?: never
-  assoc?: never
-  type?: undefined
-) | (ASTLeaf &
-  type?: undefined
+// Operator metadata fields the parser may install on any operator variant.
+// Each subtype below mixes this in so TS distributes narrowings
+// (`op.call`, `op.assoc`, etc.) uniformly across the BinaryOp union
+// instead of silently filtering to the only variant that declared them.
+export type BinaryOpMeta =
   spaced?: boolean
   special?: true
-  // The following are allowed only when special is true:
   prec?: string | number | undefined
   assoc?: string?
   call?: ASTNode
   method?: ASTNode
+  /** Trailing fragment appended after a `call`-form rewrite (e.g. " >= 0"). */
+  suffix?: ASTNode
   relational?: boolean
   reversed?: boolean
   negated?: boolean
   asConst?: boolean
-) | (PatternTest &
-  token?: never
-  relational?: never
+
+// Operator-as-string: bare token like "+" or "&&".  All metadata is absent
+// (`?: never`) so accessing e.g. `op.special` on the union still narrows.
+export type BinaryOpString = string &
+  type?: undefined
+  spaced?: never
+  special?: never
+  prec?: never
   assoc?: never
-  asConst?: never
-) | (ChainOp &
-  token?: never
+  call?: never
+  method?: never
   relational?: never
-)
+  reversed?: never
+  negated?: never
+  asConst?: never
+
+// Operator-as-leaf: an ASTLeaf token plus the optional behaviour overrides.
+export type BinaryOpLeaf = ASTLeaf & BinaryOpMeta &
+  type?: undefined
+
+export type BinaryOp =
+  | BinaryOpString
+  | BinaryOpLeaf
+  | (PatternTest & BinaryOpMeta)
+  | (ChainOp & BinaryOpMeta)
 
 export type BinaryOpRHS = [ASTNode, BinaryOp, ASTNode, ASTNode]
 
@@ -286,11 +306,22 @@ export type AssignmentExpression = ASTParent &
   assigned: ASTNode
   expression: ExpressionNode | ASTRef
   hoistDec?: ASTNode
+  /** CoffeeScript-style `for own k in obj` marker on the LHS. */
+  own?: boolean
+  /** When the assignment is the head of a Declaration-style statement,
+  this holds the produced Declaration so callers can splice it. */
+  statementDeclaration?: ASTNode
 
 export type AssignmentExpressionLHS = [undefined, NonNullable<ASTNode>, [WSNode, [string, WSNode]], ASTLeaf][]
 
 export type MemberExpression = ASTParent &
   type: "MemberExpression"
+  /** Set on `@x.y` / `this.x` shorthand (HashThis rule). */
+  thisShorthand?: boolean
+  /** Set on `#x` private-field shorthand (HashThis rule). */
+  privateShorthand?: boolean
+  /** The original `PrivateIdentifier` node when privateShorthand is set. */
+  privateId?: ASTNode
 
 export type CallExpression = ASTParent &
   type: "CallExpression"
@@ -309,6 +340,7 @@ export type UnaryExpression = ASTParent &
 export type Await = ASTTokenOrParent &
   type: "Await"
   op?: ASTNode
+  $loc?: Loc
 
 export type AwaitExpression = ASTObject &
   type: "AwaitExpression"
@@ -324,6 +356,7 @@ export type UnwrappedExpression = ASTParent &
 
 export type Yield = ASTTokenOrParent &
   type: "Yield"
+  $loc?: Loc
 
 export type YieldExpression = ASTParent &
   type: "YieldExpression"
@@ -347,9 +380,12 @@ export type ParenthesizedExpression = ASTParent &
 export type IfStatement = ASTParent &
   type: "IfStatement"
   condition: Condition
-  negated: boolean?
+  negated?: boolean
   then: BlockStatement
-  else: ElseClause?
+  else?: ElseClause?
+  /** Per-iteration setup statements injected ahead of the body
+  (postfix `if` carrying a destructuring binding). */
+  blockPrefix?: StatementTuple[]
 
 export type ElseClause = ASTObject &
   type: "ElseClause"
@@ -382,6 +418,8 @@ export type IterationStatement = ASTParent &
   object?: boolean
   resultsRef: ASTRef?
   resultsParent?: boolean // inherit resultsRef from parent loop
+  /** Per-iteration setup statements injected ahead of the body. */
+  blockPrefix?: StatementTuple[]
 
 export type BreakStatement = ASTParent &
   type: "BreakStatement"
@@ -391,6 +429,10 @@ export type BreakStatement = ASTParent &
 export type ComptimeStatement = ASTParent &
   type: "ComptimeStatement"
   block: BlockStatement
+  /** Original then/else blocks before comptime selects one (so a still-
+  active branch can be re-emitted in non-comptime mode). */
+  then?: BlockStatement
+  else?: BlockStatement
 
 export type ComptimeExpression = ASTParent &
   type: "ComptimeExpression"
@@ -405,6 +447,8 @@ export type ContinueStatement = ASTParent &
 export type DoStatement = ASTParent &
   type: "DoStatement"
   block: BlockStatement
+  /** Set when wrapped via `async do`/`generator do`. */
+  generator?: ASTNode
 
 export type ForStatement = ASTParent &
   type: "ForStatement"
@@ -419,6 +463,9 @@ export type ForStatement = ASTParent &
   resultsParent?: boolean // inherit resultsRef from parent loop
   reduction?: ForReduction
   object?: boolean
+  /** Per-iteration setup statements injected ahead of the body
+  (e.g. destructuring rest splices or `each` index/value reassignments). */
+  blockPrefix?: StatementTuple[]
 
 export type ForDeclaration = ASTParent &
   type: "ForDeclaration"
@@ -429,6 +476,7 @@ export type ForDeclaration = ASTParent &
 export type ForReduction
   type: "ForReduction"
   subtype: "some" | "every" | "count" | "first" | "sum" | "product" | "min" | "max" | "join" | "concat"
+  children?: ASTNode[]
 
 export type SwitchStatement = ASTParent &
   type: "SwitchStatement"
@@ -498,6 +546,7 @@ export type PropertyGlob = ASTParent &
   type: "PropertyGlob"
   dot: ASTNode
   object: ObjectExpression
+  reversed?: boolean
 
 export type Call = ASTParent &
   type: "Call"
@@ -507,6 +556,9 @@ export type Call = ASTParent &
 export type Index = ASTParent &
   type: "Index"
   optional?: Optional?
+  expression?: ASTNode
+  /** Set on `x[i%]` shorthand. */
+  mod?: boolean
 
 export type SliceExpression = ASTParent &
   type: "SliceExpression"
@@ -536,6 +588,9 @@ export type ASTRef = ASTObject &
    */
   names?: [ASTString]
   children?: [ASTString]
+  /** Optional source location used by populateRefs to forward sourcemap
+  positions onto the resolved child. */
+  $loc?: Loc
 
 export type AtBinding =
   type: "AtBinding"
@@ -557,12 +612,16 @@ export type BlockStatement = ASTParent &
   root?: boolean  // is this the global root block for the program?
   topLevelAwait?: boolean // for root block, is there top-level `await`? (before any IIFE wrapping)
   topLevelYield?: boolean // for root block, is there top-level `yield`? (before any IIFE wrapping)
+  /** Refines the block (e.g. ClassBody — see the ClassBody alias). */
+  subtype?: "ClassBody"
 
 export type ImportDeclaration = ASTParent &
   type: "ImportDeclaration"
   ts?: boolean
   imports?: ASTNode
   from?: ASTNode
+  /** Set on `import.meta` and similar — the `module` keyword token. */
+  module?: ASTNode
 
 export type ExportDeclaration = ASTParent &
   type: "ExportDeclaration"
@@ -572,6 +631,7 @@ export type ExportDeclaration = ASTParent &
 export type Star = ASTObject &
   type: "Star"
   token: "*"
+  $loc?: Loc
   children?: never
 
 export type ModuleSpecifier = ASTParent &
@@ -594,6 +654,12 @@ export type Declaration = ASTParent &
   // Should placeholders in contents be lifted above the parent block,
   // because they actual came from code outside the block?
   implicitLift?: boolean
+  /** Set on import-style declarations. */
+  binding?: ASTNode
+  specifiers?: ASTNode
+  star?: ASTNode
+  hoistDec?: ASTNode
+  ts?: boolean
 
 export type Binding = ASTParent &
   type: "Binding"
@@ -647,9 +713,9 @@ export type TryStatement = ASTParent &
 
 export type CatchClause = ASTObject &
   type: "CatchClause"
-  children: Children & [ Whitespace | ASTString, CatchToken, CatchBinding, BlockStatement ]
+  children: Children
   block: BlockStatement
-  binding: CatchBinding?
+  binding?: CatchBinding?
 
 export type CatchToken = { $loc: Loc, token: "catch" }
 
@@ -764,6 +830,9 @@ export type NamedBindingPattern = ASTParent &
   binding: BindingIdentifier
   pattern: BindingPattern
   subbinding?: ASTNode
+  /** Identifiers bound by this pattern. */
+  names?: string[]
+  typeSuffix?: TypeSuffix?
 
 export type HasSubbinding = BindingProperty | NamedBindingPattern
 
@@ -775,7 +844,7 @@ export type Delimiter = ASTLeaf | ASTString | Delimiter[]
 type PropertyName =
   Literal | ComputedPropertyName | Identifier
 
-type ComputedPropertyName =
+export type ComputedPropertyName =
   type: "ComputedPropertyName"
   children: Children
   parent?: Parent
@@ -791,6 +860,9 @@ export type BindingProperty = ASTParent &
   initializer: Initializer?
   delim: ASTNode
   subbinding?: ASTNode
+  /** Original identifier when this property was constructed via a
+  bare-identifier shorthand (`{x}` rather than `{x: x}`). */
+  identifier?: ASTNode
 
 export type PinProperty = ASTParent &
   type: "PinProperty"
@@ -834,7 +906,7 @@ export type ObjectBindingPattern =
 
 export type ObjectExpression = ASTParent &
   type: "ObjectExpression"
-  names: string[]
+  names?: string[]
   properties: (Property | SpreadProperty | MethodDefinition | ASTError)[]
 
 export type SpreadProperty = ASTParent &
@@ -851,6 +923,7 @@ export type Property = ASTParent &
   value: ASTNode
   implicitName?: boolean
   usesRef?: boolean
+  delim?: ASTNode // attached when inside a comma-delimited property list
 
 export type ArrayExpression = ASTParent &
   type: "ArrayExpression"
@@ -873,13 +946,19 @@ export type Argument = ASTParent &
 
 export type FunctionExpression = ASTParent &
   type: "FunctionExpression"
-  name: string
-  id: Identifier
+  name?: string
+  id?: Identifier
   async?: ASTNode[]
   generator?: ASTNode[]
   signature: FunctionSignature
   block: BlockStatement
   parameters: ParametersNode
+  /** Custom-operator marker (set by the OperatorBehavior grammar arm). */
+  operator?: boolean
+  /** Mirrored from signature.returnType for direct access. */
+  returnType?: ReturnTypeAnnotation
+  /** Marks a TS-only function expression (e.g. abstract method bodyless). */
+  ts?: boolean
 
 export type AmpersandBlockBody =
   ref?: ASTRef
@@ -910,10 +989,14 @@ export type MethodDefinition = ASTParent &
   parameters: ParametersNode
   autoBind?: boolean // CoffeeScript => bound methods
   delim?: ASTNode // attached when inside a comma-delimited property list
+  /** TS abstract-method marker. */
+  abstract?: boolean
+  /** TS-only method (e.g. signature without body). */
+  ts?: boolean
 
 export type ArrowFunction = ASTParent &
   type: "ArrowFunction"
-  name: string
+  name?: string
   async: ASTNode[]
   // Arrow functions can't grammatically be generators; FunctionNode machinery
   // reads `.generator` uniformly, so declare it as never so readers see
@@ -924,6 +1007,15 @@ export type ArrowFunction = ASTParent &
   parameters: ParametersNode
   ampersandBlock?: boolean  // unrollable single-argument function
   body?: ASTNode
+  /** Mirrored from signature.modifier for direct access. */
+  modifier?: MethodModifier
+  /** Set when the arrow was originally written inside parens
+  (e.g. `(x) => …`); affects emit. */
+  parenthesized?: boolean
+  /** Token used in the original parens, if any. */
+  parenthesizedOp?: ASTNode
+  /** Mirrored from signature.returnType for direct access. */
+  returnType?: ReturnTypeAnnotation
 
 export type FunctionSignature = ASTParent &
   type: "MethodSignature" | "FunctionSignature"
@@ -933,6 +1025,12 @@ export type FunctionSignature = ASTParent &
   modifier: MethodModifier
   returnType: ReturnTypeAnnotation?
   parameters: ParametersNode
+  /** Mirrored from `modifier.async` for direct access. */
+  async?: ASTNode[]
+  /** Mirrored from `modifier.generator` for direct access. */
+  generator?: ASTNode[]
+  /** Optional method marker (`?`) attached to MethodSignatures. */
+  optional?: ASTNode
   /**
   Force implicit return for this function for IIFE
   (overriding "civet -implicitReturns")
@@ -1011,6 +1109,10 @@ export type ClassExpression = ASTParent &
   heritage: ASTNode
   body: ClassBody
   binding: [BindingIdentifier, TypeParameters]
+  /** TS abstract-class marker. */
+  abstract?: boolean
+  /** Decorators preceding the class (`@foo class …`). */
+  decorators?: ASTNode
 
 export type ClassBody = BlockStatement & { subtype: "ClassBody" }
 
@@ -1020,8 +1122,10 @@ export type FieldDefinition = ASTParent &
   id: ASTNode
   typeSuffix?: TypeSuffix?
   abstract?: ASTNode
-  "readonly"?: ASTNode
+  readonly?: ASTNode | boolean
   initializer?: Initializer
+  /** Set when the field's `readonly` keyword has no value (just present). */
+  true?: boolean
 
 export type CoffeeClassPrivate = ASTParent &
   type: "CoffeeClassPrivate"
@@ -1046,9 +1150,11 @@ export type Literal =
 
 export type LiteralContentNode =
   | ASTLeaf
-  | ASTLeafWithType "NumericLiteral" | "StringLiteral"
+  | ASTLeafWithType "BooleanLiteral" | "NullLiteral" | "NumericLiteral" | "StringLiteral"
   | string
 
+export type BooleanLiteral = ASTLeafWithType "BooleanLiteral"
+export type NullLiteral = ASTLeafWithType "NullLiteral"
 export type NumericLiteral = ASTLeafWithType "NumericLiteral"
 export type StringLiteral = ASTLeafWithType "StringLiteral"
 
@@ -1128,6 +1234,7 @@ export type TypeElement = ASTParent &
 export type TypeFunction = ASTParent &
   type: "TypeFunction"
   ts: true
+  returnType?: ASTNode
 
 export type TypeParenthesized = ASTParent &
   type: "TypeParenthesized"
@@ -1144,6 +1251,7 @@ export type TypeTypeof = ASTParent &
 export type TypeAsserts = ASTParent &
   type: "TypeAsserts"
   t: TypeNode
+  ts: true
 
 export type TypePredicate = ASTParent &
   type: "TypePredicate"
@@ -1154,11 +1262,16 @@ export type VoidType = ASTLeafWithType "VoidType"
 
 export type TypeLiteralNode = ASTLeaf | ASTString | VoidType
 
-export type ThisAssignments = ([string, ASTRef] | AssignmentExpression)[]
+/** A this-assignment fragment.  In addition to the two structured forms,
+binding.civet may push a 4-element source-mapped tuple
+`[<this. ASTLeaf>, <id ASTLeaf>, " = ", ASTRef]`. */
+export type ThisAssignments = ([string, ASTRef] | AssignmentExpression | ASTNode[])[]
 
 export type WithClause = ASTParent &
   type: "WithClause"
-  targets: [WSNode, ExpressionNode][]
+  /** Each target is `[leadingWs, expr]` with an optional trailing
+  whitespace slot that convertWithClause ignores. */
+  targets: [WSNode, ExpressionNode, WSNode?][]
 
 export type OperatorBehavior
   prec?: number

@@ -8,10 +8,15 @@
 
 import type {
   AccessStart
+  ArrowFunction
+  ASTError
   ASTLeaf
   ASTNode
   ASTNodeObject
   ASTRef
+  AssignmentExpressionLHS
+  Binding
+  BindingProperty
   BlockStatement
   BreakStatement
   Call
@@ -27,21 +32,29 @@ import type {
   ElseClause
   FinallyClause
   ForStatement
+  FunctionExpression
   FunctionSignature
+  ASTString
+  Identifier
   IfStatement
+  Index
   Initializer
   IterationStatement
   Label
   LabelledStatement
   Literal
-  LiteralContentNode
   MemberExpression
   MethodDefinition
   NormalCatchParameter
+  ObjectBindingPattern
   ObjectExpression
   ParametersNode
   ParenthesizedExpression
   Placeholder
+  PropertyAccess
+  Property
+  ReturnTypeAnnotation
+  SpreadProperty
   StatementNode
   StatementTuple
   SwitchStatement
@@ -75,6 +88,7 @@ import {
   hasYield
   inplaceInsertTrimmingSpace
   inplacePrepend
+  isASTNodeObject
   insertTrimmingSpace
   isComma
   isEmptyBareBlock
@@ -183,7 +197,7 @@ import {
 
 function addPostfixStatement(statement: StatementNode, ws: ASTNode, post: IterationStatement | ForStatement | IfStatement)
   expressions := [
-    ...post.blockPrefix or []
+    ...(post.blockPrefix ?? [])
     ["", statement]
   ]
 
@@ -217,8 +231,9 @@ function adjustIndexAccess(dot: AccessStart): AccessStart
     }
   else
     dot = replaceNodes deepCopy(dot),
-      (node) => node.token is ".",
-      (node) => ({ ...node, token: "[" })
+      (node) => (node as ASTLeaf).token is ".",
+      (node) => ({ ...node, token: "[" } as ASTNode)
+    as AccessStart
 
   return dot
 
@@ -271,7 +286,7 @@ function rewriteDynamicImportCall(call: Call): Call
     ...firstArg
     expression: rewrittenArg
     children: [rewrittenArg]
-  }
+  } as! typeof rewrittenArg
 
   args := call.args[..]
   args[i] = rewrittenArg
@@ -375,8 +390,13 @@ function expressionizeIfStatement(statement: IfStatement): ASTNode
     children
   }
 
-function expressionizeTypeIf([ifOp, condition, t, e])
-  children := [
+function expressionizeTypeIf([ifOp, condition, t, e]: [
+  { negated: boolean }
+  ASTNodeObject & { negated: boolean }
+  ASTNode
+  [ASTNode, ASTNode, ...ASTNode[]] | undefined
+])
+  children: ASTNode[] := [
     "("
     trimFirstSpace condition
     "?"
@@ -403,32 +423,38 @@ function expressionizeTypeIf([ifOp, condition, t, e])
  *
  * [See More](../test/object.civet)
  */
-function handleThisPrivateShorthands(value)
-  if value.privateShorthand
-    value = value.children[1].children[1]
+function handleThisPrivateShorthands(value: NonNullable<ASTNode>): [NonNullable<ASTNode>, boolean]
+  return [value, false] unless isASTNodeObject value
 
-    return [value, false]
+  if value.type is "MemberExpression" and value.privateShorthand
+    // Strip `this.#x` -> `#x`
+    inner := (value.children[1] as MemberExpression).children[1]
+    return [inner!, false]
 
   if value.type is "MemberExpression" or value.type is "CallExpression"
-    suppressPrefix .= value.thisShorthand
-    value = {
+    me := value as MemberExpression
+    suppressPrefix .= !!me.thisShorthand
+    rewritten := {
       ...value,
       children: value.children.map (c, i) =>
-        if i is 0
-          let s
-          [c, s] = handleThisPrivateShorthands c
+        if i is 0 and c?
+          [r, s] := handleThisPrivateShorthands c
           suppressPrefix ||= s
-
+          return r
         c
-    }
+    } as typeof value
 
-    return [value, suppressPrefix]
+    return [rewritten, suppressPrefix]
 
-  return [value, value.thisShorthand]
+  return [value, !!(value as MemberExpression).thisShorthand]
 
-function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause[], ElseClause?, FinallyClause?])
-  [t, , b, cs, e, f] .= $0
-
+function processTryBlock(
+  t: ASTLeaf
+  b: BlockStatement
+  cs: CatchClause[]
+  e?: ElseClause
+  f?: FinallyClause
+)
   // Pattern matching catch clauses: transform into pattern matching switch
   let c: CatchClause?
   if cs.some .binding?.parameter is like {type: "CatchPattern"}
@@ -461,7 +487,7 @@ function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause[],
             type: "Initializer"
             expression: ref
             children: [ "", " = ", ref ]
-          bindings: Bindings[] := [{
+          bindings: Binding[] := [{
             type: "Binding"
             names: pattern.names
             pattern
@@ -548,10 +574,11 @@ function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause[],
     c = c!  // absent catch clause would have been created above
     // `let ok = true` before try
     ok := makeRef 'ok'
-    hoistDec =
+    hoistDec = {
       type: "Declaration"
       children: [ "let ", ok, " = true" ]
       names: []
+    } as! Declaration
     // `ok = false` inside catch block
     replaceNode
       c.block
@@ -659,18 +686,25 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
           parts.push part
           continue
         if part.type is "MethodDefinition"
-          parts.push
+          parts.push {
             type: "Error"
             message: "Glob pattern cannot have method definition"
+          } as ASTError
           continue
-        if part.value and part.value.type is not in ["CallExpression", "MemberExpression", "Identifier", "StringLiteral", "ComputedPropertyName"] as (string?)[]
-          parts.push
+        if part.value and (part.value as ASTNodeObject).type is not in ["CallExpression", "MemberExpression", "Identifier", "StringLiteral", "ComputedPropertyName"] as (string?)[]
+          parts.push {
             type: "Error"
             message: `Glob pattern must have call or member expression value, found ${JSON.stringify(part.value)}`
+          } as ASTError
           continue
 
         suppressPrefix .= false
-        name .= part.name
+        // SpreadProperty has no .name, only .value.  Property carries both.
+        let name: ASTNode
+        if part.type is "Property"
+          name = part.name
+        else
+          name = ""
         value .= part.value ?? name
         wValue := getTrimmingSpace part.value
 
@@ -707,8 +741,14 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
             children: part.children.slice(0, 2) // whitespace, ...
               .concat(value, part.delim)
             usesRef: Boolean ref
-          }
+          } as! SpreadProperty
         else
+          // `isWhitespaceOrEmpty(x) and x` previously short-circuited to
+          // `false` when x wasn't whitespace, leaking booleans into
+          // children.  Use undefined for the "skip" case so traversal
+          // doesn't see them.
+          ws0 := if isWhitespaceOrEmpty(part.children[0]) then part.children[0] else undefined
+          ws2 := if isWhitespaceOrEmpty(part.children[2]) then part.children[2] else undefined
           parts.push {
             type: part.type
             name
@@ -716,20 +756,20 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
             delim: part.delim
             names: part.names
             children: [
-              isWhitespaceOrEmpty(part.children[0]) and part.children[0]
+              ws0
               name
-              isWhitespaceOrEmpty(part.children[2]) and part.children[2]
-              part.children[3]?.token is ":" ? part.children[3] : ":"
+              ws2
+              (part.children[3] as ASTLeaf?)?.token is ":" ? part.children[3] : ":"
               value
               part.delim // comma delimiter
             ]
             usesRef: Boolean ref
-          }
+          } as! Property
       object: ObjectExpression :=
         type: "ObjectExpression"
         children: [
           glob.object.children.0 // {
-          ...parts
+          ...parts as ASTNode[]
           glob.object.children.-1 // whitespace and }
         ]
         properties: parts
@@ -838,18 +878,26 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
 // * anonymous function expression
 // * unary suffix applied to above
 // * comma operators applied to above
+// A `CommaExpression` produced by the grammar at parser.hera:370 takes the
+// shape `[expr0, [[CommaDelimiter, expr], ...]]` where each `CommaDelimiter`
+// is `[whitespace, commaLeaf]`.  Spelling it out so the deep navigation
+// below typechecks without a cast.
+type CommaTail = [[ ASTNode, ASTLeaf ], ASTNode][]
+
 function makeExpressionStatement(expression: ASTNode): ASTNode
-  if Array.isArray(expression) and expression[1]?[0]?[0]?[1]?.token is "," // CommaExpression
+  if Array.isArray(expression) and
+     ((expression[1] as CommaTail)?[0]?[0]?[1]?.token) is ","
     [
       makeExpressionStatement expression[0]
-      expression[1].map [comma, exp] => // CommaDelimiter AssignmentExpression
+      (expression[1] as CommaTail).map ([comma, exp]) =>
         [comma, makeExpressionStatement exp]
     ]
-  else if expression?.type is "ObjectExpression" or
-          (expression?.type is "FunctionExpression" and not expression.id) or
-          (expression?.type is "UnaryExpression" and not expression.pre?# and
-           expression.expression is not
-           makeExpressionStatement expression.expression)
+  else if isASTNodeObject(expression) and (
+            expression.type is "ObjectExpression" or
+            (expression.type is "FunctionExpression" and not expression.id) or
+            (expression.type is "UnaryExpression" and not expression.pre?# and
+             expression.expression is not
+             makeExpressionStatement expression.expression))
     makeLeftHandSideExpression expression
   else
     expression
@@ -861,46 +909,52 @@ The return value should have a `name` property (for "Identifier",
 "PropertyAcess", and "Index"), or have `type` of "Index" (for `[computed]`),
 or be undefined.
 */
-function lastAccessInCallExpression(exp)
-  while exp.type is "MemberExpression" or exp.type is "CallExpression"
-    { children } := exp
+function lastAccessInCallExpression(exp: ASTNode): Identifier | PropertyAccess | Index | undefined
+  while isASTNodeObject(exp) and (exp.type is "MemberExpression" or exp.type is "CallExpression")
+    children := exp.children
     i .= children# - 1
-    while (i >= 0 and children[i] <? "object" and (
-      children[i].type is "Call" ||
-      children[i].type is "NonNullAssertion" ||
-      children[i].type is "Optional"
-    )) i--
+    while i >= 0
+      child := children[i]
+      break unless isASTNodeObject(child) and (
+        child.type is "Call" or
+        child.type is "NonNullAssertion" or
+        child.type is "Optional"
+      )
+      i--
 
     assert i >= 0, "lastAccessInCallExpression: no base access found"
 
     // Recurse into nested MemberExpression, e.g. from `x.y()`
     exp = children[i]
+  /* c8 ignore next -- the while-loop drains MemberExpressions/CallExpressions; the final exp is always an AST object in practice */
+  return unless isASTNodeObject exp
   if exp.type is "Identifier" or exp.type is "PropertyAccess" or exp.type is "Index"
     exp
 
 // Given a MethodDefinition, convert into a FunctionExpression.
 // Returns undefined if the method is a getter or setter.
-function convertMethodToFunction(method)
+function convertMethodToFunction(method: MethodDefinition): FunctionExpression?
   { signature, block } := method
   { async, modifier, optional } := signature
 
-  return if modifier?.get or modifier?.set
-  func := ["function "]
+  return undefined if modifier?.get or modifier?.set
+  func: ASTNode[] := ["function "]
   if async?
     // put `function` after `async`
     func.unshift async
     // ensure space after `async` (absent in e.g. `async* f()`)
-    if async# and not async.-1?.#
+    last := async.-1
+    if async# and not (last as ASTLeaf | ASTString | undefined)?.length
       async.push " "
 
-  sigChildren := signature.children.slice(1)
+  sigChildren := signature.children.slice(1) as ASTNode[]
   if optional
     optIdx := sigChildren.indexOf optional
     sigChildren.splice optIdx, 1 if optIdx >= 0
 
   return {
     ...signature
-    id: signature.name
+    id: signature.id
     signature
     type: "FunctionExpression"
     children: [
@@ -908,12 +962,13 @@ function convertMethodToFunction(method)
       block
     ]
     block
-  }
+  } as! FunctionExpression
 
-function convertFunctionToMethod(id, exp)
-  fnTokenIndex := exp.children.findIndex (c) -> c?.token?.startsWith("function")
+function convertFunctionToMethod(id: Identifier, exp: FunctionExpression): MethodDefinition
+  fnTokenIndex := exp.children.findIndex (c) ->
+    c? <? "object" and "token" in c and (c.token as string?)?.startsWith("function")
   // copy
-  children := exp.children.slice()
+  children := exp.children.slice() as ASTNode[]
   // Replace "function" and move the generator slot ahead of id so a "*"
   // later pushed by processSignature (for implicit yield) lands before id.
   children.splice(fnTokenIndex, 2, children[fnTokenIndex+1], id)
@@ -924,13 +979,17 @@ function convertFunctionToMethod(id, exp)
     name: id.name,
     signature: { ...exp.signature, id, name: id.name },
     children
-  }
+  } as! MethodDefinition
 
-function convertArrowFunctionToMethod(id, exp)
-  block := {...exp.block} // prepare for bracing
-  children := exp.children.filter((c) -> !(Array.isArray(c) && c[c.length-1]?.token?.includes("=>"))).map((c) -> c === exp.block ? block : c)
+function convertArrowFunctionToMethod(id: Identifier, exp: ArrowFunction): MethodDefinition
+  block := {...exp.block} as BlockStatement // prepare for bracing
+  children := exp.children
+    .filter (c) ->
+      not (Array.isArray(c) and ((c.-1 as ASTLeaf?)?.token?.includes("=>")))
+    .map (c) =>
+      c is exp.block ? block : c
   children.unshift(id)
-  exp = {
+  newExp := {
     ...exp,
     type: "MethodDefinition",
     name: id.name,
@@ -938,28 +997,35 @@ function convertArrowFunctionToMethod(id, exp)
     block,
     children,
     autoBind: true
-  }
-  block.parent = exp // needed by braceBlock
+  } as! MethodDefinition
+  block.parent = newExp // needed by braceBlock
   braceBlock(block)
-  exp
+  newExp
 
-// Convert NamedImports into equivalent ObjectExpression or ObjectBindingPattern
-function convertNamedImportsToObject(node, pattern?: boolean)
+// Convert NamedImports into equivalent ObjectExpression or ObjectBindingPattern.
+// `node` is the parser's NamedImports node (or DynamicNamedImports), shaped
+// `{ specifiers: { ts?, source, binding, children }[], names, children }`.
+type NamedImportLike = ASTNodeObject & {
+  specifiers: { ts?: boolean, source: ASTNode, binding: ASTNode, children: ASTNode[] }[]
+  names: string[]
+  children: ASTNode[]
+}
+
+function convertNamedImportsToObject(node: NamedImportLike, pattern?: boolean): ObjectExpression | ObjectBindingPattern
   properties := node.specifiers.map (specifier) =>
     if specifier.ts
-      { type: "Error", message: "cannot use `type` in dynamic import" }
-    else
-      { source, binding } := specifier
-      delim := specifier.children.-1
-      {
-        type: pattern ? "BindingProperty" : "Property"
-        name: source
-        value: binding unless source is binding
-        delim
-        children: source is binding
-          ? [ source, delim ]
-          : [ source, ":", binding, delim ]
-      }
+      return { type: "Error", message: "cannot use `type` in dynamic import" } as ASTError
+    { source, binding } := specifier
+    delim := specifier.children.-1
+    {
+      type: pattern ? "BindingProperty" : "Property"
+      name: source
+      value: binding unless source is binding
+      delim
+      children: source is binding
+        ? [ source, delim ]
+        : [ source, ":", binding, delim ]
+    } as! Property | BindingProperty
 
   {
     type: pattern ? "ObjectBindingPattern" : "ObjectExpression"
@@ -970,44 +1036,46 @@ function convertNamedImportsToObject(node, pattern?: boolean)
       properties
       node.children.-1 // }
     ]
-  }
+  } as! (ObjectExpression | ObjectBindingPattern)
 
 // Convert an ObjectExpression (with `properties`)
 // into a set of JSX attributes.
 // {foo} is equivalent to foo={foo}, and
 // {foo, bar: baz} is equivalent to foo={foo} and bar={baz}.
 // {...foo} is a special case.
-function convertObjectToJSXAttributes(obj: ObjectExpression)
-  parts := [] // JSX attributes
-  rest := []  // parts that need to be in {...rest} form
+function convertObjectToJSXAttributes(obj: ObjectExpression): ASTNode[]
+  parts: ASTNode[] := [] // JSX attributes
+  rest: ASTNode[] := []  // parts that need to be in {...rest} form
   for part, i of obj.properties
-    if part.usesRef
+    // .usesRef is only declared on Property; SpreadProperty/Method/Error
+    // never carry it at runtime, so the `in` check narrows safely.
+    if part.type is "Property" and part.usesRef
       rest.push part
       continue
-    if (i > 0) parts.push(' ')
+    if i > 0 then parts.push ' '
     switch part.type
       when "Property"
-        if part.name.type is "ComputedPropertyName"
-          rest.push(part)
+        if isASTNodeObject(part.name) and part.name.type is "ComputedPropertyName"
+          rest.push part
         else
-          parts.push([part.name, '={', trimFirstSpace(part.value), '}'])
+          parts.push [part.name as ASTNode, '={', trimFirstSpace(part.value), '}']
       when "SpreadProperty"
-        parts.push(['{', part.dots, part.value, '}'])
+        parts.push ['{', part.dots, part.value, '}']
       when "MethodDefinition"
-        const func = convertMethodToFunction(part)
+        func := convertMethodToFunction part
         if func
-          parts.push([part.name, '={', convertMethodToFunction(part), '}'])
+          parts.push [part.name, '={', func, '}']
         else
-          rest.push(part)
+          rest.push part
   if rest#
     parts.push " " if parts# and parts.-1 is not " "
-    parts.push(["{...{", ...rest, "}}"])
-  return parts
+    parts.push ["{...{", ...rest, "}}"]
+  parts
 
 /**
  * Returns a new MethodDefinition node.
  */
-function makeGetterMethod(name, ws, value, returnType, block?: BlockStatement, kind: { token: "get" | "set" } = { token: "get" }, autoReturn: boolean = true): MethodDefinition
+function makeGetterMethod(name: string, ws: ASTNode, value: ASTNode, returnType: ReturnTypeAnnotation?, block?: BlockStatement, kind: { token: "get" | "set" } = { token: "get" }, autoReturn: boolean = true): MethodDefinition
   { token } := kind
   ws = trimFirstSpace ws
   let setVal
@@ -1043,7 +1111,9 @@ function makeGetterMethod(name, ws, value, returnType, block?: BlockStatement, k
 
     expressions.push finalStatement
 
-  children := [kind, " ", name, parameters, returnType, block]
+  // `kind` is the get/set keyword token (no $loc — synthesized at compile
+  // time); the rest of the slots are real AST.
+  children: ASTNode[] := [kind as ASTNode, " ", name, parameters, returnType, block]
 
   return {
     type: "MethodDefinition"
@@ -1058,12 +1128,16 @@ function makeGetterMethod(name, ws, value, returnType, block?: BlockStatement, k
       }
       name
       returnType
-    }
+    } as! FunctionSignature
     block
     parameters
   }
 
-function processBindingPatternLHS(lhs, tail): void
+// `lhs` here is a fully-narrowed binding-pattern subtree.  `tail` collects
+// extra ASTNode emit fragments (splices/thisAssignments/subbindings).  We
+// keep both as `ASTNode` because the gatherRecursive walks across many
+// node shapes and re-typing each access wouldn't add safety here.
+function processBindingPatternLHS(lhs: ASTNode, tail: ASTNode[]): void
   // Expand AtBindingProperty (@x shorthand in object patterns) to x: this.x
   adjustAtBindings lhs, true
   // In assignment (non-binding) context, @x can be used directly as this.x
@@ -1674,10 +1748,13 @@ function processCoffeeClasses(statements: StatementTuple[]): void
     // Outer assignment
     if { binding } .= ce
       binding = trimFirstSpace binding
+      // TODO: lhs should be AssignmentExpressionLHS (array of tuples), but
+      // we synthesize a single-binding form here.  No consumer iterates
+      // exp.lhs on this synthesized node, so the cast is safe in practice.
       wrapped = makeNode {
         type: "AssignmentExpression"
         children: [binding, " = ", wrapped]
-        lhs: binding as any // TODO: incorrect shape
+        lhs: binding as unknown as AssignmentExpressionLHS
         assigned: binding
         expression: wrapped as CallExpression
         names: [ce.name]

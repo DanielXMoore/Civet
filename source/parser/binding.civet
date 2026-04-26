@@ -1,13 +1,22 @@
 import type {
   ArrayBindingPattern
+  ArrayBindingPatternContent
+  AssignmentExpression
+  AssignmentExpressionLHS
   ASTNode
   ASTNodeObject
-  BindingPattern
+  ASTRef
+  AtBinding
   BindingProperty
   BindingRestElement
   Children
   HasSubbinding
   ObjectBindingPattern
+  Parameter
+  PinPattern
+  PinProperty
+  PostRestBindingElements
+  StatementTuple
   ThisAssignments
 } from ./types.civet
 
@@ -20,6 +29,8 @@ import {
 } from ./ref.civet
 
 import {
+  isASTNodeObject
+  isToken
   parenthesizeType
   trimFirstSpace
   updateParentPointers
@@ -32,34 +43,37 @@ import {
  */
 function adjustAtBindings(statements: ASTNode, asThis = false): void
   for each binding of gatherRecursiveAll statements, .type is "AtBindingProperty"
-    { ref } := binding
+    { ref, binding: atBinding } := binding
 
     if asThis
       // Convert from @x to x: this.x keeping any whitespace or initializer to the right
-      atBinding := binding.binding
       atBinding.children.pop()
-      atBinding.type = undefined
+      // Drop the AtBinding type tag — the children get inlined into the
+      // Property below, so this fragment doesn't carry a node type anymore.
+      delete (atBinding as { type?: AtBinding["type"] }).type
 
       // Build source-mapped "this." from the @ token's location
       atLoc := atBinding.at?.$loc
-      thisNode := if atLoc
+      thisNode: ASTNode := if atLoc
         { $loc: atLoc, token: "this." }
       else
         "this."
 
       // Insert key: this.key after the leading whitespace (index 0) so whitespace stays at front
       binding.children.splice(1, 0, ref.id, ": ", thisNode, ref.base)
-      binding.type = "Property"
-      binding.ref = undefined
+      // Mutate AtBindingProperty → Property in place
+      mut := binding as unknown as { type: "Property", ref?: ASTRef }
+      mut.type = "Property"
+      delete mut.ref
     else
-      unless ref.names[0] is ref.base
+      unless ref.names?[0] is ref.base
         binding.children.unshift(ref.base, ": ")
 
-function adjustBindingElements(elements: ASTNodeObject[])
-  names := elements.flatMap .names or []
+function adjustBindingElements(elements: ArrayBindingPatternContent)
+  names := elements.flatMap (e) => e.names or []
   { length } := elements
 
-  let blockPrefix,
+  let blockPrefix: ASTNode,
     restIndex = -1,
     restCount = 0
 
@@ -79,7 +93,10 @@ function adjustBindingElements(elements: ASTNodeObject[])
     rest := elements[restIndex] as BindingRestElement
     after := elements[restIndex + 1..]
 
-    restIdentifier := rest.binding.ref or rest.binding
+    restIdentifier: ASTNode := if 'ref' in rest.binding and rest.binding.ref
+      rest.binding.ref
+    else
+      rest.binding
     /* fallback when rest binding is PinPattern or Literal (neither sets names); prevents crash in `[a, ...^x] .= arr` shape */
     names.push ...rest.names or []
 
@@ -94,7 +111,7 @@ function adjustBindingElements(elements: ASTNodeObject[])
         type: "PostRestBindingElements"
         elements
         children: ["[", elements, "] = ", restIdentifier, ".splice(-", l.toString(), ")"]
-        names: after.flatMap((p) => p.names)
+        names: after.flatMap (p) => p.names or []
       }
 
     return {
@@ -144,13 +161,31 @@ function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: bool
   thisAssignments: ThisAssignments := []
   splices: unknown[] := []
 
-  function insertRestSplices(s, p: unknown[], thisAssignments: ThisAssignments): void
-    for each let n of gatherRecursiveAll(s, (n) => (or)
-      n.blockPrefix
-      opts?.injectParamProps and n.accessModifier
-      n.type is "AtBinding"
-      opts?.assignPins and n.type is like "PinPattern", "PinProperty"
+  // Discriminated union the gather predicate may return.  Each branch
+  // matches one of the inner if-arms.  Use the actual property types for
+  // blockPrefix (StatementTuple[] | PostRestBindingElements) rather than
+  // ASTNode so the intersection with the existing AST union is clean
+  // under exactOptionalPropertyTypes.
+  type BlockPrefix = StatementTuple[] | PostRestBindingElements
+  type SpliceMatch =
+    | (ASTNodeObject & { blockPrefix: BlockPrefix })
+    | (Parameter & { accessModifier: NonNullable<Parameter["accessModifier"]> })
+    | AtBinding
+    | PinPattern
+    | PinProperty
+
+  isSpliceMatch := ($: ASTNode): $ is SpliceMatch =>
+    /* c8 ignore next -- defensive: traversal can pass non-object values (booleans) when Hera assertions leak through; happy-path AST never triggers this */
+    return false unless isASTNodeObject $
+    !!((or)
+      'blockPrefix' in $ and !!$.blockPrefix
+      opts?.injectParamProps and 'accessModifier' in $ and !!$.accessModifier
+      $.type is "AtBinding"
+      opts?.assignPins and $.type is like "PinPattern", "PinProperty"
     )
+
+  function insertRestSplices(s: ASTNode, p: unknown[], thisAssignments: ThisAssignments): void
+    for each let n of gatherRecursiveAll s, isSpliceMatch
       // Insert `this` assignments
       if n.type is "AtBinding"
         { ref, at } := n
@@ -171,8 +206,9 @@ function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: bool
 
       if opts?.assignPins
         if n.type is "PinProperty"
-          n.children = n.children.flatMap
-            & is n.name ? [ n.name, ": ", n.value ] : &
+          { name, value } := n
+          n.children = n.children.flatMap (c) =>
+            c is name ? [ name, ": ", value ] : c
           updateParentPointers n
           // Fall through to handle PinPattern
           // (It won't be found by gatherRecursiveAll because wasn't a child)
@@ -182,25 +218,34 @@ function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: bool
             n.expression.type is "Identifier" ? n.expression.name : "pin"
           n.children = [n.ref]
           updateParentPointers n
+          // TODO: lhs should be AssignmentExpressionLHS (array of tuples),
+          // but this synthesized node uses a single-binding form.  No
+          // consumer iterates exp.lhs on this synthesized node.
           thisAssignments.push
             type: "AssignmentExpression"
             children: [n.expression, " = ", n.ref]
             names: []
-            lhs: n.expression as any
+            lhs: n.expression as! AssignmentExpressionLHS
             assigned: n.expression
             expression: n.ref
           continue
 
       if opts?.injectParamProps and n.type is "Parameter" and n.accessModifier
         for each id of n.names
-          thisAssignments.push
+          assign := {
             type: "AssignmentExpression"
             children: [`this.${id} = `, id]
             js: true
+          } as! AssignmentExpression
+          thisAssignments.push assign
         continue
 
-      { blockPrefix } := n
-      p.push(blockPrefix)
+      // Other matched branches all `continue`'d; only the
+      // `{ blockPrefix }` arm of SpliceMatch reaches here.  TS can't
+      // subtract the option-gated branches (assignPins / injectParamProps),
+      // so cast to that arm explicitly.
+      { blockPrefix } := n as ASTNodeObject & { blockPrefix: BlockPrefix }
+      p.push blockPrefix
 
       // Search for any further nested splices, and at bindings
       insertRestSplices(blockPrefix, p, thisAssignments)
@@ -209,23 +254,29 @@ function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: bool
 
   return [splices, thisAssignments] as const
 
-function arrayElementHasTrailingComma(elementNode)
+function arrayElementHasTrailingComma(elementNode: ArrayBindingPatternContent[number]): boolean
+  /* c8 ignore next -- defensive: ASTError elements aren't reached here in happy paths */
+  return false if elementNode.type is "Error"
   const lastChild = elementNode.children.-1
-  return lastChild and lastChild[lastChild.length - 1]?.token is ","
+  return false unless Array.isArray(lastChild)
+  const lastToken = lastChild.-1
+  return isToken(lastToken) and lastToken.token is ","
 
 // If an Array or ObjectBindingPattern doesn't have a typeSuffix, this function
 // extracts one from typeSuffixes for the binding properties (if present).
-function gatherBindingPatternTypeSuffix(pattern: ArrayBindingPattern | ObjectBindingPattern): BindingPattern
+function gatherBindingPatternTypeSuffix<T extends ArrayBindingPattern | ObjectBindingPattern>(pattern: T): T
   count .= 0
   switch pattern.type
     when "ArrayBindingPattern"
       types: ASTNode[] :=
         for each elem of pattern.elements
+          continue if elem.type is "Error"
           { typeSuffix, initializer } .= elem
-          typeSuffix ??= elem.binding?.typeSuffix
+          if 'binding' in elem and elem.binding? and 'typeSuffix' in elem.binding
+            typeSuffix ??= elem.binding.typeSuffix
           count++ if typeSuffix
           typeSuffix ?= typeSuffixForExpression trimFirstSpace initializer.expression if initializer?
-          typeElement .= [ typeSuffix?.t, elem.delim ]
+          typeElement: ASTNode[] .= [ typeSuffix?.t, 'delim' in elem ? elem.delim : undefined ]
           if typeSuffix?.optional
             typeElement[0] = parenthesizeType typeElement[0]
             typeElement.unshift "undefined |"
@@ -247,8 +298,11 @@ function gatherBindingPatternTypeSuffix(pattern: ArrayBindingPattern | ObjectBin
       let restType: ASTNode?
       types: ASTNode[] :=
         for each prop of pattern.properties
-          { typeSuffix, initializer } .= prop
-          typeSuffix ??= prop.value?.typeSuffix
+          continue if prop.type is "Error"
+          typeSuffix .= prop.typeSuffix
+          initializer := 'initializer' in prop ? prop.initializer : undefined
+          if 'value' in prop and prop.value? and 'typeSuffix' in prop.value
+            typeSuffix ??= prop.value.typeSuffix
           count++ if typeSuffix
           typeSuffix ?= typeSuffixForExpression trimFirstSpace initializer.expression if initializer?
           typeSuffix ??=

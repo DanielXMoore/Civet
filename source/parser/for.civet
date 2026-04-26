@@ -1,11 +1,14 @@
 import type {
   AssignmentExpression
+  AssignmentExpressionLHS
   ASTNode
   ASTNodeObject
   ASTLeaf
   ASTError
   Children
   ForDeclaration
+  Identifier
+  Initializer
   RangeDots
   RangeExpression
   Whitespace
@@ -14,6 +17,7 @@ import type {
 import {
   checkValidLHS
   literalValue
+  makeDecl
   makeLeftHandSideExpression
   makeNode
   makeNumericLiteral
@@ -131,11 +135,12 @@ function processRangeExpression(start: ASTNode, ws1: ASTNode, range: RangeDots, 
 
 // Construct for loop from RangeLiteral
 function forRange(
-  open: ASTLeaf
-  forDeclaration: ForDeclaration | AssignmentExpression
+  open: ASTLeaf | [ASTLeaf, ASTNode]
+  // null when the loop has no declaration (`for [start..end] by step`).
+  forDeclaration: ForDeclaration | AssignmentExpression | null
   range: RangeExpression
   stepExp: ASTNode
-  close: ASTLeaf
+  close: ASTLeaf | [ASTLeaf, ASTNode]
 )
   { start, end, left, right, increasing } .= range
 
@@ -206,7 +211,7 @@ function forRange(
       varAssign = [...trimFirstSpace(varName) as ASTNode[], " = "]
       varLet = [",", ...varName, " = ", counterRef]
     else // const or var or assignment like `for x[y] of z`: put inside loop
-      value := "StringLiteral" is start?.subtype ? ["String.fromCharCode(", counterRef, ")"] : counterRef
+      value := "StringLiteral" is (start as { subtype?: string }?)?.subtype ? ["String.fromCharCode(", counterRef, ")"] : counterRef
       blockPrefix = [
         ["", [forDeclaration, " = ", value], ";"]
       ]
@@ -244,19 +249,27 @@ function forRange(
     blockPrefix
   }
 
-function processForInOf($0: [
+// The grammar's `ForInOfDeclaration` is `ForDeclaration | LeftHandSideExpression`.
+// In practice the LHS form here always carries a `.names` array (Identifier,
+// destructured binding pattern, etc.) — restrict the structural shape so
+// `.names` access works without per-site narrowing.
+type ForInOfDecl = ForDeclaration | (ASTNodeObject & { names: string[] | null })
+
+function processForInOf(
   awaits: ASTNode
+  // hera emits `true` for `&` assertions in this slot.
   eachOwn: [ASTLeaf, ASTNode] | boolean | undefined
-  open: ASTLeaf
-  declaration: ASTNode
-  declaration2: [ws1: ASTNode, comma: ASTLeaf, ws2: ASTNode, decl2: ASTNode]
+  // Open/close come either as a bare ASTLeaf or as `[OpenParen, __]`.
+  open: ASTLeaf | [ASTLeaf, ASTNode]
+  declaration: ForInOfDecl
+  // The optional `( __ Comma __ ForInOfDeclaration )?` slot.
+  declaration2: [ws1: ASTNode, comma: ASTLeaf, ws2: ASTNode, decl2: ForInOfDecl] | undefined
   ws: ASTNode
   inOf: ASTLeaf
   exp: ASTNodeObject
-  step: [Whitespace, ASTLeaf, ASTNode]
-  close: ASTLeaf
-])
-  [awaits, eachOwn, open, declaration, declaration2, ws, inOf, exp, step, close] .= $0
+  step: [Whitespace, ASTLeaf, ASTNode] | undefined
+  close: ASTLeaf | [ASTLeaf, ASTNode]
+)
   // Hera 0.9.0: `&ForInOfDeclaration` assertion now yields `true` in the eachOwn slot.
   eachOwn = undefined if eachOwn <? "boolean"
 
@@ -274,7 +287,9 @@ function processForInOf($0: [
   if exp.type is "RangeExpression" and inOf.token is "of" and not declaration2
     // TODO: add support for `declaration2` to efficient `forRange`
     return forRange
-      open, declaration, exp
+      open
+      declaration as! ForDeclaration | AssignmentExpression | null
+      exp
       step and prepend(trimFirstSpace(step[0]), trimFirstSpace(step[2])) // omit "by" token
       close
   else if step
@@ -291,14 +306,14 @@ function processForInOf($0: [
       expRef := maybeRef(exp)
 
       const increment = "++"
-      let assignmentNames = [...declaration.names]
+      let assignmentNames = [...declaration.names!]
 
       if declaration2
         [, , ws2, decl2] := declaration2  // strip __ Comma __
         blockPrefix.push(["", [
           trimFirstSpace(ws2), decl2, " = ", counterRef
         ], ";"])
-        assignmentNames.push(...decl2.names)
+        assignmentNames.push(...decl2.names!)
 
       expRefDec := (expRef !== exp)
         // Trim a single leading space if present
@@ -309,15 +324,14 @@ function processForInOf($0: [
         type: "Declaration"
         children: [declaration, " = ", trimFirstSpace(expRef), "[", counterRef, "]"]
         names: assignmentNames
+        bindings: []
+        decl: "let"
         implicitLift: true
       }, ";"]
 
       eachDeclaration := declaration
-      declaration =
-        type: "Declaration"
-        children: ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", trimFirstSpace(expRef), ".length"]
-        decl: "let"
-        names: []
+      declaration = makeDecl "let",
+        ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", trimFirstSpace(expRef), ".length"]
 
       condition := [counterRef, " < ", lenRef, "; "]
       children := [open, declaration, "; ", condition, counterRef, increment, close]
@@ -341,33 +355,35 @@ function processForInOf($0: [
   //   for var x: T of y -> for (const x1 of y) {var x: T = x1;
   // for..in loops need a similar ref-based declaration
   // for dereferencing to get the associated value.
-  { binding } := declaration
-  pattern .= binding?.pattern
+  // Only ForDeclaration carries a typed `.binding`; LHS-style declarations
+  // don't, so guard via the type discriminator.
+  binding := declaration.type is "ForDeclaration" ? declaration.binding : undefined
+  pattern: ASTNodeObject? .= binding?.pattern
   // Unwrap NamedBindingPattern to correctly detect "Identifier" and
   // avoid double subbinding
   if pattern?.type is "NamedBindingPattern"
     pattern = pattern.binding
   if binding?.typeSuffix or (
-    inOf.token is "in" and declaration2 and pattern.type is not "Identifier"
+    inOf.token is "in" and declaration2 and pattern?.type is not "Identifier"
   )
     itemRef := makeRef if inOf.token is "in" then "key" else "item"
-    blockPrefix.push ["", {
-      type: "Declaration"
-      children: [declaration, " = ", itemRef]
-      names: declaration.names
-    }, ";"]
+    blockPrefix.push ["", makeDecl("const", [declaration, " = ", itemRef], declaration.names!), ";"]
     declaration =
       type: "ForDeclaration"
-      binding: {
+      binding:
         type: "Binding"
-        pattern: itemRef
+        // The synth binding uses an ASTRef before populateRefs resolves
+        // it to an Identifier; cast to satisfy Binding.pattern's type.
+        pattern: itemRef as! Identifier
         children: [ itemRef ]
         names: []
-      }
+        splices: []
+        thisAssignments: []
       children: ["const ", itemRef]
       names: []
-    unless pattern.type is "Identifier"
-      pattern = itemRef
+      decl: "const"
+    unless pattern?.type is "Identifier"
+      pattern = itemRef as! ASTNodeObject
 
   unless declaration2 or own
     return {
@@ -376,38 +392,30 @@ function processForInOf($0: [
       children: [awaits, eachOwnError, open, declaration, ws, inOf, expRef ?? exp, close] // omit declaration2, replace eachOwn with eachOwnError, replace exp with expRef
     }
 
-  let ws2: ASTNode?, decl2: ASTNode?
+  let ws2: ASTNode?, decl2: ForInOfDecl?
   if (declaration2) [, , ws2, decl2] = declaration2  // strip __ Comma __
 
   switch inOf.token
     when "of" // for item, index of iter
       counterRef := makeRef "i"
-      hoistDec = {
-        type: "Declaration"
-        children: ["let ", counterRef, " = 0"]
-        decl: "let"
-        names: []
-      }
-      blockPrefix.push ["", {
-        type: "Declaration"
-        children: [trimFirstSpace(ws2), decl2, " = ", counterRef, "++"]
-        names: decl2.names
-        decl: decl2.decl
-      }, ";"]
+      hoistDec = makeDecl "let", ["let ", counterRef, " = 0"]
+      d2 := decl2! as ForDeclaration
+      blockPrefix.push ["", makeDecl(d2.decl, [trimFirstSpace(ws2), d2, " = ", counterRef, "++"], d2.names), ";"]
 
     // grammar guarantees inOf.token is "of" or "in" only
     when "in" // for key, value in object
       // First, wrap object in ref if complex expression
       expRef := maybeRef exp
       unless expRef is exp
-        hoistDec =
-          type: "Declaration"
-          children: ["let ", expRef]
-          names: []
-          decl: "let"
-        exp =
+        hoistDec = makeDecl "let", ["let ", expRef]
+        // Synth AssignmentExpression: only `type`/`children` are read by
+        // downstream consumers of `exp`.  See typing-philosophy memo —
+        // the long-term direction is for synth nodes to match the parser
+        // shape exactly; cast for now.
+        exp = {
           type: "AssignmentExpression"
           children: [" ", expRef, " =", exp]
+        } as! ASTNodeObject
       // for own..in
       if own
         hasPropRef := getHelperRef("hasProp")
@@ -422,34 +430,39 @@ function processForInOf($0: [
                 type: "Index"
                 expression: trimmedPattern
                 children: [ "[", trimmedPattern, "]" ]
-        blockPrefix.push ["",
-          if decl2.type is "ForDeclaration"
-            { binding, children } := decl2
-            binding.children.push binding.initializer = makeNode {}
-              type: "Initializer"
-              expression
-              children: [" = ", expression]
-            makeNode
-              type: "Declaration"
-              children: [
-                trimFirstSpace(ws2)
-                ...children
-              ]
-              bindings: [decl2.binding]
-              decl: decl2.decl
-              names: decl2.names
-          else
-            makeNode {}
-              type: "AssignmentExpression"
-              children: [
-                trimFirstSpace(ws2), decl2, " = "
-                trimFirstSpace(expRef)
-                "[", trimFirstSpace(pattern), "]"
-              ]
-              names: decl2.names
-              lhs: decl2
-              assigned: decl2
-          ";"]
+        d2 := decl2!
+        synthDecl: ASTNode := if d2.type is "ForDeclaration"
+          { binding, children, decl, names } := d2
+          // decl2's binding gains an initializer for the index lookup
+          init: Initializer := makeNode {
+            type: "Initializer"
+            expression
+            children: [" = ", expression]
+          }
+          binding.children.push (binding.initializer = init)
+          makeNode {
+            type: "Declaration"
+            children: [trimFirstSpace(ws2), ...children]
+            bindings: [binding]
+            decl
+            names
+          }
+        else
+          // Synth AssignmentExpression: real AssignmentExpressionLHS is an
+          // array of tuples; no consumer iterates exp.lhs on this synth.
+          makeNode({
+            type: "AssignmentExpression"
+            children: [
+              trimFirstSpace(ws2), d2, " = "
+              trimFirstSpace(expRef)
+              "[", trimFirstSpace(pattern), "]"
+            ]
+            names: d2.names ?? []
+            lhs: d2 as! AssignmentExpressionLHS
+            assigned: d2
+            expression: expRef
+          } as! AssignmentExpression)
+        blockPrefix.push ["", synthDecl, ";"]
 
   return {
     declaration,

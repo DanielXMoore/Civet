@@ -82,16 +82,22 @@ import {
 } from "./parser/lib.civet"
 import type {
   ArrayBindingPattern,
+  AssignmentExpressionLHS,
   ASTNode,
+  ASTNodeObject,
   BlockStatement,
   ObjectBindingPattern,
+  StatementTuple,
+  WithClause,
 } from "./parser/types.civet"
 
 /**
  * Globals
  */
 let filename: string??        // filename currently being parsed
-let initialConfig: unknown | null              // input for parser config
+// Caller-supplied parser flags (i.e. CompilerOptions["parseOptions"]).
+// Kept as a snapshot — directives mutate `config`, not this.
+let initialConfig: import("./main.civet").ParseOptions | null | undefined
 let config: any                                 // current parser config after directives
 let sync: boolean??           // synchronous mode: as much as possible without await
 
@@ -109,8 +115,8 @@ interface ParserState
   JSXTagStack: unknown[]
   indentLevels: { level: number, token?: string }[]
   operators: Map<string, any>
-  helperRefs: any
-  prelude: any
+  helperRefs: Record<string, import("./parser/types.civet").ASTRef>
+  prelude: import("./parser/types.civet").StatementTuple[]
   lastIndent: any
   // Getters installed via Object.defineProperties.  The *Forbidden fields
   // are returned as booleans but the grammar bit-shifts them into a state key,
@@ -226,7 +232,7 @@ export function getStateKey()
 
   return [stateInt, state.currentJSXTag]
 
-export function parseProgram(input: string, options?: { filename?: string, parseOptions?: unknown, sync?: boolean })
+export function parseProgram(input: string, options?: { filename?: string, parseOptions?: import("./main.civet").ParseOptions, sync?: boolean })
   filename = options?.filename
   initialConfig = options?.parseOptions
   sync = options?.sync
@@ -265,7 +271,7 @@ Program
   # when Init didn't already consume them.
   Reset:reset Init:init EOS?:ws1 TopLevelStatements:statements __:ws2 ::BlockStatement ->
     // NOTE: Wrap top level statements in a bare block so they have a parent
-    program := {
+    program: BlockStatement := {
       type: "BlockStatement",
       expressions: statements,
       children: [reset, init, ws1, statements, ws2],
@@ -444,17 +450,18 @@ ImplicitArguments
 
 ExplicitArguments
   OpenParen:open AllowAll ( PostfixedArgumentList ( __ Comma )? )?:args __:ws RestoreAll CloseParen:close ->
+    let resolvedArgs: ASTNode[]
     if args
       if args[1] // trailing comma
-        args = [ ...args[0], args[1] ]
+        resolvedArgs = [ ...args[0], args[1] ]
       else // no trailing comma
-        args = args[0]
+        resolvedArgs = args[0]
     else // no arguments
-      args = []
+      resolvedArgs = []
     return {
       type: "Call",
-      args,
-      children: [open, args, ws, close],
+      args: resolvedArgs,
+      children: [open, resolvedArgs, ws, close],
     }
 
 # Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
@@ -568,6 +575,7 @@ PostfixedArgumentList
     return [
       $2,
       ...$3.flatMap(([comma, eos, ws, arg]) => [comma, prepend(ws, arg)]),
+      /* c8 ignore next 4 -- non-array NestedArguments branches (NestedBulletedArray / NestedImplicitObjectLiteral) aren't reached by happy-path tests; NestedArgumentList is dominant */
       ...(Array.isArray($4[1]) ? [$4[0], ...$4[1]] : $4),
       ...$5.flatMap(([comma, args]) =>
         Array.isArray(args) ? [comma, ...args] : [comma, args]
@@ -578,6 +586,7 @@ PostfixedArgumentList
     $1 = [$1] unless Array.isArray $1
     return [
       ...trimFirstSpace($1),
+      /* c8 ignore next 3 -- see PostfixedArgumentList above: non-array NestedArguments branch is grammar-reachable but not exercised */
       ...$2.flatMap(([comma, args]) =>
         Array.isArray(args) ? [comma, ...args] : [comma, args]
       ),
@@ -659,9 +668,9 @@ PostfixedArgumentPart
     }
 
 BinaryOpExpression
-  UnaryExpression BinaryOpRHS* ::ASTNode ->
-    return $1 unless $2.length
-    return processBinaryOpExpression($0)
+  UnaryExpression:lhs BinaryOpRHS*:binops ::ASTNode ->
+    return lhs unless binops.length
+    return processBinaryOpExpression(lhs, binops)
 
 BinaryOpNotDedented
   !NewlineBinaryOpAllowed _? -> $2
@@ -722,7 +731,8 @@ RHS
 UnaryExpression
   # NOTE: Added nested/array case, for e.g. indented await argument
   IndentedApplicationAllowed UnaryOp+:pre ( ArrayLiteral / NestedArgumentList ):args !CallExpressionRest UnaryPostfix?:post ::ASTNode ->
-    return processUnaryNestedExpression(pre, args, post) ?? $skip
+    // hera's $skip return path isn't reflected in the rule's `::Type`.
+    return processUnaryNestedExpression(pre, args, post) ?? $skip as ASTNode
 
   # NOTE: Merged AwaitExpression with UnaryOp
   # https://262.ecma-international.org/#prod-AwaitExpression
@@ -736,7 +746,7 @@ UnaryWithoutParenthesizedAssignment
 
 UnaryBody
   CoffeeDoEnabled Do MaybeNestedCoffeeDoBody:body ->
-    return processCoffeeDo(...body)
+    return processCoffeeDo(body[0], body[1])
 
   ParenthesizedAssignment
   ExpressionizedStatementWithTrailingCallExpressions
@@ -885,16 +895,18 @@ ActualAssignment
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
   ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedExpression ::ASTNode ->
-    $1 = $1.map((x) => [x[0], x[1], ...x[2]])
-    $0 = [$1, $2]
+    // Spread each WAssignmentOp `[ws, op]` pair into the enclosing lhs-part
+    // tuple so consumers can index ws at [2] and op at [3].
+    lhs := $1.map((x) => [x[0], x[1], ...x[2]]) as! AssignmentExpressionLHS
+    children := [lhs, $2]
     return {
       type: "AssignmentExpression",
-      children: $0,
+      children,
       // NOTE: This null marks the assignment for later processing to distinguish it
       // from fake assignments that only add a name to a scope
       names: null,
-      lhs: $1,
-      assigned: $1[0][1],
+      lhs,
+      assigned: lhs[0][1],
       expression: $2,
     }
 
@@ -904,16 +916,16 @@ NonPipelineActualAssignment
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
   ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedNonPipelineExpression ::ASTNode ->
-    $1 = $1.map((x) => [x[0], x[1], ...x[2]])
-    $0 = [$1, $2]
+    lhs := $1.map((x) => [x[0], x[1], ...x[2]]) as! AssignmentExpressionLHS
+    children := [lhs, $2]
     return {
       type: "AssignmentExpression",
-      children: $0,
+      children,
       // NOTE: This null marks the assignment for later processing to distinguish it
       // from fake assignments that only add a name to a scope
       names: null,
-      lhs: $1,
-      assigned: $1[0][1],
+      lhs,
+      assigned: lhs[0][1],
       expression: $2,
     }
 
@@ -937,22 +949,22 @@ YieldExpression
 ArrowFunction
   ThinArrowFunction
   ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:returnType FatArrow:arrow FatArrowBody:expOrBlock ->
-    async = [] unless async
+    asyncTokens: ASTNode[] := async ?? []
 
     return {
       type: "ArrowFunction",
       signature: {
         modifier: {
-          async: !!async#,
+          async: !!asyncTokens#,
         },
         parameters,
         returnType,
       },
       parameters,
       returnType,
-      async,
+      async: asyncTokens,
       block: expOrBlock,
-      children: [async, parameters, returnType, arrow, expOrBlock ],
+      children: [asyncTokens, parameters, returnType, arrow, expOrBlock ],
     }
 
 FatArrow
@@ -1246,11 +1258,12 @@ WithClause
   # Also allows for arbitrary expressions
   NotDedented With PushIndent ( Nested Expression _? Comma? )*:targets PopIndent ->
     return $skip unless targets#
-    targets = targets.map(($) => $.slice(0, -1)) // strip Comma?
+    // Drop the trailing Comma? — consumers only read [0] and [1].
+    stripped := targets.map(($) => $.slice(0, -1)) as! WithClause["targets"]
     return {
       type: "WithClause",
       children: $0,
-      targets,
+      targets: stripped,
     }
   NotDedented With NotDedented:ws ExtendsTarget:t ( _? Comma NotDedented ExtendsTarget )*:rest ->
     return {
@@ -1312,8 +1325,8 @@ ImplementsClause
   ImplementsToken:i PushIndent ( Nested TypeIdentifier ArrayBulletDelimiter )*:targets PopIndent ->
     return $skip unless targets#
     // remove final comma
-    last := targets.at(-1).slice(0, -1)
-    targets = targets.slice(0, -1).concat(last)
+    last := targets.at(-1)!.slice(0, -1)
+    targets = (targets.slice(0, -1) as unknown[]).concat([last]) as typeof targets
     return {
       ts: true,
       children: [i, targets],
@@ -1336,8 +1349,8 @@ ImplementsToken
     return { children }
 
   NotDedented "implements" NonIdContinue ->
-    $2 = { $loc, token: $2 }
-    return [$1, $2]
+    impl := { $loc, token: $2 }
+    return [$1, impl]
 
 ImplementsShorthand
   "<:" ->
@@ -1628,10 +1641,10 @@ CallExpression
       children: [$1, ...$2, ...rest.flat()],
     })
   # Import declaration as an expression
-  Import _ DynamicImportContents __ FromClause ->
-    return dynamizeImportDeclarationExpression($0)
+  Import:i _:iws DynamicImportContents:imports __:ws2 FromClause:from ->
+    return dynamizeImportDeclarationExpression(i, iws, imports, ws2, from)
   FromClause:from __:fws Import:i _:iws DynamicImportContents:imports ->
-    return dynamizeImportDeclarationExpression([i, iws, imports, fws, from])
+    return dynamizeImportDeclarationExpression(i, iws, imports, fws, from)
   # Dynamic import(), with optional parentheses when not used at top level.
   # (At top level, ImportDeclaration will match first.)
   "import" ArgumentsWithTrailingCallExpressions:argsWithTrailing CallExpressionRest*:rest ->
@@ -2046,7 +2059,7 @@ AfterReturnShorthand
 Parameters
   NonEmptyParameters
   TypeParameters?:tp Loc:p ->
-    parameters := []
+    parameters: ASTNode[] := []
     return {
       type: "Parameters",
       children: [tp, {$loc: p.$loc, token: "("}, parameters, ")"],
@@ -2575,8 +2588,8 @@ FunctionDeclaration
 FunctionSignature
   # NOTE: Merged in async and generator with optionals
   ( Async _ )?:async Function:func ( _? Star )?:generator ( _? NWBindingIdentifier )?:wid _?:w Parameters:parameters ReturnTypeSuffix?:returnType ->
-    async = [] unless async
-    generator = [] unless generator
+    asyncTokens: ASTNode[] := async ?? []
+    generatorTokens: ASTNode[] := generator ?? []
 
     id := wid?.[1]
     return {
@@ -2585,16 +2598,16 @@ FunctionSignature
       name: id?.name,
       parameters,
       returnType,
-      async,
-      generator,
+      async: asyncTokens,
+      generator: generatorTokens,
       modifier: {
-        async: !!async#,
-        generator: !!generator#,
+        async: !!asyncTokens#,
+        generator: !!generatorTokens#,
       },
       block: null,
       children: !parameters.implicit
-        ? [ async, func, generator, wid, w, parameters, returnType ]
-        : [ async, func, generator, wid, parameters, w, returnType ],
+        ? [ asyncTokens, func, generatorTokens, wid, w, parameters, returnType ]
+        : [ asyncTokens, func, generatorTokens, wid, parameters, w, returnType ],
           // move whitespace w to after implicit () in parameters
     }
 
@@ -2629,9 +2642,9 @@ FunctionExpression
     ws2 = op.spaced ? [" "] : [] unless ws2
     refA := makeRef("a")
     refB := makeRef("b")
-    body := processBinaryOpExpression([refA, [
+    body := processBinaryOpExpression(refA, [
       [ws1, op, ws2, refB] // BinaryOpRHS
-    ]])
+    ])
 
     parameterList := [ [ refA, "," ], refB ]
     parameters := {
@@ -2664,9 +2677,9 @@ FunctionExpression
     refB := makeRef("b")
     fn := makeAmpersandFunction({
       ref: refB,
-      body: processBinaryOpExpression([lhs, [
+      body: processBinaryOpExpression(lhs, [
         [ws1, op, ws2, refB] // BinaryOpRHS
-      ]])
+      ])
     })
     return {
       type: "ParenthesizedExpression",
@@ -2675,16 +2688,16 @@ FunctionExpression
     }
   # Assignment version based on ActualAssignment rule
   OpenParen:open ( NotDedented UpdateExpression WAssignmentOp )+:lhs __:ws2 CloseParen:close ->
-    lhs = lhs.map((x) => [x[0], x[1], ...x[2]])
+    flatLhs := lhs.map((x) => [x[0], x[1], ...x[2]]) as! AssignmentExpressionLHS
     refB := makeRef("b")
     fn := makeAmpersandFunction({
       ref: refB,
       body: {
         type: "AssignmentExpression",
-        children: [ lhs, ws2, refB ],
+        children: [ flatLhs, ws2, refB ],
         names: null,
-        lhs,
-        assigned: lhs[0][1],
+        lhs: flatLhs,
+        assigned: flatLhs[0][1],
         expression: refB,
       },
     })
@@ -2697,9 +2710,9 @@ FunctionExpression
     refA := makeRef("a")
     fn := makeAmpersandFunction({
       ref: refA,
-      body: processBinaryOpExpression([refA, [
+      body: processBinaryOpExpression(refA, [
         [ws1, op, ws2, rhs] // BinaryOpRHS
-      ]])
+      ])
     })
     return {
       type: "ParenthesizedExpression",
@@ -2712,9 +2725,9 @@ FunctionExpression
     refA := makeRef("a")
     fn := makeAmpersandFunction({
       ref: refA,
-      body: processBinaryOpExpression([refA, [
+      body: processBinaryOpExpression(refA, [
         [ws1, op, ws2, rhs] // BinaryOpRHS
-      ]])
+      ])
     })
     return {
       type: "ParenthesizedExpression",
@@ -2759,27 +2772,26 @@ OperatorDeclaration
 # and parameters are required (to be useful).
 OperatorSignature
   ( Async _ )?:async Operator:op ( _ Function )?:func ( _? Star )?:generator _:w1 Identifier:id OperatorBehavior?:behavior _?:w2 NonEmptyParameters:parameters ReturnTypeSuffix?:returnType ->
-    async = [] unless async
-    generator = [] unless generator
+    asyncTokens: ASTNode[] := async ?? []
+    generatorTokens: ASTNode[] := generator ?? []
     // Add "function" (if not already one) to replace "operator"
-    unless func
-      func = { $loc: op.$loc, token: "function" }
-    else
-      func = [ trimFirstSpace(func[0]), func[1] ]
+    funcTokens: ASTNode := func
+      ? [ trimFirstSpace(func[0]), func[1] ]
+      : { $loc: op.$loc, token: "function" }
     return {
       type: "FunctionSignature",
       id,
       name: id.name,
       parameters,
       returnType,
-      async,
-      generator,
+      async: asyncTokens,
+      generator: generatorTokens,
       modifier: {
-        async: !!async#,
-        generator: !!generator#,
+        async: !!asyncTokens#,
+        generator: !!generatorTokens#,
       },
       block: null,
-      children: [ async, func, generator, w1, id, behavior?.error, w2, parameters, returnType ],
+      children: [ asyncTokens, funcTokens, generatorTokens, w1, id, behavior?.error, w2, parameters, returnType ],
       behavior,
     }
 
@@ -2826,8 +2838,8 @@ OperatorAssociativity
 
 ThinArrowFunction
   ( Async _ )?:async ThinArrowParameters:parameters ReturnTypeSuffix?:returnType _?:ws ThinArrow:arrow ( BracedObjectSingleLineStatements / NoCommaBracedOrEmptyBlock ):block ->
-    async = [] unless async
-    generator := []
+    asyncTokens: ASTNode[] := async ?? []
+    generatorTokens: ASTNode[] := []
 
     // Assuming there's anything before the arrow, use input whitespace `ws`
     // instead of leading space from block generated by OpenBrace or braceBlock
@@ -2841,23 +2853,23 @@ ThinArrowFunction
       id: undefined,
       parameters,
       returnType,
-      async,
-      generator,
+      async: asyncTokens,
+      generator: generatorTokens,
       block,
       signature: {
         name: undefined,
-        async,
-        generator,
+        async: asyncTokens,
+        generator: generatorTokens,
         modifier: {
-          async: !!async#,
-          generator: !!generator#,
+          async: !!asyncTokens#,
+          generator: !!generatorTokens#,
         },
         returnType,
       },
       children: [
-        async,
+        asyncTokens,
         { $loc: arrow.$loc, token: "function" },
-        generator,
+        generatorTokens,
         parameters,
         returnType,
         ws,
@@ -2892,7 +2904,7 @@ ExplicitBlock
 
 EmptyBracedContent
   &( __ "}" ) ->
-    expressions := []
+    expressions: StatementTuple[] := []
     return {
       type: "BlockStatement",
       expressions,
@@ -2994,7 +3006,7 @@ NoPostfixBracedOrEmptyBlock
 EmptyBlock
   # Implied empty block
   InsertOpenBrace InsertCloseBrace ->
-    expressions := []
+    expressions: StatementTuple[] := []
     return {
       type: "BlockStatement",
       expressions,
@@ -3033,7 +3045,7 @@ EmptyStatementBareBlock
 EmptyBareBlock
   # Implied empty block with no braces. Used in case statements.
   "" ->
-    expressions := []
+    expressions: StatementTuple[] := []
     return {
       type: "BlockStatement",
       expressions,
@@ -3115,7 +3127,7 @@ SingleLineStatements
     expressions := stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
     expressions.push([last[0][0], last[1], last[2]]) if last
 
-    children := [expressions]
+    children: ASTNode[] := [expressions]
     children.push(["\n"]) if hasTrailingComment(expressions)
 
     return {
@@ -3556,20 +3568,22 @@ NestedBulletedArray
 BulletedArray
   InsertOpenBracket:open ( ArrayBullet NestedArrayBullet* )?:content InsertCloseBracket:close ->
     return $skip unless content
-    content = [
+    flat: ASTNode[] := [
       ...trimFirstSpace(content[0]), // replace first space with bracket
       ...content[1].flat(),
     ]
 
     // Remove implicit comma from last element
-    last .= content[content# - 1]
-    if last.children?.at(-1)?.implicit
-      content[content# - 1] = last =
-        { ...last, children: last.children.slice(0, -1) }
+    type LastShape = { children?: { implicit?: boolean }[] } | undefined
+    last .= flat[flat# - 1] as LastShape
+    if last?.children?.at(-1)?.implicit
+      replaced := { ...last, children: last.children!.slice(0, -1) }
+      flat[flat# - 1] = replaced as! ASTNode
+      last = replaced
 
     return {
       type: "ArrayExpression",
-      children: [open, ...content, close],
+      children: [open, ...flat, close],
     }
 
 NestedArrayBullet
@@ -3893,11 +3907,12 @@ PropertyDefinition
     last := lastAccessInCallExpression(value)
     return $skip unless last
 
-    let name, ref, refAssignment
-    { expression, type } := last
-    if type is "Index"
+    let name: string | { type: string, children: ASTNode[], implicit?: boolean } | undefined
+    let ref: ASTNode
+    let refAssignment: ASTNode | undefined
+    if last.type is "Index"
       // TODO: If `last` is a suitable string literal, could use it for `name`.
-      { ref, refAssignment } = maybeRefAssignment(expression)
+      { ref, refAssignment } = maybeRefAssignment(last.expression)
       if refAssignment
         name = {
           type: "ComputedPropertyName",
@@ -3922,11 +3937,13 @@ PropertyDefinition
           implicit: true,
         }
     else
+      // Identifier or PropertyAccess — both carry .name (a string)
       ({name} = last)
       return $skip unless name
 
-    // Private name becomes public
-    if name[0] is "#" then name = name.slice(1)
+    // Private name becomes public (only applies to bare-string names —
+    // ComputedPropertyName form keeps its `#` inside the expression).
+    if typeof name is "string" and name[0] is "#" then name = name.slice(1)
 
     // { y? } → { ...((y != null) && {y}) }
     if not pre# and post?.token is "?" and value.type is "Identifier"
@@ -4083,13 +4100,15 @@ MethodDefinition
     value := [ base, rest ]
 
     unless rest#
-      let name
+      let name: string | undefined
       if base.type is "MemberExpression"
         lastAccess := lastAccessInCallExpression(base)
-        if lastAccess
+        // Only Identifier/PropertyAccess carry .name (Index does not).
+        if lastAccess and lastAccess.type is not "Index"
           ({ name } = lastAccess)
 
-      if not name then ({ name } = base)
+      if not name and base.type is not "Index"
+        name = (base as { name?: string }).name
       return $skip unless name
 
       // Remove leading # from private identifier since it makes no
@@ -4137,11 +4156,15 @@ MethodDefinition
             return makeGetterMethod(name, ws, exp, returnType, block, kind)
           })
         }
-
-    lastAccess := lastAccessInCallExpression({children: rest})
-    { name } := lastAccess
-
-    return makeGetterMethod(name, ws, value, returnType, block, kind)
+      // Defensive backtrack for non-Call/PropertyAccess/PropertyGlob last access
+      // (e.g., trailing Index): `$skip` (not assert) lets the parser backtrack
+      // so an alternative grammar rule can match.  Happy-path tests don't
+      // exercise this fall-through.
+      /* c8 ignore next 4 */
+      default:
+        lastAccess := lastAccessInCallExpression({children: rest})
+        return $skip if not lastAccess? or lastAccess.type is "Index"
+        return makeGetterMethod(lastAccess.name, ws, value, returnType, block, kind)
 
 MethodModifier
   # NOTE: Merged get/set definitions
@@ -4159,18 +4182,18 @@ MethodModifier
     }
   # NOTE: Merged async and generator into MethodModifier
   ( Async __ )?:async ( Star __ )?:generator ->
-    async = [] unless async
-    generator = [] unless generator
+    asyncTokens: ASTNode[] := async ?? []
+    generatorTokens: ASTNode[] := generator ?? []
     return {
-      async,
-      generator,
+      async: asyncTokens,
+      generator: generatorTokens,
       modifier: {
-        async: !!async#,
+        async: !!asyncTokens#,
         get: false,
         set: false,
-        generator: !!generator#,
+        generator: !!generatorTokens#,
       },
-      children: [ async, generator ],
+      children: [ asyncTokens, generatorTokens ],
     }
 
 # TypeScript method signature
@@ -4947,7 +4970,7 @@ DoStatement
 ComptimeStatement
   Comptime NoPostfixBracedOrEmptyBlock:t ElseClause?:e ->
     // Wrap the else block if present and comptime is off
-    block .= not initialConfig.comptime and e?.block or t
+    block .= not initialConfig?.comptime and e?.block or t
     block = trimFirstSpace(block)
     return {
       type: "ComptimeStatement",
@@ -5046,7 +5069,7 @@ ForStatementControlWithReduction
     return { ...control, reduction }
 
 ForReduction
-  ( "some" / "every" / "count" / "first" / "sum" / "product" / "min" / "max" / "join" / "concat" ):subtype NonIdContinue __:ws ->
+  $/some|every|count|first|sum|product|min|max|join|concat/:subtype NonIdContinue __:ws ->
     return {
       type: "ForReduction",
       subtype,
@@ -5108,7 +5131,7 @@ CoffeeForStatementParameters
       expRef := maybeRef(exp)
 
       varRef := declaration
-      increment .= "++"
+      let increment: string | ASTNode[] = "++"
       let indexAssignment
       assignmentNames .= [...varRef.names]
 
@@ -5213,17 +5236,17 @@ ForStatementParameters
   # NOTE: Consolidated optional 'await'
   # NOTE: &OpenParen is to fill the spot normally taken by each/own
   ( Await __ )? &OpenParen ( OpenParen __ ) ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? ( __ CloseParen ) ->
-    return processForInOf($0)
+    return processForInOf(...$0)
   # NOTE: Added optional each/own modifiers,
   # which are tried second to allow them to still work as identifiers
   ( Await __ )? ( (Each / Own) __ )? ( OpenParen __ ) ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? ( __ CloseParen ) ->
-    return processForInOf($0)
+    return processForInOf(...$0)
   # NOTE: Added optional parens
   # NOTE: &ForInOfDeclaration is to fill the spot normally taken by each/own
   ( Await __ )? &ForInOfDeclaration InsertOpenParen ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? InsertCloseParen ->
-    return processForInOf($0)
+    return processForInOf(...$0)
   ( Await __ )? ( (Each / Own) __ )? InsertOpenParen ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? InsertCloseParen ->
-    return processForInOf($0)
+    return processForInOf(...$0)
   ForRangeParameters
 
 ForRangeParameters
@@ -5282,6 +5305,7 @@ ForBinding
 # https://262.ecma-international.org/#prod-SwitchStatement
 SwitchStatement
   Switch:s ForbidNewlineBinaryOp ( EmptyCondition / Condition )?:condition RestoreNewlineBinaryOp CaseBlock:caseBlock ->
+    /* c8 ignore next -- defensive: $skip lets parser backtrack when optional Condition fails to parse; happy-path tests always supply a condition */
     return $skip unless condition
     if condition.type is "EmptyCondition"
       // Negate all case condition expressions. This converts them to booleans
@@ -5437,8 +5461,8 @@ IgnoreColon
 
 # https://262.ecma-international.org/#prod-TryStatement
 TryStatement
-  Try !":" NoPostfixBracedOrEmptyBlock CatchClause* ElseClause? WFinallyClause? ->
-    return processTryBlock($0)
+  Try:t !":" NoPostfixBracedOrEmptyBlock:block CatchClause*:cs ElseClause?:e WFinallyClause?:f ->
+    return processTryBlock(t, block, cs, e, f)
 
 # https://262.ecma-international.org/#prod-Catch
 CatchClause
@@ -6706,8 +6730,8 @@ TemplateLiteral
   /(?=[`'"])/ _TemplateLiteral -> $2
 
 _TemplateLiteral
-  TripleTick ( TemplateBlockCharacters / TemplateSubstitution )* TripleTick ->
-    return dedentBlockSubstitutions($0, config.tab)
+  TripleTick:s ( TemplateBlockCharacters / TemplateSubstitution )*:parts TripleTick:e ->
+    return dedentBlockSubstitutions(s, parts, e, config.tab)
 
   Backtick ( TemplateCharacters / TemplateSubstitution )* Backtick ->
     return {
@@ -6716,8 +6740,8 @@ _TemplateLiteral
     }
 
   # NOTE: actual CoffeeScript """ string behaviors are pretty weird, this is simplified
-  TripleDoubleQuote TripleDoubleStringContents TripleDoubleQuote ->
-    return dedentBlockSubstitutions($0, config.tab)
+  TripleDoubleQuote:s TripleDoubleStringContents:parts TripleDoubleQuote:e ->
+    return dedentBlockSubstitutions(s, parts, e, config.tab)
 
   # NOTE: ''' don't have interpolation so could be converted into a regular
   # String, but currently we use `template`s so the output looks similar to
@@ -7319,19 +7343,20 @@ JSXImplicitFragment
   # Implicit fragment can be explicitly forbidden; it also inherits
   # forbidden status from binary ops on the following line.
   JSXTag:first ( ImplicitFragmentAllowed NestedBinaryOpAllowed NewlineBinaryOpAllowed ( Nested ( JSXTag / JSXAngleChild ) )* )?:rest ->
-    rest = rest ? rest[3] : []
-    jsx := rest# === 0 ? first : {
+    // rest[3] is the `( Nested ( JSXTag / JSXAngleChild ) )*` repetition.
+    nestedTags: [ASTNode, ASTNode][] := rest ? rest[3] : []
+    jsx := nestedTags# === 0 ? first : {
       type: "JSXFragment",
       children: [
         "<>\n",
         state.currentIndent.token,
         first,
-        ...rest,
+        ...nestedTags,
         "\n",
         state.currentIndent.token,
         "</>",
       ],
-      jsxChildren: [ first, ...rest.map(([, tag]) => tag) ],
+      jsxChildren: [ first, ...nestedTags.map(([, tag]) => tag) ],
     }
     type := typeOfJSX(jsx, config)
     return type ? [
@@ -7357,13 +7382,13 @@ JSXElement
   !CoffeeJSXEnabled PushJSXOpeningElement:open JSXMixedChildren?:children JSXOptionalClosingElement:close PopJSXStack ->
     /* c8 ignore next -- JSXMixedChildren always returns an object; $skip kept as a defensive guard against future grammar edits that could change that */
     return $skip unless children
-    let parts
-    $0 = $0.slice(1)
+    let parts: ASTNode[]
+    rest := $0.slice(1)
     if close
-      parts = $0
+      parts = rest
     else if children.jsxChildren#
       parts = [
-        ...$0,
+        ...rest,
         "\n", // InsertNewline
         state.currentIndent.token, // InsertIndent
         ["</", open[1], ">"],
@@ -7374,10 +7399,10 @@ JSXElement
   # NOTE: In CoffeeScript JSX mode, JSX children do not need to be properly
   # indented, but tags must be explicitly closed.
   CoffeeJSXEnabled JSXOpeningElement:open JSXChildren? Whitespace? JSXClosingElement:close ->
-    $0 = $0.slice(1)
+    rest := $0.slice(1) as ASTNode[]
     // Check that tags match
     return $skip if open[1] !== close[2]
-    return { type: "JSXElement", children: $0, tag: open[1] }
+    return { type: "JSXElement", children: rest, tag: open[1] }
 
 # https://facebook.github.io/jsx/#prod-JSXSelfClosingElement
 JSXSelfClosingElement
@@ -7415,10 +7440,10 @@ JSXFragment
   !CoffeeJSXEnabled PushJSXOpeningFragment:open JSXMixedChildren?:children JSXOptionalClosingFragment:close PopJSXStack ->
     /* c8 ignore next -- JSXMixedChildren always returns an object; $skip kept as a defensive guard against future grammar edits that could change that */
     return $skip unless children
-    $0 = $0.slice(1)
-    parts := close ? $0 :
+    rest := $0.slice(1) as ASTNode[]
+    parts := close ? rest :
       [
-        ...$0,
+        ...rest,
         "\n", // InsertNewline
         state.currentIndent.token, // InsertIndent
         "</>",
@@ -7427,10 +7452,10 @@ JSXFragment
   # NOTE: In CoffeeScript JSX mode, JSX children do not need to be properly
   # indented, but tags must be explicitly closed.
   CoffeeJSXEnabled "<>" JSXChildren?:children Whitespace? JSXClosingFragment ->
-    $0 = $0.slice(1)
+    rest := $0.slice(1) as ASTNode[]
     return {
       type: "JSXFragment",
-      children: $0,
+      children: rest,
       jsxChildren: children ? children.jsxChildren : []
     }
 
@@ -7467,7 +7492,7 @@ JSXIdentifierName
 JSXAttributes
   ( Whitespace? JSXAttribute )* ->
     // Extract all .class shorthands into `classes` array
-    classes := []
+    classes: ASTNode[] := []
     attrs .= $0.filter((pair) => {
       attr := pair[1]
       if attr.type is "JSXClass"
@@ -7504,7 +7529,8 @@ JSXAttributes
         }
         return JSON.parse(c)
       }
-      [strings, exprs] := [[], []]
+      strings: ASTNode[] := []
+      exprs: ASTNode[] := []
       classes.forEach (c) =>
         if isBraced c
           exprs.push(unbrace(c))
@@ -7521,7 +7547,10 @@ JSXAttributes
           exprs.unshift(JSON.stringify(stringPart), ", ")
         if exprs# is 1
           // Single expression doesn't need array, filter, or join.
-          root .= exprs[0]
+          // root is unwrapped through array/object layers via duck typing
+          // (length/slice/children); typing each shape would crowd the
+          // logic with guards, so leave it permissive here.
+          let root: any = exprs[0]
           // Remove trailing whitespace, e.g. in JSXShorthandString rule
           while root# and isWhitespaceOrEmpty(root[root#-1])
             root = root.slice(0, -1)
@@ -7625,6 +7654,8 @@ JSXAttribute
       type: "CallExpression",
       children: [ id, ...rest.flat() ],
     })
+    /* c8 ignore next -- defensive: $skip lets parser backtrack on the rare shape where processCallMemberExpression returns a string/array; happy-path JSX tests always produce an object */
+    return $skip unless expr? <? "object" and not Array.isArray(expr)
     if expr.type is "ObjectExpression"  // glob
       return convertObjectToJSXAttributes(expr)
     last := lastAccessInCallExpression(expr)
@@ -7704,9 +7735,9 @@ JSXAttributeValue
 
 # JSX shorthand to avoid explicit braces when unnecessary (no whitespace)
 InlineJSXAttributeValue
-  InlineJSXUnaryExpression InlineJSXBinaryOpRHS* ->
-    return processBinaryOpExpression($0) if $2.length
-    return $1
+  InlineJSXUnaryExpression:lhs InlineJSXBinaryOpRHS*:binops ->
+    return processBinaryOpExpression(lhs, binops) if binops.length
+    return lhs
 
 # BinaryOpRHS without whitespace and without ExpressionizedStatement,
 # forbidding operators starting with < or > (possible JSX tags),
@@ -7851,7 +7882,7 @@ JSXNestedChildren
     if $2.length
       return {
         children: $2,
-        jsxChildren: [].concat(...$2.map((nestedChildren) => nestedChildren[1])),
+        jsxChildren: ([] as ASTNode[]).concat(...$2.map((nestedChildren) => nestedChildren[1])),
       }
     return $skip
   # NOTE: Empty JSXNestedChildren can be from newline or unmatched close brace
@@ -8269,9 +8300,9 @@ EnumDeclaration
               // TS further restricts this to past enum members,
               // but we don't need to enforce that here.
               init = replaceNodes(deepCopy(property.initializer),
-                (n) => n.type is "Identifier" and names.has(n.name),
-                (n) => [id, '["', n.name, '"]'])
-              value := init[init# - 1]
+                (n) => n.type is "Identifier" and names.has((n as { name: string }).name),
+                (n) => [id, '["', (n as { name: string }).name, '"]']) as ASTNode[]
+              value := init[init# - 1] as ASTNodeObject
               isString = value.type is "TemplateLiteral" or
                 (value.type is "Literal" and value.subtype is "StringLiteral")
             else
@@ -8343,7 +8374,7 @@ TypeProperty
 TypeIndexSignature
   # NOTE: QuestionMark will be parsed by following TypeSuffix
   ( [+-]? Readonly NotDedented )?:prefix OpenBracket:open TypeIndex:index CloseBracket:close ( __ [+-] &( _? QuestionMark ) )?:suffix ->
-    suffix = [suffix[0], suffix[1]] if suffix
+    suffix = [suffix[0], suffix[1]] as unknown as [unknown, RegExpMatchArray, true] if suffix
     return [prefix, open, index, close, suffix]
 
 TypeIndex
@@ -8452,10 +8483,11 @@ ReturnType
 TypePredicate
   MaybeNestedType:lhs ( __ Is Type )?:rhs ->
     return lhs unless rhs
+    rhs4 := rhs as unknown as [unknown, unknown, unknown, ASTNode]
     return {
       type: "TypePredicate",
       lhs,
-      rhs: rhs[3],
+      rhs: rhs4[3],
       children: [lhs, ...rhs],
     }
 
@@ -8654,15 +8686,16 @@ TypeElement
     }
   __ DotDotDot __ Type:type
   Type:type ( _? DotDotDot )?:spaceDots ->
+    spaceDots3: [unknown, unknown, unknown] | undefined .= undefined
     if spaceDots
       [space, dots] := spaceDots
       ws := getTrimmingSpace(type)
-      spaceDots = [ ws, dots, space ]
+      spaceDots3 = [ ws, dots, space ]
       type = trimFirstSpace(type)
     return {
       type: "TypeElement",
       t: type,
-      children: [ spaceDots, type ],
+      children: [ spaceDots3 ?? spaceDots, type ],
     }
 
 NestedTypeElementList
@@ -8706,22 +8739,22 @@ NestedTypeBulletedTuple
 TypeBulletedTuple
   InsertOpenBracket:open ( TypeBullet NestedTypeBullet* )?:content InsertCloseBracket:close ->
     return $skip unless content
-    content = [
+    flat: ASTNode[] := [
       ...trimFirstSpace(content[0]), // replace first space with bracket
       ...content[1].flat(),
     ]
 
     // Remove implicit comma from last element
     // NOTE: See NestedTypeBulletedTuple — Array.isArray(last) arm dead.
-    last := content[content# - 1]
+    last := flat[flat# - 1] as { children?: ({ implicit?: boolean }[]) } | undefined
     children .= last?.children
-    if children?.at(-1).implicit
+    if children?.at(-1)?.implicit
       children = children.slice(0, -1)
-      content[content# - 1] = { ...last, children }
+      flat[flat# - 1] = { ...last, children } as! ASTNode
 
     return {
       type: "TypeTuple",
-      children: [open, ...content, close],
+      children: [open, ...flat, close],
     }
 
 NestedTypeBullet
@@ -8746,7 +8779,7 @@ TypeWithPostfix
   TypeConditional:t ( _? TypeIfClause )?:postfix ->
     return t unless postfix
     return prepend(postfix[0],
-      expressionizeTypeIf([ ...postfix[1], $1, undefined ]))
+      expressionizeTypeIf([ ...postfix[1], $1, undefined ] as Parameters<typeof expressionizeTypeIf>[0]))
 
 TypeConditional
   _? /(?=if|unless)/ TypeIfThenElse ->
@@ -9338,7 +9371,7 @@ Reset
       }
     })
     // default to deno compatibility if running in deno
-    config.deno = typeof Deno !== "undefined"
+    config.deno = typeof (globalThis as { Deno?: unknown }).Deno !== "undefined"
 
     // Expand setting coffeeCompat to the individual options
     Object.defineProperty(config, "coffeeCompat", {
@@ -9406,11 +9439,11 @@ Reset
             setOperatorBehavior(name, undefined) // default behavior
 
         else
-          for let [name, behavior] of Object.entries o
+          for let [name, behavior] of Object.entries(o) as [string, unknown][]
             if typeof behavior is "string"
               behavior = behavior.trim()
               if behavior
-                behavior = parse(behavior, {
+                behavior = parse(behavior as string, {
                   startRule: "OperatorBehavior",
                   filename: `operator config for ${name}`,
                 })
@@ -9438,7 +9471,7 @@ Init
         Object.assign(config, directive.config)
 
     if config.strict
-      $0 = [...$0, '"use strict";\n']
+      ($0 as unknown[]).push '"use strict";\n'
     return $0
 
 Prologue

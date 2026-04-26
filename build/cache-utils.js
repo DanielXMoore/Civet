@@ -97,7 +97,14 @@ function compileToTS(source, filename, module = true) {
   const type = filename.endsWith('.hera') ? 'hera' : 'civet';
   let result;
   if (type === 'hera') {
-    const heraResult = heraCompile(source, { filename, module, sourceMap: true });
+    // `language: 'civet'` emits TS-typed Civet — handler IIFE params get
+    // `: typeof $$value[i]` annotations and the rule's `::Type` becomes
+    // the IIFE return-type annotation, which propagates to MaybeResult<T>.
+    // Without it, every parser tuple element is `unknown` and we lose
+    // the `::ASTNode` etc. annotations entirely.
+    const heraResult = heraCompile(source, {
+      filename, module, sourceMap: true, language: 'civet',
+    });
     result = civetCompile(heraResult.code, {
       filename, js: false, sourceMap: true, sync: true,
       parseOptions: { rewriteCivetImports: '.civet.tsx' },
