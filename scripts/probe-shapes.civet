@@ -1,0 +1,345 @@
+#!/usr/bin/env civet
+/**
+ * probe-shapes.civet
+ *
+ * Walks parser.hera and parser/*.civet looking for AST-node literals — any
+ * object containing `type: "Foo"` — and collects the union of field names
+ * the parser emits for each `type` tag.  Compares against the field set
+ * declared in source/parser/types.civet and reports drift:
+ *
+ *   missing-in-type:   parser emits this field but the AST type doesn't
+ *                      declare it (shows up as TS2339 at use sites)
+ *   missing-in-parser: AST type declares this field but no parser rule
+ *                      emits it (probably a synthetic-only field, but
+ *                      could mean dead type-fields if the type also has
+ *                      no readers)
+ *
+ * The probe parses object literals via balanced-brace text walking — fast
+ * and good enough; misses cases where `type` is computed (e.g.
+ * `type: pattern ? "BindingProperty" : "Property"`) and reports those
+ * separately.
+ *
+ * Usage:
+ *   civet scripts/probe-shapes.civet            # full report
+ *   civet scripts/probe-shapes.civet Property   # filter to one type tag
+ */
+
+{ readFileSync } from "node:fs"
+{ readdirSync } from "node:fs"
+{ resolve, join } from "node:path"
+
+filter := process.argv[2]
+
+// ----- Source files we scan ------------------------------------------------
+parserFiles := [
+  "source/parser.hera"
+  ...readdirSync("source/parser").map (f) => `source/parser/${f}`
+    .filter (p) => p.endsWith ".civet"
+]
+
+// ----- Object-literal extractor --------------------------------------------
+// Given source text, yield every brace-balanced object literal containing
+// a `type: "Foo"` field at the top level of the literal.
+//
+// Simplifications:
+// - We only recognize string-literal `type:` (skips `type: cond ? "A" : "B"`).
+// - We only collect field names at the literal's top level — nested objects
+//   are skipped over via the bracket counter.
+// - Comments and string literals are stripped before scanning so braces
+//   inside them don't confuse the counter.
+
+function stripComments(src: string): string
+  // Replace comments with spaces of the same length so byte offsets are
+  // preserved.  String contents are NOT erased — we want `"Foo"` after
+  // `type:` to survive — but the brace-scanner below is string-aware so
+  // braces inside strings are skipped.
+  out: string[] := []
+  i .= 0
+  n := src.length
+  while i < n
+    c := src[i]
+    pair := src.substring(i, i + 2)
+    if c is "/" and src[i + 1] is "/"
+      end .= src.indexOf "\n", i
+      end = n if end < 0
+      out.push " ".repeat end - i
+      i = end
+      continue
+    if pair is "/*"
+      end .= src.indexOf "*/", i + 2
+      if end < 0
+        end = n
+      else
+        end += 2
+      out.push (src.substring(i, end).replace(/[^\r\n]/g, " "))
+      i = end
+      continue
+    if c is "#" and (i is 0 or src[i - 1] is "\n" or src[i - 1] is " ")
+      // hera/civet line comment (start-of-line or after whitespace)
+      end .= src.indexOf "\n", i
+      end = n if end < 0
+      out.push " ".repeat end - i
+      i = end
+      continue
+    out.push c
+    i++
+  out.join ""
+
+// Skip over a string literal starting at `i`.  Returns the index just past
+// the closing quote, or `i + 1` if not a string start.
+function skipString(src: string, i: number): number
+  q := src[i]
+  return i + 1 unless q is '"' or q is "'" or q is "`"
+  j .= i + 1
+  while j < src.length
+    c := src[j]
+    if c is "\\"
+      j += 2
+      continue
+    if c is q
+      return j + 1
+    j++
+  j
+
+// Find every `type: "Foo"` occurrence in the stripped source (positions are
+// identical to the original).
+function findTypeOccurrences(stripped: string): { pos: number, tag: string }[]
+  out: { pos: number, tag: string }[] := []
+  re := /\btype\s*:\s*"([A-Z][A-Za-z0-9]*)"/g
+  for m of stripped.matchAll re
+    out.push { pos: m.index!, tag: m[1] }
+  out
+
+// Walk backward from `pos` to find the unmatched `{`, then forward from
+// that brace to its match.  Return [open, close] inclusive on the pair.
+//
+// Backward scan: simple — strings make the count slightly wrong but the
+// asymmetry is bounded; we double-check by scanning forward in a string-
+// aware way once we have a candidate open brace.
+function enclosingBraces(src: string, pos: number): [number, number]?
+  depth .= 0
+  i .= pos
+  while i >= 0
+    c := src[i]
+    if c is "}" then depth++
+    else if c is "{"
+      if depth is 0
+        open := i
+        // Forward scan for matching close, skipping string interiors.
+        d .= 0
+        j .= open
+        while j < src.length
+          k := src[j]
+          if k is '"' or k is "'" or k is "`"
+            j = skipString src, j
+            continue
+          if k is "{" then d++
+          else if k is "}"
+            d--
+            return [open, j] if d is 0
+          j++
+        return undefined
+      depth--
+    i--
+  undefined
+
+// Inside `[open+1 .. close-1]`, collect property keys at the literal's
+// top level (depth 0 of further brackets).  We accept identifier or
+// quoted-string keys followed by `:`.  String-literal interiors are
+// skipped wholesale.
+function collectTopLevelKeys(src: string, open: number, close: number): Set<string>
+  out := new Set<string>
+  depth .= 0
+  parens .= 0
+  brackets .= 0
+  i .= open + 1
+  while i < close
+    c := src[i]
+    if c is '"' or c is "'" or c is "`"
+      i = skipString src, i
+      continue
+    if c is "{" then depth++
+    else if c is "}" then depth--
+    else if c is "(" then parens++
+    else if c is ")" then parens--
+    else if c is "[" then brackets++
+    else if c is "]" then brackets--
+    else if depth is 0 and parens is 0 and brackets is 0
+      // Only recognize keys at the start of an entry (preceded by
+      // `{`/`,`/newline+ws) so we don't pick up identifiers inside
+      // ternaries or other expression contexts.
+      prevNonWS .= i - 1
+      while prevNonWS >= 0 and src[prevNonWS] is in [' ', '\t', '\n', '\r']
+        prevNonWS--
+      prevC := prevNonWS >= 0 ? src[prevNonWS] : '{'
+      atEntryStart := prevC is in ['{', ',']
+      if atEntryStart
+        // Identifier-or-string-key followed by colon (full form).
+        colonForm := src.substring(i).match /^([A-Za-z_$][\w$]*|"[^"]*")\s*:/
+        if colonForm
+          rawKey := colonForm[1]
+          key := rawKey.startsWith('"') ? rawKey.slice(1, -1) : rawKey
+          out.add key unless /^\$\d+$/.test key  // skip hera $0..$9
+          i += colonForm[0].length
+          continue
+        // Shorthand: `{ name, ... }` — bare identifier followed by `,`/`}`.
+        shortForm := src.substring(i).match /^([A-Za-z_$][\w$]*)\s*([,}])/
+        if shortForm
+          out.add shortForm[1]
+          i += shortForm[1].length
+          continue
+    i++
+  out
+
+// ----- Type-declaration extractor ------------------------------------------
+// Parse types.civet into a Map<TagName, Set<FieldName>> by scanning
+// `export type Foo = ASTParent &` blocks (or similar) and collecting their
+// field declarations until the next `export type` / blank-block boundary.
+// We index by the `type: "Tag"` literal the type carries, not the type
+// alias name.
+
+type TypeShape =
+  alias: string
+  tag: string?
+  bases: string[]   // type names this extends via `&`
+  ownFields: Set<string>
+  fields: Set<string>  // ownFields ∪ inherited (resolved after parsing all)
+
+function parseTypes(src: string): TypeShape[]
+  shapes: TypeShape[] := []
+  // Slice into top-level `export type Foo` declarations using a permissive
+  // line-start regex.
+  re := /^(?:export\s+)?type\s+([A-Z][A-Za-z0-9]*)\s*=?([^\n]*)$/gm
+  matches := [...src.matchAll re]
+  for m, idx of matches
+    start := m.index!
+    end := matches[idx + 1]?.index ?? src.length
+    body := src.substring(start, end)
+    alias := m[1]
+    header := m[2]
+    // Bases: `= ASTParent & …` — collect identifier names mentioned on the
+    // header line that look like base types (capitalized).
+    bases: string[] := []
+    for bm of header.matchAll /\b([A-Z][A-Za-z0-9]*)\b/g
+      bases.push bm[1] if bm[1] is in ["ASTObject", "ASTParent", "ASTLeaf", "ASTTokenOrParent"]
+    // Tag: `type: "Foo"` literal inside the body.
+    tagMatch := body.match /^\s*type\s*:\s*"([A-Z][A-Za-z0-9]*)"/m
+    tag := tagMatch?.[1]
+    ownFields := new Set<string>
+    headerEnd := body.indexOf "\n"
+    rest := body.substring (headerEnd >= 0 ? headerEnd : 0)
+    for line of rest.split /\r?\n/
+      fm := line.match /^\s{2,}([A-Za-z_$][\w$]*)\??\s*:/
+      ownFields.add fm[1] if fm
+    shapes.push { alias, tag, bases, ownFields, fields: new Set ownFields }
+  // Resolve inherited fields by walking bases.
+  byAlias := new Map<string, TypeShape>
+  for s of shapes
+    byAlias.set s.alias, s
+  function resolve(s: TypeShape, seen: Set<string> = new Set): Set<string>
+    return s.fields if seen.has s.alias
+    seen.add s.alias
+    for b of s.bases
+      base := byAlias.get b
+      continue unless base
+      for f of resolve(base, seen)
+        s.fields.add f
+    s.fields
+  for s of shapes
+    resolve s
+  shapes
+
+// ----- Main ----------------------------------------------------------------
+
+emittedShapes := new Map<string, Set<string>>
+emittedSources := new Map<string, Set<string>>  // tag -> set of "file:line"
+
+for file of parserFiles
+  raw := readFileSync resolve(file), "utf8"
+  // Comments stripped to spaces (preserve offsets); strings preserved so
+  // `type: "Foo"` survives.  Brace scanning below is string-aware.
+  src := stripComments raw
+  for { pos, tag } of findTypeOccurrences src
+    pair := enclosingBraces src, pos
+    continue unless pair
+    keys := collectTopLevelKeys src, pair[0], pair[1]
+    bucket := emittedShapes.get(tag) ?? new Set<string>
+    for k of keys
+      bucket.add k
+    emittedShapes.set tag, bucket
+    // Source location for reporting.
+    line := raw.substring(0, pos).split("\n").length
+    sources := emittedSources.get(tag) ?? new Set<string>
+    sources.add `${file}:${line}`
+    emittedSources.set tag, sources
+
+typesPath := resolve "source/parser/types.civet"
+typesSrc := readFileSync typesPath, "utf8"
+typeShapes := parseTypes typesSrc
+
+declaredByTag := new Map<string, TypeShape>
+for s of typeShapes
+  if s.tag
+    declaredByTag.set s.tag, s
+
+// ----- Report --------------------------------------------------------------
+
+allTags := new Set<string> [...emittedShapes.keys(), ...declaredByTag.keys()]
+sorted := [...allTags].sort()
+
+driftFound .= 0
+for tag of sorted
+  continue if filter and tag is not filter
+
+  emitted := emittedShapes.get(tag)
+  declared := declaredByTag.get(tag)
+
+  if not emitted
+    // Declared but no parser rule emits it — report only if the user asked
+    // for this specific tag (avoid noise from synthetic-only types).
+    if filter
+      console.log `${tag}: declared as type ${declared?.alias} but no parser rule emits it`
+    continue
+
+  if not declared
+    driftFound++
+    console.log `${tag}: emitted by parser but no AST type declares this tag`
+    console.log `  emit sites: ${[...emittedSources.get(tag) ?? []].slice(0, 3).join(", ")}`
+    console.log `  fields:     ${[...emitted].sort().join(", ")}`
+    continue
+
+  missingInType: string[] := []
+  // Common synthetic / runtime-only fields we don't expect parser rules
+  // to emit literally — skip these in "missing-in-parser" noise.
+  syntheticOnly := new Set [
+    "parent"        // installed by addParentPointers
+    "blockPrefix"   // installed by adjustBindingElements
+    "hoistDec"      // installed by various rewrites
+    "splices"       // installed by gatherBindingCode
+    "thisAssignments" // installed by gatherBindingCode
+    "$loc"          // attached by hera, not by handlers
+    "names"         // sometimes computed late
+  ]
+  missingInParser: string[] := []
+
+  for k of emitted
+    missingInType.push k unless declared.fields.has k
+  for k of declared.fields
+    continue if syntheticOnly.has k
+    missingInParser.push k unless emitted.has k
+
+  if missingInType.length is 0 and missingInParser.length is 0
+    continue
+
+  driftFound++
+  console.log `${tag} (declared as ${declared.alias})`
+  if missingInType.length
+    console.log `  ➕ emitted but not in type: ${missingInType.sort().join(", ")}`
+    console.log `     emit sites: ${[...emittedSources.get(tag) ?? []].slice(0, 3).join(", ")}`
+  if missingInParser.length
+    console.log `  ➖ in type but never emitted: ${missingInParser.sort().join(", ")}`
+
+if driftFound is 0
+  console.log filter ? `No drift for ${filter}.` : "No drift detected."
+else
+  console.log `\n${driftFound} tag${driftFound is 1 ? '' : 's'} with drift.`
