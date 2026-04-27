@@ -5,14 +5,23 @@
 
 set -euo pipefail
 
+# Track temp files we create so EXIT cleanup doesn't remove a user-supplied log.
+TMPS=()
+cleanup() {
+  for f in "${TMPS[@]:-}"; do [ -n "$f" ] && rm -f "$f"; done
+}
+trap cleanup EXIT
+
 if [ $# -ge 1 ]; then
   LOG="$1"
 else
   LOG=$(mktemp -t typecheck-XXXXXX.log)
+  TMPS+=("$LOG")
   CIVET_TYPECHECK_MAX_ERRORS=99999 pnpm typecheck &>"$LOG" || true
 fi
 
 CLEAN=$(mktemp -t typecheck-clean-XXXXXX.log)
+TMPS+=("$CLEAN")
 sed 's/\x1b\[[0-9;]*m//g' "$LOG" > "$CLEAN"
 
 echo "=== Per-file error counts ==="
