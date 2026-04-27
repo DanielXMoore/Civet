@@ -1111,8 +1111,35 @@ function processAssignments(statements): void
         else
           pre.push(["(", lhs, ", "])
           post.push(")")
-        // TODO: use ref to avoid duplicating function calls
-        return expr.assigned
+        // Use refs to avoid duplicating side-effectful member access and indices
+        { assigned } := expr
+        return assigned unless assigned?.children
+        { children } := assigned
+
+        // Find the terminal member access (last PropertyAccess or Index)
+        j .= children.findLastIndex (c) => c?.type is like "PropertyAccess", "Index"
+        return assigned if j <= 0
+
+        // Cache the base (everything before terminal access) if it has side effects
+        { ref: baseRef, refAssignment: baseRefAssignment } := maybeRefAssignment children.slice 0, j
+        if baseRefAssignment
+          innerBase := makeLeftHandSideExpression baseRefAssignment
+          children.splice 0, j, innerBase
+          innerBase.parent = assigned
+          j = 1  // terminal is now at index 1 after splice
+
+        // Cache the terminal Index expression if it has side effects
+        terminal := children[j]
+        outerTerminal .= terminal
+        if terminal?.type is "Index"
+          { ref, refAssignment } := maybeRefAssignment terminal.expression
+          if refAssignment
+            replaceNode terminal.expression, refAssignment, terminal
+            outerTerminal = { type: "Index", children: ["[", ref, "]"], expression: ref }
+
+        return assigned unless baseRefAssignment or outerTerminal is not terminal
+        outerBase := if baseRefAssignment then [baseRef] else children.slice 0, j
+        { ...assigned, children: [...outerBase, outerTerminal, ...children.slice j + 1] }
 
     const pre = [], post = []
     switch exp.type
