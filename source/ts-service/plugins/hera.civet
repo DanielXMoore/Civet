@@ -1,0 +1,89 @@
+/**
+ * Hera transpiler plugin.
+ *
+ * Lifts the two-stage Hera→Civet→TS recipe from build/cache-utils.js:99-116
+ * (the only place in the repo that previously knew how to typecheck a .hera
+ * file) and packages it as a Plugin alongside the Civet plugin.  Once
+ * registered with a TSService, the LSP / typecheck script / unplugin all
+ * gain `.hera` support — type checking, hover, go-to-def — for free.
+ *
+ * The composed sourcemap (Civet's `upstreamSourceMap`) means TS diagnostics
+ * on the synthetic `.hera.tsx` map all the way back to `.hera` line/column
+ * through the same `remapPosition` plumbing every other consumer uses.
+ */
+
+{ type CompileOptions, type ParseError } from @danielx/civet
+BundledCivetModule from @danielx/civet
+{ compile as bundledHeraCompile } from @danielx/hera
+
+ts from typescript
+
+{ type Plugin, type TranspileResult } from ../types.civet
+
+interface HeraCompileResult
+  code: string
+  sourceMap?: unknown
+
+interface HeraModule
+  compile(source: string, options: { filename: string, module: boolean, sourceMap: boolean }): HeraCompileResult
+
+export interface HeraPluginOptions
+  /** Override the Hera module.  Defaults to the bundled @danielx/hera. */
+  Hera?: HeraModule
+  /** Override the second-stage Civet module.  Defaults to bundled @danielx/civet. */
+  Civet?: typeof BundledCivetModule
+  /** Civet compile config forwarded to the second stage (mirrors makeCivetPlugin). */
+  config?: CompileOptions
+
+export function makeHeraPlugin(options: HeraPluginOptions = {}): Plugin
+  // @danielx/hera's published types declare compile as returning `string`, but
+  // the runtime returns `{ code, sourceMap }` when `sourceMap: true` is set.
+  // Cast through unknown until Hera's d.ts catches up with the actual API.
+  Hera := options.Hera ?? ({ compile: bundledHeraCompile } as unknown as HeraModule)
+  Civet := options.Civet ?? BundledCivetModule
+  civetConfig := options.config ?? {}
+
+  function transpileHera(p: string, source: string): TranspileResult
+    errors: (Error | ParseError)[] := []
+    try
+      // Stage 1: Hera grammar → Civet code, with a Hera→Civet sourcemap.
+      heraResult := Hera.compile source, {
+        filename: p
+        module: true
+        sourceMap: true
+      }
+
+      // Stage 2: Civet code → TS, composing the upstream Hera→Civet map so
+      // the final lines table maps `.hera.tsx` positions all the way back
+      // to `.hera` source coordinates.  `sync: true` forces the synchronous
+      // overload of Civet.compile (matching makeCivetPlugin).
+      civetOptions: CompileOptions & { sync: true, sourceMap: true } := {}
+        ...civetConfig
+        filename: p
+        js: false
+        sync: true
+        sourceMap: true
+        upstreamSourceMap: heraResult.sourceMap as string | object
+        parseOptions: {}
+          ...civetConfig.parseOptions
+          comptime: false
+      civetResult := Civet.compile heraResult.code, civetOptions
+
+      {
+        code: civetResult.code
+        sourceMap: civetResult.sourceMap
+        errors
+      }
+    catch e
+      errors.push e as Error
+      { code: "", errors }
+
+  {
+    transpilers: [{
+      extension: ".hera"
+      target: ".tsx" as ts.Extension
+      compile: transpileHera
+    }]
+  }
+
+export default makeHeraPlugin

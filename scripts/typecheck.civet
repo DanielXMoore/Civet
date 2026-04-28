@@ -2,39 +2,48 @@
 /**
  * typecheck.civet
  *
- * Type-check the project's .civet (and eventually .hera) files against
- * tsconfig.json.  tsc alone only sees .ts/.js, so this script:
- *   - walks the tsconfig include set through a patched ts.sys that exposes
- *     each .civet file as a virtual .civet.tsx sibling,
- *   - compiles .civet → TypeScript on demand via `@danielx/civet`,
- *   - feeds the result into a TS `Program` for diagnostics,
- *   - remaps diagnostic ranges back to .civet coordinates through the Civet
- *     sourcemap before printing.
+ * Type-check the project's .civet and .hera files against tsconfig.json
+ * via the shared `@danielx/civet/ts-service` module — same machinery that
+ * powers the Civet LSP server.  This replaces the earlier hand-rolled
+ * virtual `.civet.tsx` filesystem with a proper LanguageService-backed
+ * pipeline:
+ *   - registers the bundled Civet + Hera transpiler plugins,
+ *   - walks the tsconfig include set through TSHost (which discovers
+ *     transpilable extensions automatically),
+ *   - collects diagnostics across all source files via the LanguageService,
+ *   - remaps diagnostic ranges back to .civet/.hera coordinates through
+ *     the host's per-file FileMeta sourcemap lines.
  *
  * Usage:
- *   civet scripts/typecheck.civet
+ *   civet scripts/typecheck.civet                  # all files
+ *   civet scripts/typecheck.civet source/parser/op # files containing this filter
  *
- * Exits non-zero if any TypeScript diagnostics are reported.
+ * Exits non-zero if diagnostics exceed CIVET_TYPECHECK_MAX_ERRORS.
  */
 
 { readFileSync } from "node:fs"
-{ resolve } from "node:path"
+{ pathToFileURL, fileURLToPath } from "node:url"
+{ resolve, sep } from "node:path"
 
 ts from "typescript"
-{ createFSBackedSystem, createVirtualCompilerHost } from "@typescript/vfs"
-{ compileToTS } from "../build/cache-utils.js"
+{
+  type DocFactory
+  type TranspiledDoc
+  TSService
+  makeCivetPlugin
+  makeHeraPlugin
+} from "../source/ts-service/index.civet"
 { remapPosition, flattenDiagnosticMessageText } from "../source/ts-diagnostic.civet"
 
 type Diagnostic = import("typescript").Diagnostic
-type System = import("typescript").System
 
-projectRoot := resolve "."
+// Trailing separator: TSService builds tsConfigPath as `${projectPath}tsconfig.json`.
+projectPath := resolve(".") + sep
 
 // --- argv: optional file filter ---------------------------------------------
-// Positional args narrow diagnostics to the listed source files (substring
-// match against the diagnostic's relative file path).  The TS Program is
-// still built over the full project so cross-file types resolve correctly;
-// only reporting is filtered.  Compile failures are filtered the same way.
+// Positional args narrow diagnostics to source files whose path contains any
+// of the listed substrings.  The TS Program is still built over the full
+// project so cross-file types resolve correctly; only reporting is filtered.
 //
 // Examples:
 //   pnpm typecheck                      # all files
@@ -47,131 +56,70 @@ function fileMatchesFilter(path: string): boolean
     return true if path.includes filter
   false
 
-// --- tsconfig ----------------------------------------------------------------
+// --- minimal in-memory doc factory ------------------------------------------
+// Satisfies DocFactory<TranspiledDoc> without pulling in
+// vscode-languageserver-textdocument or vscode-uri.  All we need is uri /
+// version / getText() for the host's bookkeeping.
+class InMemoryDoc
+  uri: string
+  version: number
+  @text: string
 
-tsconfigPath := ts.findConfigFile projectRoot, ts.sys.fileExists
-unless tsconfigPath
-  console.error "typecheck: could not find tsconfig.json"
+  @(uri: string, version: number, text: string)
+    @uri = uri
+    @version = version
+    @text = text
+
+  getText(): string
+    @text
+
+  setText(t: string): void
+    @text = t
+
+docFactory: DocFactory<TranspiledDoc> := {
+  create: (uri, _languageId, version, text) =>
+    new InMemoryDoc(uri, version, text) as unknown as TranspiledDoc
+  update: (doc, text, version) =>
+    (doc as unknown as InMemoryDoc).setText text
+    doc.version = version
+  uriToPath: (uri) => fileURLToPath uri
+  pathToUri: (p) => pathToFileURL(p).toString()
+}
+
+// --- service ----------------------------------------------------------------
+
+nullLogger :=
+  log: (_msg: string) ->
+  info: (_msg: string) ->
+  error: (msg: string) -> console.error msg
+
+service := TSService projectPath, {
+  plugins: [makeCivetPlugin(), makeHeraPlugin()]
+  docFactory
+  logger: nullLogger
+}
+
+program := service.getProgram()
+unless program
+  console.error "typecheck: failed to obtain TS program from service"
   process.exit 1
 
-{ config: rawConfig, error: readErr } := ts.readConfigFile tsconfigPath, ts.sys.readFile
-if readErr
-  console.error flattenDiagnosticMessageText readErr.messageText
-  process.exit 1
+// --- diagnostics ------------------------------------------------------------
 
-// --- virtual .civet.tsx filesystem -------------------------------------------
+// Cache real-source SourceFiles by .civet/.hera path so remapped diagnostic
+// positions can be resolved into a SourceFile for ts.formatDiagnostics....
+realFileCache := new Map<string, ts.SourceFile>()
 
-fsMap := new Map<string, string>
-sourceMaps := new Map<string, any>
-compileFailures := new Map<string, string>
-
-function compileSource(srcPath: string): string
-  source := readFileSync srcPath, 'utf8'
+function realSourceFile(realPath: string): ts.SourceFile?
+  cached := realFileCache.get realPath
+  return cached if cached
   try
-    { code, sourceMapLines } := compileToTS source, srcPath, true
-    sourceMaps.set srcPath + ".tsx", { lines: sourceMapLines }
-    code
-  catch e
-    // Record failure but hand TS a valid empty stub so it doesn't crash
-    compileFailures.set srcPath, (e as Error).message
-    `// compile failed\nexport {}\n`
-
-// Base system: fs-backed so TS can load lib.*.d.ts from its own install
-baseSystem := createFSBackedSystem new Map<string, string>(), projectRoot, ts
-
-origFileExists := baseSystem.fileExists.bind baseSystem
-origReadFile := baseSystem.readFile.bind baseSystem
-origReadDirectory := baseSystem.readDirectory.bind baseSystem
-
-function isVirtual(filename: string): boolean
-  filename.endsWith(".civet.tsx") or filename.endsWith(".hera.tsx")
-
-system: System := {
-  ...baseSystem
-  fileExists: (filename) ->
-    if isVirtual filename
-      return true if fsMap.has filename
-      return origFileExists filename.slice(0, -4)
-    origFileExists filename
-  readFile: (filename, encoding) ->
-    if isVirtual filename
-      cached := fsMap.get filename
-      return cached if cached?
-      srcPath := filename.slice 0, -4
-      return undefined unless origFileExists srcPath
-      code := compileSource srcPath
-      fsMap.set filename, code
-      return code
-    result := origReadFile filename, encoding
-    if result is undefined and process.env.TYPECHECK_DEBUG
-      console.error `readFile miss: ${filename}`
-    result
-  readDirectory: (path, extensions, excludes, includes, depth) ->
-    exts := extensions ? [...extensions, ".civet", ".hera"] : undefined
-    entries := origReadDirectory path, exts, excludes, includes, depth
-    entries.map (f) =>
-      if f.endsWith(".civet") or f.endsWith(".hera") then `${f}.tsx` else f
-}
-
-// --- resolve tsconfig against patched system --------------------------------
-
-parsed := ts.parseJsonConfigFileContent rawConfig, system, projectRoot, {}, tsconfigPath
-if parsed.errors.length
-  for err of parsed.errors
-    console.error flattenDiagnosticMessageText err.messageText
-  process.exit 1
-
-compilerOptions := {
-  ...parsed.options
-  noEmit: true
-  // We rewrite .civet imports to .civet.tsx in the virtual FS, so TS needs to
-  // accept those explicit extensions.  noEmit makes this safe.
-  allowImportingTsExtensions: true
-  // Enable --generateTrace output when CIVET_TYPECHECK_TRACE is set
-  ...(process.env.CIVET_TYPECHECK_TRACE ? { generateTrace: process.env.CIVET_TYPECHECK_TRACE } : {})
-  // Trace module resolution to stderr when CIVET_TYPECHECK_TRACE_RESOLUTION is set
-  ...(process.env.CIVET_TYPECHECK_TRACE_RESOLUTION ? { traceResolution: true } : {})
-}
-
-// Mutate stdHost directly so all TS-internal caches (like resolvedModules)
-// are installed on the same host object TS walks.  Only override the file
-// I/O hooks; leave everything else default.
-sourceFileCache := new Map<string, any>
-stdHost := ts.createCompilerHost compilerOptions, true
-origStdFileExists := stdHost.fileExists.bind stdHost
-origStdReadFile := stdHost.readFile.bind stdHost
-stdHost.fileExists = (fileName: string) => system.fileExists fileName
-stdHost.readFile = (fileName: string) => system.readFile fileName
-stdHost.readDirectory = (path, extensions, excludes, includes, depth) =>
-  system.readDirectory? path, extensions, excludes, includes, depth
-origGetSourceFile := stdHost.getSourceFile.bind stdHost
-stdHost.getSourceFile = (fileName, languageVersion, onError, shouldCreate) ->
-  cached := sourceFileCache.get fileName
-  return cached if cached?
-  text := system.readFile fileName
-  return undefined unless text?
-  sf := ts.createSourceFile fileName, text, languageVersion ?? compilerOptions.target ?? ts.ScriptTarget.ESNext, false
-  sourceFileCache.set fileName, sf
-  sf
-compilerHost := stdHost
-
-program := ts.createProgram {
-  rootNames: parsed.fileNames
-  options: compilerOptions
-  host: compilerHost
-}
-
-// --- diagnostics -------------------------------------------------------------
-
-origFileCache := new Map<string, any>
-
-function realSourceFile(realPath: string)
-  cached := origFileCache.get realPath
-  return cached if cached?
-  src := readFileSync realPath, 'utf8'
-  sf := ts.createSourceFile realPath, src, ts.ScriptTarget.ESNext, true
-  origFileCache.set realPath, sf
-  sf
+    src := readFileSync realPath, "utf8"
+    sf := ts.createSourceFile realPath, src, ts.ScriptTarget.ESNext, true
+    realFileCache.set realPath, sf
+    return sf
+  catch
+    return undefined
 
 // Suppress diagnostics on .hera files that don't reflect user-actionable bugs:
 //   6133 / 6196 / 6192 — "declared but never read" for preamble imports that
@@ -188,10 +136,12 @@ function remap(d: Diagnostic): Diagnostic?
   isHera := file.fileName.endsWith ".hera.tsx"
   return undefined if isHera and heraSuppressedCodes.has d.code
   return d unless file.fileName.endsWith(".civet.tsx") or isHera
-  sm := sourceMaps.get file.fileName
-  return d unless sm
-  lines := sm.lines ?? sm.data?.lines
-  return d unless lines
+
+  realPath := file.fileName.slice 0, -4
+  meta := service.host.getMeta realPath
+  return d unless meta
+  { sourcemapLines } := meta!
+  return d unless sourcemapLines
 
   start := d.start ?? 0
   length := d.length ?? 0
@@ -199,67 +149,86 @@ function remap(d: Diagnostic): Diagnostic?
   endLc := file.getLineAndCharacterOfPosition start + length
 
   remapped := {
-    start: remapPosition startLc, lines
-    end:   remapPosition endLc, lines
+    start: remapPosition startLc, sourcemapLines
+    end:   remapPosition endLc, sourcemapLines
   }
 
-  realPath := file.fileName.slice 0, -4
   realFile := realSourceFile realPath
+  return d unless realFile
 
-  function toPos(lc: {line: number, character: number}): number | undefined
+  function toPos(lc: { line: number, character: number }): number?
     try
       realFile.getPositionOfLineAndCharacter lc.line, lc.character
     catch
       undefined
 
-  remappedStart := toPos remapped.start
-  return d unless remappedStart?
-  remappedEnd := toPos(remapped.end) ?? (remappedStart + 1)
+  rs := toPos remapped.start
+  return d unless rs?
+  re := toPos(remapped.end) ?? (rs + 1)
 
   {
     ...d
     file: realFile
-    start: remappedStart
-    length: Math.max 1, remappedEnd - remappedStart
+    start: rs
+    length: Math.max 1, re - rs
     messageText: flattenDiagnosticMessageText d.messageText
   }
 
-all := [...ts.getPreEmitDiagnostics(program)]
-  .map remap
-  .filter (d): d is Diagnostic => d?
-  .filter (d): boolean =>
-    return true unless d.file
-    fileMatchesFilter d.file.fileName
+// Walk all program source files and collect diagnostics.  The LanguageService
+// gives us syntactic + semantic per file; we merge and remap each.
+all: Diagnostic[] := []
+for sourceFile of program.getSourceFiles()
+  fileName := sourceFile.fileName
+  // Skip lib + transitive node_modules sources — they aren't actionable.
+  continue if fileName.includes "/node_modules/"
+  syn := service.getSyntacticDiagnostics(fileName)
+  sem := service.getSemanticDiagnostics(fileName)
+  for diag of [...syn, ...sem]
+    remapped := remap diag
+    continue unless remapped
+    sourceName := remapped.file?.fileName ?? fileName
+    continue unless fileMatchesFilter sourceName
+    all.push remapped
+
+// Compile failures: any host meta with fatal=true means the transpiler threw.
+// Walk only over .civet.tsx / .hera.tsx siblings (the host populates meta
+// lazily on getScriptSnapshot, so we go via the program).
+compileFailures: [string, string][] := []
+for sourceFile of program.getSourceFiles()
+  fileName := sourceFile.fileName
+  continue unless fileName.endsWith(".civet.tsx") or fileName.endsWith(".hera.tsx")
+  realPath := fileName.slice 0, -4
+  meta := service.host.getMeta realPath
+  if meta?.fatal and meta.parseErrors?#
+    msg := meta.parseErrors[0]?.message ?? "compile failed"
+    compileFailures.push [realPath, msg] if fileMatchesFilter realPath
 
 formatHost := {
-  getCurrentDirectory: -> projectRoot
-  getNewLine: -> system.newLine
+  getCurrentDirectory: -> projectPath
+  getNewLine: -> ts.sys.newLine
   getCanonicalFileName: (f: string) -> f
 }
 
 if all.length
   process.stderr.write ts.formatDiagnosticsWithColorAndContext all, formatHost
 
-filteredFailures: [string, string][] := []
-for [file, msg] of compileFailures
-  filteredFailures.push [file, msg] if fileMatchesFilter file
-if filteredFailures.length
-  console.error `\nCivet compile failures (${filteredFailures.length}):`
-  for [file, msg] of filteredFailures
+if compileFailures.length
+  console.error `\nCivet/Hera compile failures (${compileFailures.length}):`
+  for [file, msg] of compileFailures
     console.error `  ${file}: ${msg.split("\n")[0]}`
 
-total := all.length + filteredFailures.length
+total := all.length + compileFailures.length
 
-// Regression gate: CIVET_TYPECHECK_MAX_ERRORS sets the allowed diagnostic count
-// (compile failures always fail).  Lets CI catch regressions without requiring
-// us to fix the full baseline up-front; drop the env var once baseline hits 0.
-// File-filter mode skips the gate entirely (it's an iteration tool, not CI).
+// Regression gate: CIVET_TYPECHECK_MAX_ERRORS sets the allowed diagnostic
+// count (compile failures always fail).  Lets CI catch regressions without
+// requiring us to fix the full baseline up-front; drop the env var once
+// baseline hits 0.  File-filter mode skips the gate (iteration tool, not CI).
 maxErrors := parseInt(process.env.CIVET_TYPECHECK_MAX_ERRORS ?? '0', 10) || 0
 filterMode := fileFilters.length > 0
-regressed := not filterMode and (all.length > maxErrors or filteredFailures.length > 0)
+regressed := not filterMode and (all.length > maxErrors or compileFailures.length > 0)
 
 if total
-  console.error `\n${total} problem${total is 1 ? '' : 's'} reported (diagnostics: ${all.length}, compile failures: ${filteredFailures.length}).`
+  console.error `\n${total} problem${total is 1 ? '' : 's'} reported (diagnostics: ${all.length}, compile failures: ${compileFailures.length}).`
   if regressed
     if all.length > maxErrors
       console.error `Typecheck regression: ${all.length} diagnostics exceeds baseline ${maxErrors}.`
@@ -271,6 +240,6 @@ if total
     process.exit 0
 
 if filterMode
-  console.log `Typecheck OK for filter [${fileFilters.join(", ")}] (${fsMap.size} source file${fsMap.size is 1 ? '' : 's'}).`
+  console.log `Typecheck OK for filter [${fileFilters.join(", ")}].`
 else
-  console.log `Typecheck OK (${fsMap.size} source file${fsMap.size is 1 ? '' : 's'}).`
+  console.log "Typecheck OK."
