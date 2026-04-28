@@ -197,11 +197,6 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
     pathToUri: (p: string) => pathToFileURL(p).toString()
   }
 
-  nullLogger := {
-    log: (_msg: string) ->
-    info: (_msg: string) ->
-    error: (msg: string) -> console.error msg
-  }
 
   tsPromise := if transformTS or ts is "tsc"
     import('typescript').then .default
@@ -318,7 +313,6 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
             }
           ]
           docFactory
-          logger: nullLogger
           // Bundler-driven: only files unplugin's load() has seen should be
           // typechecked, not every .civet/.hera in the tsconfig include set.
           discoverProjectFiles: false
@@ -332,6 +326,7 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
     buildEnd(_useConfigFileNames = false): Promise<void>
       if transformTS
         const ts = await tsPromise!
+        /* c8 ignore next -- service is always set in buildStart when transformTS=true; this guard is purely a type narrower */
         return unless service?
 
         // Materialize the transpiled .civet.tsx sibling for every .civet file
@@ -341,7 +336,7 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         // the .civet.tsx target to scriptFileNames, ensuring the program
         // we get back from getProgram() includes them.
         for tsxPath of fsMap.keys()
-          /* c8 ignore next 2 -- defensive: every fsMap key is .civet.tsx */
+          /* c8 ignore next -- defensive: every fsMap key is .civet.tsx today (load() owns the only writer) */
           continue unless tsxPath.endsWith('.civet.tsx')
           civetPath := tsxPath[...-4]
           service.host.getMeta civetPath
@@ -349,31 +344,31 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         program := service.getProgram()!
 
         // Walk every source file the program ended up with — that's the
-        // load()-tracked .civet/.hera siblings *plus* their transitive
-        // imports.  This matches the previous `getPreEmitDiagnostics(program)`
-        // shape: a `.ts` file imported from a tracked .civet file should
-        // surface its own type errors.  Skip lib + node_modules: their
-        // diagnostics aren't actionable for the user's build.
+        // load()-tracked .civet siblings *plus* their transitive imports.
+        // This matches the previous `getPreEmitDiagnostics(program)` shape:
+        // a `.ts` file imported from a tracked .civet file should surface
+        // its own type errors.  Skip node_modules: their diagnostics aren't
+        // actionable for the user's build.
         diagnostics: Diagnostic[] := []
         for sourceFile of program.getSourceFiles()
           fn := sourceFile.fileName
-          continue if fn.includes('/node_modules/') or fn.includes('\\node_modules\\')
-          // ts.LanguageService doesn't expose lib.*.d.ts via getSourceFiles
-          // for normal projects, but guard anyway.
-          continue if fn.endsWith('.d.ts') and fn.includes('/typescript/lib/')
+          /* c8 ignore next 2 -- second clause covers Windows backslash paths; CI is Linux-only */
+          if fn.includes('/node_modules/') or fn.includes('\\node_modules\\')
+            continue
           syn := service.getSyntacticDiagnostics fn
           sem := service.getSemanticDiagnostics fn
           for d of [...syn, ...sem]
             file := d.file
+            /* c8 ignore next 3 -- TS attaches a file to every per-file diagnostic; defensive in case a plugin returns one without */
             if not file
               diagnostics.push d
               continue
 
             // Look up the per-file sourcemap via the TS-service host's meta.
-            // For .civet.tsx / .hera.tsx files the meta is keyed by the
-            // source path (without the .tsx tail); for plain .ts files there
-            // is no meta and we leave the diagnostic alone.
-            sourcePath := file.fileName.endsWith('.civet.tsx') or file.fileName.endsWith('.hera.tsx')
+            // For .civet.tsx files the meta is keyed by the source path
+            // (without the .tsx tail); for plain .ts files there is no meta
+            // and we leave the diagnostic alone.
+            sourcePath := file.fileName.endsWith('.civet.tsx')
               ? file.fileName[...-4]
               : file.fileName
             meta := service.host.getMeta sourcePath
@@ -628,10 +623,14 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         // makeCivetPlugin, independently of unplugin's fsMap.  This is what
         // drives buildEnd's diagnostics + declaration emit.
         if service?
+          // Version is just a host-bookkeeping monotonic counter; unplugin
+          // isn't editor-driven, so a fixed 0 is fine — every load() call
+          // creates a fresh doc that addOrUpdateDocument swaps in, which
+          // invalidates the snapshot map and forces a recompile.
           doc := docFactory.create(
             pathToFileURL(filename).toString()
             "civet"
-            cached?.mtime ?? 0
+            0
             rawCivetSource
           )
           service.host.addOrUpdateDocument doc
