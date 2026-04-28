@@ -1,0 +1,157 @@
+/**
+ * Shared TSService factory: builds a TypeScript LanguageService over a
+ * Civet-aware host so any consumer (LSP server, CLI --typecheck, build-time
+ * typecheck script, unplugin TS mode) can drive Civet/Hera type checking,
+ * navigation, and diagnostics from one place.
+ *
+ * Lifted from lsp/server/source/lib/typescript-service.civet.  This factory
+ * is project-path-based (already resolved fsPath); the LSP wrapper handles
+ * URI-string projectURL inputs and project-Civet detection before calling in.
+ */
+
+path from path
+
+ts from typescript
+{ type LanguageService } from typescript
+{
+  createCompilerHost
+  createLanguageService
+  parseJsonConfigFileContent
+  readConfigFile
+  sys
+  JsxEmit
+} := ts
+
+{
+  type DocFactory
+  type Logger
+  type Plugin
+  type Transpiler
+  type TranspiledDoc
+} from ./types.civet
+{ type Host, TSHost } from ./host.civet
+{ getCanonicalFileName, remapFileName } from ./path.civet
+
+export interface TSServiceOptions
+  /** Initial plugins; later additions go through registerPlugin / loadPlugins. */
+  plugins?: Plugin[]
+  /** Document constructor + URI parsing.  Required (no sensible default). */
+  docFactory: DocFactory<TranspiledDoc>
+  /** Defaults to console. */
+  logger?: Logger
+  /**
+   * Directory containing TypeScript lib.*.d.ts files.  Set by the LSP server
+   * which bundles its own lib copies; left undefined elsewhere so the host
+   * falls back to ts.getDefaultLibFilePath.
+   */
+  libDir?: string
+
+export interface ResolvedService extends LanguageService
+  host: Host
+  /** Map a TypeScript file name (e.g. `foo.civet.tsx`) to its source path (`foo.civet`). */
+  getSourceFileName(fileName: string): string
+  /** Register a plugin's transpilers at runtime.  Existing snapshots are not invalidated. */
+  registerPlugin(plugin: Plugin): void
+  /**
+   * Discover `<projectPath>/.civet/*-plugin.mjs` files and dynamic-import each
+   * as a Plugin.  Returns once all plugins have either loaded or failed
+   * (failures are logged, not thrown).
+   */
+  loadPlugins(): Promise<void>
+
+export function TSService(projectPath: string, options: TSServiceOptions): ResolvedService
+  { plugins = [], docFactory, libDir } := options
+  logger: Logger := options.logger ?? console
+
+  // Build the transpilers map first so parseJsonConfigFileContent can be
+  // told about transpilable extensions when it walks the project's include
+  // patterns.  Without this, tsconfig's `include: ["source"]` would only
+  // pick up .ts/.tsx/.js (TS's known extensions) and skip every .civet /
+  // .hera file in the tree — making batch typecheck see 4 files instead of
+  // ~170.  The LSP doesn't strictly need this since it adds documents
+  // event-driven, but pre-populating from disk makes cross-file types
+  // resolve before any file is opened.
+  transpilers: Map<string, Transpiler> := new Map
+  function registerPlugin(plugin: Plugin): void
+    plugin.transpilers?.forEach (t) =>
+      transpilers.set t.extension, t
+
+  for plugin of plugins
+    registerPlugin plugin
+
+  extraExtensions := Array.from transpilers.keys()
+  // Wrap sys.readDirectory to:
+  //   1. inject every transpilable extension into the requested filter list
+  //   2. rewrite each .<ext> match to .<ext><target> so parsedConfig.fileNames
+  //      contains the synthetic-tsx siblings TypeScript will ask snapshots for.
+  configSys := if extraExtensions.length is 0 then sys else {
+    ...sys
+    readDirectory: (
+      p: string
+      extensions?: readonly string[]
+      excludes?: readonly string[]
+      includes?: readonly string[]
+      depth?: number
+    ): string[] ->
+      exts := extensions ? [...extensions, ...extraExtensions] : undefined
+      raw := sys.readDirectory(p, exts, excludes, includes, depth)
+      raw.map (f) =>
+        for ext of extraExtensions
+          if f.endsWith(ext)
+            t := transpilers.get(ext)
+            return f + t.target if t
+        f
+  }
+
+  tsConfigPath := `${projectPath}tsconfig.json`
+  { config } := readConfigFile(tsConfigPath, sys.readFile)
+
+  existingOptions := {
+    rootDir: projectPath
+    // This is necessary to load .civet files
+    allowNonTsExtensions: true
+    // Better described as "allow non-ts, non-json extensions"
+    allowJs: true
+    jsx: JsxEmit.Preserve
+  }
+
+  parsedConfig := parseJsonConfigFileContent(
+    config
+    configSys
+    projectPath
+    existingOptions
+    tsConfigPath
+    undefined
+  )
+
+  //@ts-ignore
+  baseHost := createCompilerHost(parsedConfig)
+
+  host := TSHost(parsedConfig.options, parsedConfig.fileNames, baseHost, transpilers, docFactory, logger, libDir)
+  service := createLanguageService(host)
+
+  loadPlugins := async function (): Promise<void>
+    civetFolder := path.join(projectPath, "./.civet/")
+    civetFiles := sys.readDirectory(civetFolder)
+    pluginFiles := civetFiles.filter((file) => file.endsWith("plugin.mjs"))
+
+    for filePath of pluginFiles
+      // Use docFactory.pathToUri so the dynamic import gets a properly-formed
+      // file URI on every OS (Windows needs file:///C:/...).
+      pluginUri := docFactory.pathToUri(filePath)
+      logger.info("Loading plugin " + pluginUri)
+      try
+        { default: plugin }: { default: Plugin } := await import(pluginUri)
+        logger.info("Loaded plugin " + plugin)
+        registerPlugin plugin
+      catch e
+        logger.error("Error loading plugin " + pluginUri + " " + e)
+    return
+
+  return Object.assign {}, service, {
+    host
+    getSourceFileName(fileName: string)
+      getCanonicalFileName remapFileName(fileName, transpilers)
+    registerPlugin
+    loadPlugins
+  }

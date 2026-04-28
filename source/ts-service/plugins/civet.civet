@@ -1,0 +1,93 @@
+/**
+ * Civet transpiler plugin.
+ *
+ * Packages up `transpileCivet` (lifted from
+ * lsp/server/source/lib/typescript-service.civet) as a Plugin that any
+ * TS-service consumer can register.  Defaults to the bundled @danielx/civet
+ * module; the LSP server passes a project-discovered Civet (and its loaded
+ * civetconfig) to keep the type-check pipeline aligned with what the editor
+ * sees at the language layer.
+ */
+
+{ type CompileOptions, type ParseError, lib as BundledCivetLib } from @danielx/civet
+BundledCivetModule from @danielx/civet
+BundledCivetPackage from @danielx/civet/package.json with type: 'json'
+
+ts from typescript
+
+{ type Plugin, type TranspileResult } from ../types.civet
+
+interface CivetTraversalLib
+  gatherRecursiveAll(ast: unknown, predicate: (node: unknown) => boolean): unknown[]
+
+export interface CivetPluginOptions
+  /** Override the Civet module.  Defaults to the bundled @danielx/civet. */
+  Civet?: typeof BundledCivetModule
+  /** Override the lib export (provides `gatherRecursiveAll`).  Defaults to the bundled lib. */
+  CivetLib?: CivetTraversalLib
+  /** Override the version string.  Used to detect Civet 0.9.4+ SourceMap API. */
+  CivetVersion?: string
+  /** Civet compile config (typically loaded from civetconfig.json or similar).  Defaults to {}. */
+  config?: CompileOptions
+
+/**
+ * Build a Civet transpiler Plugin.  The returned plugin's transpiler is
+ * synchronous and forces `parseOptions.comptime: false` because the
+ * TypeScript LanguageService snapshot path is sync; comptime macro execution
+ * (which is async) belongs in the build/CLI compile pipeline, not this one.
+ */
+export function makeCivetPlugin(options: CivetPluginOptions = {}): Plugin
+  Civet := options.Civet ?? BundledCivetModule
+  CivetLib := options.CivetLib ?? BundledCivetLib
+  CivetVersion := options.CivetVersion ?? BundledCivetPackage.version
+  civetConfig := options.config ?? {}
+
+  function transpileCivet(p: string, source: string): TranspileResult
+    errors: ParseError[] := []
+    options: CompileOptions & { sync: true } := {}
+      ...civetConfig
+      filename: p
+      errors
+      sync: true
+      parseOptions: {}
+        ...civetConfig.parseOptions
+        comptime: false
+
+    // Civet 0.9.4 introduced `new SourceMap` API.  Older project Civets fall
+    // through to the legacy single-call compile path.
+    [major, minor, patch] := CivetVersion.split(".").map(Number)
+    if major is 0 and (minor < 9 or minor is 9 and patch < 4)
+      result := Civet.compile source, { ...options, sourceMap: true }
+      return { ...result, errors }
+
+    // Re-use the single parse for both code generation and comment extraction.
+    options.ast = true
+    ast := Civet.compile source, options
+    sourceMap := new Civet.SourceMap source, p
+    code := Civet.generate ast, {}
+      ...options
+      sourceMap
+    commentRanges := collectCommentRanges(ast)
+
+    {
+      code
+      sourceMap
+      commentRanges
+      errors
+    }
+
+  function collectCommentRanges(ast: unknown)
+    comments := CivetLib.gatherRecursiveAll(ast, (node: any) =>
+      node?.type is "Comment" and node.$loc?.length > 0
+    ) as { $loc: { pos: number, length: number } }[]
+    comments.map (comment) => comment.$loc
+
+  {
+    transpilers: [{
+      extension: ".civet"
+      target: ".tsx" as ts.Extension
+      compile: transpileCivet
+    }]
+  }
+
+export default makeCivetPlugin
