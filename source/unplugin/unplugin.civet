@@ -8,10 +8,20 @@ import {
   // using ts-ignore because the version of @danielx/civet typescript is checking against
   // is the one published to npm, not the one in the repo
 } from '@danielx/civet/ts-diagnostic'
+import {
+  TSService
+  makeCivetPlugin
+  makeHeraPlugin
+  // @ts-ignore — see ts-diagnostic note above.  ts-service is also a
+  // workspace-only subpath that the published @danielx/civet doesn't expose
+  // yet, so TS can't see its types when type-checking unplugin against the
+  // installed (published) Civet.  The runtime resolution still works because
+  // it goes through the local workspace symlink at build time.
+} from '@danielx/civet/ts-service'
 import * as fs from 'fs'
 import path from 'path'
+import { pathToFileURL, fileURLToPath } from 'url'
 import type { FormatDiagnosticsHost, Diagnostic, System } from 'typescript'
-import { createFSBackedSystem, createVirtualCompilerHost } from '@typescript/vfs'
 import type { UserConfig } from 'vite'
 import type { BuildOptions } from 'esbuild'
 import os from 'os'
@@ -151,8 +161,47 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
   outDir .= path.join rootDir, 'dist'
   let esbuildOptions: BuildOptions
   let configErrors: Diagnostic[]?
-  let configFileNames: string[]
   skipWorker .= false
+
+  // Shared TS-service: drives the typecheck + declaration-emit path.  Stays
+  // null when transformTS is false (the esbuild fast path doesn't need TS).
+  // Created lazily in buildStart so the project root + tsconfig are known.
+  // Typed `any` because the published @danielx/civet d.ts doesn't yet
+  // declare the ./ts-service subpath (see import note above).
+  service: any .= null
+
+  // Minimal in-memory doc factory.  unplugin doesn't track editor-style
+  // versions per file, so we wrap the .civet source in a tiny shape that
+  // satisfies the host's TranspiledDoc — the TS-service then asks its
+  // registered transpiler (makeCivetPlugin / makeHeraPlugin) to compile
+  // when needed.
+  docFactory := {
+    create: (uri: string, _languageId: string, version: number, text: string) =>
+      let _text = text
+      doc := {
+        uri
+        version
+        getText: () => _text
+      }
+      // Stash the text setter so update() can mutate this same object.
+      Object.defineProperty doc, "_setText", {
+        enumerable: false
+        value: (t: string) =>
+          _text = t
+      }
+      doc
+    update: (doc: any, text: string, version: number) =>
+      doc._setText text
+      doc.version = version
+    uriToPath: (uri: string) => fileURLToPath uri
+    pathToUri: (p: string) => pathToFileURL(p).toString()
+  }
+
+  nullLogger := {
+    log: (_msg: string) ->
+    info: (_msg: string) ->
+    error: (msg: string) -> console.error msg
+  }
 
   tsPromise := if transformTS or ts is "tsc"
     import('typescript').then .default
@@ -235,7 +284,6 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
           tsConfigPath
 
         configErrors = configContents.errors
-        configFileNames = configContents.fileNames
 
         compilerOptions = {
           ...configContents.options
@@ -251,110 +299,105 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         }
         fsMap = new Map()
 
-    buildEnd(useConfigFileNames = false): Promise<void>
+        // Spin up the shared TS-service.  TSService re-parses the tsconfig
+        // internally, but that's the same file ts.findConfigFile already
+        // located above; the duplicate parse is cheap and keeps the service
+        // self-contained.  Project path is the directory containing
+        // tsconfig.json (with trailing separator — TSService concatenates
+        // `${projectPath}tsconfig.json` directly).
+        servicePath := if tsConfigPath then path.dirname(tsConfigPath) + path.sep else process.cwd() + path.sep
+        service = TSService servicePath, {
+          plugins: [
+            makeCivetPlugin {
+              Civet: civet
+              config: compileOptions
+            }
+            makeHeraPlugin {
+              Civet: civet
+              config: compileOptions
+            }
+          ]
+          docFactory
+          logger: nullLogger
+          // Bundler-driven: only files unplugin's load() has seen should be
+          // typechecked, not every .civet/.hera in the tsconfig include set.
+          discoverProjectFiles: false
+        }
+
+    // useConfigFileNames is preserved for backwards compat; previously
+    // toggled rootNames between fsMap.keys() and tsconfig's fileNames.  The
+    // TSService-driven flow walks the actual program built from registered
+    // documents + their transitive imports, so neither set drives scope
+    // anymore.  Underscore-prefix to silence noUnusedParameters.
+    buildEnd(_useConfigFileNames = false): Promise<void>
       if transformTS
         const ts = await tsPromise!
+        return unless service?
 
-        // Create a virtual file system with all source files processed so far,
-        // but which further resolves any Civet dependencies that are needed
-        // just for typechecking (e.g. `import type` which get removed in JS).
-        system := createFSBackedSystem fsMap, process.cwd(), ts
-        {
-          fileExists: systemFileExists
-          readFile: systemReadFile
-          readDirectory: systemReadDirectory
-        } := system
+        // Materialize the transpiled .civet.tsx sibling for every .civet file
+        // we tracked in load().  TSService's host creates these snapshots
+        // lazily, so we walk the fsMap and ask for getMeta on each source
+        // path — that triggers the host's compile-via-plugin flow and adds
+        // the .civet.tsx target to scriptFileNames, ensuring the program
+        // we get back from getProgram() includes them.
+        for tsxPath of fsMap.keys()
+          /* c8 ignore next 2 -- defensive: every fsMap key is .civet.tsx */
+          continue unless tsxPath.endsWith('.civet.tsx')
+          civetPath := tsxPath[...-4]
+          service.host.getMeta civetPath
 
-        system.fileExists = (filename: string): boolean =>
-          if (!filename.endsWith('.civet.tsx')) return systemFileExists(filename)
-          /* c8 ignore next 2 -- only hit when TS resolves .civet.tsx dependencies not in fsMap */
-          if (fsMap.has(filename)) return true
-          return systemFileExists filename[...-4]
+        program := service.getProgram()!
 
-        /* c8 ignore start -- defensive: buildEnd's createProgram uses explicit rootNames, so TS never scans directories through this override */
-        system.readDirectory = (path: string): string[] =>
-          systemReadDirectory(path)
-          .map &.endsWith('.civet') ? & + '.tsx' : &
-        /* c8 ignore stop */
+        // Walk every source file the program ended up with — that's the
+        // load()-tracked .civet/.hera siblings *plus* their transitive
+        // imports.  This matches the previous `getPreEmitDiagnostics(program)`
+        // shape: a `.ts` file imported from a tracked .civet file should
+        // surface its own type errors.  Skip lib + node_modules: their
+        // diagnostics aren't actionable for the user's build.
+        diagnostics: Diagnostic[] := []
+        for sourceFile of program.getSourceFiles()
+          fn := sourceFile.fileName
+          continue if fn.includes('/node_modules/') or fn.includes('\\node_modules\\')
+          // ts.LanguageService doesn't expose lib.*.d.ts via getSourceFiles
+          // for normal projects, but guard anyway.
+          continue if fn.endsWith('.d.ts') and fn.includes('/typescript/lib/')
+          syn := service.getSyntacticDiagnostics fn
+          sem := service.getSemanticDiagnostics fn
+          for d of [...syn, ...sem]
+            file := d.file
+            if not file
+              diagnostics.push d
+              continue
 
-        tsCompileOptions := {
-          ...compileOptions
-          rewriteCivetImports: false
-          rewriteTsImports: true
-        }
-        system.readFile = (filename: string, encoding: BufferEncoding = 'utf-8'): string? =>
-          // Mogrify package.json imports field to use .civet.tsx
-          if path.basename(filename) is "package.json"
-            json := systemReadFile filename, encoding
-            return json unless json
-            parsed: Record<string, unknown> := JSON.parse(json)
-            modified .= false
-            /* c8 ignore next 10 -- only hit when package.json has .civet entries in imports field */
-            function recurse(node: unknown): void
-              if node? <? "object"
-                for key in node
-                  value := (node as Record<string, unknown>)[key]
-                  if value <? "string"
-                    if value.endsWith ".civet"
-                      (node as Record<string, unknown>)[key] = value + '.tsx'
-                      modified = true
-                  else if value
-                    recurse value
-            recurse parsed.imports
-            return modified ? JSON.stringify(parsed) : json
+            // Look up the per-file sourcemap via the TS-service host's meta.
+            // For .civet.tsx / .hera.tsx files the meta is keyed by the
+            // source path (without the .tsx tail); for plain .ts files there
+            // is no meta and we leave the diagnostic alone.
+            sourcePath := file.fileName.endsWith('.civet.tsx') or file.fileName.endsWith('.hera.tsx')
+              ? file.fileName[...-4]
+              : file.fileName
+            meta := service.host.getMeta sourcePath
+            sourcemapLines := meta?.sourcemapLines
 
-          // Generate .civet.tsx files on the fly
-          if (!filename.endsWith('.civet.tsx')) return systemReadFile(filename, encoding)
-          if (fsMap.has(filename)) return fsMap.get(filename)
-          /* c8 ignore next 12 -- only hit when TS resolves `import type` dependencies not yet compiled */
-          civetFilename := filename[...-4]
-          rawCivetSource := fs.readFileSync civetFilename, {encoding}
-          { code: compiledTS, sourceMap } := civet.compile rawCivetSource, {
-            ...tsCompileOptions
-            filename
-            js: false
-            sourceMap: true
-            sync: true // TS readFile API seems to need to be synchronous
-          }
-          fsMap.set filename, compiledTS
-          sourceMaps.set filename, sourceMap
-          return compiledTS
+            unless sourcemapLines
+              diagnostics.push d
+              continue
 
-        host := createVirtualCompilerHost
-          system
-          compilerOptions
-          ts
-
-        program := ts.createProgram
-          rootNames: useConfigFileNames ? configFileNames : [...fsMap.keys()]
-          options: compilerOptions
-          host: host.compilerHost
-
-        diagnostics: Diagnostic[] := ts
-          .getPreEmitDiagnostics(program)
-          .map (diagnostic) =>
-            file := diagnostic.file
-            if (!file) return diagnostic
-
-            sourceMap := sourceMaps.get file.fileName
-            if (!sourceMap) return diagnostic
-
-            sourcemapLines := sourceMap.lines
-            /* c8 ignore start -- \`|| 0\` / \`|| 1\` fallbacks only fire for diagnostics with undefined or zero start/length; TS always sets these when file is non-null */
+            /* c8 ignore start -- `|| 0` / `|| 1` fallbacks only fire for diagnostics with undefined or zero start/length; TS always sets these when file is non-null */
             range := remapRange(
               {
-                start: diagnostic.start || 0,
-                end: (diagnostic.start || 0) + (diagnostic.length || 1),
-              },
+                start: d.start || 0
+                end:  (d.start || 0) + (d.length || 1)
+              }
               sourcemapLines
             )
             /* c8 ignore stop */
 
-            {
-              ...diagnostic,
-              messageText: flattenDiagnosticMessageText(diagnostic.messageText),
-              length: diagnostic.length,
-              start: range.start,
+            diagnostics.push {
+              ...d
+              messageText: flattenDiagnosticMessageText d.messageText
+              length: d.length
+              start: range.start
             }
 
         /* c8 ignore next 2 -- only hit when tsconfig.json has parse errors */
@@ -400,7 +443,7 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
             sourceFile := program.getSourceFile(file)!
             program.emit
               sourceFile
-              (filePath, content) =>
+              (filePath: string, content: string) =>
                 if options.declarationExtension?
                   if filePath.endsWith '.d.ts'
                     filePath = filePath[< -5]
@@ -579,6 +622,19 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         unless tsx is slashed
           fsMap.set slashed, compiledTS
           sourceMaps.set slashed, civetSourceMap
+
+        // Notify the shared TS-service of this .civet file.  The service's
+        // host caches a compiled .tsx sibling on demand via the registered
+        // makeCivetPlugin, independently of unplugin's fsMap.  This is what
+        // drives buildEnd's diagnostics + declaration emit.
+        if service?
+          doc := docFactory.create(
+            pathToFileURL(filename).toString()
+            "civet"
+            cached?.mtime ?? 0
+            rawCivetSource
+          )
+          service.host.addOrUpdateDocument doc
 
       jsonSourceMap := sourceMap and
         if sourceMap <? "string"
