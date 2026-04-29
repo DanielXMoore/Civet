@@ -596,6 +596,41 @@ describe "ts-service direct factory usage", ->
     meta := service.host.getMeta civetPath
     assert meta?.transpiledDoc, "expected the freshly-registered Civet plugin to compile snap-test.civet"
 
+  it "addScriptFileName widens program scope without a TranspiledDoc", ->
+    // Expansion path used by `civet --typecheck` (project-wide) and
+    // unplugin's `buildEnd(useConfigFileNames=true)` to fold tsconfig-
+    // discovered files into the program without first wrapping each in a
+    // doc.  TS reads the file from disk via getScriptSnapshot when asked.
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-add-script-file-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020"}}'
+      sidecarPath := path.join tmpDir, 'sidecar.civet'
+      writeFileSync sidecarPath, "x: number := 'wrong type'\n"
+
+      service := SharedTSService tmpDir + path.sep, {
+        plugins: [makeCivetPlugin()]
+        docFactory: directDocFactory
+        logger: nullLogger
+        // discoverProjectFiles=false so the file doesn't enter via the
+        // include walk — addScriptFileName has to be the thing that pulls
+        // it in for the diagnostic to surface.
+        discoverProjectFiles: false
+      }
+
+      // Calling twice on the same path should be idempotent — the second
+      // call short-circuits via the `scriptFileNames.has` guard.
+      service.host.addScriptFileName sidecarPath
+      service.host.addScriptFileName sidecarPath
+
+      diagnostics := service.getSemanticDiagnostics(sidecarPath + '.tsx')
+      assert diagnostics.length > 0,
+        "expected at least one diagnostic from sidecar.civet"
+      assert diagnostics.some((d) => String(d.messageText).includes("'wrong type'") or String(d.messageText).includes("not assignable")),
+        `expected a type-mismatch diagnostic, got: ${diagnostics.map(.messageText).join(' | ')}`
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
   it "rewrites raw .civet entries from tsconfig.files to their .tsx siblings", ->
     // tsconfig's `files: [...]` accepts literal paths verbatim — they don't
     // flow through configSys's readDirectory wrapper that would otherwise

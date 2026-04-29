@@ -198,6 +198,12 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
   outDir .= path.join rootDir, 'dist'
   let esbuildOptions: BuildOptions
   let configErrors: Diagnostic[]?
+  // Tsconfig's fileNames as resolved by parseJsonConfigFileContent against
+  // the mogrify-aware system — i.e. `.civet` discoveries already rewritten
+  // to `.civet.tsx`.  Captured in buildStart, consumed by buildEnd's
+  // `useConfigFileNames` opt-in (the public toggle for "type-check the whole
+  // project, not just bundler-tracked files").
+  let configFileNames: string[] = []
   skipWorker .= false
 
   // Shared TS-service: drives the typecheck + declaration-emit path.  Stays
@@ -314,6 +320,7 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
           tsConfigPath
 
         configErrors = configContents.errors
+        configFileNames = configContents.fileNames
 
         compilerOptions = {
           ...configContents.options
@@ -368,12 +375,13 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
           extraCompilerOptions
         }
 
-    // useConfigFileNames is preserved for backwards compat; previously
-    // toggled rootNames between fsMap.keys() and tsconfig's fileNames.  The
-    // TSService-driven flow walks the actual program built from registered
-    // documents + their transitive imports, so neither set drives scope
-    // anymore.  Underscore-prefix to silence noUnusedParameters.
-    buildEnd(_useConfigFileNames = false): Promise<void>
+    // useConfigFileNames is the public toggle for "type-check the whole
+    // project, not just bundler-tracked files": when true, we expand the
+    // TSService program to include every path tsconfig matched (captured in
+    // buildStart's `configFileNames`) on top of whatever load() registered.
+    // When false (default) the typecheck program stays scoped to load()-
+    // tracked .civet siblings and their transitive imports.
+    buildEnd(useConfigFileNames = false): Promise<void>
       if transformTS
         const ts = await tsPromise!
         /* c8 ignore next -- service is always set in buildStart when transformTS=true; this guard is purely a type narrower */
@@ -390,6 +398,14 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
           continue unless tsxPath.endsWith('.civet.tsx')
           civetPath := tsxPath[...-4]
           service.host.getMeta civetPath
+
+        // Pull tsconfig-discovered files into the program when the caller
+        // asked for project-wide scope.  configFileNames already has the
+        // .civet → .civet.tsx mogrify applied from buildStart's
+        // parseJsonConfigFileContent against the mogrify-aware system.
+        if useConfigFileNames
+          for fn of configFileNames
+            service.host.addScriptFileName fn
 
         program := service.getProgram()!
 
