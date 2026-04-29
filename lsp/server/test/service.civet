@@ -596,6 +596,77 @@ describe "ts-service direct factory usage", ->
     meta := service.host.getMeta civetPath
     assert meta?.transpiledDoc, "expected the freshly-registered Civet plugin to compile snap-test.civet"
 
+  it "rewrites raw .civet entries from tsconfig.files to their .tsx siblings", ->
+    // tsconfig's `files: [...]` accepts literal paths verbatim — they don't
+    // flow through configSys's readDirectory wrapper that would otherwise
+    // rewrite `.civet` → `.civet.tsx`.  TSHost picks up the slack so a
+    // tsconfig listing `.civet` sources directly still ends up with the
+    // synthetic `.civet.tsx` siblings TS knows how to ask snapshots for.
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-files-array-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'), JSON.stringify({
+        compilerOptions: { target: 'es2020' }
+        files: ['main.civet']
+      })
+      writeFileSync path.join(tmpDir, 'main.civet'), 'x := 5\n'
+
+      service := SharedTSService tmpDir + path.sep, {
+        plugins: [makeCivetPlugin()]
+        docFactory: directDocFactory
+        logger: nullLogger
+      }
+      program := service.getProgram()
+      fileNames := program!.getSourceFiles().map .fileName
+      assert fileNames.some(.endsWith "main.civet.tsx"),
+        `expected main.civet.tsx in program (got ${fileNames.filter(.includes 'main').join(', ')})`
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "merges consumer-supplied extraCompilerOptions on top of tsconfig", ->
+    // The CLI typecheck flag uses extraCompilerOptions to inject
+    // tsbuildinfo settings without touching tsconfig.json.  Verify the
+    // override actually reaches the host's compilation settings.
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-extra-opts-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020"}}'
+      service := SharedTSService tmpDir + path.sep, {
+        docFactory: directDocFactory
+        logger: nullLogger
+        discoverProjectFiles: false
+        extraCompilerOptions:
+          incremental: true
+          tsBuildInfoFile: path.join(tmpDir, '.tsbuildinfo')
+      }
+      compilationSettings := service.host.getCompilationSettings()
+      assert.equal compilationSettings.incremental, true,
+        "expected extraCompilerOptions.incremental to override tsconfig"
+      assert.equal compilationSettings.tsBuildInfoFile,
+        path.join(tmpDir, '.tsbuildinfo'),
+        "expected extraCompilerOptions.tsBuildInfoFile to flow through"
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "makeHeraPlugin honors options.Hera override", ->
+    // Consumers can provide their own Hera implementation (mocks for tests,
+    // alternative grammar engines, etc.) — verify the override path bypasses
+    // the bundled @danielx/hera require.
+    callLog: { source: string, filename: string }[] := []
+    fakeHera := {
+      compile: (source, options) =>
+        callLog.push { source, filename: options.filename }
+        // Return shape matching @danielx/hera with sourceMap: true.
+        { code: "// fake hera output\n", sourceMap: { lines: [] } }
+    }
+    plugin := makeHeraPlugin Hera: fakeHera
+    [t] := plugin.transpilers!
+    result := t.compile("test.hera", "Rule := 'x'")
+    assert result, "expected compile result"
+    assert.equal callLog.length, 1, "expected fakeHera.compile to be called"
+    assert.equal callLog[0].filename, "test.hera"
+    assert (result! as { code: string }).code.includes("fake hera output"),
+      "expected fakeHera output in result"
+
 describe "createInMemoryDocFactory", ->
   // Shared in-memory factory used by typecheck.civet and unplugin (any
   // consumer that doesn't need vscode-languageserver-textdocument).  These
