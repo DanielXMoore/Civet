@@ -6,6 +6,13 @@ import { mkdtempSync, writeFileSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import path from "path"
 
+{
+  makeCivetPlugin
+  makeHeraPlugin
+  TSService as SharedTSService
+  createInMemoryDocFactory
+} from "@danielx/civet/ts-service"
+{ URI } from "vscode-uri"
 { forwardMap, getCanonicalFileName } from ../source/lib/util.civet
 
 assert from assert
@@ -467,3 +474,221 @@ describe "ts service with partial project civet packages", ->
     assert meta?.sourcemapLines, 'expected legacy compile path to populate sourcemap lines'
     assert.equal meta?.commentRanges, undefined,
       'legacy compile path should not collect comment ranges even when the input contains comments'
+
+describe "ts service hera plugin", ->
+  hPath := "./integration/project-test/h.hera"
+
+  it "transpiles a .hera file via the built-in hera plugin", async ->
+    // Note: skip loadPlugins() — the project-test fixture ships its own
+    // hera-plugin.mjs that targets .cjs and skips sourcemaps; that's a fixture
+    // for the plugin-loading flow, not the built-in Hera transpiler we want
+    // to exercise here.
+    service := await TSService(projectURL, nullLogger)
+
+    heraDoc := TextDocument.create(pathToFileURL(hPath).href, "hera", 0, fs.readFileSync(hPath, "utf8"))
+    service.host.addOrUpdateDocument(heraDoc)
+
+    meta := service.host.getMeta(hPath)
+    assert meta, `expected meta for ${hPath}`
+
+    { transpiledDoc, sourcemapLines, parseErrors, fatal } := meta!
+    assert.equal fatal, false, 'transpile should not be fatal'
+    assert.equal parseErrors?.length ?? 0, 0, 'no parse errors expected'
+    assert sourcemapLines, 'expected sourcemap lines'
+    assert transpiledDoc, 'expected transpiledDoc'
+    assert transpiledDoc!.getText().length > 0, 'expected non-empty transpiled output'
+
+    // The composed Hera→Civet→TS sourcemap should let us walk back from any
+    // TS-coordinate diagnostic to the original .hera source.  No assertion on
+    // semantic-diagnostic count here — Hera-generated TS imports from
+    // `@danielx/hera/lib` whose .d.ts shape may evolve; we only require that
+    // compilation reaches semantic analysis at all.
+    diagnostics := service.getSemanticDiagnostics(hPath + ".tsx")
+    assert Array.isArray(diagnostics), 'getSemanticDiagnostics should return an array'
+
+describe "ts-service plugin factories", ->
+  // makeCivetPlugin / makeHeraPlugin are exposed as part of the public
+  // @danielx/civet/ts-service API; the LSP and unplugin always pass an
+  // explicit Civet module + config, but standalone consumers (CLI typecheck,
+  // ad-hoc scripts) can call the factories with no arguments and rely on
+  // the bundled Civet/Hera defaults.  These tests exercise that path so
+  // the `?? Bundled…` fallbacks (and the Hera plugin's compile error path)
+  // stay covered.
+
+  it "makeCivetPlugin() with no options uses bundled defaults", ->
+    plugin := makeCivetPlugin()
+    assert plugin.transpilers, "expected transpilers"
+    [t] := plugin.transpilers!
+    assert.equal t.extension, ".civet"
+    assert.equal t.target, ".tsx"
+    result := t.compile("inline.civet", "x := 5\nconsole.log x\n")
+    assert result, "expected compile result"
+    assert (result! as { code: string }).code.includes("const x"), "expected `const x = 5` in output"
+
+  it "makeHeraPlugin() with no options uses bundled defaults", ->
+    plugin := makeHeraPlugin()
+    assert plugin.transpilers, "expected transpilers"
+    [t] := plugin.transpilers!
+    assert.equal t.extension, ".hera"
+    assert.equal t.target, ".tsx"
+    grammar := fs.readFileSync("./integration/project-test/h.hera", "utf8")
+    result := t.compile("./integration/project-test/h.hera", grammar)
+    assert result, "expected compile result"
+    assert (result! as { code: string }).code.length > 0, "expected non-empty compiled output"
+
+  it "makeHeraPlugin() reports parse errors via the result.errors array", ->
+    // Malformed grammar — Hera throws a ParseError, which the plugin's
+    // catch block converts into a result with empty code and a populated
+    // errors array (so consumers can surface diagnostics rather than crash).
+    plugin := makeHeraPlugin()
+    [t] := plugin.transpilers!
+    result := t.compile("bad.hera", "this is not a hera grammar :=:=:=\n")
+    assert result, "expected compile result"
+    typed := result! as { code: string, errors?: Error[] }
+    assert.equal typed.code, "", "expected empty code on parse failure"
+    assert typed.errors and typed.errors.length > 0, "expected at least one error"
+
+describe "ts-service direct factory usage", ->
+  // Drive the shared TSService factory directly (bypassing the LSP wrapper)
+  // so the bundler-driven branches — `discoverProjectFiles: false` and
+  // empty-plugins — get coverage too.
+
+  directDocFactory := {
+    create: (uri: string, languageId: string, version: number, text: string) =>
+      TextDocument.create uri, languageId, version, text
+    update: (doc: any, text: string, version: number) =>
+      TextDocument.update doc, [{ text }], version
+    uriToPath: (uri: string) => URI.parse(uri).fsPath
+    pathToUri: (p: string) => URI.file(p).toString()
+  }
+
+  // Trailing slash matters: TSService builds tsConfigPath as
+  // `${projectPath}tsconfig.json`.
+  projectPath := path.resolve("./integration/project-test/") + path.sep
+
+  it "starts with no plugins and no auto-discovery (bundler-driven mode)", ->
+    service := SharedTSService projectPath, {
+      docFactory: directDocFactory
+      logger: nullLogger
+      discoverProjectFiles: false
+    }
+    program := service.getProgram()
+    assert program, "expected a program even with no plugins"
+    // No transpilers registered, so the program has no .civet/.hera siblings;
+    // any pre-existing .ts files in the test fixture still appear as roots.
+    fileNames := program!.getSourceFiles().map .fileName
+    assert.equal fileNames.some(.endsWith ".civet.tsx"), false, "expected no .civet.tsx without a Civet plugin"
+
+  it "registers plugins lazily through registerPlugin after construction", ->
+    service := SharedTSService projectPath, {
+      docFactory: directDocFactory
+      logger: nullLogger
+      discoverProjectFiles: false
+    }
+    // registerPlugin path is also exercised internally by `plugins: [...]`,
+    // but calling it post-construction covers consumers that load plugins
+    // (like loadPlugins() does for `.civet/*-plugin.mjs`).
+    service.registerPlugin makeCivetPlugin()
+    // Add a .civet doc and verify it now compiles via the registered plugin.
+    civetPath := path.resolve "./integration/project-test/snap-test.civet"
+    doc := TextDocument.create pathToFileURL(civetPath).href, "civet", 0, "x := 7\n"
+    service.host.addOrUpdateDocument doc
+    meta := service.host.getMeta civetPath
+    assert meta?.transpiledDoc, "expected the freshly-registered Civet plugin to compile snap-test.civet"
+
+  it "rewrites raw .civet entries from tsconfig.files to their .tsx siblings", ->
+    // tsconfig's `files: [...]` accepts literal paths verbatim — they don't
+    // flow through configSys's readDirectory wrapper that would otherwise
+    // rewrite `.civet` → `.civet.tsx`.  TSHost picks up the slack so a
+    // tsconfig listing `.civet` sources directly still ends up with the
+    // synthetic `.civet.tsx` siblings TS knows how to ask snapshots for.
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-files-array-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'), JSON.stringify({
+        compilerOptions: { target: 'es2020' }
+        files: ['main.civet']
+      })
+      writeFileSync path.join(tmpDir, 'main.civet'), 'x := 5\n'
+
+      service := SharedTSService tmpDir + path.sep, {
+        plugins: [makeCivetPlugin()]
+        docFactory: directDocFactory
+        logger: nullLogger
+      }
+      program := service.getProgram()
+      fileNames := program!.getSourceFiles().map .fileName
+      assert fileNames.some(.endsWith "main.civet.tsx"),
+        `expected main.civet.tsx in program (got ${fileNames.filter(.includes 'main').join(', ')})`
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "merges consumer-supplied extraCompilerOptions on top of tsconfig", ->
+    // The CLI typecheck flag uses extraCompilerOptions to inject
+    // tsbuildinfo settings without touching tsconfig.json.  Verify the
+    // override actually reaches the host's compilation settings.
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-extra-opts-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020"}}'
+      service := SharedTSService tmpDir + path.sep, {
+        docFactory: directDocFactory
+        logger: nullLogger
+        discoverProjectFiles: false
+        extraCompilerOptions:
+          incremental: true
+          tsBuildInfoFile: path.join(tmpDir, '.tsbuildinfo')
+      }
+      compilationSettings := service.host.getCompilationSettings()
+      assert.equal compilationSettings.incremental, true,
+        "expected extraCompilerOptions.incremental to override tsconfig"
+      assert.equal compilationSettings.tsBuildInfoFile,
+        path.join(tmpDir, '.tsbuildinfo'),
+        "expected extraCompilerOptions.tsBuildInfoFile to flow through"
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "makeHeraPlugin honors options.Hera override", ->
+    // Consumers can provide their own Hera implementation (mocks for tests,
+    // alternative grammar engines, etc.) — verify the override path bypasses
+    // the bundled @danielx/hera require.
+    callLog: { source: string, filename: string }[] := []
+    fakeHera := {
+      compile: (source, options) =>
+        callLog.push { source, filename: options.filename }
+        // Return shape matching @danielx/hera with sourceMap: true.
+        { code: "// fake hera output\n", sourceMap: { lines: [] } }
+    }
+    plugin := makeHeraPlugin Hera: fakeHera
+    [t] := plugin.transpilers!
+    result := t.compile("test.hera", "Rule := 'x'")
+    assert result, "expected compile result"
+    assert.equal callLog.length, 1, "expected fakeHera.compile to be called"
+    assert.equal callLog[0].filename, "test.hera"
+    assert (result! as { code: string }).code.includes("fake hera output"),
+      "expected fakeHera output in result"
+
+describe "createInMemoryDocFactory", ->
+  // Shared in-memory factory used by typecheck.civet and unplugin (any
+  // consumer that doesn't need vscode-languageserver-textdocument).  These
+  // tests exercise the create/update/uri round-trip so the helper file
+  // stays covered without driving a full TSService through it.
+
+  factory := createInMemoryDocFactory()
+
+  it "create() produces a doc satisfying TranspiledDoc", ->
+    doc := factory.create "file:///x/y.civet", "civet", 3, "hello"
+    assert.equal doc.uri, "file:///x/y.civet"
+    assert.equal doc.version, 3
+    assert.equal doc.getText(), "hello"
+
+  it "update() mutates text + version in place", ->
+    doc := factory.create "file:///x/y.civet", "civet", 0, "first"
+    factory.update doc, "second", 5
+    assert.equal doc.version, 5
+    assert.equal doc.getText(), "second"
+
+  it "uriToPath / pathToUri round-trip a path", ->
+    p := path.resolve "./integration/project-test/a.civet"
+    uri := factory.pathToUri p
+    assert uri.startsWith "file://"
+    assert.equal factory.uriToPath(uri), p
