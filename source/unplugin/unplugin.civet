@@ -2,7 +2,7 @@ import { type TransformResult, createUnplugin, type UnpluginContextMeta, type Un
 import civet, { decode, lib, SourceMap, type CompileOptions, type ParseOptions } from '@danielx/civet'
 import { findInDir, loadConfig } from '@danielx/civet/config'
 import {
-  remapRange,
+  remapPosition,
   flattenDiagnosticMessageText,
   // @ts-ignore
   // using ts-ignore because the version of @danielx/civet typescript is checking against
@@ -30,6 +30,7 @@ import type {
   BuilderProgramHost
   ReadBuildProgramHost
   SemanticDiagnosticsBuilderProgram
+  SourceFile
 } from 'typescript'
 import type { UserConfig } from 'vite'
 import type { BuildOptions } from 'esbuild'
@@ -210,6 +211,14 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
   // populated in buildStart, consumed in buildEnd's incremental persist
   // step.  Stays undefined when the option isn't set.
   let tsBuildInfoTarget: string?
+
+  // Diagnostics on .hera-generated TS that the user can't act on without
+  // editing Hera:
+  //   6133 / 6196 / 6192 — "declared but never read" for preamble imports
+  //     used only by rule handlers whose references hera optimises away.
+  //   7006 / 7031 — noImplicitAny on positional $1..$9 args and
+  //     destructuring patterns synthesized inside rule handlers.
+  heraSuppressedCodes := new Set<number> [6133, 6196, 6192, 7006, 7031]
 
   // unplugin isn't editor-driven, so the in-memory factory from ts-service
   // is sufficient — TSService only ever asks for `uri`, `version`, and
@@ -394,6 +403,27 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
           oldProgram := ts.readBuilderProgram program.getCompilerOptions(), readHost
           builder = ts.createSemanticDiagnosticsBuilderProgram program, builderHost, oldProgram
 
+        // For diagnostics on transpiled `.civet.tsx` / `.hera.tsx` files,
+        // we replace the diagnostic's SourceFile with one constructed from
+        // the real `.civet` / `.hera` source — TS's formatter then displays
+        // the original path and line/col, matching what users (and
+        // scripts/typecheck-{summary,diff}) expect.  Cache per-realPath so
+        // we don't re-read each file once per diagnostic.
+        realFileCache := new Map<string, SourceFile>()
+        realSourceFile := (realPath: string) =>
+          cached := realFileCache.get realPath
+          return cached if cached
+          /* c8 ignore start -- defensive: realPath is derived from a known
+             .civet.tsx / .hera.tsx source that the program already loaded */
+          try
+            src := fs.readFileSync realPath, 'utf8'
+            sf := ts.createSourceFile realPath, src, ts.ScriptTarget.ESNext, true
+            realFileCache.set realPath, sf
+            return sf
+          catch
+            return undefined
+          /* c8 ignore stop */
+
         // Walk every source file the program ended up with — that's the
         // load()-tracked .civet siblings *plus* their transitive imports.
         // This matches the previous `getPreEmitDiagnostics(program)` shape:
@@ -422,13 +452,20 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
               diagnostics.push d
               continue
 
-            // Look up the per-file sourcemap via the TS-service host's meta.
-            // For .civet.tsx files the meta is keyed by the source path
-            // (without the .tsx tail); for plain .ts files there is no meta
-            // and we leave the diagnostic alone.
-            sourcePath := file.fileName.endsWith('.civet.tsx')
-              ? file.fileName[...-4]
-              : file.fileName
+            // Hera-grammar files generate code (positional `$1..$9` args,
+            // synthesized destructuring patterns, preamble imports used
+            // only by rule handlers) that triggers a known set of
+            // diagnostics the user can't fix without editing Hera itself.
+            // Drop them so .hera authors aren't drowned in noise.
+            isHera := file.fileName.endsWith('.hera.tsx')
+            /* c8 ignore start -- exercised by `civet --typecheck` on
+               projects with .hera files; mocha unit tests don't include any */
+            if isHera and heraSuppressedCodes.has(d.code)
+              continue
+            /* c8 ignore stop */
+
+            isTranspiled := file.fileName.endsWith('.civet.tsx') or isHera
+            sourcePath := isTranspiled ? file.fileName[...-4] : file.fileName
             meta := service.host.getMeta sourcePath
             sourcemapLines := meta?.sourcemapLines
 
@@ -437,20 +474,52 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
               continue
 
             /* c8 ignore start -- `|| 0` / `|| 1` fallbacks only fire for diagnostics with undefined or zero start/length; TS always sets these when file is non-null */
-            range := remapRange(
-              {
-                start: d.start || 0
-                end:  (d.start || 0) + (d.length || 1)
-              }
-              sourcemapLines
-            )
+            startLc := file.getLineAndCharacterOfPosition d.start || 0
+            endLc := file.getLineAndCharacterOfPosition (d.start || 0) + (d.length || 1)
             /* c8 ignore stop */
+
+            remappedStartLc := remapPosition startLc, sourcemapLines
+            remappedEndLc := remapPosition endLc, sourcemapLines
+
+            // Resolve to real-source-file coordinates so the formatter shows
+            // `foo.civet:N:M` (not `foo.civet.tsx:N:M`).
+            realFile := realSourceFile sourcePath
+            /* c8 ignore start -- defensive: realSourceFile only fails when
+               the .civet/.hera file disappeared between compile and emit
+               (e.g. concurrent rm); not reachable in the test suite */
+            if not realFile
+              diagnostics.push {
+                ...d
+                messageText: flattenDiagnosticMessageText d.messageText
+              }
+              continue
+            /* c8 ignore stop */
+
+            toPos := (lc: { line: number, character: number }): number? =>
+              /* c8 ignore start -- defensive: remapped positions sometimes
+                 fall outside the source file's line/column range when the
+                 sourcemap points to a synthesized location */
+              try
+                realFile!.getPositionOfLineAndCharacter lc.line, lc.character
+              catch
+                undefined
+              /* c8 ignore stop */
+
+            remappedStart := toPos remappedStartLc
+            /* c8 ignore start -- defensive: remap should always succeed
+               for in-range positions; only fires for sourcemap mismatches */
+            if remappedStart is undefined
+              diagnostics.push d
+              continue
+            /* c8 ignore stop */
+            remappedEnd := toPos(remappedEndLc) ?? (remappedStart + 1)
 
             diagnostics.push {
               ...d
+              file: realFile
+              start: remappedStart
+              length: Math.max 1, remappedEnd - remappedStart
               messageText: flattenDiagnosticMessageText d.messageText
-              length: d.length
-              start: range.start
             }
 
         /* c8 ignore next 2 -- only hit when tsconfig.json has parse errors */
