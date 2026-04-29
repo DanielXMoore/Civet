@@ -14,11 +14,24 @@
 
 { type CompileOptions, type ParseError } from @danielx/civet
 BundledCivetModule from @danielx/civet
-{ compile as bundledHeraCompile } from @danielx/hera
+{ createRequire } from node:module
 
 ts from typescript
 
 { type Plugin, type TranspileResult } from ../types.civet
+
+// Synthesize a `require` that works in both the CJS and ESM build of this
+// module (and in re-bundlers like the LSP server, which build CJS but inline
+// our ESM output).  In CJS contexts `__filename` is a global; in pure ESM
+// it's undefined and we fall back to `import.meta.url`.  The `typeof` guard
+// short-circuits before `import.meta.url` is evaluated in CJS — important
+// because consumer bundles (e.g. lsp/server) replace `import.meta.url` with
+// the empty string via esbuild's `define`, and `createRequire("")` throws.
+heraRequire := createRequire(
+  /* c8 ignore start -- one branch fires per build target; tests cover only one */
+  __filename !<? "undefined" ? __filename : import.meta.url
+  /* c8 ignore stop */
+)
 
 interface HeraCompileResult
   code: string
@@ -28,7 +41,13 @@ interface HeraModule
   compile(source: string, options: { filename: string, module: boolean, sourceMap: boolean }): HeraCompileResult
 
 export interface HeraPluginOptions
-  /** Override the Hera module.  Defaults to the bundled @danielx/hera. */
+  /**
+   * Override the Hera module.  When omitted, `@danielx/hera` is loaded
+   * lazily via `require()` the first time a `.hera` file is transpiled —
+   * so consumers without any `.hera` files don't need it installed, and
+   * `@danielx/hera` can stay an optional peer dependency rather than a
+   * hard runtime requirement of `@danielx/civet/ts-service`.
+   */
   Hera?: HeraModule
   /** Override the second-stage Civet module.  Defaults to bundled @danielx/civet. */
   Civet?: typeof BundledCivetModule
@@ -36,18 +55,36 @@ export interface HeraPluginOptions
   config?: CompileOptions
 
 export function makeHeraPlugin(options: HeraPluginOptions = {}): Plugin
-  // @danielx/hera's published types declare compile as returning `string`, but
-  // the runtime returns `{ code, sourceMap }` when `sourceMap: true` is set.
-  // Cast through unknown until Hera's d.ts catches up with the actual API.
-  Hera := options.Hera ?? ({ compile: bundledHeraCompile } as unknown as HeraModule)
   Civet := options.Civet ?? BundledCivetModule
   civetConfig := options.config ?? {}
+
+  // Cache the resolved Hera module across calls — the require() succeeds or
+  // fails the same way every time, but caching avoids repeating the lookup
+  // (and the catch path) per .hera file.
+  let resolvedHera: HeraModule?
+  function getHera(): HeraModule
+    return resolvedHera if resolvedHera
+    if options.Hera
+      resolvedHera = options.Hera
+      return resolvedHera!
+    /* c8 ignore start -- defensive: the project's devDeps include @danielx/hera so the require() always succeeds in tests */
+    let mod: { compile: HeraModule['compile'] }
+    try
+      mod = heraRequire('@danielx/hera')
+    catch
+      throw new Error "@danielx/hera is not installed; install it as a (peer) dependency to type-check .hera files, or pass HeraPluginOptions.Hera explicitly."
+    /* c8 ignore stop */
+    // @danielx/hera's published types declare compile as returning `string`,
+    // but the runtime returns `{ code, sourceMap }` when `sourceMap: true`
+    // is set.  Cast through unknown until Hera's d.ts catches up.
+    resolvedHera = { compile: mod.compile } as unknown as HeraModule
+    resolvedHera!
 
   function transpileHera(p: string, source: string): TranspileResult
     errors: (Error | ParseError)[] := []
     try
       // Stage 1: Hera grammar → Civet code, with a Hera→Civet sourcemap.
-      heraResult := Hera.compile source, {
+      heraResult := getHera().compile source, {
         filename: p
         module: true
         sourceMap: true

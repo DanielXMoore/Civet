@@ -212,6 +212,13 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
   // step.  Stays undefined when the option isn't set.
   let tsBuildInfoTarget: string?
 
+  // Monotonic counter handed to docFactory.create on every load() call so the
+  // TSHost's `sourceDocVersion > transpiledDoc.version` re-transpile check
+  // actually fires when watch mode reloads a file with new contents (the
+  // host bumps `transpiledDoc.version` to whatever number the source doc
+  // last advertised, so a fixed 0 would never re-trigger compilation).
+  let nextDocVersion: number = 0
+
   // Diagnostics on .hera-generated TS that the user can't act on without
   // editing Hera:
   //   6133 / 6196 / 6192 — "declared but never read" for preamble imports
@@ -429,11 +436,23 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         // This matches the previous `getPreEmitDiagnostics(program)` shape:
         // a `.ts` file imported from a tracked .civet file should surface
         // its own type errors.  Skip node_modules: their diagnostics aren't
-        // actionable for the user's build.
+        // actionable for the user's build (and `skipLibCheck` already filters
+        // most of them anyway in any modern tsconfig).
         //
         // When `builder` is set, route through it so TS reuses any cached
         // diagnostics from the prior tsbuildinfo for unchanged files.
         diagnostics: Diagnostic[] := []
+
+        // Program-wide diagnostics that aren't tied to a specific source file:
+        // tsconfig parse / option problems (`getOptionsDiagnostics`) and
+        // global "no implicit any" / lib mismatch errors
+        // (`getGlobalDiagnostics`).  `getPreEmitDiagnostics` used to fold
+        // these in for us; surface them explicitly now.  Builder wraps these
+        // through too, but the API lives on the underlying program either
+        // way, so just call program directly.
+        diagnostics.push ...program.getOptionsDiagnostics()
+        diagnostics.push ...program.getGlobalDiagnostics()
+
         for sourceFile of program.getSourceFiles()
           fn := sourceFile.fileName
           /* c8 ignore next 2 -- second clause covers Windows backslash paths; CI is Linux-only */
@@ -511,8 +530,13 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
             if remappedStart is undefined
               diagnostics.push d
               continue
-            /* c8 ignore stop */
+            // The `?? (remappedStart + 1)` fallback only fires when toPos
+            // returns undefined for the *end* position while succeeding for
+            // start — itself only reachable through the toPos catch arm,
+            // which is unreachable in the test suite (all sourcemap
+            // positions land in-range for the seeded fixtures).
             remappedEnd := toPos(remappedEndLc) ?? (remappedStart + 1)
+            /* c8 ignore stop */
 
             diagnostics.push {
               ...d
@@ -773,14 +797,14 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         // makeCivetPlugin, independently of unplugin's fsMap.  This is what
         // drives buildEnd's diagnostics + declaration emit.
         if service?
-          // Version is just a host-bookkeeping monotonic counter; unplugin
-          // isn't editor-driven, so a fixed 0 is fine — every load() call
-          // creates a fresh doc that addOrUpdateDocument swaps in, which
-          // invalidates the snapshot map and forces a recompile.
+          // Bump nextDocVersion on every load() so watch-mode reloads
+          // (same path, new content) advance the source doc's version past
+          // the transpiledDoc's version and force a fresh compile through
+          // the TSHost — see the comment on nextDocVersion above.
           doc := docFactory.create(
             pathToFileURL(filename).toString()
             "civet"
-            0
+            ++nextDocVersion
             rawCivetSource
           )
           service.host.addOrUpdateDocument doc
