@@ -447,118 +447,96 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
             return undefined
           /* c8 ignore stop */
 
-        // Walk every source file the program ended up with — that's the
-        // load()-tracked .civet siblings *plus* their transitive imports.
-        // This matches the previous `getPreEmitDiagnostics(program)` shape:
-        // a `.ts` file imported from a tracked .civet file should surface
-        // its own type errors.  We don't filter `node_modules` ourselves —
-        // `skipLibCheck` (which most tsconfigs set) already swallows the
-        // common .d.ts noise, and projects that have it off explicitly
-        // want to see those diagnostics.
-        //
-        // When `builder` is set, route through it so TS reuses any cached
-        // diagnostics from the prior tsbuildinfo for unchanged files.
+        // ts.getPreEmitDiagnostics folds in syntactic + semantic + options +
+        // global + declaration diagnostics from the program (or builder).
+        // Going through this single API rather than re-collecting each
+        // bucket ourselves keeps us in sync with whatever TS adds in
+        // future versions, and surfaces declaration-emit errors (e.g.
+        // isolatedDeclarations TS9007/TS9010) that purely-semantic
+        // collection misses.  We don't filter `node_modules` ourselves —
+        // `skipLibCheck` already swallows the common .d.ts noise.
         diagnostics: Diagnostic[] := []
+        sourceProgram := builder ?? program
+        for d of ts.getPreEmitDiagnostics(sourceProgram)
+          file := d.file
+          if not file
+            diagnostics.push d
+            continue
 
-        // Program-wide diagnostics that aren't tied to a specific source file:
-        // tsconfig parse / option problems (`getOptionsDiagnostics`) and
-        // global "no implicit any" / lib mismatch errors
-        // (`getGlobalDiagnostics`).  `getPreEmitDiagnostics` used to fold
-        // these in for us; surface them explicitly now.  Builder wraps these
-        // through too, but the API lives on the underlying program either
-        // way, so just call program directly.
-        diagnostics.push ...program.getOptionsDiagnostics()
-        diagnostics.push ...program.getGlobalDiagnostics()
+          // Hera-grammar files generate code (positional `$1..$9` args,
+          // synthesized destructuring patterns, preamble imports used
+          // only by rule handlers) that triggers a known set of
+          // diagnostics the user can't fix without editing Hera itself.
+          // Drop them so .hera authors aren't drowned in noise.
+          isHera := file.fileName.endsWith('.hera.tsx')
+          /* c8 ignore start -- exercised by `civet --typecheck` on
+             projects with .hera files; mocha unit tests don't include any */
+          if isHera and heraSuppressedCodes.has(d.code)
+            continue
+          /* c8 ignore stop */
 
-        for sourceFile of program.getSourceFiles()
-          fn := sourceFile.fileName
-          syn := builder
-            ? builder.getSyntacticDiagnostics sourceFile
-            : service.getSyntacticDiagnostics fn
-          sem := builder
-            ? builder.getSemanticDiagnostics sourceFile
-            : service.getSemanticDiagnostics fn
-          for d of [...syn, ...sem]
-            file := d.file
-            /* c8 ignore next 3 -- TS attaches a file to every per-file diagnostic; defensive in case a plugin returns one without */
-            if not file
-              diagnostics.push d
-              continue
+          isTranspiled := file.fileName.endsWith('.civet.tsx') or isHera
+          sourcePath := isTranspiled ? file.fileName[...-4] : file.fileName
+          meta := service.host.getMeta sourcePath
+          sourcemapLines := meta?.sourcemapLines
 
-            // Hera-grammar files generate code (positional `$1..$9` args,
-            // synthesized destructuring patterns, preamble imports used
-            // only by rule handlers) that triggers a known set of
-            // diagnostics the user can't fix without editing Hera itself.
-            // Drop them so .hera authors aren't drowned in noise.
-            isHera := file.fileName.endsWith('.hera.tsx')
-            /* c8 ignore start -- exercised by `civet --typecheck` on
-               projects with .hera files; mocha unit tests don't include any */
-            if isHera and heraSuppressedCodes.has(d.code)
-              continue
-            /* c8 ignore stop */
+          unless sourcemapLines
+            diagnostics.push d
+            continue
 
-            isTranspiled := file.fileName.endsWith('.civet.tsx') or isHera
-            sourcePath := isTranspiled ? file.fileName[...-4] : file.fileName
-            meta := service.host.getMeta sourcePath
-            sourcemapLines := meta?.sourcemapLines
+          /* c8 ignore start -- `|| 0` / `|| 1` fallbacks only fire for diagnostics with undefined or zero start/length; TS always sets these when file is non-null */
+          startLc := file.getLineAndCharacterOfPosition d.start || 0
+          endLc := file.getLineAndCharacterOfPosition (d.start || 0) + (d.length || 1)
+          /* c8 ignore stop */
 
-            unless sourcemapLines
-              diagnostics.push d
-              continue
+          remappedStartLc := remapPosition startLc, sourcemapLines
+          remappedEndLc := remapPosition endLc, sourcemapLines
 
-            /* c8 ignore start -- `|| 0` / `|| 1` fallbacks only fire for diagnostics with undefined or zero start/length; TS always sets these when file is non-null */
-            startLc := file.getLineAndCharacterOfPosition d.start || 0
-            endLc := file.getLineAndCharacterOfPosition (d.start || 0) + (d.length || 1)
-            /* c8 ignore stop */
-
-            remappedStartLc := remapPosition startLc, sourcemapLines
-            remappedEndLc := remapPosition endLc, sourcemapLines
-
-            // Resolve to real-source-file coordinates so the formatter shows
-            // `foo.civet:N:M` (not `foo.civet.tsx:N:M`).
-            realFile := realSourceFile sourcePath
-            /* c8 ignore start -- defensive: realSourceFile only fails when
-               the .civet/.hera file disappeared between compile and emit
-               (e.g. concurrent rm); not reachable in the test suite */
-            if not realFile
-              diagnostics.push {
-                ...d
-                messageText: flattenDiagnosticMessageText d.messageText
-              }
-              continue
-            /* c8 ignore stop */
-
-            toPos := (lc: { line: number, character: number }): number? =>
-              /* c8 ignore start -- defensive: remapped positions sometimes
-                 fall outside the source file's line/column range when the
-                 sourcemap points to a synthesized location */
-              try
-                realFile!.getPositionOfLineAndCharacter lc.line, lc.character
-              catch
-                undefined
-              /* c8 ignore stop */
-
-            remappedStart := toPos remappedStartLc
-            /* c8 ignore start -- defensive: remap should always succeed
-               for in-range positions; only fires for sourcemap mismatches */
-            if remappedStart is undefined
-              diagnostics.push d
-              continue
-            // The `?? (remappedStart + 1)` fallback only fires when toPos
-            // returns undefined for the *end* position while succeeding for
-            // start — itself only reachable through the toPos catch arm,
-            // which is unreachable in the test suite (all sourcemap
-            // positions land in-range for the seeded fixtures).
-            remappedEnd := toPos(remappedEndLc) ?? (remappedStart + 1)
-            /* c8 ignore stop */
-
+          // Resolve to real-source-file coordinates so the formatter shows
+          // `foo.civet:N:M` (not `foo.civet.tsx:N:M`).
+          realFile := realSourceFile sourcePath
+          /* c8 ignore start -- defensive: realSourceFile only fails when
+             the .civet/.hera file disappeared between compile and emit
+             (e.g. concurrent rm); not reachable in the test suite */
+          if not realFile
             diagnostics.push {
               ...d
-              file: realFile
-              start: remappedStart
-              length: Math.max 1, remappedEnd - remappedStart
               messageText: flattenDiagnosticMessageText d.messageText
             }
+            continue
+          /* c8 ignore stop */
+
+          toPos := (lc: { line: number, character: number }): number? =>
+            /* c8 ignore start -- defensive: remapped positions sometimes
+               fall outside the source file's line/column range when the
+               sourcemap points to a synthesized location */
+            try
+              realFile!.getPositionOfLineAndCharacter lc.line, lc.character
+            catch
+              undefined
+            /* c8 ignore stop */
+
+          remappedStart := toPos remappedStartLc
+          /* c8 ignore start -- defensive: remap should always succeed
+             for in-range positions; only fires for sourcemap mismatches */
+          if remappedStart is undefined
+            diagnostics.push d
+            continue
+          // The `?? (remappedStart + 1)` fallback only fires when toPos
+          // returns undefined for the *end* position while succeeding for
+          // start — itself only reachable through the toPos catch arm,
+          // which is unreachable in the test suite (all sourcemap
+          // positions land in-range for the seeded fixtures).
+          remappedEnd := toPos(remappedEndLc) ?? (remappedStart + 1)
+          /* c8 ignore stop */
+
+          diagnostics.push {
+            ...d
+            file: realFile
+            start: remappedStart
+            length: Math.max 1, remappedEnd - remappedStart
+            messageText: flattenDiagnosticMessageText d.messageText
+          }
 
         /* c8 ignore next 2 -- only hit when tsconfig.json has parse errors */
         if configErrors?#
