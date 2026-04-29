@@ -22,7 +22,15 @@ import {
 import * as fs from 'fs'
 import path from 'path'
 import { pathToFileURL } from 'url'
-import type { FormatDiagnosticsHost, Diagnostic, System } from 'typescript'
+import type {
+  FormatDiagnosticsHost
+  Diagnostic
+  System
+  CompilerOptions
+  BuilderProgramHost
+  ReadBuildProgramHost
+  SemanticDiagnosticsBuilderProgram
+} from 'typescript'
 import type { UserConfig } from 'vite'
 import type { BuildOptions } from 'esbuild'
 import os from 'os'
@@ -76,6 +84,16 @@ export type PluginOptions
    * scripts/typecheck.civet's `CIVET_TYPECHECK_MAX_ERRORS` env var.
    */
   maxErrors?: number
+  /**
+   * When set, persist TypeScript's incremental analysis state to this path
+   * (`.tsbuildinfo`).  On subsequent runs, TS reads the file and skips
+   * re-analyzing source files whose hashes are unchanged — meaningful
+   * speedup for repeat `civet --typecheck` / `pnpm typecheck` invocations
+   * in large projects.
+   *
+   * Implies `incremental: true` for the underlying program.
+   */
+  tsBuildInfoFile?: string
 
 type CacheEntry
   mtime: number
@@ -188,6 +206,11 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
   // declare the ./ts-service subpath (see import note above).
   service: any .= null
 
+  // Resolved absolute path to the tsbuildinfo file when --tsbuildinfo is on;
+  // populated in buildStart, consumed in buildEnd's incremental persist
+  // step.  Stays undefined when the option isn't set.
+  let tsBuildInfoTarget: string?
+
   // unplugin isn't editor-driven, so the in-memory factory from ts-service
   // is sufficient — TSService only ever asks for `uri`, `version`, and
   // `getText()` from each doc.
@@ -295,6 +318,21 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         // located above; the duplicate parse is cheap and keeps the service
         // self-contained.
         servicePath := if tsConfigPath then path.dirname(tsConfigPath) else process.cwd()
+        // When the consumer asks for incremental tsbuildinfo persistence,
+        // resolve the path against projectPath so a relative
+        // `--tsbuildinfo .cache/typecheck.tsbuildinfo` ends up under the
+        // project, not the cwd of whatever shell launched us.
+        let extraCompilerOptions: CompilerOptions?
+        if options.tsBuildInfoFile
+          tsBuildInfoTarget = path.resolve servicePath, options.tsBuildInfoFile
+          // `noEmit: false` is required for builder.emit() to actually write
+          // the tsbuildinfo; the writeFile override in buildEnd accepts only
+          // the tsbuildinfo path so we don't pollute the project with JS.
+          extraCompilerOptions =
+            incremental: true
+            tsBuildInfoFile: tsBuildInfoTarget
+            noEmit: false
+
         service = TSService servicePath, {
           plugins: [
             makeCivetPlugin {
@@ -311,6 +349,7 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
           // CLI's no-args `civet --typecheck` opts into project-wide via
           // options.discoverProjectFiles=true.
           discoverProjectFiles: options.discoverProjectFiles ?? false
+          extraCompilerOptions
         }
 
     // useConfigFileNames is preserved for backwards compat; previously
@@ -338,20 +377,44 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
 
         program := service.getProgram()!
 
+        // When tsbuildinfo persistence is on, wrap the program in a
+        // SemanticDiagnosticsBuilderProgram.  The builder reads any prior
+        // .tsbuildinfo on disk via `ts.readBuilderProgram` and short-circuits
+        // diagnostic computation for files whose content hash hasn't
+        // changed since the previous run.  At the end of buildEnd we call
+        // `builder.emit(...)` to persist the new state.
+        let builder: SemanticDiagnosticsBuilderProgram?
+        if options.tsBuildInfoFile
+          builderHost: BuilderProgramHost := {}
+          readHost: ReadBuildProgramHost := {
+            useCaseSensitiveFileNames: => ts.sys.useCaseSensitiveFileNames
+            getCurrentDirectory: => ts.sys.getCurrentDirectory()
+            readFile: (fileName: string) => ts.sys.readFile(fileName)
+          }
+          oldProgram := ts.readBuilderProgram program.getCompilerOptions(), readHost
+          builder = ts.createSemanticDiagnosticsBuilderProgram program, builderHost, oldProgram
+
         // Walk every source file the program ended up with — that's the
         // load()-tracked .civet siblings *plus* their transitive imports.
         // This matches the previous `getPreEmitDiagnostics(program)` shape:
         // a `.ts` file imported from a tracked .civet file should surface
         // its own type errors.  Skip node_modules: their diagnostics aren't
         // actionable for the user's build.
+        //
+        // When `builder` is set, route through it so TS reuses any cached
+        // diagnostics from the prior tsbuildinfo for unchanged files.
         diagnostics: Diagnostic[] := []
         for sourceFile of program.getSourceFiles()
           fn := sourceFile.fileName
           /* c8 ignore next 2 -- second clause covers Windows backslash paths; CI is Linux-only */
           if fn.includes('/node_modules/') or fn.includes('\\node_modules\\')
             continue
-          syn := service.getSyntacticDiagnostics fn
-          sem := service.getSemanticDiagnostics fn
+          syn := builder
+            ? builder.getSyntacticDiagnostics sourceFile
+            : service.getSyntacticDiagnostics fn
+          sem := builder
+            ? builder.getSemanticDiagnostics sourceFile
+            : service.getSemanticDiagnostics fn
           for d of [...syn, ...sem]
             file := d.file
             /* c8 ignore next 3 -- TS attaches a file to every per-file diagnostic; defensive in case a plugin returns one without */
@@ -393,6 +456,22 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         /* c8 ignore next 2 -- only hit when tsconfig.json has parse errors */
         if configErrors?#
           diagnostics.unshift ...configErrors
+
+        // Persist incremental state before deciding whether to throw —
+        // even a failing run produced new analysis that the next run
+        // should be able to reuse for unchanged files.  builder.emit()
+        // with the configured `tsBuildInfoFile` writes the tsbuildinfo
+        // even when noEmit is on.
+        if builder and tsBuildInfoTarget
+          // emit with a writeFile override that ONLY accepts the tsbuildinfo
+          // path — drops any other emitted output (JS / .d.ts) on the floor
+          // so we don't pollute the project with files the user didn't ask
+          // for.
+          target := tsBuildInfoTarget!
+          writeFile := (fileName: string, data: string) =>
+            if fileName is target
+              ts.sys.writeFile fileName, data
+          builder.emit undefined, writeFile, undefined, false
 
         if diagnostics# > 0
           console.error

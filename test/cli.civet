@@ -914,6 +914,56 @@ describe "CLI --typecheck", ->
     assert stdErr.includes("Invalid value for --max-errors"),
       "expected the validation message; got: " + stdErr
 
+  it "--tsbuildinfo persists incremental analysis between runs", :any ->
+    @timeout 60000
+    isolated := path.join tmpDir, "tsbuildinfo-isolated"
+    await mkdir isolated, { recursive: true }
+    await writeFile path.join(isolated, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022'
+        module: 'ESNext'
+        moduleResolution: 'Bundler'
+        jsx: 'preserve'
+        allowJs: true
+        strict: true
+        noEmit: true
+      }
+      include: ['src']
+    })
+    await mkdir path.join(isolated, 'src'), { recursive: true }
+    await writeFile path.join(isolated, 'src/clean.civet'), 'x: number := 42\nconsole.log x\n'
+
+    cwd := process.cwd()
+    process.chdir isolated
+    try
+      buildInfoPath := path.join isolated, '.tsbuildinfo'
+      // Cold run — no cache, should write the file.
+      await captureProcess => await cli ['--typecheck', '--tsbuildinfo', '.tsbuildinfo', '--no-config']
+      const fs2 = await import 'node:fs/promises'
+      stat1 := await fs2.stat buildInfoPath
+      assert stat1.size > 0, "tsbuildinfo should be written on cold run"
+      // Warm run with no source change — same content (same hash).
+      await captureProcess => await cli ['--typecheck', '--tsbuildinfo', '.tsbuildinfo', '--no-config']
+      stat2 := await fs2.stat buildInfoPath
+      assert.equal stat2.size, stat1.size,
+        "tsbuildinfo should be identical between unchanged runs (size: " + stat2.size + " vs " + stat1.size + ")"
+    finally
+      process.chdir cwd
+
+  it "rejects --tsbuildinfo with a missing PATH", ->
+    { exitCode, stdErr } := await captureProcess =>
+      await cli ['--typecheck', '--tsbuildinfo']
+    assert exitCode? and exitCode > 0, "missing PATH should exit non-zero"
+    assert stdErr.includes("Missing PATH after --tsbuildinfo"),
+      "expected validation message; got: " + stdErr
+
+  it "rejects --tsbuildinfo immediately followed by another flag", ->
+    { exitCode, stdErr } := await captureProcess =>
+      await cli ['--typecheck', '--tsbuildinfo', '--no-config']
+    assert exitCode? and exitCode > 0, "PATH starting with `-` should exit non-zero"
+    assert stdErr.includes("Missing PATH after --tsbuildinfo"),
+      "expected validation message; got: " + stdErr
+
   it "rejects --max-errors with a non-numeric value", ->
     // parseArgs accumulates `errors` and process.exit's on any parse error;
     // captureProcess intercepts the exit so the test can observe it.
