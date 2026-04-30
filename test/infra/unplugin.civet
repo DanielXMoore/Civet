@@ -482,38 +482,36 @@ describe "unplugin: file system", ->
 
       assert errored
 
-    it "buildEnd surfaces declaration-only diagnostics", ->
+    it "options.tsConfig.compilerOptions reaches TSService", ->
       @timeout 30000
 
-      // isolatedDeclarations forces TS9010 ("Variable must have an explicit
-      // type annotation") in declaration diagnostics even when semantic
-      // analysis has nothing to say.  It's the cleanest way to pin our
-      // collection to ts.getPreEmitDiagnostics's full set — otherwise
-      // declaration errors silently slip through.
-      //
-      // We write a real tsconfig.json to disk (rather than passing
-      // tsConfig inline) so the compilerOptions actually reach TSService —
-      // inline tsConfig passthrough is a separate piece of work.
-      declDir := path.join tmpDir, "decl-#{fileNum++}"
-      await mkdir declDir, recursive: true
-      await writeFile path.join(declDir, "tsconfig.json"), JSON.stringify({
-        compilerOptions:
-          declaration: true
-          isolatedDeclarations: true
-          strict: true
-          skipLibCheck: true
-          target: "es2020"
-          jsx: "preserve"
-      })
-      fileWithDeclError := path.join declDir, "decl.civet"
-      await writeFile fileWithDeclError, "export f := () => 1 + 2\n"
+      // Two contracts in one fixture:
+      //   * inline tsConfig.compilerOptions actually drives the program
+      //     (no tsconfig.json on disk to fall back on),
+      //   * declaration-emit diagnostics surface in buildEnd's collected
+      //     set (regression-pin for ts.getPreEmitDiagnostics over the
+      //     prior manual syn+sem+options+global walk).
+      // isolatedDeclarations is the probe: TS9010 fires from
+      // declaration diagnostics only when both halves work.
+      inlineDir := path.join tmpDir, "inline-tsconfig-#{fileNum++}"
+      await mkdir inlineDir, recursive: true
+      civetFile := path.join inlineDir, "decl.civet"
+      await writeFile civetFile, "export f := () => 1 + 2\n"
 
       plugin := rawPlugin {
         ts: 'tsc'
         config: false
         typecheck: true
         tsConfig: {
-          rootDir: declDir
+          rootDir: inlineDir
+          compilerOptions:
+            declaration: true
+            isolatedDeclarations: true
+            strict: true
+            skipLibCheck: true
+            target: "es2020"
+            jsx: "preserve"
+          files: [ civetFile ]
         }
       }, { framework: 'esbuild' }
       ctx := { ...nullContext, ...plugin }
@@ -526,19 +524,18 @@ describe "unplugin: file system", ->
       let thrown: Error?
       try
         await plugin.buildStart.call ctx
-        await plugin.load.call ctx, fileWithDeclError + ".jsx"
-        // useConfigFileNames=true so tsconfig's discovered files
-        // (including our decl.civet) actually enter the program.
-        await plugin.buildEnd.call ctx, true
+        await plugin.load.call ctx, civetFile + ".jsx"
+        await plugin.buildEnd.call ctx
       catch e
         thrown = e as Error
       finally
         console.error = origError
 
-      assert thrown, "expected buildEnd to throw on declaration-only error"
+      assert thrown,
+        "expected buildEnd to throw — inline tsConfig.compilerOptions.isolatedDeclarations should drive a declaration error"
       combined := capturedErrors.join "\n"
       assert combined.includes("TS9010") or combined.includes("TS9007"),
-        `expected TS9010 / TS9007 (isolatedDeclarations) in output, got: ${combined.slice(0, 400)}`
+        `expected TS9010 / TS9007 in output, got: ${combined.slice(0, 400)}`
 
     it "buildEnd(true) typechecks tsConfig.files entries that load() never saw", ->
       @timeout 30000
