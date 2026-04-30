@@ -8,17 +8,6 @@ import {
   // using ts-ignore because the version of @danielx/civet typescript is checking against
   // is the one published to npm, not the one in the repo
 } from '@danielx/civet/ts-diagnostic'
-import {
-  TSService
-  makeCivetPlugin
-  makeHeraPlugin
-  createInMemoryDocFactory
-  // @ts-ignore — see ts-diagnostic note above.  ts-service is also a
-  // workspace-only subpath that the published @danielx/civet doesn't expose
-  // yet, so TS can't see its types when type-checking unplugin against the
-  // installed (published) Civet.  The runtime resolution still works because
-  // it goes through the local workspace symlink at build time.
-} from '@danielx/civet/ts-service'
 import * as fs from 'fs'
 import path from 'path'
 import { pathToFileURL } from 'url'
@@ -233,14 +222,16 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
   //     destructuring patterns synthesized inside rule handlers.
   heraSuppressedCodes := new Set<number> [6133, 6196, 6192, 7006, 7031]
 
-  // unplugin isn't editor-driven, so the in-memory factory from ts-service
-  // is sufficient — TSService only ever asks for `uri`, `version`, and
-  // `getText()` from each doc.
-  docFactory := createInMemoryDocFactory()
-
+  // ts-service transitively imports typescript; loading it eagerly would
+  // bring typescript in for plain-transform consumers that don't need it.
+  type TsServiceModule = typeof import('@danielx/civet/ts-service')
+  let tsService: TsServiceModule?
+  let docFactory: ReturnType<TsServiceModule['createInMemoryDocFactory']>?
 
   tsPromise := if transformTS or ts is "tsc"
     import('typescript').then .default
+  tsServicePromise := if transformTS
+    import('@danielx/civet/ts-service')
   getFormatHost := (sys: System): FormatDiagnosticsHost =>
     return {
       getCurrentDirectory: => sys.getCurrentDirectory()
@@ -272,6 +263,9 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
 
       if transformTS or ts is "tsc"
         ts := await tsPromise!
+        if transformTS
+          tsService = await tsServicePromise!
+          docFactory ??= tsService.createInMemoryDocFactory()
         let config: any, error: Diagnostic?, tsConfigPath: string | undefined
 
         if options.tsConfig
@@ -356,24 +350,25 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
             tsBuildInfoFile: tsBuildInfoTarget
             noEmit: false
 
-        service = TSService servicePath, {
-          plugins: [
-            makeCivetPlugin {
-              Civet: civet
-              config: compileOptions
-            }
-            makeHeraPlugin {
-              Civet: civet
-              config: compileOptions
-            }
-          ]
-          docFactory
-          // Default to bundler-driven (only typecheck files load() has seen);
-          // CLI's no-args `civet --typecheck` opts into project-wide via
-          // options.discoverProjectFiles=true.
-          discoverProjectFiles: options.discoverProjectFiles ?? false
-          extraCompilerOptions
-        }
+        if transformTS and tsService and docFactory
+          service = tsService.TSService servicePath, {
+            plugins: [
+              tsService.makeCivetPlugin {
+                Civet: civet
+                config: compileOptions
+              }
+              tsService.makeHeraPlugin {
+                Civet: civet
+                config: compileOptions
+              }
+            ]
+            docFactory
+            // Default to bundler-driven (only typecheck files load() has seen);
+            // CLI's no-args `civet --typecheck` opts into project-wide via
+            // options.discoverProjectFiles=true.
+            discoverProjectFiles: options.discoverProjectFiles ?? false
+            extraCompilerOptions
+          }
 
     // useConfigFileNames is the public toggle for "type-check the whole
     // project, not just bundler-tracked files": when true, we expand the
@@ -788,7 +783,7 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         // host caches a compiled .tsx sibling on demand via the registered
         // makeCivetPlugin, independently of unplugin's fsMap.  This is what
         // drives buildEnd's diagnostics + declaration emit.
-        if service?
+        if service? and docFactory?
           // Bump nextDocVersion on every load() so watch-mode reloads
           // (same path, new content) advance the source doc's version past
           // the transpiledDoc's version and force a fresh compile through
