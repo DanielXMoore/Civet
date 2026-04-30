@@ -78,49 +78,8 @@ export function TSHost(
 
   resolutionCache: ts.ModuleResolutionCache := ts.createModuleResolutionCache(rootDir, (fileName) => fileName, compilationSettings)
 
-  // package.json `imports` map values are read inside ts.resolveModuleName,
-  // before our resolveModuleNames redirect runs — so rewrite transpilable
-  // extensions here at the readFile layer.  Without this `"#dep": "./d.civet"`
-  // hits TS2307 "Cannot find module" even though direct relative imports work.
-  function mogrifyPackageJsonImports(contents: string): string
-    /* c8 ignore start -- defensive: package.json is JSON by spec; if a project
-       ships a malformed one we'd rather pass it through than crash module
-       resolution */
-    let parsed: Record<string, unknown>
-    try
-      parsed = JSON.parse contents
-    catch
-      return contents
-    /* c8 ignore stop */
-    return contents unless parsed.imports? <? "object"
-    let modified = false
-    function recurse(node: unknown): void
-      return unless node? <? "object"
-      obj := node as Record<string, unknown>
-      for key in obj
-        value := obj[key]
-        if value <? "string"
-          ext := getExtensionFromPath value
-          if t? := transpilers.get(ext)
-            obj[key] = value + t.target
-            modified = true
-        else if value
-          recurse value
-    recurse parsed.imports
-    if modified then JSON.stringify parsed else contents
-
   baseReadFile := baseHost.readFile.bind baseHost
   baseFileExists := baseHost.fileExists.bind baseHost
-  // Synthetic transpiler targets aren't on disk; teach the host that
-  // `foo.civet.tsx` "exists" whenever `foo.civet` does, so TS's resolver
-  // accepts the rewritten `imports` map values from mogrifyPackageJsonImports.
-  function syntheticTargetExists(filename: string): boolean
-    for [ext, t] of transpilers
-      if filename.endsWith(t.target)
-        source := filename.slice(0, -t.target.length)
-        if source.endsWith(ext) and baseFileExists(source)
-          return true
-    false
 
   let self: Host
 
@@ -359,6 +318,48 @@ export function TSHost(
     writeFile(fileName: string, content: string)
       logger.log("write " + fileName + " " + content)
   })
+
+  // package.json `imports` map values are read inside ts.resolveModuleName,
+  // before our resolveModuleNames redirect runs — so rewrite transpilable
+  // extensions here at the readFile layer.  Without this `"#dep": "./d.civet"`
+  // hits TS2307 "Cannot find module" even though direct relative imports work.
+  function mogrifyPackageJsonImports(contents: string): string
+    /* c8 ignore start -- defensive: package.json is JSON by spec; if a project
+       ships a malformed one we'd rather pass it through than crash module
+       resolution */
+    let parsed: Record<string, unknown>
+    try
+      parsed = JSON.parse contents
+    catch
+      return contents
+    /* c8 ignore stop */
+    return contents unless parsed.imports? <? "object"
+    let modified = false
+    function recurse(node: unknown): void
+      return unless node? <? "object"
+      obj := node as Record<string, unknown>
+      for key in obj
+        value := obj[key]
+        if value <? "string"
+          ext := getExtensionFromPath value
+          if t? := transpilers.get(ext)
+            obj[key] = value + t.target
+            modified = true
+        else if value
+          recurse value
+    recurse parsed.imports
+    if modified then JSON.stringify parsed else contents
+
+  // Synthetic transpiler targets aren't on disk; teach the host that
+  // `foo.civet.tsx` "exists" whenever `foo.civet` does, so TS's resolver
+  // accepts the rewritten `imports` map values from mogrifyPackageJsonImports.
+  function syntheticTargetExists(filename: string): boolean
+    for [ext, t] of transpilers
+      if filename.endsWith(t.target)
+        source := filename.slice(0, -t.target.length)
+        if source.endsWith(ext) and baseFileExists(source)
+          return true
+    false
 
   /** Open editor docs win over disk. */
   function getPathSource(p: string)
