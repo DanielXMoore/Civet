@@ -1,12 +1,9 @@
 /**
  * Shared TSService factory: builds a TypeScript LanguageService over a
- * Civet-aware host so any consumer (LSP server, CLI --typecheck, build-time
- * typecheck script, unplugin TS mode) can drive Civet/Hera type checking,
- * navigation, and diagnostics from one place.
- *
- * Lifted from lsp/server/source/lib/typescript-service.civet.  This factory
- * is project-path-based (already resolved fsPath); the LSP wrapper handles
- * URI-string projectURL inputs and project-Civet detection before calling in.
+ * Civet-aware host so any consumer (LSP, CLI typecheck, unplugin) can
+ * drive Civet/Hera type checking, navigation, and diagnostics from one
+ * place.  Project-path-based — the LSP wrapper resolves URIs to fsPaths
+ * and handles project-Civet detection before calling in.
  */
 
 path from path
@@ -89,14 +86,10 @@ export function TSService(projectPath: string, options: TSServiceOptions): Resol
   /* c8 ignore next -- console default fires for ad-hoc consumers; tests always supply a logger */
   logger: Logger := options.logger ?? console
 
-  // Build the transpilers map first so parseJsonConfigFileContent can be
-  // told about transpilable extensions when it walks the project's include
-  // patterns.  Without this, tsconfig's `include: ["source"]` would only
-  // pick up .ts/.tsx/.js (TS's known extensions) and skip every .civet /
-  // .hera file in the tree — making batch typecheck see 4 files instead of
-  // ~170.  The LSP doesn't strictly need this since it adds documents
-  // event-driven, but pre-populating from disk makes cross-file types
-  // resolve before any file is opened.
+  // Populate transpilers before the configSys wrapper closes over them —
+  // parseJsonConfigFileContent uses configSys.readDirectory below to walk
+  // tsconfig's include patterns, and that walk needs to know about every
+  // registered transpilable extension up front.
   transpilers: Map<string, Transpiler> := new Map
   function registerPlugin(plugin: Plugin): void
     plugin.transpilers?.forEach (t) =>
@@ -106,13 +99,12 @@ export function TSService(projectPath: string, options: TSServiceOptions): Resol
     registerPlugin plugin
 
   extraExtensions := Array.from transpilers.keys()
-  // When `discoverProjectFiles` is on, wrap sys.readDirectory to:
-  //   1. inject every transpilable extension into the requested filter list
-  //   2. rewrite each .<ext> match to .<ext><target> so parsedConfig.fileNames
-  //      contains the synthetic-tsx siblings TypeScript asks snapshots for.
-  // When off, the service starts with whatever fileNames tsconfig naturally
-  // matches (usually .ts/.d.ts/.mjs only) — consumers add files via
-  // addOrUpdateDocument as they discover them.
+  // configSys widens TS's readDirectory walk: injects each transpilable
+  // extension into the include filter and rewrites the match results to
+  // the synthetic `<src>.<target>` siblings that getScriptSnapshot expects.
+  // When discoverProjectFiles=false, the bare sys is used and the program
+  // starts with only what tsconfig's `files` / `include` literally match;
+  // consumers add files via addOrUpdateDocument / addScriptFileName.
   configSys := if not discoverProjectFiles or extraExtensions.length is 0 then sys else {
     ...sys
     readDirectory: (
@@ -133,16 +125,17 @@ export function TSService(projectPath: string, options: TSServiceOptions): Resol
         f
   }
 
-  // Civet-aware defaults; tsconfig overrides any of these it sets explicitly.
+  // Civet-aware defaults; tsconfig overrides any of these explicitly.
+  // `allowNonTsExtensions` is misnamed — it actually allows any non-ts,
+  // non-json extension.
   existingOptions := {
     rootDir: projectPath
     allowNonTsExtensions: true
-    // "allow non-ts, non-json extensions" is the actual semantics.
     allowJs: true
     jsx: JsxEmit.Preserve
   }
 
-  // path.join tolerates callers that don't add a trailing separator.
+  // path.join (vs string concat) tolerates a missing trailing separator.
   tsConfigPath := path.join projectPath, "tsconfig.json"
   config := options.tsConfig ?? readConfigFile(tsConfigPath, sys.readFile).config
   parsedConfig := parseJsonConfigFileContent(
@@ -154,16 +147,12 @@ export function TSService(projectPath: string, options: TSServiceOptions): Resol
     undefined
   )
 
-  // Merge any consumer-supplied overrides on top of parsed tsconfig.  This
-  // is how the CLI's `--tsbuildinfo` flag injects `incremental: true` and
-  // `tsBuildInfoFile`; LSP and unplugin pass nothing extra and the merge
-  // is a no-op.
   hostOptions := if extraCompilerOptions
     { ...parsedConfig.options, ...extraCompilerOptions }
   else
     parsedConfig.options
 
-  //@ts-ignore
+  //@ts-expect-error
   baseHost := createCompilerHost(parsedConfig)
 
   host := TSHost(hostOptions, parsedConfig.fileNames, baseHost, transpilers, docFactory, logger, libDir)
@@ -171,10 +160,9 @@ export function TSService(projectPath: string, options: TSServiceOptions): Resol
 
   loadPlugins := async function (): Promise<void>
     civetFolder := path.join(projectPath, "./.civet/")
-    // ts.sys.readDirectory currently returns [] for missing dirs rather than
-    // throwing, but wrap defensively so a future TS change (or alternative
-    // System impl) can't take the whole service down with an unhandled
-    // ENOENT race between existence-check and read.
+    // Current TS returns [] for missing dirs, but the catch arm is
+    // forward-compat insurance: a future TS or alternative System impl
+    // throwing ENOENT shouldn't take the service down.
     let civetFiles: string[]
     try
       civetFiles = sys.readDirectory(civetFolder)
@@ -187,8 +175,8 @@ export function TSService(projectPath: string, options: TSServiceOptions): Resol
     pluginFiles := civetFiles.filter((file) => file.endsWith("plugin.mjs"))
 
     for filePath of pluginFiles
-      // Use docFactory.pathToUri so the dynamic import gets a properly-formed
-      // file URI on every OS (Windows needs file:///C:/...).
+      // pathToUri produces a `file:///` URI dynamic import accepts on
+      // every OS (Windows needs `file:///C:/…`).
       pluginUri := docFactory.pathToUri(filePath)
       logger.info("Loading plugin " + pluginUri)
       try
@@ -201,6 +189,7 @@ export function TSService(projectPath: string, options: TSServiceOptions): Resol
 
   return Object.assign {}, service, {
     host
+    /** `foo.civet.tsx` → `foo.civet`; passthrough for non-transpiled files. */
     getSourceFileName(fileName: string)
       getCanonicalFileName remapFileName(fileName, transpilers)
     registerPlugin
