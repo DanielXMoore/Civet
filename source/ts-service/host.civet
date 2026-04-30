@@ -1,18 +1,11 @@
 /**
- * Shared TypeScript LanguageServiceHost factory backing the Civet LSP server,
- * the build-time typecheck script, the `civet --typecheck` CLI flag, and the
- * unplugin TS-mode bundle.
- *
- * The host maintains a virtual filesystem layer where each registered
- * transpiler's source files (.civet, .hera, …) appear as siblings of their
- * transpiled targets (.civet.tsx, .hera.tsx, …).  TypeScript's
- * resolveModuleNames is patched to discover these sibling targets so that
- * imports of non-TS sources resolve through the standard module-resolution
- * pipeline.
- *
- * Lifted from lsp/server/source/lib/typescript-service.civet:84-447.  External
- * dependencies on vscode-languageserver-textdocument and vscode-uri are
- * abstracted through DocFactory; LSP wires the real implementations.
+ * Shared TypeScript LanguageServiceHost factory.  Maintains a virtual
+ * filesystem where each registered transpiler's source files (.civet,
+ * .hera, …) appear as siblings of their transpiled targets (.civet.tsx,
+ * .hera.tsx, …); resolveModuleNames + readFile / fileExists overrides
+ * route TS's resolver through them.  vscode-languageserver-textdocument
+ * + vscode-uri are abstracted via DocFactory so non-LSP consumers can
+ * use simpler in-memory docs.
  */
 
 assert from assert
@@ -139,10 +132,9 @@ export function TSHost(
       contents
     fileExists(filename: string)
       baseFileExists(filename) or syntheticTargetExists(filename)
+    // LSP bundles its own lib copies under <dist>/lib (libDir set);
+    // other consumers fall through to TS's resolved-module lookup.
     getDefaultLibFileName(options: ts.CompilerOptions)
-      // LSP bundles its own lib copies under <dist>/lib (see build.sh); other
-      // consumers fall back to TypeScript's own lookup based on the resolved
-      // typescript module location.
       if libDir
         return path.join(libDir, ts.getDefaultLibFileName(options))
       ts.getDefaultLibFilePath(options)
@@ -151,11 +143,11 @@ export function TSHost(
       resolutionCache
 
     /**
-     * This is how TypeScript resolves module names when it finds things like `import { foo } from "bar"`.
-     * We need to modify this to make sure that TypeScript can resolve our `.civet` files.
-     * We default to the original behavior, but if it is a `.civet` file, we resolve it with the `.civet` extension.
-     * This requires the `allowNonTsExtensions` option and `allowJs` options to be set to true.
-     * Then TypeScript will call `getScriptSnapshot` with the `.civet` extension and we can do the transpilation there.
+     * Defer to TS's standard resolver first; fall back to our own walk
+     * (paths / baseUrl / relative) for transpilable extensions TS doesn't
+     * know about.  Requires `allowNonTsExtensions` + `allowJs`; matches
+     * resolve to a synthetic `<src>.<target>` so subsequent
+     * `getScriptSnapshot` calls hit the transpiler.
      */
     resolveModuleNames(moduleNames: string[], containingFile: string, _reusedNames: string[] | undefined, _redirectedReference: ts.ResolvedProjectReference | undefined, compilerOptions: CompilerOptions, _containingSourceFile?: ts.SourceFile)
       moduleNames.map (name) =>
@@ -259,11 +251,7 @@ export function TSHost(
      */
     addOrUpdateDocument(doc: TranspiledDoc): void
       const p = getCanonicalFileName docFactory.uriToPath(doc.uri)
-      // Clear any cached snapshot for this document
       snapshotMap.delete(p)
-
-      // Something may have changed so notify TS by updating the project version
-      // Still not too sure exactly how TS uses this. Read `synchronizeHostData` in `typescript/src/sercivces/services.ts` for more info.
       projectVersion++
 
       extension := getExtensionFromPath(p)
@@ -274,17 +262,14 @@ export function TSHost(
         transpiledPath := p + target
 
         transpiledDoc .= pathMap.get(transpiledPath)
-
         initTranspiledDoc(transpiledPath) unless transpiledDoc
-        // Deleting the snapshot will force a new one to be created when requested
         snapshotMap.delete(transpiledPath)
 
-        // Add the original document to pathMap but *not* scriptFileNames
-        // Document map is so that the transpiled doc can update when the original changes
+        // Source doc lives in pathMap (not scriptFileNames) so the
+        // transpiled sibling can pick up updates via getOrCreatePathSnapshot.
         pathMap.set(p, doc)
         return
 
-      // Plain non-transpiled document
       scriptFileNames.add(p) unless scriptFileNames.has(p)
       pathMap.set(p, doc)
 
@@ -348,9 +333,8 @@ export function TSHost(
 
     getMeta(p: string)
       p = getCanonicalFileName p
-      transpiledPath := getTranspiledPath(p)
-      // This ensures that the transpiled meta data is created
-      getOrCreatePathSnapshot(transpiledPath)
+      // Force snapshot creation so meta is populated before lookup.
+      getOrCreatePathSnapshot(getTranspiledPath(p))
       fileMetaData.get(p)
 
     getProjectVersion()
@@ -359,18 +343,12 @@ export function TSHost(
     getCompilationSettings()
       compilationSettings
 
-    /**
-     * NOTE: TypeScript likes to pass in paths with only forward slashes regardless of the OS.
-     * So we need to normalize them here and in `getScriptVersion`.
-     */
+    // TS passes forward-slash paths on every OS; both methods
+    // normalize through getCanonicalFileName before lookup.
     getScriptSnapshot(p: string)
       p = getCanonicalFileName p
       getOrCreatePathSnapshot(p)
 
-    /**
-     * NOTE: TypeScript likes to pass in paths with only forward slashes regardless of the OS.
-     * So we need to normalize them here and in `getScriptSnapshot`.
-     */
     getScriptVersion(p: string)
       p = getCanonicalFileName p
       pathMap.get(p)?.version.toString() || "0"
@@ -382,13 +360,9 @@ export function TSHost(
       logger.log("write " + fileName + " " + content)
   })
 
-  /**
-   * Get the source code for a path.
-   * Use the open document if it exists otherwise use the file system.
-   */
+  /** Open editor docs win over disk. */
   function getPathSource(p: string)
     p = getCanonicalFileName p
-    // Open docs and transpiled files should all be in the pathMap
     doc := pathMap.get(p)
     return doc.getText() if doc
     return sys.readFile(p)! if sys.fileExists(p)
@@ -408,13 +382,11 @@ export function TSHost(
 
     let transpiler
 
-    // path comes in as transformed (transpiler target extension added), check for 2nd to last extension for transpiler
-    // ie .coffee.js or .civet.ts or .hera.cjs
-
+    // p arrives with the transpiler's target extension already applied
+    // (e.g. `foo.civet.tsx`); the second-to-last extension picks the
+    // transpiler.
     exts := getTranspiledExtensionsFromPath(p)
     if (exts && (transpiler = transpilers.get(exts[0])))
-      // this is a possibly transpiled file
-
       sourcePath := removeExtension(p)
       sourceDoc := pathMap.get(sourcePath)
       transpiledDoc .= pathMap.get(p)
@@ -423,24 +395,21 @@ export function TSHost(
       let source
       sourceDocVersion .= 0
       if !sourceDoc
-        // A source file from the file system
         source = sys.readFile(sourcePath)
       else
         source = sourceDoc.getText()
         sourceDocVersion = sourceDoc.version
 
-      // The source document is ahead of the transpiled document
       if source and sourceDocVersion > transpiledDoc.version
         transpiledCode := doTranspileAndUpdateMeta(transpiledDoc, sourceDocVersion, transpiler, sourcePath, source)
         snapshot = Snap(transpiledCode) if transpiledCode?
 
-      // Use the old version if there was an error
+      // Fall back to the previous transpiled text if the new compile errored.
       snapshot = Snap(transpiledDoc.getText()) unless snapshot
 
       snapshotMap.set(p, snapshot)
       return snapshot
 
-    // Regular non-transpiled file
     snapshot = Snap(getPathSource(p))
     snapshotMap.set(p, snapshot)
     return snapshot
@@ -454,12 +423,12 @@ export function TSHost(
       Object.assign(meta, update)
 
   function doTranspileAndUpdateMeta(transpiledDoc: TranspiledDoc, version: number, transpiler: Transpiler, sourcePath: string, sourceCode: string): string?
-    // Definitely do not want to throw errors here, it can make TypeScript very unhappy if it can't get a snapshot/version
+    // Errors thrown here would crash TS's snapshot/version path; trap
+    // them and report through FileMeta.parseErrors instead.
     let result
     try
       result = transpiler.compile(sourcePath, sourceCode)
     catch e
-      // Add parse errors to meta
       createOrUpdateMeta sourcePath, {
         transpiledDoc
         sourcemapLines: undefined
@@ -491,10 +460,9 @@ export function TSHost(
     docFactory.update transpiledDoc, transpiledCode, version
     transpiledCode
 
+  // Empty placeholder; getOrCreatePathSnapshot fills it on first request.
   function initTranspiledDoc(p: string)
     p = getCanonicalFileName p
-    // Create an empty document, it will be updated on-demand when `getScriptSnapshot` is called
-    // `p` must be the in the format that TypeScript Language Service expects
     uri := docFactory.pathToUri(p)
     transpiledDoc := docFactory.create(uri, "none", -1, "")
     pathMap.set(p, transpiledDoc)
