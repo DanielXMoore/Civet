@@ -537,6 +537,76 @@ describe "unplugin: file system", ->
       assert combined.includes("TS9010") or combined.includes("TS9007"),
         `expected TS9010 / TS9007 in output, got: ${combined.slice(0, 400)}`
 
+    it "package.json `imports` map resolves to a .civet file", ->
+      @timeout 30000
+
+      // Mirror the previous unplugin VFS feature: a project with
+      //   { "imports": { "#dep": "./dep.civet" } }
+      // in package.json should let TS resolve `import x from '#dep'`
+      // through the package's import map.  TSHost's resolveModuleNames
+      // has to redirect the resolved `.civet` path to its synthetic
+      // `.civet.tsx` sibling so the program actually picks the file up.
+      pkgDir := path.join tmpDir, "pkg-imports-#{fileNum++}"
+      await mkdir pkgDir, recursive: true
+      await writeFile path.join(pkgDir, "package.json"), JSON.stringify({
+        name: "civet-pkg-imports-fixture"
+        type: "module"
+        imports: { "#dep": "./dep.civet" }
+      })
+      await writeFile path.join(pkgDir, "dep.civet"), "export foo: string := 'hello'\n"
+      consumerPath := path.join pkgDir, "consumer.civet"
+      // Type mismatch: foo is string, n is typed as number.  We use this
+      // as the proof-positive that dep.civet's exports actually flowed
+      // through into the program — a "Cannot find module '#dep'" error
+      // fires (loudly, with a different code) when resolution fails.
+      await writeFile consumerPath, """
+        { foo } from '#dep'
+        n: number := foo
+      """
+
+      plugin := rawPlugin {
+        ts: 'tsc'
+        config: false
+        typecheck: true
+        tsConfig: {
+          rootDir: pkgDir
+          compilerOptions:
+            target: "es2020"
+            module: "node16"
+            moduleResolution: "node16"
+            strict: true
+            skipLibCheck: true
+            jsx: "preserve"
+          files: [ consumerPath ]
+        }
+      }, { framework: 'esbuild' }
+      ctx := { ...nullContext, ...plugin }
+      plugin.esbuild.config { outdir: testOutDir }
+
+      capturedErrors: string[] .= []
+      origError := console.error
+      console.error = (msg) => { capturedErrors.push msg }
+      let thrown: Error?
+      try
+        await plugin.buildStart.call ctx
+        await plugin.load.call ctx, consumerPath + ".jsx"
+        await plugin.buildEnd.call ctx
+      catch e
+        thrown = e as Error
+      finally
+        console.error = origError
+
+      combined := capturedErrors.join "\n"
+      assert thrown, "expected buildEnd to throw on the resulting type mismatch"
+      // We *want* the type-mismatch diagnostic from dep.civet flowing
+      // into consumer.civet — proves resolution worked.
+      assert combined.includes("'string' is not assignable to type 'number'") or combined.includes("Type 'string'"),
+        `expected a string→number type mismatch (which only fires when '#dep' resolves to dep.civet via package imports), got: ${combined.slice(0, 600)}`
+      // And we *don't* want a "Cannot find module" — the failure mode
+      // when the package-imports resolution can't reach the .civet file.
+      assert not combined.includes("Cannot find module '#dep'"),
+        `'#dep' did not resolve via package.json imports map: ${combined.slice(0, 600)}`
+
     it "buildEnd(true) typechecks tsConfig.files entries that load() never saw", ->
       @timeout 30000
 

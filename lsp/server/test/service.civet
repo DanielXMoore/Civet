@@ -702,6 +702,63 @@ describe "ts-service direct factory usage", ->
     assert (result! as { code: string }).code.includes("fake hera output"),
       "expected fakeHera output in result"
 
+  it "package.json `imports` map redirects through to .civet sources", ->
+    // TSHost rewrites transpilable extensions (`.civet`, `.hera`) inside
+    // package.json's `imports` field on read, and reports the synthetic
+    // `.tsx` siblings as existing via fileExists — together those let
+    // TS resolve `import x from '#dep'` against a `.civet` source.
+    pkgDir := mkdtempSync path.join tmpdir(), 'civet-pkg-imports-'
+    try
+      writeFileSync path.join(pkgDir, 'tsconfig.json'), JSON.stringify({
+        compilerOptions:
+          target: 'es2020'
+          module: 'node16'
+          moduleResolution: 'node16'
+          strict: true
+          skipLibCheck: true
+          jsx: 'preserve'
+      })
+      writeFileSync path.join(pkgDir, 'package.json'), JSON.stringify({
+        name: 'lsp-pkg-imports-fixture'
+        type: 'module'
+        imports: { '#dep': './dep.civet', '#nested': { default: './nested.civet' } }
+      })
+      writeFileSync path.join(pkgDir, 'dep.civet'), "export foo: string := 'hello'\n"
+      writeFileSync path.join(pkgDir, 'nested.civet'), "export bar := 42\n"
+      consumerPath := path.join pkgDir, 'consumer.civet'
+      writeFileSync consumerPath,
+        "{ foo } from '#dep'\n{ bar } from '#nested'\nx: number := foo\ny: string := bar\n"
+      consumerSource := fs.readFileSync consumerPath, "utf8"
+
+      service := SharedTSService pkgDir + path.sep, {
+        plugins: [makeCivetPlugin()]
+        docFactory: directDocFactory
+        logger: nullLogger
+      }
+      doc := TextDocument.create pathToFileURL(consumerPath).href, "civet", 0, consumerSource
+      service.host.addOrUpdateDocument doc
+
+      diagnostics := service.getSemanticDiagnostics consumerPath + ".tsx"
+      messages := diagnostics.map (d) => String d.messageText
+      // Resolution proof: no "Cannot find module" diagnostics for either
+      // import.  If TSHost's mogrify or fileExists override regressed,
+      // we'd see TS2307 here.
+      for missing of messages.filter (m) => m.includes "Cannot find module"
+        assert false, `unexpected resolution failure: ${missing}`
+      // Type-flow proof: dep's `foo: string` reaches consumer where it's
+      // assigned to a `number`, and nested's `bar: number` flows where it's
+      // assigned to a `string`.  Both should error.
+      hasStringToNumber := messages.some (m) =>
+        m.includes("'string' is not assignable to type 'number'") or
+        m.includes("Type 'string'") and m.includes("'number'")
+      hasNumberToString := messages.some (m) =>
+        m.includes("'number' is not assignable to type 'string'") or
+        m.includes("Type 'number'") and m.includes("'string'")
+      assert hasStringToNumber, `expected string→number mismatch, got: ${messages.join(' | ')}`
+      assert hasNumberToString, `expected number→string mismatch, got: ${messages.join(' | ')}`
+    finally
+      rmSync pkgDir, { recursive: true, force: true }
+
 describe "createInMemoryDocFactory", ->
   // Shared in-memory factory used by typecheck.civet and unplugin (any
   // consumer that doesn't need vscode-languageserver-textdocument).  These
