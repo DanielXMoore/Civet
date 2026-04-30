@@ -597,10 +597,6 @@ describe "ts-service direct factory usage", ->
     assert meta?.transpiledDoc, "expected the freshly-registered Civet plugin to compile snap-test.civet"
 
   it "addScriptFileName widens program scope without a TranspiledDoc", ->
-    // Expansion path used by `civet --typecheck` (project-wide) and
-    // unplugin's `buildEnd(useConfigFileNames=true)` to fold tsconfig-
-    // discovered files into the program without first wrapping each in a
-    // doc.  TS reads the file from disk via getScriptSnapshot when asked.
     tmpDir := mkdtempSync path.join tmpdir(), 'civet-add-script-file-'
     try
       writeFileSync path.join(tmpDir, 'tsconfig.json'),
@@ -608,18 +604,16 @@ describe "ts-service direct factory usage", ->
       sidecarPath := path.join tmpDir, 'sidecar.civet'
       writeFileSync sidecarPath, "x: number := 'wrong type'\n"
 
+      // discoverProjectFiles=false so the file enters only via
+      // addScriptFileName.
       service := SharedTSService tmpDir + path.sep, {
         plugins: [makeCivetPlugin()]
         docFactory: directDocFactory
         logger: nullLogger
-        // discoverProjectFiles=false so the file doesn't enter via the
-        // include walk — addScriptFileName has to be the thing that pulls
-        // it in for the diagnostic to surface.
         discoverProjectFiles: false
       }
 
-      // Calling twice on the same path should be idempotent — the second
-      // call short-circuits via the `scriptFileNames.has` guard.
+      // Idempotent: second call short-circuits via scriptFileNames.has.
       service.host.addScriptFileName sidecarPath
       service.host.addScriptFileName sidecarPath
 
@@ -632,11 +626,6 @@ describe "ts-service direct factory usage", ->
       rmSync tmpDir, { recursive: true, force: true }
 
   it "rewrites raw .civet entries from tsconfig.files to their .tsx siblings", ->
-    // tsconfig's `files: [...]` accepts literal paths verbatim — they don't
-    // flow through configSys's readDirectory wrapper that would otherwise
-    // rewrite `.civet` → `.civet.tsx`.  TSHost picks up the slack so a
-    // tsconfig listing `.civet` sources directly still ends up with the
-    // synthetic `.civet.tsx` siblings TS knows how to ask snapshots for.
     tmpDir := mkdtempSync path.join tmpdir(), 'civet-files-array-'
     try
       writeFileSync path.join(tmpDir, 'tsconfig.json'), JSON.stringify({
@@ -658,9 +647,6 @@ describe "ts-service direct factory usage", ->
       rmSync tmpDir, { recursive: true, force: true }
 
   it "merges consumer-supplied extraCompilerOptions on top of tsconfig", ->
-    // The CLI typecheck flag uses extraCompilerOptions to inject
-    // tsbuildinfo settings without touching tsconfig.json.  Verify the
-    // override actually reaches the host's compilation settings.
     tmpDir := mkdtempSync path.join tmpdir(), 'civet-extra-opts-'
     try
       writeFileSync path.join(tmpDir, 'tsconfig.json'),
@@ -683,14 +669,10 @@ describe "ts-service direct factory usage", ->
       rmSync tmpDir, { recursive: true, force: true }
 
   it "makeHeraPlugin honors options.Hera override", ->
-    // Consumers can provide their own Hera implementation (mocks for tests,
-    // alternative grammar engines, etc.) — verify the override path bypasses
-    // the bundled @danielx/hera require.
     callLog: { source: string, filename: string }[] := []
     fakeHera := {
       compile: (source, options) =>
         callLog.push { source, filename: options.filename }
-        // Return shape matching @danielx/hera with sourceMap: true.
         { code: "// fake hera output\n", sourceMap: { lines: [] } }
     }
     plugin := makeHeraPlugin Hera: fakeHera
@@ -740,14 +722,10 @@ describe "ts-service direct factory usage", ->
 
       diagnostics := service.getSemanticDiagnostics consumerPath + ".tsx"
       messages := diagnostics.map (d) => String d.messageText
-      // Resolution proof: no "Cannot find module" diagnostics for either
-      // import.  If TSHost's mogrify or fileExists override regressed,
-      // we'd see TS2307 here.
+      // No TS2307 — both #dep and #nested resolved.  Plus the type
+      // mismatches prove the resolved sources actually flowed through.
       for missing of messages.filter (m) => m.includes "Cannot find module"
         assert false, `unexpected resolution failure: ${missing}`
-      // Type-flow proof: dep's `foo: string` reaches consumer where it's
-      // assigned to a `number`, and nested's `bar: number` flows where it's
-      // assigned to a `string`.  Both should error.
       hasStringToNumber := messages.some (m) =>
         m.includes("'string' is not assignable to type 'number'") or
         m.includes("Type 'string'") and m.includes("'number'")

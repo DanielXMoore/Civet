@@ -73,47 +73,20 @@ describe "unplugin: loadInclude()", ->
     assert.equal plugin.loadInclude("foo.civet.tsx"), true
 
 describe "unplugin: lazy typescript loading", ->
-  // Pin TypeScript to the explicit-opt-in path: tsconfig parsing, the
-  // shared TSService, and `typescript` itself should only be required
-  // when the user enables typecheck / emitDeclaration / `ts: 'tsc' |
-  // 'preserve'`.  Plain transform consumers (Vite/webpack/etc. just
-  // running `civet → JS`) can stay on the optional peer dependency.
-  //
-  // Use a fresh node subprocess: the surrounding mocha process has
-  // already loaded typescript via the typecheck-mode tests above, so
-  // require.cache here would falsely show typescript as loaded by
-  // unplugin's import side-effects.
-
-  unpluginPath := path.resolve "./dist/unplugin/unplugin.js"
-
-  function runChild(probeJs: string): string
-    execFileSync "node", ["-e", probeJs], { cwd: process.cwd(), encoding: "utf8" }
-
-  it "does not eagerly load typescript when imported", ->
+  it "plain `ts: 'civet'` path doesn't transitively load typescript", ->
     @timeout 15000
-    out := runChild `
-      const before = Object.keys(require.cache).length;
+    // Fresh subprocess: the surrounding mocha already loaded typescript
+    // via typecheck-mode tests, so checking the parent's require.cache
+    // would yield a false positive.
+    unpluginPath := path.resolve "./dist/unplugin/unplugin.js"
+    out := execFileSync "node", ["-e", `
       const unplugin = require(${JSON.stringify unpluginPath});
+      unplugin.rawPlugin({ ts: 'civet' }, { framework: 'rollup' });
       const tsLoaded = Object.keys(require.cache).some(p => /[\\\\/]typescript[\\\\/]lib[\\\\/]typescript\\.js$/.test(p));
-      console.log(JSON.stringify({ tsLoaded, hasRawPlugin: typeof unplugin.rawPlugin === 'function' }));
-    `
-    parsed := JSON.parse(out.trim()) as { tsLoaded: boolean, hasRawPlugin: boolean }
-    assert.equal parsed.hasRawPlugin, true, "expected rawPlugin export"
-    assert.equal parsed.tsLoaded, false,
-      "typescript was eagerly loaded by `require('@danielx/civet/unplugin')` even though no typecheck/emit/tsc options were enabled"
-
-  it "does not eagerly load typescript on plain `ts: 'civet'` rawPlugin construction", ->
-    @timeout 15000
-    out := runChild `
-      const unplugin = require(${JSON.stringify unpluginPath});
-      const plugin = unplugin.rawPlugin({ ts: 'civet' }, { framework: 'rollup' });
-      const tsLoaded = Object.keys(require.cache).some(p => /[\\\\/]typescript[\\\\/]lib[\\\\/]typescript\\.js$/.test(p));
-      console.log(JSON.stringify({ tsLoaded, builtPlugin: typeof plugin.load === 'function' }));
-    `
-    parsed := JSON.parse(out.trim()) as { tsLoaded: boolean, builtPlugin: boolean }
-    assert.equal parsed.builtPlugin, true, "expected plugin.load to exist"
-    assert.equal parsed.tsLoaded, false,
-      "typescript was eagerly loaded by `rawPlugin({ ts: 'civet' })` — the plain transform path should stay on the optional peer dep"
+      console.log(tsLoaded ? '1' : '0');
+    `], cwd: process.cwd(), encoding: "utf8"
+    assert.equal out.trim(), "0",
+      "typescript was eagerly loaded for plain `ts: 'civet'` — the plain transform path should stay on the optional peer dep"
 
 describe "unplugin: options normalization", ->
   it "dts: true is aliased to emitDeclaration: true (plugin loads)", ->
@@ -485,14 +458,9 @@ describe "unplugin: file system", ->
     it "options.tsConfig.compilerOptions reaches TSService", ->
       @timeout 30000
 
-      // Two contracts in one fixture:
-      //   * inline tsConfig.compilerOptions actually drives the program
-      //     (no tsconfig.json on disk to fall back on),
-      //   * declaration-emit diagnostics surface in buildEnd's collected
-      //     set (regression-pin for ts.getPreEmitDiagnostics over the
-      //     prior manual syn+sem+options+global walk).
-      // isolatedDeclarations is the probe: TS9010 fires from
-      // declaration diagnostics only when both halves work.
+      // Pins both: inline tsConfig drives the program (no disk tsconfig.json),
+      // and declaration-emit diagnostics surface (TS9010 from
+      // isolatedDeclarations only fires through ts.getPreEmitDiagnostics).
       inlineDir := path.join tmpDir, "inline-tsconfig-#{fileNum++}"
       await mkdir inlineDir, recursive: true
       civetFile := path.join inlineDir, "decl.civet"
@@ -540,12 +508,10 @@ describe "unplugin: file system", ->
     it "package.json `imports` map resolves to a .civet file", ->
       @timeout 30000
 
-      // Mirror the previous unplugin VFS feature: a project with
-      //   { "imports": { "#dep": "./dep.civet" } }
-      // in package.json should let TS resolve `import x from '#dep'`
-      // through the package's import map.  TSHost's resolveModuleNames
-      // has to redirect the resolved `.civet` path to its synthetic
-      // `.civet.tsx` sibling so the program actually picks the file up.
+      // The type mismatch in consumer.civet is the proof-positive: it
+      // fires only when `#dep` actually resolves to dep.civet and dep's
+      // typed export flows through.  Resolution failure produces the
+      // distinct TS2307 "Cannot find module" diagnostic instead.
       pkgDir := path.join tmpDir, "pkg-imports-#{fileNum++}"
       await mkdir pkgDir, recursive: true
       await writeFile path.join(pkgDir, "package.json"), JSON.stringify({
@@ -555,10 +521,6 @@ describe "unplugin: file system", ->
       })
       await writeFile path.join(pkgDir, "dep.civet"), "export foo: string := 'hello'\n"
       consumerPath := path.join pkgDir, "consumer.civet"
-      // Type mismatch: foo is string, n is typed as number.  We use this
-      // as the proof-positive that dep.civet's exports actually flowed
-      // through into the program — a "Cannot find module '#dep'" error
-      // fires (loudly, with a different code) when resolution fails.
       await writeFile consumerPath, """
         { foo } from '#dep'
         n: number := foo
@@ -598,24 +560,16 @@ describe "unplugin: file system", ->
 
       combined := capturedErrors.join "\n"
       assert thrown, "expected buildEnd to throw on the resulting type mismatch"
-      // We *want* the type-mismatch diagnostic from dep.civet flowing
-      // into consumer.civet — proves resolution worked.
       assert combined.includes("'string' is not assignable to type 'number'") or combined.includes("Type 'string'"),
-        `expected a string→number type mismatch (which only fires when '#dep' resolves to dep.civet via package imports), got: ${combined.slice(0, 600)}`
-      // And we *don't* want a "Cannot find module" — the failure mode
-      // when the package-imports resolution can't reach the .civet file.
+        `expected string→number mismatch through '#dep', got: ${combined.slice(0, 600)}`
       assert not combined.includes("Cannot find module '#dep'"),
         `'#dep' did not resolve via package.json imports map: ${combined.slice(0, 600)}`
 
     it "buildEnd(true) typechecks tsConfig.files entries that load() never saw", ->
       @timeout 30000
 
-      // Two .civet files, both with a TS error, both listed in tsConfig.files —
-      // but unplugin's load() is only called on one of them (simulating the
-      // bundler-driven flow where unloaded files don't naturally enter the
-      // typecheck program).  buildEnd(true) is the contract to opt in to
-      // project-wide scope (mirrors the old buildEnd(useConfigFileNames=true)),
-      // so the unloaded sibling's diagnostic should still surface.
+      // Both files have a TS error; only one is load()-ed.  buildEnd(true)
+      // pulls the unloaded sibling into scope via configFileNames.
       loadedFile := await makeCivetTempFile "x: number := 'not a number'\n"
       unloadedFile := await makeCivetTempFile "y: number := 'also not a number'\n"
       rootDir := path.dirname loadedFile
@@ -639,7 +593,6 @@ describe "unplugin: file system", ->
       try
         await plugin.buildStart.call ctx
         await plugin.load.call ctx, loadedFile + ".jsx"
-        // useConfigFileNames=true: pull tsConfig.files into typecheck scope
         await plugin.buildEnd.call ctx, true
       catch e
         thrown = e as Error

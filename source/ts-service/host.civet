@@ -46,11 +46,9 @@ export interface Host extends LanguageServiceHost
   getMeta(p: string): FileMeta?
   addOrUpdateDocument(doc: TranspiledDoc): void
   /**
-   * Register a path as a program root without supplying its content — TS will
-   * read it from disk via `getScriptSnapshot` when it asks for a snapshot.
-   * Used by callers that want project-wide scope (e.g. `civet --typecheck`,
-   * unplugin's `buildEnd(useConfigFileNames=true)`) over a tsconfig-discovered
-   * file list, without having to materialize a TranspiledDoc per file first.
+   * Register a path as a program root without a TranspiledDoc — TS reads
+   * it from disk on demand.  For consumers that want project-wide scope
+   * over a tsconfig-discovered file list.
    */
   addScriptFileName(p: string): void
   closeDocument(p: string): void
@@ -68,15 +66,10 @@ export function TSHost(
   { rootDir } := compilationSettings
   assert(rootDir, "Must have root dir for now")
 
-  // initialFileNames comes from parseJsonConfigFileContent: paths discovered
-  // via `include` patterns are already rewritten to `<src>.<target>` by
-  // service.civet's configSys wrapper, but explicit `files: [...]` entries
-  // pass through verbatim — so a tsconfig that lists `"src/index.civet"`
-  // would end up with a raw `.civet` path here.  Rewrite each transpilable
-  // source to its synthetic target so TS asks for `<src>.<target>` snapshots
-  // (which `getOrCreatePathSnapshot` knows how to compile via the transpiler);
-  // a raw `.civet` would otherwise fall through to the plain-file branch and
-  // get parsed as TypeScript, producing a flood of syntax errors.
+  // Explicit `files: [...]` entries from tsconfig don't flow through
+  // service.civet's configSys mogrify (only `include` does), so rewrite
+  // any raw transpilable extensions to their synthetic targets here —
+  // otherwise `getOrCreatePathSnapshot` would parse raw `.civet` as TS.
   scriptFileNames: Set<string> := new Set(initialFileNames.map (name) =>
     canonical := getCanonicalFileName name
     extension := getExtensionFromPath canonical
@@ -92,13 +85,10 @@ export function TSHost(
 
   resolutionCache: ts.ModuleResolutionCache := ts.createModuleResolutionCache(rootDir, (fileName) => fileName, compilationSettings)
 
-  // Rewrite transpilable extensions in package.json's `imports` field so
-  // TS's module resolution (which only considers extensions it knows about)
-  // sees the synthetic `.tsx` siblings.  Without this, a project mapping
-  // `"#dep": "./dep.civet"` would fail with TS2307 "Cannot find module"
-  // even though resolveModuleNames correctly redirects direct relative
-  // imports — `imports` map resolution happens inside ts.resolveModuleName
-  // before our hook gets a chance to redirect.
+  // package.json `imports` map values are read inside ts.resolveModuleName,
+  // before our resolveModuleNames redirect runs — so rewrite transpilable
+  // extensions here at the readFile layer.  Without this `"#dep": "./d.civet"`
+  // hits TS2307 "Cannot find module" even though direct relative imports work.
   function mogrifyPackageJsonImports(contents: string): string
     /* c8 ignore start -- defensive: package.json is JSON by spec; if a project
        ships a malformed one we'd rather pass it through than crash module
@@ -128,10 +118,9 @@ export function TSHost(
 
   baseReadFile := baseHost.readFile.bind baseHost
   baseFileExists := baseHost.fileExists.bind baseHost
-  // Synthetic transpiler targets (e.g. `foo.civet.tsx`) live in the host's
-  // virtual layer rather than on disk, so TS's resolveModuleName needs us to
-  // confirm they "exist" — without this, the package-imports redirect still
-  // bottoms out on a fileExists check against the missing .tsx sibling.
+  // Synthetic transpiler targets aren't on disk; teach the host that
+  // `foo.civet.tsx` "exists" whenever `foo.civet` does, so TS's resolver
+  // accepts the rewritten `imports` map values from mogrifyPackageJsonImports.
   function syntheticTargetExists(filename: string): boolean
     for [ext, t] of transpilers
       if filename.endsWith(t.target)
@@ -300,13 +289,11 @@ export function TSHost(
       pathMap.set(p, doc)
 
     /**
-     * Add a path to scriptFileNames so it shows up as a root in the program,
-     * without attaching any document.  Accepts either the raw transpilable
-     * source (e.g. `foo.civet`) or the synthetic target sibling
-     * (`foo.civet.tsx`); raw sources get rewritten through the transpilers
-     * map so TS only ever asks for `.tsx` snapshots — same rule the
-     * constructor applies to `initialFileNames`.  TS reads the file via
-     * getScriptSnapshot → getOrCreatePathSnapshot when it asks for it.
+     * Add a path to scriptFileNames without attaching a document.  Accepts
+     * either the raw source (`foo.civet`) or its synthetic target
+     * (`foo.civet.tsx`); raw transpilable extensions get rewritten through
+     * the transpilers map, matching the constructor's `initialFileNames`
+     * handling.
      */
     addScriptFileName(p: string): void
       canonical := getCanonicalFileName p
