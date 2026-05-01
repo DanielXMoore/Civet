@@ -13,21 +13,18 @@ ts from typescript
 {
   createCompilerHost
   createLanguageService
-  parseJsonConfigFileContent
-  readConfigFile
   sys
-  JsxEmit
 } := ts
 
 {
   type DocFactory
   type Logger
   type Plugin
-  type Transpiler
   type TranspiledDoc
 } from ./types.civet
 { type Host, TSHost } from ./host.civet
 { getCanonicalFileName, remapFileName } from ./path.civet
+{ buildTranspilers, parseTsConfigForCivet } from ./config.civet
 
 export interface TSServiceOptions
   /** Initial plugins; later additions go through registerPlugin / loadPlugins. */
@@ -86,66 +83,21 @@ export function TSService(projectPath: string, options: TSServiceOptions): Resol
   /* c8 ignore next -- console default fires for ad-hoc consumers; tests always supply a logger */
   logger: Logger := options.logger ?? console
 
-  // Populate transpilers before the configSys wrapper closes over them —
-  // parseJsonConfigFileContent uses configSys.readDirectory below to walk
-  // tsconfig's include patterns, and that walk needs to know about every
-  // registered transpilable extension up front.
-  transpilers: Map<string, Transpiler> := new Map
+  // Populate transpilers before parseTsConfigForCivet runs — its
+  // configSys wrapper closes over the map to widen the include walk.
+  // registerPlugin mutates the same map for runtime plugin loads
+  // (loadPlugins below).  Existing snapshots aren't invalidated: a
+  // plugin registered after a file has been transpiled won't apply
+  // until that file is re-snapshotted.
+  transpilers := buildTranspilers plugins
   function registerPlugin(plugin: Plugin): void
     plugin.transpilers?.forEach (t) =>
       transpilers.set t.extension, t
 
-  for plugin of plugins
-    registerPlugin plugin
-
-  extraExtensions := Array.from transpilers.keys()
-  // configSys widens TS's readDirectory walk: injects each transpilable
-  // extension into the include filter and rewrites the match results to
-  // the synthetic `<src>.<target>` siblings that getScriptSnapshot expects.
-  // When discoverProjectFiles=false, the bare sys is used and the program
-  // starts with only what tsconfig's `files` / `include` literally match;
-  // consumers add files via addOrUpdateDocument / addScriptFileName.
-  configSys := if not discoverProjectFiles or extraExtensions.length is 0 then sys else {
-    ...sys
-    readDirectory: (
-      p: string
-      extensions?: readonly string[]
-      excludes?: readonly string[]
-      includes?: readonly string[]
-      depth?: number
-    ): string[] ->
-      /* c8 ignore next -- TS always passes the include extensions list; the `: undefined` arm is defensive */
-      exts := extensions ? [...extensions, ...extraExtensions] : undefined
-      raw := sys.readDirectory(p, exts, excludes, includes, depth)
-      raw.map (f) =>
-        for ext of extraExtensions
-          if f.endsWith(ext)
-            t := transpilers.get(ext)
-            return f + t.target if t
-        f
+  parsedConfig := parseTsConfigForCivet projectPath, transpilers, {
+    tsConfig: options.tsConfig
+    widenIncludeFilter: discoverProjectFiles
   }
-
-  // Civet-aware defaults; tsconfig overrides any of these explicitly.
-  // `allowNonTsExtensions` is misnamed — it actually allows any non-ts,
-  // non-json extension.
-  existingOptions := {
-    rootDir: projectPath
-    allowNonTsExtensions: true
-    allowJs: true
-    jsx: JsxEmit.Preserve
-  }
-
-  // path.join (vs string concat) tolerates a missing trailing separator.
-  tsConfigPath := path.join projectPath, "tsconfig.json"
-  config := options.tsConfig ?? readConfigFile(tsConfigPath, sys.readFile).config
-  parsedConfig := parseJsonConfigFileContent(
-    config
-    configSys
-    projectPath
-    existingOptions
-    tsConfigPath
-    undefined
-  )
 
   hostOptions := if extraCompilerOptions
     { ...parsedConfig.options, ...extraCompilerOptions }

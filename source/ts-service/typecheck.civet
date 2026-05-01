@@ -14,12 +14,13 @@ ts from typescript
 * as fs from fs
 * as path from path
 
-{ type Plugin, type Transpiler, type FileMeta, type Logger } from ./types.civet
+{ type Plugin, type FileMeta, type Logger } from ./types.civet
 {
   getCanonicalFileName
   getTranspiledExtensionsFromPath
   removeExtension
 } from ./path.civet
+{ buildTranspilers, parseTsConfigForCivet } from ./config.civet
 
 export interface IncrementalTypecheckOptions
   /** Plugins providing transpilers for `.civet`, `.hera`, etc. */
@@ -48,50 +49,9 @@ export function makeIncrementalTypecheckProgram(
   projectPath: string
   options: IncrementalTypecheckOptions
 ): IncrementalTypecheckResult
-  // Aggregate transpilers from all plugins, keyed by source extension.
-  transpilers: Map<string, Transpiler> := new Map
-  for plugin of options.plugins
-    plugin.transpilers?.forEach (t) =>
-      transpilers.set t.extension, t
-
+  transpilers := buildTranspilers options.plugins
   extraExtensions := Array.from transpilers.keys()
-
-  // Wrap `readDirectory` so the include filter walks `.civet`/`.hera` and
-  // reports them as their `.tsx` synthetic siblings.
-  configSys := if extraExtensions.length is 0 then ts.sys else {
-    ...ts.sys
-    readDirectory: (
-      p: string
-      extensions?: readonly string[]
-      excludes?: readonly string[]
-      includes?: readonly string[]
-      depth?: number
-    ): string[] ->
-      /* c8 ignore next -- defensive: TS always supplies extensions */
-      exts := extensions ? [...extensions, ...extraExtensions] : undefined
-      ts.sys.readDirectory(p, exts, excludes, includes, depth).map (f) =>
-        for ext of extraExtensions
-          if f.endsWith(ext)
-            t := transpilers.get(ext)
-            return f + t.target if t
-        f
-  }
-
-  tsConfigPath := path.join projectPath, "tsconfig.json"
-  config := options.tsConfig ?? ts.readConfigFile(tsConfigPath, ts.sys.readFile).config
-  parsed := ts.parseJsonConfigFileContent(
-    config
-    configSys
-    projectPath
-    {
-      rootDir: projectPath
-      allowNonTsExtensions: true
-      allowJs: true
-      jsx: ts.JsxEmit.Preserve
-    }
-    tsConfigPath
-    undefined
-  )
+  parsed := parseTsConfigForCivet projectPath, transpilers, { tsConfig: options.tsConfig }
 
   compilerOptions: ts.CompilerOptions := {
     ...parsed.options

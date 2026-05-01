@@ -1,0 +1,80 @@
+/**
+ * Shared tsconfig parsing for the LanguageService (TSService) and the
+ * incremental typecheck pipelines.  Both need to widen TS's include
+ * walk to discover `.civet` / `.hera` files and rewrite matches to their
+ * synthetic `.tsx` siblings, parse the tsconfig, and apply the same
+ * Civet-aware compiler defaults — kept in one place here.
+ */
+
+ts from typescript
+path from path
+
+{ type Plugin, type Transpiler } from ./types.civet
+
+/** Build a Map of source-extension → Transpiler from a plugin list. */
+export function buildTranspilers(plugins: readonly Plugin[]): Map<string, Transpiler>
+  m: Map<string, Transpiler> := new Map
+  for plugin of plugins
+    plugin.transpilers?.forEach (t) =>
+      m.set t.extension, t
+  m
+
+export interface ParseTsConfigOptions
+  /** Pre-loaded tsconfig JSON (skips reading `<projectPath>/tsconfig.json`). */
+  tsConfig?: any
+  /**
+   * When true (default), `readDirectory` is widened so the include
+   * filter discovers each transpiler's source extension and reports it
+   * as the synthetic `<src>.<target>` sibling.  Set false for consumers
+   * that drive the file set themselves (bundler `load()` hooks).
+   */
+  widenIncludeFilter?: boolean
+
+/**
+ * Parse `<projectPath>/tsconfig.json` (or the inline `tsConfig`),
+ * applying Civet-aware defaults (`allowJs`, JSX preserve, etc.).
+ * The returned `parsed.fileNames` reflects the widened include walk
+ * when `widenIncludeFilter` is on.
+ */
+export function parseTsConfigForCivet(
+  projectPath: string
+  transpilers: Map<string, Transpiler>
+  options: ParseTsConfigOptions = {}
+): ts.ParsedCommandLine
+  widen := options.widenIncludeFilter ?? true
+  extraExtensions := Array.from transpilers.keys()
+
+  configSys := if widen and extraExtensions.length > 0 then {
+    ...ts.sys
+    readDirectory: (
+      p: string
+      extensions?: readonly string[]
+      excludes?: readonly string[]
+      includes?: readonly string[]
+      depth?: number
+    ): string[] ->
+      /* c8 ignore next -- TS always supplies extensions */
+      exts := extensions ? [...extensions, ...extraExtensions] : undefined
+      ts.sys.readDirectory(p, exts, excludes, includes, depth).map (f) =>
+        for ext of extraExtensions
+          if f.endsWith(ext)
+            t := transpilers.get(ext)
+            return f + t.target if t
+        f
+  } else ts.sys
+
+  tsConfigPath := path.join projectPath, "tsconfig.json"
+  config := options.tsConfig ?? ts.readConfigFile(tsConfigPath, ts.sys.readFile).config
+  ts.parseJsonConfigFileContent(
+    config
+    configSys
+    projectPath
+    {
+      rootDir: projectPath
+      allowNonTsExtensions: true
+      allowJs: true
+      jsx: ts.JsxEmit.Preserve
+    }
+    tsConfigPath
+    undefined
+  )
