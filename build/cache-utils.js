@@ -21,7 +21,7 @@ const civetSourceResolved = require.resolve(path.resolve(civetSourceRaw));
 const civetSourceMtime = fs.statSync(civetSourceResolved).mtime.getTime().toString();
 const { compile: civetCompile } = require(civetSourceResolved);
 
-const { hashParts, createDiskCache } = require('../dist/cache.js');
+const { makeCacheKey, createDiskCache } = require('../dist/cache.js');
 
 function findPackageVersion(resolvedPath) {
   let dir = path.dirname(resolvedPath);
@@ -38,25 +38,36 @@ const cacheDir = path.resolve(__dirname, '../.cache/build');
 const diskCache = createDiskCache(cacheDir);
 
 /**
- * Compute cache key for a compiled source file.
- * `mode` is included in the hash so JS and TS outputs land in separate slots.
+ * Build a CacheKeyInput for a single file compile.  The compiler-name + the
+ * primary compiler version disambiguate civet vs hera; civetVersion +
+ * civetSourceMtime are always included so the hera path (which runs civet
+ * as its second stage) re-keys when either compiler changes.
  */
-function makeKey({ source, filename, module, mode = 'js' }) {
-  return hashParts([heraVersion, civetVersion, civetSourceMtime, source, filename, module.toString(), mode]);
+function keyInput(source, filename, isHera, options) {
+  return {
+    source,
+    sourcePath: filename,
+    compilerName: isHera ? 'hera' : 'civet',
+    compilerVersion: isHera ? heraVersion : civetVersion,
+    civetVersion,
+    civetMtime: civetSourceMtime,
+    options,
+  };
 }
 
 function compileWithCache(source, filename, module = true) {
-  const key = makeKey({ source, filename, module }) + '.mjs';
+  const isHera = filename.endsWith('.hera');
+  const compileOptions = { js: true, inlineMap: true, sync: true, module };
+  const key = makeCacheKey(keyInput(source, filename, isHera, compileOptions)) + '.mjs';
   const cached = diskCache.get(key);
   if (cached != null) return cached;
 
-  const type = filename.endsWith('.hera') ? 'hera' : 'civet';
   let js;
-  if (type === 'hera') {
+  if (isHera) {
     const civetOutput = heraCompile(source, { filename, module, inlineMap: true });
-    js = civetCompile(civetOutput, { filename, js: true, inlineMap: true, sync: true });
+    js = civetCompile(civetOutput, { filename, ...compileOptions });
   } else {
-    js = civetCompile(source, { filename, js: true, inlineMap: true, sync: true });
+    js = civetCompile(source, { filename, ...compileOptions });
   }
 
   diskCache.set(key, js);
@@ -65,11 +76,18 @@ function compileWithCache(source, filename, module = true) {
 
 /**
  * Compile a .civet or .hera file to TypeScript (for type-checking), returning
- * `{ code, sourceMapLines }`.  Caches code and sourcemap lines on disk keyed
- * the same way as `compileWithCache` but in a separate TS slot.
+ * `{ code, sourceMapLines }`.  TS-mode options (`js: false`, `sourceMap: true`,
+ * `parseOptions.rewriteCivetImports`) put this in a different cache slot from
+ * `compileWithCache` automatically — the only manual disambiguation is the
+ * `.ts` / `.map.json` key suffix that lets us store code and lines separately.
  */
 function compileToTS(source, filename, module = true) {
-  const baseKey = makeKey({ source, filename, module, mode: 'ts' });
+  const isHera = filename.endsWith('.hera');
+  const compileOptions = {
+    js: false, sourceMap: true, sync: true, module,
+    parseOptions: { rewriteCivetImports: '.civet.tsx' },
+  };
+  const baseKey = makeCacheKey(keyInput(source, filename, isHera, compileOptions));
   const codeKey = baseKey + '.ts';
   const mapKey = baseKey + '.map.json';
   const cachedCode = diskCache.get(codeKey);
@@ -78,20 +96,15 @@ function compileToTS(source, filename, module = true) {
     return { code: cachedCode, sourceMapLines: JSON.parse(cachedMap) };
   }
 
-  const type = filename.endsWith('.hera') ? 'hera' : 'civet';
   let result;
-  if (type === 'hera') {
+  if (isHera) {
     const heraResult = heraCompile(source, { filename, module, sourceMap: true });
     result = civetCompile(heraResult.code, {
-      filename, js: false, sourceMap: true, sync: true,
-      parseOptions: { rewriteCivetImports: '.civet.tsx' },
+      filename, ...compileOptions,
       upstreamSourceMap: heraResult.sourceMap,
     });
   } else {
-    result = civetCompile(source, {
-      filename, js: false, sourceMap: true, sync: true,
-      parseOptions: { rewriteCivetImports: '.civet.tsx' },
-    });
+    result = civetCompile(source, { filename, ...compileOptions });
   }
 
   const lines = result.sourceMap?.lines ?? result.sourceMap?.data?.lines ?? [];

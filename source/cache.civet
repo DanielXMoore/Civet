@@ -16,12 +16,66 @@ export interface Cache
   get(key: string): string | undefined
   set(key: string, value: string): void
 
+/**
+ * Inputs that determine cache identity for a single compile.  Identical
+ * `source` + `compilerName` + `compilerVersion` + `options` always hash
+ * the same; `sourcePath` is included so a moved or renamed file produces
+ * a fresh sourcemap rather than reusing the previous filename.
+ */
+export interface CacheKeyInput
+  /** Source text fed to the compiler. */
+  source: string
+  /** Source file path; resolved to an absolute, forward-slash form before hashing. */
+  sourcePath: string
+  /** Compiler family name, e.g. 'civet' or 'hera'. */
+  compilerName: string
+  /** Compiler package version. */
+  compilerVersion: string
+  /** Secondary compiler version, e.g. civet for the hera→civet pipeline. */
+  civetVersion?: string
+  /** mtime of the resolved compiler source — invalidates dev-mode caches when the local compiler changes. */
+  civetMtime?: string
+  /** Compile options forwarded to the compiler.  Canonicalized (sorted keys, no functions) before hashing. */
+  options?: unknown
+
 /** SHA1 hex over an array of strings, NUL-separated to disambiguate. */
 export function hashParts(parts: string[]): string
   hash := crypto.createHash 'sha1'
   for part of parts
     hash.update(part).update '\0'
   hash.digest 'hex'
+
+/**
+ * Stable JSON serialization: sorts object keys recursively and drops
+ * function-valued fields.  Used to canonicalize compile options for
+ * hashing so logically equivalent option sets produce identical keys.
+ */
+export function stableStringify(value: unknown): string
+  JSON.stringify value, (_key, val) =>
+    return undefined if typeof val is 'function'
+    if val and typeof val is 'object' and not Array.isArray val
+      sorted: Record<string, unknown> := {}
+      for key of Object.keys(val as object).sort()
+        sorted[key] = (val as Record<string, unknown>)[key]
+      return sorted
+    val
+
+/**
+ * Compute a SHA1 cache key from a CacheKeyInput.  Two inputs hash the
+ * same iff their source, compiler identity, options, and resolved
+ * source path all match.
+ */
+export function makeCacheKey(input: CacheKeyInput): string
+  resolved := path.resolve(input.sourcePath).replace(/\\/g, '/')
+  hashParts [
+    input.source
+    input.compilerName
+    input.compilerVersion
+    input.civetVersion ?? ''
+    input.civetMtime ?? ''
+    resolved
+    stableStringify input.options ?? {}
+  ]
 
 /** In-memory cache backed by a Map.  No eviction. */
 export function createMemoryCache(): Cache
