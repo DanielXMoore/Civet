@@ -33,6 +33,11 @@ export interface IncrementalTypecheckOptions
 
 export interface IncrementalTypecheckResult
   builder: ts.EmitAndSemanticDiagnosticsBuilderProgram
+  /**
+   * The CompilerHost driving the program — exposed so tests (and bespoke
+   * consumers) can probe `fileExists` / `getSourceFile` etc. directly.
+   */
+  host: ts.CompilerHost
   /** Per-source-file metadata captured during getSourceFile (sourcemap lines, parse errors). */
   getMeta(sourcePath: string): FileMeta?
   /** Diagnostics from parseJsonConfigFileContent. */
@@ -118,15 +123,23 @@ export function makeIncrementalTypecheckProgram(
     sf
 
   origFileExists := baseHost.fileExists.bind baseHost
+  // fileExists override: TS validates resolveModuleNameLiterals's outputs
+  // (synthetic `.civet.tsx` paths) by asking the host whether they exist.
+  // Without this override, TS would consult the bare filesystem, the
+  // synthetic sibling wouldn't be found, and cross-file civet imports
+  // would silently break.
   baseHost.fileExists = (fileName: string) =>
     exts := getTranspiledExtensionsFromPath fileName
-    transpiler := exts and transpilers.get exts[0]
-    /* c8 ignore next 2 -- non-transpiled fileExists checks pass through to the base host; not testable without a multi-extension fixture */
-    if exts and transpiler and transpiler.target is exts[1]
-      return origFileExists removeExtension(fileName)
+    if exts
+      transpiler := transpilers.get exts[0]
+      if transpiler and transpiler.target is exts[1]
+        return origFileExists removeExtension(fileName)
     origFileExists fileName
 
-  // Redirect `import './foo.civet'` to its `.civet.tsx` synthetic sibling.
+  // Redirect `import './foo.civet'` to its `.civet.tsx` synthetic sibling;
+  // anything else falls through to ts.resolveModuleName.  ts.resolveModuleName
+  // returns `{ resolvedModule: ResolvedModuleFull | undefined }`, so we can
+  // pass the field through directly without an explicit if/else.
   baseHost.resolveModuleNameLiterals = (literals: readonly any[], containingFile: string, _redirected, opts: ts.CompilerOptions) =>
     literals.map (lit) =>
       name: string := lit.text
@@ -143,13 +156,7 @@ export function makeIncrementalTypecheckProgram(
                 isExternalLibraryImport: false
               }
             }
-      /* c8 ignore start -- fallback for non-civet imports; exercised in real --typecheck runs but not by the test fixtures here */
-      r := ts.resolveModuleName name, containingFile, opts, baseHost
-      if r.resolvedModule
-        { resolvedModule: r.resolvedModule }
-      else
-        { resolvedModule: undefined }
-      /* c8 ignore stop */
+      { resolvedModule: ts.resolveModuleName(name, containingFile, opts, baseHost).resolvedModule }
 
   // ts.createIncrementalProgram reads any prior tsbuildinfo via the
   // host's readFile (driven by compilerOptions.tsBuildInfoFile) — no
@@ -165,6 +172,7 @@ export function makeIncrementalTypecheckProgram(
 
   {
     builder
+    host: baseHost
     getMeta(sourcePath: string)
       fileMetaData.get getCanonicalFileName(sourcePath)
     configErrors: parsed.errors

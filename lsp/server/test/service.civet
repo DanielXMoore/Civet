@@ -894,6 +894,60 @@ describe "makeIncrementalTypecheckProgram", ->
     finally
       rmSync tmpDir, { recursive: true, force: true }
 
+  it "fileExists override redirects synthetic .civet.tsx to the on-disk .civet source", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-fileexists-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","strict":true,"jsx":"preserve"},"include":["**/*.civet"]}'
+      civetPath := path.join tmpDir, 'main.civet'
+      writeFileSync civetPath, "x: number := 1\n"
+
+      { host } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      // Synthetic .civet.tsx — no such file on disk, but the override claims
+      // it exists by redirecting to the .civet source check.  Without this,
+      // resolveModuleNameLiterals's outputs would fail validation.
+      assert.equal host.fileExists(civetPath + '.tsx'), true
+      // .civet.tsx for a path with NO underlying .civet source
+      assert.equal host.fileExists(path.join(tmpDir, 'missing.civet.tsx')), false
+      // 2-extension path that doesn't match a transpiler target — passes
+      // through to baseHost.
+      assert.equal host.fileExists(path.join(tmpDir, 'something.foo.bar')), false
+      // Single-extension path — `if exts` is false, straight to baseHost.
+      assert.equal host.fileExists(path.join(tmpDir, 'tsconfig.json')), true
+      assert.equal host.fileExists(path.join(tmpDir, 'no-such-file.json')), false
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "falls back to ts.resolveModuleName for non-civet imports", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-resolve-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","strict":true,"jsx":"preserve","allowJs":true,"module":"esnext","moduleResolution":"bundler"},"include":["**/*.civet","**/*.ts"]}'
+      // A .ts sibling — the import name doesn't end in `.civet`/`.hera`,
+      // so resolveModuleNameLiterals's loop falls through to
+      // ts.resolveModuleName which finds the .ts file via the standard resolver.
+      writeFileSync path.join(tmpDir, 'sibling.ts'),
+        'export const greeting: string = "hello";\n'
+      civetPath := path.join tmpDir, 'main.civet'
+      writeFileSync civetPath, '{ greeting } from ./sibling\nconsole.log greeting\n'
+
+      { builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      program := builder.getProgram()
+      consumer := program.getSourceFiles().find (sf) => sf.fileName.endsWith 'main.civet.tsx'
+      assert consumer
+      diagnostics := builder.getSemanticDiagnostics consumer
+      assert.equal diagnostics.length, 0,
+        `expected the .ts import to resolve cleanly, got: ${diagnostics.map(.messageText).join(' | ')}`
+      // Confirm the .ts file made it into the program (resolveModuleName fallback worked)
+      assert program.getSourceFiles().some((sf) => sf.fileName.endsWith 'sibling.ts'),
+        "expected sibling.ts in program after resolveModuleName fallback"
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
   it "writes tsbuildinfo and skips affected work on a warm rerun", ->
     tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-warm-'
     try
