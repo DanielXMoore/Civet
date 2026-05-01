@@ -11,10 +11,16 @@ BundledCivetPackage from @danielx/civet/package.json with type: 'json'
 
 { type Extension } from typescript
 
-{ type Plugin, type TranspileResult } from ../types.civet
+{ type Plugin, type SourceMap, type TranspileResult } from ../types.civet
+{ type Cache, makeCacheKey } from ../../cache.civet
 
 interface CivetTraversalLib
   gatherRecursiveAll(ast: unknown, predicate: (node: unknown) => boolean): unknown[]
+
+interface CachedTranspile
+  code: string
+  lines?: SourceMap["lines"]
+  commentRanges?: { pos: number, length: number }[]
 
 export interface CivetPluginOptions
   /** Override the Civet module.  Defaults to the bundled @danielx/civet. */
@@ -25,6 +31,12 @@ export interface CivetPluginOptions
   CivetVersion?: string
   /** Civet compile config (typically loaded from civetconfig.json or similar).  Defaults to {}. */
   config?: CompileOptions
+  /**
+   * Optional cache for transpile results.  When supplied, successful compiles
+   * (errors-empty) are stored and reused for matching inputs.  Cache keys are
+   * derived from source, sourcePath, civet version, and the user's config.
+   */
+  cache?: Cache
 
 /**
  * Build a Civet transpiler Plugin.  The returned plugin's transpiler is
@@ -37,6 +49,7 @@ export function makeCivetPlugin(options: CivetPluginOptions = {}): Plugin
   CivetLib := options.CivetLib ?? BundledCivetLib
   CivetVersion := options.CivetVersion ?? BundledCivetPackage.version
   civetConfig := options.config ?? {}
+  cache := options.cache
 
   function transpileCivet(p: string, source: string): TranspileResult
     errors: ParseError[] := []
@@ -50,11 +63,33 @@ export function makeCivetPlugin(options: CivetPluginOptions = {}): Plugin
         comptime: false
 
     // Civet 0.9.4 introduced `new SourceMap` API.  Older project Civets fall
-    // through to the legacy single-call compile path.
+    // through to the legacy single-call compile path (uncached — rare).
     [major, minor, patch] := CivetVersion.split(".").map(Number)
     if major is 0 and (minor < 9 or minor is 9 and patch < 4)
       result := Civet.compile source, { ...options, sourceMap: true }
       return { ...result, errors }
+
+    cacheKey := if cache then makeCacheKey {
+      source
+      sourcePath: p
+      compilerName: 'civet'
+      compilerVersion: CivetVersion
+      options: civetConfig
+    } else undefined
+
+    if cacheKey
+      hit := cache!.get cacheKey
+      if hit
+        try
+          { code, lines, commentRanges } := JSON.parse(hit) as CachedTranspile
+          return {
+            code
+            sourceMap: { lines } as SourceMap
+            commentRanges
+            errors
+          }
+        catch
+          // corrupt cache entry — fall through and recompile
 
     // Re-use the single parse for both code generation and comment extraction.
     options.ast = true
@@ -64,6 +99,10 @@ export function makeCivetPlugin(options: CivetPluginOptions = {}): Plugin
       ...options
       sourceMap
     commentRanges := collectCommentRanges(ast)
+
+    if cacheKey and errors.length is 0
+      lines := (sourceMap as SourceMap).lines ?? (sourceMap as SourceMap).data?.lines
+      cache!.set cacheKey, JSON.stringify { code, lines, commentRanges }
 
     {
       code

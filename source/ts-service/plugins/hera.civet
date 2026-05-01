@@ -8,10 +8,16 @@
 
 { type CompileOptions, type ParseError } from @danielx/civet
 BundledCivetModule from @danielx/civet
+BundledCivetPackage from @danielx/civet/package.json with type: 'json'
 { createRequire } from node:module
 
 { type Extension } from typescript
-{ type Plugin, type TranspileResult } from ../types.civet
+{ type Plugin, type SourceMap, type TranspileResult } from ../types.civet
+{ type Cache, makeCacheKey } from ../../cache.civet
+
+interface CachedTranspile
+  code: string
+  lines?: SourceMap["lines"]
 
 // `require` that works for both build targets and any consumer bundle.
 // In CJS `__filename` is a global; in pure ESM it's undefined and we
@@ -41,10 +47,17 @@ export interface HeraPluginOptions
    * hard runtime requirement of `@danielx/civet/ts-service`.
    */
   Hera?: HeraModule
+  /** Override the Hera package version used in cache keys.  Auto-detected from `@danielx/hera/package.json` on first compile when omitted. */
+  HeraVersion?: string
   /** Override the second-stage Civet module.  Defaults to bundled @danielx/civet. */
   Civet?: typeof BundledCivetModule
   /** Civet compile config forwarded to the second stage (mirrors makeCivetPlugin). */
   config?: CompileOptions
+  /**
+   * Optional cache for transpile results.  When supplied, successful compiles
+   * (errors-empty) are stored and reused for matching inputs.
+   */
+  cache?: Cache
 
 /**
  * Build a Hera transpiler Plugin.  The `@danielx/hera` runtime is
@@ -54,8 +67,10 @@ export interface HeraPluginOptions
 export function makeHeraPlugin(options: HeraPluginOptions = {}): Plugin
   Civet := options.Civet ?? BundledCivetModule
   civetConfig := options.config ?? {}
+  cache := options.cache
 
   let resolvedHera: HeraModule?
+  let resolvedHeraVersion: string?
   function getHera(): HeraModule
     return resolvedHera if resolvedHera
     if options.Hera
@@ -73,8 +88,43 @@ export function makeHeraPlugin(options: HeraPluginOptions = {}): Plugin
     resolvedHera = { compile: mod.compile } as unknown as HeraModule
     resolvedHera!
 
+  function getHeraVersion(): string
+    return resolvedHeraVersion if resolvedHeraVersion
+    if options.HeraVersion
+      resolvedHeraVersion = options.HeraVersion
+      return resolvedHeraVersion
+    try
+      pkg := heraRequire('@danielx/hera/package.json') as { version: string }
+      resolvedHeraVersion = pkg.version
+    catch
+      resolvedHeraVersion = 'unknown'
+    resolvedHeraVersion
+
   function transpileHera(p: string, source: string): TranspileResult
     errors: (Error | ParseError)[] := []
+
+    cacheKey := if cache then makeCacheKey {
+      source
+      sourcePath: p
+      compilerName: 'hera'
+      compilerVersion: getHeraVersion()
+      civetVersion: BundledCivetPackage.version
+      options: civetConfig
+    } else undefined
+
+    if cacheKey
+      hit := cache!.get cacheKey
+      if hit
+        try
+          { code, lines } := JSON.parse(hit) as CachedTranspile
+          return {
+            code
+            sourceMap: { lines } as SourceMap
+            errors
+          }
+        catch
+          // corrupt cache entry — fall through and recompile
+
     try
       // Stage 1: Hera grammar → Civet code, with a Hera→Civet sourcemap.
       // `language: 'civet'` emits TS-typed Civet: handler-IIFE params
@@ -104,6 +154,11 @@ export function makeHeraPlugin(options: HeraPluginOptions = {}): Plugin
           ...civetConfig.parseOptions
           comptime: false
       civetResult := Civet.compile heraResult.code, civetOptions
+
+      if cacheKey
+        sm := civetResult.sourceMap as SourceMap?
+        lines := sm?.lines ?? sm?.data?.lines
+        cache!.set cacheKey, JSON.stringify { code: civetResult.code, lines }
 
       {
         code: civetResult.code
