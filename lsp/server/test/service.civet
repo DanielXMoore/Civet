@@ -9,6 +9,7 @@ import path from "path"
 {
   makeCivetPlugin
   makeHeraPlugin
+  makeIncrementalTypecheckProgram
   TSService as SharedTSService
   createInMemoryDocFactory
 } from "@danielx/civet/ts-service"
@@ -793,3 +794,137 @@ describe "createInMemoryDocFactory", ->
     uri := factory.pathToUri p
     assert uri.startsWith "file://"
     assert.equal factory.uriToPath(uri), p
+
+describe "makeIncrementalTypecheckProgram", ->
+  // The incremental typecheck path bypasses LanguageService; these
+  // tests stand it up against a tiny on-disk project so the
+  // CompilerHost overrides (getSourceFile / fileExists /
+  // resolveModuleNameLiterals) and the BuilderProgram cache flow are
+  // covered without depending on `civet --typecheck` running in CI.
+
+  it "compiles a clean project to an EmitAndSemanticDiagnosticsBuilderProgram", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-clean-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","strict":true,"jsx":"preserve"},"include":["**/*.civet"]}'
+      civetPath := path.join tmpDir, 'main.civet'
+      writeFileSync civetPath, "x: number := 5\nconsole.log x\n"
+
+      { builder, getMeta, configErrors } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      assert.equal configErrors.length, 0, "tsconfig should parse cleanly"
+
+      program := builder.getProgram()
+      civetTsx := program.getSourceFiles().find (sf) => sf.fileName.endsWith 'main.civet.tsx'
+      assert civetTsx, "program should include the synthetic .civet.tsx sibling"
+
+      diagnostics := builder.getSemanticDiagnostics civetTsx
+      assert.equal diagnostics.length, 0, `expected no diagnostics, got: ${diagnostics.map(.messageText).join(' | ')}`
+
+      meta := getMeta civetPath
+      assert meta?.sourcemapLines, "getMeta should return sourcemap lines for the .civet source"
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "captures parse errors as fatal FileMeta (sourceFile undefined)", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-parse-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","strict":true,"jsx":"preserve"},"include":["**/*.civet"]}'
+      civetPath := path.join tmpDir, 'broken.civet'
+      // Malformed civet that fails to parse (unbalanced quote).
+      writeFileSync civetPath, "x := 'unterminated\n"
+
+      { getMeta } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      // Force snapshot creation by reaching for getMeta — the host's
+      // getSourceFile runs the transpiler, the catch arm fires, and
+      // FileMeta.fatal=true is recorded.
+      meta := getMeta civetPath
+      // (getSourceFile was driven by ts when constructing the program)
+      assert meta?.fatal or (meta?.parseErrors and meta.parseErrors.length > 0),
+        `expected fatal/parseErrors meta for broken.civet, got: ${JSON.stringify meta}`
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "surfaces type errors from civet sources via per-file diagnostics", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-errors-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","strict":true,"jsx":"preserve"},"include":["**/*.civet"]}'
+      civetPath := path.join tmpDir, 'bad.civet'
+      writeFileSync civetPath, "x: number := 'wrong type'\n"
+
+      { builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      program := builder.getProgram()
+      target := program.getSourceFiles().find (sf) => sf.fileName.endsWith 'bad.civet.tsx'
+      assert target
+      diagnostics := builder.getSemanticDiagnostics target
+      assert diagnostics.length > 0,
+        "expected at least one type error from `x: number := 'wrong type'`"
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "resolves cross-file civet imports via resolveModuleNameLiterals", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-imports-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","strict":true,"jsx":"preserve"},"include":["**/*.civet"]}'
+      writeFileSync path.join(tmpDir, 'dep.civet'), "export answer := 42\n"
+      consumerPath := path.join tmpDir, 'consumer.civet'
+      writeFileSync consumerPath, "{ answer } from ./dep.civet\nconsole.log answer\n"
+
+      { builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      program := builder.getProgram()
+      // The dep.civet sibling must be loaded for cross-file types to work
+      depTsx := program.getSourceFiles().find (sf) => sf.fileName.endsWith 'dep.civet.tsx'
+      assert depTsx, "expected dep.civet.tsx to be in the program (resolveModuleNameLiterals)"
+
+      consumer := program.getSourceFiles().find (sf) => sf.fileName.endsWith 'consumer.civet.tsx'
+      assert consumer
+      diagnostics := builder.getSemanticDiagnostics consumer
+      assert.equal diagnostics.length, 0,
+        `expected no diagnostics on the consumer, got: ${diagnostics.map(.messageText).join(' | ')}`
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "writes tsbuildinfo and skips affected work on a warm rerun", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-warm-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","strict":true,"jsx":"preserve"},"include":["**/*.civet"]}'
+      writeFileSync path.join(tmpDir, 'main.civet'), "x: number := 5\nconsole.log x\n"
+      tsbi := path.join tmpDir, '.tsbuildinfo'
+
+      runOnce := =>
+        { builder } := makeIncrementalTypecheckProgram tmpDir, {
+          plugins: [makeCivetPlugin()]
+          extraCompilerOptions: { incremental: true, tsBuildInfoFile: tsbi, noEmit: false }
+        }
+        // Drain affected so the per-file cache is populated, then emit.
+        affected .= 0
+        loop
+          r := builder.getSemanticDiagnosticsOfNextAffectedFile()
+          break unless r
+          affected++
+        builder.emit undefined, ((fn, data) =>
+          writeFileSync fn, data if fn is tsbi
+        ), undefined, false
+        affected
+
+      // First run: every file is "affected" (no prior state).
+      firstAffected := runOnce()
+      assert firstAffected > 0, "first run should re-check at least one file"
+
+      // Second run: tsbuildinfo present, signatures match, nothing to redo.
+      secondAffected := runOnce()
+      assert.equal secondAffected, 0,
+        `warm rerun should skip every file; got ${secondAffected} affected`
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
