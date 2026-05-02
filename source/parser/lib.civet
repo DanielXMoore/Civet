@@ -1104,15 +1104,62 @@ function processAssignments(statements): void
       while expr.type is "ParenthesizedExpression"
         expr = expr.expression
       if expr.type is like "AssignmentExpression", "UpdateExpression"
-        if expr.type is "UpdateExpression" and
-            expr.children[0] is expr.assigned  // postfix update
+        // Postfix-inner update runs second (via post); non-postfix runs first (via pre).
+        // For non-postfix we inline ref-assignments inside the original `lhs`
+        // (which runs first). For postfix we hoist them into `pre` so they run
+        // before both the outer and the inner reads.
+        postfix := expr.type is "UpdateExpression" and
+            expr.children[0] is expr.assigned
+        // refsToHoist accumulates [refAssignment, ", "] pairs for the postfix case
+        const refsToHoist = []
+        if postfix
           pre.push("(")
           post.push([", ", lhs, ")"])
         else
           pre.push(["(", lhs, ", "])
           post.push(")")
-        // TODO: use ref to avoid duplicating function calls
-        return expr.assigned
+        // Use refs to avoid duplicating side-effectful member access and indices
+        { assigned } := expr
+        return assigned unless assigned?.children
+        { children } := assigned
+
+        // Find the terminal member access (last PropertyAccess or Index)
+        j .= children.findLastIndex (c: any) => c?.type is like "PropertyAccess", "Index"
+        return assigned if j <= 0
+
+        // Cache the base (everything before terminal access) if it has side effects
+        { ref: baseRef, refAssignment: baseRefAssignment } := maybeRefAssignment children.slice 0, j
+        if baseRefAssignment
+          // Non-postfix: inline (ref = base) into the original. Postfix: keep bare
+          // ref in the original and hoist (ref = base) into pre so the chain stays
+          // in the AST for hoistDec resolution.
+          innerBase := makeLeftHandSideExpression (if postfix then baseRef else baseRefAssignment)
+          children.splice 0, j, innerBase
+          innerBase.parent = assigned
+          j = 1  // terminal is now at index 1 after splice
+          if postfix
+            (baseRefAssignment as ASTNodeObject).parent = exp
+            refsToHoist.push baseRefAssignment, ", "
+
+        // Cache the terminal Index expression if it has side effects
+        terminal := children[j]
+        outerTerminal .= terminal
+        if terminal?.type is "Index"
+          { ref, refAssignment } := maybeRefAssignment terminal.expression
+          if refAssignment
+            replaceNode terminal.expression, (if postfix then ref else refAssignment), terminal
+            outerTerminal = { type: "Index", children: ["[", ref, "]"], expression: ref }
+            if postfix
+              (refAssignment as ASTNodeObject).parent = exp
+              refsToHoist.push refAssignment, ", "
+
+        if refsToHoist#
+          // Insert hoisted ref-assignments after the leading "(" in pre
+          pre.push ...refsToHoist
+
+        return assigned unless baseRefAssignment or outerTerminal is not terminal
+        outerBase := if baseRefAssignment then [baseRef] else children.slice 0, j
+        { ...assigned, children: [...outerBase, outerTerminal, ...children.slice j + 1] }
 
     const pre = [], post = []
     switch exp.type
