@@ -30,6 +30,26 @@ suite 'TSConfig Reload', =>
       20000
     )
 
+    // === Debug observability ================================================
+    // Track every diagnostic event the LSP publishes (any URI), and every
+    // tsconfig.json change VS Code sees, so a timeout reveals which link
+    // is broken: VS Code never saw the change | server never republished |
+    // server republished but not for unused-local.civet.
+    diagEvents: { uri: string, count: number, severities: number[] }[] := []
+    fsEvents: string[] := []
+    diagSub := vscode.languages.onDidChangeDiagnostics (e) =>
+      for u of e.uris
+        ds := vscode.languages.getDiagnostics u
+        diagEvents.push {
+          uri: u.fsPath
+          count: ds.length
+          severities: ds.map(.severity)
+        }
+    fsWatcher := vscode.workspace.createFileSystemWatcher '**/tsconfig.json'
+    fsWatcher.onDidChange (u) => fsEvents.push `change ${u.fsPath}`
+    fsWatcher.onDidCreate (u) => fsEvents.push `create ${u.fsPath}`
+    // =========================================================================
+
     // Subscribe to the next diagnostics event BEFORE modifying tsconfig
     // so we cannot miss it.
     diagPromise := onNextDiagnostics docUri, 30000
@@ -55,7 +75,20 @@ suite 'TSConfig Reload', =>
 
     // The server debounces 300 ms, rebuilds TSService, then re-sends
     // diagnostics for all open documents.  Wait for that event.
-    diagnostics := await diagPromise
+    let diagnostics: vscode.Diagnostic[]
+    try
+      diagnostics = await diagPromise
+    catch e
+      console.error `=== tsconfig-reload debug ===`
+      console.error `fsWatcher events (${fsEvents.length}): ${fsEvents.join(' | ')}`
+      console.error `diagnostic events seen (${diagEvents.length}):`
+      for d of diagEvents
+        console.error `  ${d.uri} count=${d.count} severities=[${d.severities.join(',')}]`
+      diagSub.dispose()
+      fsWatcher.dispose()
+      throw e
+    diagSub.dispose()
+    fsWatcher.dispose()
 
     assert diagnostics.length >= 1,
       `Expected at least one diagnostic after enabling noUnusedLocals, got ${diagnostics.length}`
