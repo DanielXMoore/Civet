@@ -1,0 +1,85 @@
+// Merge the three coverage temp dirs (populated by `coverage:run`) into
+// `coverage/merged-tmp/` and run a single `c8 report` so the whole
+// `source/` + `lsp/` tree shows up in one place.
+//
+// e2e source-map-cache is stripped because it contains a fake source
+// reconstructed from lineLengths (all dots) that breaks v8-to-istanbul
+// and collapses everything to 100%.
+
+{ readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'fs'
+{ resolve, join } from 'path'
+{ fileURLToPath } from 'url'
+{ execFileSync } from 'child_process'
+
+root := typeof __dirname !== "undefined" ?
+  resolve __dirname, '..' :
+  fileURLToPath new URL('..', import.meta.url)
+
+rootTmp := join root, 'coverage', 'tmp'
+serverTmp := join root, 'lsp', 'server', 'coverage', 'tmp'
+e2eTmp := join root, 'lsp', 'vscode', 'coverage', 'e2e-tmp'
+mergedTmp := join root, 'coverage', 'merged-tmp'
+
+unless existsSync rootTmp
+  console.error `No root coverage found at ${rootTmp}`
+  process.exit(1)
+unless existsSync serverTmp
+  console.error `No lsp/server coverage found at ${serverTmp}`
+  process.exit(1)
+unless existsSync e2eTmp
+  console.error `No lsp/vscode e2e coverage found at ${e2eTmp}`
+  process.exit(1)
+
+rmSync mergedTmp, { recursive: true, force: true }
+mkdirSync mergedTmp, { recursive: true }
+
+copy := (srcDir: string, prefix: string, stripSourceMapCache = false) =>
+  count .= 0
+  for f of readdirSync srcDir
+    continue unless f.endsWith '.json'
+    dst := join mergedTmp, `${prefix}-${f}`
+    if stripSourceMapCache
+      raw := JSON.parse readFileSync join(srcDir, f), 'utf8'
+      delete raw['source-map-cache']
+      writeFileSync dst, JSON.stringify raw
+    else
+      writeFileSync dst, readFileSync join(srcDir, f)
+    count++
+  console.log `Copied ${count} ${prefix} coverage file(s)`
+
+copy rootTmp,   'root'
+copy serverTmp, 'server'
+copy e2eTmp,    'e2e', true
+
+c8 := resolve root, 'node_modules/c8/bin/c8.js'
+// c8 matches include/exclude against absolute paths after source-map
+// remap, so anchor with `**/`.  Excluding `**/integration/**` keeps
+// sibling tools (eslint, etc.) out of the project total — the root
+// c8 config's `include: ["source"]` keeps them out of the root run
+// by default, but the merge would otherwise pick them up.
+execFileSync process.execPath, [
+  c8, 'report'
+  '--reporter', 'text'
+  '--reporter', 'json'
+  '--reporter', 'json-summary'
+  '--reporter', 'html'
+  '--reporter', 'lcov'
+  '--report-dir', join(root, 'coverage')
+  '--temp-directory', mergedTmp
+  '--allow-external'
+  '--exclude-after-remap'
+  '--extension', '.civet'
+  '--extension', '.coffee'
+  '--extension', '.hera'
+  '--extension', '.js'
+  '--extension', '.mjs'
+  '--extension', '.mts'
+  '--extension', '.ts'
+  '--include', '**/source/**'
+  '--include', '**/lsp/server/source/**'
+  '--include', '**/lsp/vscode/source/**'
+  '--exclude', '**/source/parser/types.civet'
+  '--exclude', '**/source/bun-civet.civet'
+  '--exclude', '**/source/node-worker.civet'
+  '--exclude', '**/integration/**'
+], { cwd: root, stdio: 'inherit' }
