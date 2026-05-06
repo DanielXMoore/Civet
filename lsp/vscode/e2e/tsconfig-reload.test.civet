@@ -30,15 +30,18 @@ suite 'TSConfig Reload', =>
       20000
     )
 
+    diagEvents: { uri: string, count: number }[] := []
+    diagSub := vscode.languages.onDidChangeDiagnostics (e) =>
+      for u of e.uris
+        ds := vscode.languages.getDiagnostics u
+        diagEvents.push { uri: u.fsPath, count: ds.length }
+
     // Subscribe to the next diagnostics event BEFORE modifying tsconfig
     // so we cannot miss it.
     diagPromise := onNextDiagnostics docUri, 30000
 
     // Modify tsconfig to enable noUnusedLocals — this should surface an
     // error in unused-local.civet once the server reloads the TSService.
-    // Route the write through `vscode.workspace.fs.writeFile` so VS Code's
-    // own watcher fires reliably (raw `fs.writeFileSync` doesn't always
-    // propagate to ReadDirectoryChangesW in time on Windows).
     parsed := JSON.parse originalContent
     parsed.compilerOptions.noUnusedLocals = true
     encoder := new TextEncoder()
@@ -47,9 +50,19 @@ suite 'TSConfig Reload', =>
       encoder.encode JSON.stringify(parsed, null, 2)
     )
 
-    // The server debounces 300 ms, rebuilds TSService, then re-sends
-    // diagnostics for all open documents.  Wait for that event.
-    diagnostics := await diagPromise
+    let diagnostics: vscode.Diagnostic[]
+    try
+      diagnostics = await diagPromise
+    catch e
+      console.error `=== diag events seen (${diagEvents.length}) ===`
+      console.error `expected fsPath: ${docUri.fsPath}`
+      for d of diagEvents
+        console.error `  ${d.uri} count=${d.count}`
+      console.error `current diagnostics for unused-local.civet:`,
+        vscode.languages.getDiagnostics(docUri).map((d) => `sev=${d.severity} code=${(d.code as any)?.value ?? d.code}: ${d.message}`).join(' | ')
+      diagSub.dispose()
+      throw e
+    diagSub.dispose()
 
     assert diagnostics.length >= 1,
       `Expected at least one diagnostic after enabling noUnusedLocals, got ${diagnostics.length}`
