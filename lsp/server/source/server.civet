@@ -43,6 +43,7 @@ TSService from ./lib/typescript-service.civet
 } from ./lib/completions.civet
 assert from assert
 path from node:path
+* as fs from node:fs
 { pathToFileURL } from node:url
 ts, {
   sys as tsSys
@@ -89,6 +90,21 @@ semanticTokenModifiers := [
 // Also include all preview / proposed LSP features.
 connection := createConnection(ProposedFeatures.all)
 logger := connection.console
+
+// DEBUG: when CIVET_LSP_DEBUG_FILE is set, append reload-path events to that
+// file.  Used by the e2e suite to surface server-side state across the
+// vscode-test-electron process boundary (its captured stderr loses LSP-child
+// output).
+debugLogPath := process.env.CIVET_LSP_DEBUG_FILE
+debugStart := Date.now()
+debugLog := if debugLogPath
+  (msg: string) =>
+    try
+      fs.appendFileSync debugLogPath, `+${Date.now() - debugStart}ms ${msg}\n`
+    catch
+      // ignore — debug log is best-effort
+else
+  (_: string) => {}
 
 // Create a simple text document manager.
 documents: TextDocuments<TextDocument> := new TextDocuments(TextDocument)
@@ -1036,14 +1052,17 @@ function scheduleServiceReload(projPath: string, tsConfigPath: string)
   // Debounce: cancel existing timer and set a new one
   existing := tsConfigReloadTimers.get(projPath)
   globalThis.clearTimeout(existing) if existing
+  debugLog `[scheduleServiceReload] projPath=${projPath} debounce=${tsConfigReloadDebounce}ms (existing timer=${!!existing})`
 
   reloadCallback := () =>
     tsConfigReloadTimers.delete(projPath)
+    debugLog `[scheduleServiceReload] timer fired for ${projPath}`
     doReloadServiceForProject(projPath, tsConfigPath)
   timer := globalThis.setTimeout(reloadCallback, tsConfigReloadDebounce)
   tsConfigReloadTimers.set(projPath, timer)
 
 async function doReloadServiceForProject(projPath: string, tsConfigPath: string): Promise<void>
+  debugLog `[doReloadServiceForProject] enter projPath=${projPath} tsConfigPath=${tsConfigPath} rebuildInProgress=${rebuildInProgress.has(projPath)}`
   /* c8 ignore start — coalescing requires a second didChange during the
      ~1-3s TSService rebuild window; deterministic reproduction in tests
      is flaky under coverage instrumentation. */
@@ -1062,10 +1081,12 @@ async function doReloadServiceForProject(projPath: string, tsConfigPath: string)
   // tsconfig.json, so readFile must succeed.
   newContent := tsSys.readFile(tsConfigPath)
   assert newContent, `expected tsconfig to exist at ${tsConfigPath}`
+  cachedContent := tsConfigContentMap.get(projPath)
+  debugLog `[doReloadServiceForProject] newContent.length=${newContent.length} cached.length=${cachedContent?.length ?? 'undef'} matches=${newContent is cachedContent}`
   /* c8 ignore start — no-op skip fires when a didChange arrives with the
      same file content; the reload test hits it but v8 coverage of the
      debounced timer callback is unreliable. */
-  if newContent is tsConfigContentMap.get(projPath)
+  if newContent is cachedContent
     logger.log `tsconfig.json unchanged for ${projPath}, skipping reload`
     return
   /* c8 ignore stop */
@@ -1076,6 +1097,7 @@ async function doReloadServiceForProject(projPath: string, tsConfigPath: string)
   try
     newService := await TSService(projPath, connection.console)
     await newService.loadPlugins()
+    debugLog `[doReloadServiceForProject] new TSService built; staging open docs`
 
     // Only record the new content after a successful rebuild so that a failed
     // rebuild doesn't permanently suppress retries for the same content.
@@ -1101,6 +1123,7 @@ async function doReloadServiceForProject(projPath: string, tsConfigPath: string)
       if docProjPath is projPath
         openDocs.add(doc)
         newService.host.addOrUpdateDocument(doc)
+    debugLog `[doReloadServiceForProject] openDocs=${openDocs.size}; scheduling updateDiagnostics`
     scheduleUpdateDiagnostics(openDocs) if openDocs.size > 0
   /* c8 ignore start — defensive: TSService constructor throwing during
      reload would leave us without a working service; log and move on. */
@@ -1121,10 +1144,12 @@ async function doReloadServiceForProject(projPath: string, tsConfigPath: string)
 connection.onDidChangeWatchedFiles (change) =>
   // Monitored files have change in VSCode
   logger.log('We received a file change event')
+  debugLog `[onDidChangeWatchedFiles] events=${change.changes#}`
 
   for fileEvent of change.changes
     filePath := URI.parse(fileEvent.uri).fsPath
     basename := path.basename(filePath)
+    debugLog `  event type=${fileEvent.type} uri=${fileEvent.uri} basename=${basename}`
 
     // Source file deletion: purge from the owning service and clear diagnostics
     if fileEvent.type is FileChangeType.Deleted and basename is not 'tsconfig.json'
@@ -1147,6 +1172,7 @@ connection.onDidChangeWatchedFiles (change) =>
     hasProject .= projectPathToServiceMap.has(projPath)
     /* c8 ignore next */
     hasProject ||= projectPathToPendingPromiseMap.has(projPath)
+    debugLog `  projPath=${projPath} hasProject=${hasProject} knownProjects=[${Array.from(projectPathToServiceMap.keys()).join(',')}]`
     if hasProject
       logger.log `tsconfig.json changed for known project ${projPath}`
       scheduleServiceReload(projPath, filePath)
