@@ -1003,35 +1003,32 @@ updateProjectDiagnostics := (
   service: ResolvedService
 ) =>
   program := service.getProgram()
-  debugLog `[updateProjectDiagnostics] enter program=${!!program}`
   return unless program
 
   // A single, short delay before starting the update for a project.
   await setTimeout(diagnosticsPropagationDelay)
 
+  // Build a canonical-path → open-doc lookup table.  Naïvely passing the URI
+  // we construct from `service.getSourceFileName(sourceFile.fileName)` to
+  // `documents.get(...)` misses on case-insensitive file systems: TS
+  // canonicalises `sourceFile.fileName` to lowercase, but the documents Map
+  // is keyed by VS Code's original-case URI from textDocument/didOpen.  Going
+  // through `getCanonicalFileName` on both sides lets the lookup succeed
+  // regardless of FS case sensitivity.
+  canonicalToDoc := new Map<string, TextDocument>()
+  for d of documents.all()
+    canonicalToDoc.set getCanonicalFileName(documentToSourcePath(d)), d
+
   projectFiles := program.getSourceFiles()
-  debugLog `[updateProjectDiagnostics] sourceFiles=${projectFiles#} openDocs=${documents.all()#} canceled=${status.isCanceled}`
   for sourceFile of projectFiles
-    if status.isCanceled
-      debugLog `[updateProjectDiagnostics] canceled mid-iteration`
-      return
+    return if status.isCanceled
 
     // We only need to send diagnostics for files the user has open
     // TypeScript is analyzing all files in memory anyway
     rawFileName := service.getSourceFileName(sourceFile.fileName)
-    docUri := URI.file(rawFileName).toString()
-    doc := documents.get(docUri)
-    /* c8 ignore start — temporary debug instrumentation */
-    if /unused-local/.test sourceFile.fileName
-      debugLog `  unused-local match: sf.fn=${sourceFile.fileName} raw=${rawFileName} docUri=${docUri} doc?=${!!doc}`
-    /* c8 ignore stop */
+    doc := canonicalToDoc.get getCanonicalFileName(rawFileName)
     if doc
       await updateDiagnosticsForDoc(doc, service)
-      /* c8 ignore start — temporary debug instrumentation */
-      if /unused-local/.test sourceFile.fileName
-        debugLog `  unused-local: updateDiagnosticsForDoc returned`
-      /* c8 ignore stop */
-  debugLog `[updateProjectDiagnostics] iteration complete`
 
 // Schedule an update of diagnostics for all projects affected by recent changes.
 function scheduleUpdateDiagnostics(changedDocs: Set<TextDocument>)
