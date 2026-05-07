@@ -15,6 +15,13 @@ export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--enable-source-maps"
 rm -rf "$out"
 mkdir "$out"
 
+# Bootstrap: build/cache-utils.js (the Civet/Hera loader hook used during
+# this build) imports primitives from "$out"/cache.js, but esbuild.civet
+# below is what would normally produce that file.  Compile cache.civet
+# directly here so the file exists before esbuild.civet runs.  esbuild's
+# own pass below replaces this output with the bundled-and-minified copy.
+"$civet_bin" --no-config -c --js < source/cache.civet \
+  | ./node_modules/.bin/esbuild --format=cjs --platform=node --loader=js > "$out"/cache.js
 
 # types (these get used for type checking during esbuild, so must go first)
 cp types/types.d.ts types/config.d.ts "$out"/

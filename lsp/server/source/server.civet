@@ -26,7 +26,7 @@
 } from vscode-languageserver-textdocument
 TSService from ./lib/typescript-service.civet
 * as Previewer from ./lib/previewer.civet
-{ convertNavTree, forwardMap, getCanonicalFileName, convertDiagnostic, remapPosition, logTiming, type WithResolvers, withResolvers, type SourcemapLines } from ./lib/util.civet
+{ collectCommentTokens, convertNavTree, forwardMap, getCanonicalFileName, convertDiagnostic, remapPosition, logTiming, type WithResolvers, withResolvers, type SourcemapLines } from ./lib/util.civet
 { asPlainTextWithLinks, tagsToMarkdown } from ./lib/textRendering.civet
 {
   adjustCursorForEmptyQuotes
@@ -514,8 +514,15 @@ connection.onCompletionResolve (item) =>
           changeDoc = changeMeta.transpiledDoc
           changeSourcemapLines = changeMeta.sourcemapLines
         else
-          // Non-transpiled file
-          changeDoc = documents.get(URI.file(changeFileName).toString())
+          // Non-transpiled file.  `changeFileName` is already canonical
+          // (lowercased on Windows); search documents by canonical path so
+          // the lookup succeeds even when VS Code's didOpen URI preserved
+          // mixed case (`URI.file(changeFileName).toString()` would yield a
+          // lowercased URI string that misses the original-case Map key).
+          for d of documents.all()
+            if getCanonicalFileName(documentToSourcePath(d)) is changeFileName
+              changeDoc = d
+              break
       /* c8 ignore stop */
       continue unless changeDoc
       for tc of change.textChanges
@@ -987,6 +994,17 @@ updateProjectDiagnostics := (
   // A single, short delay before starting the update for a project.
   await setTimeout(diagnosticsPropagationDelay)
 
+  // Build a canonical-path → open-doc lookup table.  Naïvely passing the
+  // URI we construct from `service.getSourceFileName(sourceFile.fileName)`
+  // to `documents.get(...)` misses on case-insensitive file systems: TS
+  // canonicalises `sourceFile.fileName` to lowercase, but the documents Map
+  // is keyed by VS Code's original-case URI from textDocument/didOpen.
+  // Going through `getCanonicalFileName` on both sides lets the lookup
+  // succeed regardless of FS case sensitivity.
+  canonicalToDoc := new Map<string, TextDocument>()
+  for d of documents.all()
+    canonicalToDoc.set getCanonicalFileName(documentToSourcePath(d)), d
+
   projectFiles := program.getSourceFiles()
   for sourceFile of projectFiles
     return if status.isCanceled
@@ -994,8 +1012,7 @@ updateProjectDiagnostics := (
     // We only need to send diagnostics for files the user has open
     // TypeScript is analyzing all files in memory anyway
     rawFileName := service.getSourceFileName(sourceFile.fileName)
-    docUri := URI.file(rawFileName).toString()
-    doc := documents.get(docUri)
+    doc := canonicalToDoc.get getCanonicalFileName(rawFileName)
     if doc
       await updateDiagnosticsForDoc(doc, service)
 
@@ -1054,10 +1071,11 @@ async function doReloadServiceForProject(projPath: string, tsConfigPath: string)
   // tsconfig.json, so readFile must succeed.
   newContent := tsSys.readFile(tsConfigPath)
   assert newContent, `expected tsconfig to exist at ${tsConfigPath}`
+  cachedContent := tsConfigContentMap.get(projPath)
   /* c8 ignore start — no-op skip fires when a didChange arrives with the
      same file content; the reload test hits it but v8 coverage of the
      debounced timer callback is unreliable. */
-  if newContent is tsConfigContentMap.get(projPath)
+  if newContent is cachedContent
     logger.log `tsconfig.json unchanged for ${projPath}, skipping reload`
     return
   /* c8 ignore stop */
@@ -1081,12 +1099,29 @@ async function doReloadServiceForProject(projPath: string, tsConfigPath: string)
     if oldService
       globalThis.setTimeout(() => oldService.dispose?.(), 1000)
 
-    // Re-send diagnostics for all open documents belonging to this project
+    // Re-send diagnostics for all open documents belonging to this project.
+    // The new service's host starts empty, so re-stage each open .civet/.hera
+    // doc — without this, host.getMeta returns no transpiledDoc inside
+    // updateDiagnosticsForDoc and the function silently returns without
+    // republishing.  TS files don't need staging (TS auto-loads them via
+    // tsconfig include patterns).
+    // Re-publish diagnostics directly for each open doc using the new
+    // service.  We can't go through scheduleUpdateDiagnostics →
+    // updateProjectDiagnostics here: that path iterates
+    // program.getSourceFiles() and looks docs up by `URI.file(
+    // service.getSourceFileName(...))`, which on case-insensitive file
+    // systems silently misses docs registered with VS Code's original-case
+    // URI (TS canonicalises sourceFile.fileName to lowercase).  We have the
+    // open docs in hand here with their original-case URIs, so just call
+    // updateDiagnosticsForDoc directly — same publish path, no URI lookup.
     openDocs := new Set<TextDocument>()
     for doc of documents.all()
       docProjPath := getProjectPathFromSourcePath(documentToSourcePath(doc))
-      openDocs.add(doc) if docProjPath is projPath
-    scheduleUpdateDiagnostics(openDocs) if openDocs.size > 0
+      if docProjPath is projPath
+        openDocs.add(doc)
+        newService.host.addOrUpdateDocument(doc)
+    for doc of openDocs
+      await updateDiagnosticsForDoc(doc, newService)
   /* c8 ignore start — defensive: TSService constructor throwing during
      reload would leave us without a working service; log and move on. */
   catch e
@@ -1149,7 +1184,7 @@ connection.onRequest SemanticTokensRequest.type, (params) =>
   let transpiledPath: string
   let sourcemapLines: SourcemapLines | undefined
   let transpiledDoc: TextDocument | undefined
-  commentRanges: { pos: number, length: number }[] .= []
+  let commentRanges: { pos: number, length: number }[]?
   if sourcePath.match(tsSuffix)
     // Non-transpiled TS/JS file
     transpiledPath = sourcePath
@@ -1158,7 +1193,7 @@ connection.onRequest SemanticTokensRequest.type, (params) =>
     return { data: [] } unless meta?.transpiledDoc
     transpiledDoc = meta.transpiledDoc
     sourcemapLines = meta.sourcemapLines
-    commentRanges = meta.commentRanges ?? []
+    commentRanges = meta.commentRanges
     transpiledPath = documentToSourcePath(transpiledDoc)
 
   try
@@ -1199,7 +1234,7 @@ connection.onRequest SemanticTokensRequest.type, (params) =>
 
       remapped.push { line: pos.line, character: pos.character, length, tokenType, tokenModifiers }
 
-    remapped.push ...collectCommentTokens doc, commentRanges
+    remapped.push ...collectCommentTokens doc, commentRanges, commentSemanticTokenType
 
     // Sort by position (required for valid delta encoding)
     remapped.sort (a, b) => a.line - b.line or a.character - b.character
@@ -1237,38 +1272,6 @@ documents.listen(connection)
 connection.listen()
 
 // Utils
-
-function collectCommentTokens(
-  doc: TextDocument
-  commentRanges: { pos: number, length: number }[]
-)
-  sourceText := doc.getText()
-  tokens: { line: number, character: number, length: number, tokenType: number, tokenModifiers: number }[] := []
-
-  for { pos, length } of commentRanges
-    start .= Math.max(0, pos)
-    end .= Math.min(sourceText.length, pos + length)
-    while start < end
-      tokenEnd .= start
-      while tokenEnd < end and sourceText[tokenEnd] is not '\r' and sourceText[tokenEnd] is not '\n'
-        tokenEnd++
-
-      if length := tokenEnd - start
-        tokenPos := doc.positionAt start
-        tokens.push {
-          tokenPos.{line,character}
-          length
-          tokenType: commentSemanticTokenType
-          tokenModifiers: 0
-        }
-
-      break if tokenEnd >= end
-      if sourceText[tokenEnd] is '\r' and sourceText[tokenEnd + 1] is '\n'
-        start = tokenEnd + 2
-      else
-        start = tokenEnd + 1
-
-  tokens
 
 function documentToSourcePath(textDocument: TextDocumentIdentifier)
   URI.parse(textDocument.uri).fsPath

@@ -80,6 +80,40 @@ run the test via `pnpm test`. (You do not need to `pnpm build` in between.)
 With only one test running, you can reasonably add `console.log` and other
 debugging statements to figure out what's going on.
 
+## Coverage
+
+CI gates this repo at 100% on every c8 metric (statements / branches /
+functions / lines).  The local workflow:
+
+```sh
+pnpm coverage           # run all suites (root + lsp/server + lsp/vscode e2e)
+                        # and emit a unified report at coverage/
+pnpm coverage:check     # gate at 100% — exits non-zero with details if not
+pnpm coverage:show <p>  # show uncovered regions for files matching <p>
+                        # add --branches for per-arm hit counts
+pnpm coverage:merge     # re-merge existing temp data without re-running tests
+                        # (fast iteration when editing exclude patterns)
+```
+
+For defensive arms tests can't reach, c8-ignore the line with a comment
+that explains *why* it's unreachable, e.g.:
+
+```civet
+/* c8 ignore next -- defensive: caller always passes non-null */
+return defaults if value is null
+```
+
+The `-- <why>` part is required so the next reader can judge whether the
+ignore should be replaced with a test.
+
+### "Works locally, fails on CI" coverage divergence
+
+GitHub Actions on `pull_request` builds the **merge of HEAD onto base**, not
+your branch tip.  If `main` has changed a file your PR doesn't touch, CI's
+`dist/` differs from local's and coverage shapes can diverge.  When that
+happens, `git fetch && git merge origin/main` first — once `md5sum dist/main.js`
+matches CI's, the failure reproduces locally and you can fix it properly.
+
 ## Debugging
 
 A useful trick is to add a `debugger` statement inside a rule handler in

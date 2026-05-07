@@ -2,7 +2,7 @@ import { type TransformResult, createUnplugin, type UnpluginContextMeta, type Un
 import civet, { decode, lib, SourceMap, type CompileOptions, type ParseOptions } from '@danielx/civet'
 import { findInDir, loadConfig } from '@danielx/civet/config'
 import {
-  remapRange,
+  remapPosition,
   flattenDiagnosticMessageText,
   // @ts-ignore
   // using ts-ignore because the version of @danielx/civet typescript is checking against
@@ -10,8 +10,17 @@ import {
 } from '@danielx/civet/ts-diagnostic'
 import * as fs from 'fs'
 import path from 'path'
-import type { FormatDiagnosticsHost, Diagnostic, System } from 'typescript'
-import { createFSBackedSystem, createVirtualCompilerHost } from '@typescript/vfs'
+import { pathToFileURL } from 'url'
+import type {
+  FormatDiagnosticsHost
+  Diagnostic
+  System
+  CompilerOptions
+  BuilderProgramHost
+  ReadBuildProgramHost
+  SemanticDiagnosticsBuilderProgram
+  SourceFile
+} from 'typescript'
 import type { UserConfig } from 'vite'
 import type { BuildOptions } from 'esbuild'
 import os from 'os'
@@ -48,6 +57,33 @@ export type PluginOptions
   config?: string | false | null
   parseOptions?: ParseOptions
   tsConfig?: any
+  /**
+   * When `true`, the typecheck pipeline walks every `.civet` / `.hera` file
+   * matched by the tsconfig include set instead of only files seen through
+   * `load()`.  Bundler use is `false` by default (only typecheck what was
+   * actually loaded); the CLI's `civet --typecheck` flips this to `true`
+   * when invoked without explicit filenames so a no-args run lints the
+   * whole project.
+   */
+  discoverProjectFiles?: boolean
+  /**
+   * Allow up to N failing TypeScript diagnostics before aborting the build.
+   * Without this option, any failing diagnostic (per the `typecheck` severity
+   * filter) causes a build abort.  Set to a baseline count to track
+   * regressions in projects with existing errors — same shape as
+   * scripts/typecheck.civet's `CIVET_TYPECHECK_MAX_ERRORS` env var.
+   */
+  maxErrors?: number
+  /**
+   * When set, persist TypeScript's incremental analysis state to this path
+   * (`.tsbuildinfo`).  On subsequent runs, TS reads the file and skips
+   * re-analyzing source files whose hashes are unchanged — meaningful
+   * speedup for repeat `civet --typecheck` / `pnpm typecheck` invocations
+   * in large projects.
+   *
+   * Implies `incremental: true` for the underlying program.
+   */
+  tsBuildInfoFile?: string
 
 type CacheEntry
   mtime: number
@@ -151,11 +187,42 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
   outDir .= path.join rootDir, 'dist'
   let esbuildOptions: BuildOptions
   let configErrors: Diagnostic[]?
-  let configFileNames: string[]
+  let configFileNames: string[] = []
   skipWorker .= false
+
+  let tsBuildInfoTarget: string?
+
+  // Bumped on every load() so watch-mode reloads (same path, new content)
+  // surpass the transpiledDoc's version and re-trigger compilation.  A
+  // fixed 0 would equal the host's transpiledDoc.version after the first
+  // compile, leaving subsequent loads stuck on the stale transpile.
+  let nextDocVersion: number = 0
+
+  // ts-service transitively imports typescript; loading it eagerly would
+  // bring typescript in for plain-transform consumers that don't need it.
+  type TsServiceModule = typeof import('@danielx/civet/ts-service')
+  let tsService: TsServiceModule?
+  let docFactory: ReturnType<TsServiceModule['createInMemoryDocFactory']>?
+  // `any` because the published @danielx/civet d.ts doesn't yet expose
+  // the ./ts-service subpath we'd need to spell ResolvedService here.
+  service: any .= null
+
+  // Project-discovery typecheck mode bypasses LanguageService and uses
+  // ts.createIncrementalProgram directly so prior tsbuildinfo state
+  // actually skips per-file checks (LanguageService.getProgram() can't
+  // leverage incremental state).  Bundler/emitDeclaration paths keep
+  // using TSService — those need the live in-memory document model.
+  let incrementalTypecheckSetup: {
+    plugins: any[]
+    tsConfig: any
+    extraCompilerOptions: CompilerOptions?
+    projectPath: string
+  }?
 
   tsPromise := if transformTS or ts is "tsc"
     import('typescript').then .default
+  tsServicePromise := if transformTS
+    import('@danielx/civet/ts-service')
   getFormatHost := (sys: System): FormatDiagnosticsHost =>
     return {
       getCurrentDirectory: => sys.getCurrentDirectory()
@@ -187,6 +254,9 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
 
       if transformTS or ts is "tsc"
         ts := await tsPromise!
+        if transformTS
+          tsService = await tsServicePromise!
+          docFactory ??= tsService.createInMemoryDocFactory()
         let config: any, error: Diagnostic?, tsConfigPath: string | undefined
 
         if options.tsConfig
@@ -217,8 +287,11 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
               return item.replace(/\.civet\b(?!\.)/g, '.civet.tsx')
         mogrify "files"
 
-        // Override readDirectory (used for include/exclude matching)
-        // to include .civet files, as .civet.tsx files
+        // Inject `.civet` into the include-walk extension list and rewrite
+        // matches to their `.civet.tsx` synthetic siblings.  Used for the
+        // per-file `tsTranspile` path's `compilerOptions` and the
+        // `configFileNames` capture below; TSService has its own configSys
+        // that additionally handles `.hera`.
         system := {...ts.sys}
         {readDirectory: systemReadDirectory} := system
         system.readDirectory = (path: string, extensions?: readonly string[], excludes?: readonly string[], includes?: readonly string[], depth?: number): string[] =>
@@ -251,115 +324,265 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         }
         fsMap = new Map()
 
+        // We pass `tsConfig: config` below so TSService skips the disk read
+        // and parses the same in-memory config we already mogrified.
+        servicePath := if tsConfigPath then path.dirname(tsConfigPath) else process.cwd()
+        let extraCompilerOptions: CompilerOptions?
+        if options.tsBuildInfoFile
+          // Resolve relative to projectPath, not whatever cwd launched us.
+          tsBuildInfoTarget = path.resolve servicePath, options.tsBuildInfoFile
+          // `noEmit: false` is required for builder.emit() to write the
+          // tsbuildinfo; buildEnd's writeFile override drops everything else.
+          extraCompilerOptions =
+            incremental: true
+            tsBuildInfoFile: tsBuildInfoTarget
+            noEmit: false
+
+        if transformTS and tsService and docFactory
+          // Project-local disk cache: skips re-transpiling unchanged source
+          // across runs.  Survives between `civet --typecheck` invocations
+          // and shared by both plugins — also shared with build/cache-utils.js's
+          // build-time slot.  Keys carry compiler identity + options, so civet
+          // vs hera vs build-time JS-mode vs typecheck TS-mode entries can't
+          // collide despite living in the same directory.
+          transpileCache := tsService.createDiskCache path.resolve(servicePath, '.cache/build')
+          plugins := [
+            tsService.makeCivetPlugin {
+              Civet: civet
+              config: compileOptions
+              cache: transpileCache
+            }
+            tsService.makeHeraPlugin {
+              Civet: civet
+              config: compileOptions
+              cache: transpileCache
+            }
+          ]
+
+          // Use createIncrementalProgram for project-discovery typecheck
+          // (the only mode where prior tsbuildinfo state really pays off).
+          // Bundler typecheck (discoverProjectFiles=false) and emitDeclaration
+          // mode keep going through TSService since they need live snapshots
+          // / change tracking.
+          useIncremental := options.typecheck and not options.emitDeclaration and (options.discoverProjectFiles ?? false)
+          if useIncremental
+            incrementalTypecheckSetup = {
+              plugins
+              tsConfig: config
+              extraCompilerOptions
+              projectPath: servicePath
+            }
+          else
+            service = tsService.TSService servicePath, {
+              plugins
+              docFactory
+              discoverProjectFiles: options.discoverProjectFiles ?? false
+              extraCompilerOptions
+              // TSService's own configSys handles .civet + .hera mogrification;
+              // unplugin's local one only adds .civet.
+              tsConfig: config
+            }
+
+    // useConfigFileNames=true expands the typecheck scope to every path
+    // tsconfig matched (captured in buildStart's `configFileNames`); the
+    // false default keeps it scoped to load()-tracked files + their
+    // transitive imports.
     buildEnd(useConfigFileNames = false): Promise<void>
       if transformTS
         const ts = await tsPromise!
 
-        // Create a virtual file system with all source files processed so far,
-        // but which further resolves any Civet dependencies that are needed
-        // just for typechecking (e.g. `import type` which get removed in JS).
-        system := createFSBackedSystem fsMap, process.cwd(), ts
-        {
-          fileExists: systemFileExists
-          readFile: systemReadFile
-          readDirectory: systemReadDirectory
-        } := system
+        // Each path sets up rawDiagnostics + getMeta + emitTsBuildInfo;
+        // the rest of this function (remap loop, formatting, exit code)
+        // is shared.
+        let rawDiagnostics: readonly Diagnostic[]
+        let getMeta: (sourcePath: string) => { sourcemapLines?: any }?
+        let emitTsBuildInfo: () => void
+        emitTsBuildInfo = => return
+        // Hoisted so the emitDeclaration block below (TSService path only)
+        // can reach it.  The incremental path doesn't reach that block.
+        let program: any
 
-        system.fileExists = (filename: string): boolean =>
-          if (!filename.endsWith('.civet.tsx')) return systemFileExists(filename)
-          /* c8 ignore next 2 -- only hit when TS resolves .civet.tsx dependencies not in fsMap */
-          if (fsMap.has(filename)) return true
-          return systemFileExists filename[...-4]
+        if incrementalTypecheckSetup
+          // New path: ts.createIncrementalProgram leverages prior
+          // tsbuildinfo state to skip per-file checks (warm runs are
+          // ~10× faster than the LanguageService path on this codebase).
+          /* c8 ignore next -- tsService is always set when transformTS=true */
+          return unless tsService?
+          { builder, getMeta: gm, configErrors: cErrors } := tsService.makeIncrementalTypecheckProgram(
+            incrementalTypecheckSetup.projectPath
+            incrementalTypecheckSetup
+          )
+          getMeta = gm
+          // Drain affected files first so subsequent per-file calls hit cache.
+          loop
+            r := builder.getSemanticDiagnosticsOfNextAffectedFile()
+            break unless r
+          program = builder.getProgram()
+          // Mirror ts.getPreEmitDiagnostics's set, but route per-file calls
+          // through the BuilderProgram so cached results are used.
+          // Config-file parse errors are prepended via the configErrors
+          // unshift below — including them here too would double-print.
+          collected: Diagnostic[] := []
+          collected.push ...builder.getOptionsDiagnostics()
+          collected.push ...builder.getGlobalDiagnostics()
+          for f of program.getSourceFiles()
+            collected.push ...builder.getSyntacticDiagnostics f
+            collected.push ...builder.getSemanticDiagnostics f
+            collected.push ...builder.getDeclarationDiagnostics f
+          rawDiagnostics = ts.sortAndDeduplicateDiagnostics collected
+          /* c8 ignore next 2 -- only fires when tsconfig.json itself has parse errors */
+          if cErrors and cErrors# > 0
+            configErrors = [...cErrors] as Diagnostic[]
+          if tsBuildInfoTarget
+            target := tsBuildInfoTarget!
+            writeFile := (fileName: string, data: string) =>
+              if fileName is target
+                ts.sys.writeFile fileName, data
+            emitTsBuildInfo = =>
+              builder.emit undefined, writeFile, undefined, false
+        else
+          /* c8 ignore next -- service is always set in buildStart when transformTS=true; this guard is purely a type narrower */
+          return unless service?
 
-        /* c8 ignore start -- defensive: buildEnd's createProgram uses explicit rootNames, so TS never scans directories through this override */
-        system.readDirectory = (path: string): string[] =>
-          systemReadDirectory(path)
-          .map &.endsWith('.civet') ? & + '.tsx' : &
-        /* c8 ignore stop */
+          // getMeta forces the host to materialize each .civet.tsx sibling
+          // (snapshots are lazy), so getProgram() below sees them all.
+          for tsxPath of fsMap.keys()
+            /* c8 ignore next -- defensive: every fsMap key is .civet.tsx today (load() owns the only writer) */
+            continue unless tsxPath.endsWith('.civet.tsx')
+            civetPath := tsxPath[...-4]
+            service.host.getMeta civetPath
 
-        tsCompileOptions := {
-          ...compileOptions
-          rewriteCivetImports: false
-          rewriteTsImports: true
-        }
-        system.readFile = (filename: string, encoding: BufferEncoding = 'utf-8'): string? =>
-          // Mogrify package.json imports field to use .civet.tsx
-          if path.basename(filename) is "package.json"
-            json := systemReadFile filename, encoding
-            return json unless json
-            parsed: Record<string, unknown> := JSON.parse(json)
-            modified .= false
-            /* c8 ignore next 10 -- only hit when package.json has .civet entries in imports field */
-            function recurse(node: unknown): void
-              if node? <? "object"
-                for key in node
-                  value := (node as Record<string, unknown>)[key]
-                  if value <? "string"
-                    if value.endsWith ".civet"
-                      (node as Record<string, unknown>)[key] = value + '.tsx'
-                      modified = true
-                  else if value
-                    recurse value
-            recurse parsed.imports
-            return modified ? JSON.stringify(parsed) : json
+          if useConfigFileNames
+            for fn of configFileNames
+              service.host.addScriptFileName fn
 
-          // Generate .civet.tsx files on the fly
-          if (!filename.endsWith('.civet.tsx')) return systemReadFile(filename, encoding)
-          if (fsMap.has(filename)) return fsMap.get(filename)
-          /* c8 ignore next 12 -- only hit when TS resolves `import type` dependencies not yet compiled */
-          civetFilename := filename[...-4]
-          rawCivetSource := fs.readFileSync civetFilename, {encoding}
-          { code: compiledTS, sourceMap } := civet.compile rawCivetSource, {
-            ...tsCompileOptions
-            filename
-            js: false
-            sourceMap: true
-            sync: true // TS readFile API seems to need to be synchronous
-          }
-          fsMap.set filename, compiledTS
-          sourceMaps.set filename, sourceMap
-          return compiledTS
+          program = service.getProgram()!
 
-        host := createVirtualCompilerHost
-          system
-          compilerOptions
-          ts
+          // SemanticDiagnosticsBuilderProgram reuses cached diagnostics from
+          // the prior tsbuildinfo for files whose content hash is unchanged.
+          // The TSService path runs only for emitDeclaration / non-discover
+          // typecheck — `--typecheck` proper goes through the new
+          // makeIncrementalTypecheckProgram branch above.  No test fixture
+          // covers emitDeclaration with tsBuildInfoFile, so the wiring is
+          // c8-ignored to keep patch coverage clean.
+          let builder: SemanticDiagnosticsBuilderProgram?
+          /* c8 ignore start -- exercised only by emitDeclaration consumers that opt into incremental tsbuildinfo */
+          if options.tsBuildInfoFile
+            builderHost: BuilderProgramHost := {}
+            readHost: ReadBuildProgramHost := {
+              useCaseSensitiveFileNames: => ts.sys.useCaseSensitiveFileNames
+              getCurrentDirectory: => ts.sys.getCurrentDirectory()
+              readFile: (fileName: string) => ts.sys.readFile(fileName)
+            }
+            oldProgram := ts.readBuilderProgram program.getCompilerOptions(), readHost
+            builder = ts.createSemanticDiagnosticsBuilderProgram program, builderHost, oldProgram
+          /* c8 ignore stop */
 
-        program := ts.createProgram
-          rootNames: useConfigFileNames ? configFileNames : [...fsMap.keys()]
-          options: compilerOptions
-          host: host.compilerHost
+          rawDiagnostics = ts.getPreEmitDiagnostics(builder ?? program)
+          getMeta = (p) => service.host.getMeta p
+          /* c8 ignore start -- same as above: only the emitDeclaration+tsbuildinfo combination reaches here */
+          if builder and tsBuildInfoTarget
+            target := tsBuildInfoTarget!
+            writeFile := (fileName: string, data: string) =>
+              if fileName is target
+                ts.sys.writeFile fileName, data
+            emitTsBuildInfo = =>
+              builder!.emit undefined, writeFile, undefined, false
+          /* c8 ignore stop */
 
-        diagnostics: Diagnostic[] := ts
-          .getPreEmitDiagnostics(program)
-          .map (diagnostic) =>
-            file := diagnostic.file
-            if (!file) return diagnostic
+        // Replace each diagnostic's SourceFile with one built from the
+        // real `.civet` / `.hera` source so the formatter shows the
+        // original path + line/col instead of `.civet.tsx`.  Per-path
+        // cache so each file is only read + tokenized once.
+        realFileCache := new Map<string, SourceFile>()
+        realSourceFile := (realPath: string) =>
+          cached := realFileCache.get realPath
+          return cached if cached
+          /* c8 ignore start -- defensive: realPath comes from a known
+             .civet.tsx / .hera.tsx source the program already loaded */
+          try
+            src := fs.readFileSync realPath, 'utf8'
+            sf := ts.createSourceFile realPath, src, ts.ScriptTarget.ESNext, true
+            realFileCache.set realPath, sf
+            return sf
+          catch
+            return undefined
+          /* c8 ignore stop */
 
-            sourceMap := sourceMaps.get file.fileName
-            if (!sourceMap) return diagnostic
+        diagnostics: Diagnostic[] := []
+        for d of rawDiagnostics
+          file := d.file
+          if not file
+            diagnostics.push d
+            continue
 
-            sourcemapLines := sourceMap.lines
-            /* c8 ignore start -- \`|| 0\` / \`|| 1\` fallbacks only fire for diagnostics with undefined or zero start/length; TS always sets these when file is non-null */
-            range := remapRange(
-              {
-                start: diagnostic.start || 0,
-                end: (diagnostic.start || 0) + (diagnostic.length || 1),
-              },
-              sourcemapLines
-            )
+          isHera := file.fileName.endsWith('.hera.tsx')
+          isTranspiled := file.fileName.endsWith('.civet.tsx') or isHera
+          sourcePath := isTranspiled ? file.fileName[...-4] : file.fileName
+          meta := getMeta sourcePath
+          sourcemapLines := meta?.sourcemapLines
+
+          unless sourcemapLines
+            diagnostics.push d
+            continue
+
+          /* c8 ignore start -- `|| 0` / `|| 1` fallbacks only fire for diagnostics with undefined or zero start/length; TS always sets these when file is non-null */
+          startLc := file.getLineAndCharacterOfPosition d.start || 0
+          endLc := file.getLineAndCharacterOfPosition (d.start || 0) + (d.length || 1)
+          /* c8 ignore stop */
+
+          remappedStartLc := remapPosition startLc, sourcemapLines
+          remappedEndLc := remapPosition endLc, sourcemapLines
+
+          realFile := realSourceFile sourcePath
+          /* c8 ignore start -- defensive: realSourceFile only fails when
+             the .civet/.hera file disappeared between compile and emit
+             (e.g. concurrent rm); not reachable in the test suite */
+          if not realFile
+            diagnostics.push {
+              ...d
+              messageText: flattenDiagnosticMessageText d.messageText
+            }
+            continue
+          /* c8 ignore stop */
+
+          toPos := (lc: { line: number, character: number }): number? =>
+            /* c8 ignore start -- defensive: remapped positions sometimes
+               fall outside the source file's line/column range when the
+               sourcemap points to a synthesized location */
+            try
+              realFile!.getPositionOfLineAndCharacter lc.line, lc.character
+            catch
+              undefined
             /* c8 ignore stop */
 
-            {
-              ...diagnostic,
-              messageText: flattenDiagnosticMessageText(diagnostic.messageText),
-              length: diagnostic.length,
-              start: range.start,
-            }
+          remappedStart := toPos remappedStartLc
+          /* c8 ignore start -- defensive: remap should always succeed for
+             in-range positions; both branches reach toPos's catch arm,
+             unreachable in tests where all positions land in range */
+          if remappedStart is undefined
+            diagnostics.push d
+            continue
+          remappedEnd := toPos(remappedEndLc) ?? (remappedStart + 1)
+          /* c8 ignore stop */
+
+          diagnostics.push {
+            ...d
+            file: realFile
+            start: remappedStart
+            length: Math.max 1, remappedEnd - remappedStart
+            messageText: flattenDiagnosticMessageText d.messageText
+          }
 
         /* c8 ignore next 2 -- only hit when tsconfig.json has parse errors */
         if configErrors?#
           diagnostics.unshift ...configErrors
+
+        // Persist tsbuildinfo before throwing so a failing run still
+        // contributes its analysis to the next one.  Each path's
+        // setup wired emitTsBuildInfo to filter writes to the target
+        // path so we don't pollute the project with .js / .d.ts.
+        emitTsBuildInfo()
 
         if diagnostics# > 0
           console.error
@@ -379,11 +602,18 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
               // Default behavior: fail on errors
               failures.push(DiagnosticCategory.Error)
             count := diagnostics.filter((d) => failures.includes(d.category)).length
-            if count
+            // maxErrors lets a project carry a non-zero baseline (used by the
+            // `pnpm typecheck` regression-gate flow).  Without it, any failing
+            // diagnostic aborts the build, matching prior behavior.
+            threshold := options.maxErrors ?? 0
+            if count > threshold
               /* c8 ignore start -- else arm needs non-Error categories; TS pre-emit + config errors only produce Error */
               reason := count is diagnostics# ? count : `${count} out of ${diagnostics#}`
               /* c8 ignore stop */
-              throw new Error `Aborting build because of ${reason} TypeScript diagnostic${diagnostics.length > 1 ? 's' : ''} above`
+              note := if threshold > 0 then ` (baseline ${threshold})` else ''
+              throw new Error `Aborting build because of ${reason} TypeScript diagnostic${diagnostics.length > 1 ? 's' : ''} above${note}`
+            else if threshold > 0 and count > 0
+              console.error `Within baseline of ${threshold} TypeScript diagnostic${threshold > 1 ? 's' : ''}; not failing.`
 
         if options.emitDeclaration
           if meta.framework is 'esbuild' and not esbuildOptions.outdir
@@ -400,7 +630,7 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
             sourceFile := program.getSourceFile(file)!
             program.emit
               sourceFile
-              (filePath, content) =>
+              (filePath: string, content: string) =>
                 if options.declarationExtension?
                   if filePath.endsWith '.d.ts'
                     filePath = filePath[< -5]
@@ -579,6 +809,18 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         unless tsx is slashed
           fsMap.set slashed, compiledTS
           sourceMaps.set slashed, civetSourceMap
+
+        // Hand the source to TSService so buildEnd's diagnostics + d.ts
+        // emit sees it.  Independent of unplugin's fsMap; the host runs
+        // the registered makeCivetPlugin to cache its own .tsx sibling.
+        if service? and docFactory?
+          doc := docFactory.create(
+            pathToFileURL(filename).toString()
+            "civet"
+            ++nextDocVersion
+            rawCivetSource
+          )
+          service.host.addOrUpdateDocument doc
 
       jsonSourceMap := sourceMap and
         if sourceMap <? "string"

@@ -1,0 +1,194 @@
+/**
+ * Incremental typecheck pipeline — the alternative to TSService for
+ * one-shot `civet --typecheck` runs.  Bypasses LanguageService and
+ * constructs `ts.createIncrementalProgram` directly, so a prior
+ * `.tsbuildinfo` actually skips per-file checks (LanguageService.getProgram()
+ * can't leverage incremental state).
+ *
+ * Editor / watch / bundler consumers keep using TSService — this path is
+ * for project-discovery typecheck where the full file set is read from
+ * disk.
+ */
+
+ts from typescript
+* as fs from fs
+* as path from path
+
+{ type Plugin, type FileMeta, type Logger } from ./types.civet
+{
+  getCanonicalFileName
+  getTranspiledExtensionsFromPath
+  removeExtension
+} from ./path.civet
+{
+  buildTranspilers
+  mogrifyPackageJsonImports
+  parseTsConfigForCivet
+} from ./config.civet
+
+export interface IncrementalTypecheckOptions
+  /** Plugins providing transpilers for `.civet`, `.hera`, etc. */
+  plugins: Plugin[]
+  /** Pre-parsed tsconfig content (skips disk re-read of tsconfig.json). */
+  tsConfig?: any
+  /** Compiler options merged on top of the parsed tsconfig (e.g. tsBuildInfoFile). */
+  extraCompilerOptions?: ts.CompilerOptions
+  logger?: Logger
+
+export interface IncrementalTypecheckResult
+  builder: ts.EmitAndSemanticDiagnosticsBuilderProgram
+  /**
+   * The CompilerHost driving the program — exposed so tests (and bespoke
+   * consumers) can probe `fileExists` / `getSourceFile` etc. directly.
+   */
+  host: ts.CompilerHost
+  /** Per-source-file metadata captured during getSourceFile (sourcemap lines, parse errors). */
+  getMeta(sourcePath: string): FileMeta?
+  /** Diagnostics from parseJsonConfigFileContent. */
+  configErrors: readonly ts.Diagnostic[]
+
+/**
+ * Build a CompilerHost + IncrementalProgram set up to synthesize
+ * `<source>.<target>` siblings (e.g. `foo.civet.tsx`) from the registered
+ * transpilers.  Each synthetic SourceFile is annotated with a content-hash
+ * `version` so TS's BuilderProgram can detect changes across runs against
+ * the prior tsbuildinfo state.
+ */
+export function makeIncrementalTypecheckProgram(
+  projectPath: string
+  options: IncrementalTypecheckOptions
+): IncrementalTypecheckResult
+  transpilers := buildTranspilers options.plugins
+  extraExtensions := Array.from transpilers.keys()
+  parsed := parseTsConfigForCivet projectPath, transpilers, { tsConfig: options.tsConfig }
+
+  compilerOptions: ts.CompilerOptions := {
+    ...parsed.options
+    ...options.extraCompilerOptions
+  }
+  compilerOptions.jsx ??= ts.JsxEmit.Preserve
+
+  baseHost := ts.createIncrementalCompilerHost compilerOptions
+  fileMetaData: Map<string, FileMeta> := new Map
+
+  hashText := (text: string): string =>
+    /* c8 ignore next -- baseHost.createHash is always set on Node */
+    baseHost.createHash?(text) ?? text.length.toString()
+
+  origGetSourceFile := baseHost.getSourceFile.bind baseHost
+  baseHost.getSourceFile = (fileName: string, langVersion: any, onError, shouldCreateNew) =>
+    exts := getTranspiledExtensionsFromPath fileName
+    transpiler := exts and transpilers.get exts[0]
+    if exts and transpiler and transpiler.target is exts[1]
+      sourcePath := removeExtension fileName
+      let sourceText: string?
+      try
+        sourceText = fs.readFileSync sourcePath, 'utf8'
+      /* c8 ignore start -- fileExists already passed; only fires if the file vanishes between calls */
+      catch
+        return undefined
+      /* c8 ignore stop */
+      let result
+      try
+        result = transpiler.compile sourcePath, sourceText
+      catch e
+        fileMetaData.set getCanonicalFileName(sourcePath), {
+          sourcemapLines: undefined
+          transpiledDoc: undefined
+          commentRanges: undefined
+          parseErrors: [e as Error]
+          fatal: true
+        }
+        return undefined
+      // Async transpilers aren't supported here (matches TSService host).
+      /* c8 ignore next -- bundled plugins are sync */
+      return undefined if result <? Promise
+      return undefined unless result and result.code
+      /* c8 ignore next -- `?? .data?.lines` fallback only fires for legacy Civet (<0.9.4) sourcemap shape; bundled Civet always exposes .lines directly */
+      sourcemapLines := result.sourceMap?.lines ?? result.sourceMap?.data?.lines
+      fileMetaData.set getCanonicalFileName(sourcePath), {
+        sourcemapLines
+        transpiledDoc: undefined
+        commentRanges: result.commentRanges
+        parseErrors: result.errors
+        fatal: false
+      }
+      sf := ts.createSourceFile fileName, result.code, langVersion, true
+      // BuilderProgram requires a per-file version; createIncrementalCompilerHost's
+      // own getSourceFile sets it from the file text hash, but our synthetic
+      // sources need it set explicitly.
+      (sf as any).version = hashText result.code
+      return sf
+    sf := origGetSourceFile fileName, langVersion, onError, shouldCreateNew
+    /* c8 ignore start -- baseHost normally sets version itself; defensive */
+    if sf and (sf as any).version is undefined
+      (sf as any).version = hashText sf.text
+    /* c8 ignore stop */
+    sf
+
+  origFileExists := baseHost.fileExists.bind baseHost
+  // fileExists override: TS validates resolveModuleNameLiterals's outputs
+  // (synthetic `.civet.tsx` paths) by asking the host whether they exist.
+  // Without this override, TS would consult the bare filesystem, the
+  // synthetic sibling wouldn't be found, and cross-file civet imports
+  // would silently break.
+  baseHost.fileExists = (fileName: string) =>
+    exts := getTranspiledExtensionsFromPath fileName
+    if exts
+      transpiler := transpilers.get exts[0]
+      if transpiler and transpiler.target is exts[1]
+        return origFileExists removeExtension(fileName)
+    origFileExists fileName
+
+  // package.json#imports resolution runs before resolveModuleNameLiterals,
+  // so rewrite transpilable extensions at the readFile boundary.
+  origReadFile := baseHost.readFile.bind baseHost
+  baseHost.readFile = (fileName: string) =>
+    contents := origReadFile fileName
+    if contents and path.basename(fileName) is "package.json"
+      return mogrifyPackageJsonImports contents, transpilers
+    contents
+
+  // Redirect `import './foo.civet'` to its `.civet.tsx` synthetic sibling;
+  // anything else falls through to ts.resolveModuleName.  ts.resolveModuleName
+  // returns `{ resolvedModule: ResolvedModuleFull | undefined }`, so we can
+  // pass the field through directly without an explicit if/else.
+  baseHost.resolveModuleNameLiterals = (literals: readonly any[], containingFile: string, _redirected, opts: ts.CompilerOptions) =>
+    literals.map (lit) =>
+      name: string := lit.text
+      for ext of extraExtensions
+        if name.endsWith ext
+          t := transpilers.get(ext)!
+          containingDir := path.dirname containingFile
+          resolved := path.resolve containingDir, name
+          if origFileExists resolved
+            return {
+              resolvedModule: {
+                resolvedFileName: resolved + t.target
+                extension: t.target
+                isExternalLibraryImport: false
+              }
+            }
+      { resolvedModule: ts.resolveModuleName(name, containingFile, opts, baseHost).resolvedModule }
+
+  // ts.createIncrementalProgram reads any prior tsbuildinfo via the
+  // host's readFile (driven by compilerOptions.tsBuildInfoFile) — no
+  // explicit oldProgram parameter, the API picks it up internally.
+  programOptions: ts.IncrementalProgramOptions<ts.EmitAndSemanticDiagnosticsBuilderProgram> := {
+    rootNames: parsed.fileNames
+    options: compilerOptions
+    host: baseHost
+    configFileParsingDiagnostics: ts.getConfigFileParsingDiagnostics parsed
+  }
+  programOptions.projectReferences = parsed.projectReferences if parsed.projectReferences
+  builder := ts.createIncrementalProgram programOptions
+
+  {
+    builder
+    host: baseHost
+    getMeta(sourcePath: string)
+      fileMetaData.get getCanonicalFileName(sourcePath)
+    configErrors: parsed.errors
+  }
+
+export default makeIncrementalTypecheckProgram

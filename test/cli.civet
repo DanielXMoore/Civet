@@ -830,6 +830,257 @@ describe "CLI --typecheck", ->
     // Non-zero exit due to TS diagnostics
     assert exitCode? and exitCode > 0, "typecheck reported errors via exitCode: " + exitCode
 
+  it "lints whole project when --typecheck is invoked with no filenames", :any ->
+    // Regression guard: pre-fix, `civet --typecheck` with no args silently
+    // succeeded because unplugin's TSService had discoverProjectFiles=false
+    // and an empty fsMap, leaving the program with no project files to
+    // typecheck.  CLI now sets discoverProjectFiles=true when filenames is
+    // empty so the tsconfig include set drives the scope.
+    @timeout 30000
+    isolated := path.join tmpDir, "lint-no-args"
+    await mkdir isolated, { recursive: true }
+    await writeFile path.join(isolated, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022'
+        module: 'ESNext'
+        moduleResolution: 'Bundler'
+        jsx: 'preserve'
+        allowJs: true
+        strict: true
+        noEmit: true
+      }
+      include: ['src']
+    })
+    await mkdir path.join(isolated, 'src'), { recursive: true }
+    await writeFile path.join(isolated, 'src/bad.civet'), 'x: number := "wrong"\n'
+
+    cwd := process.cwd()
+    process.chdir isolated
+    try
+      { exitCode } := await captureProcess =>
+        await cli ['--typecheck', '--no-config']
+      assert exitCode? and exitCode > 0,
+        "no-args --typecheck must surface project-wide type errors via exitCode: " + exitCode
+    finally
+      process.chdir cwd
+
+  it "incremental path doesn't double-print tsconfig parse errors", :any ->
+    @timeout 30000
+    isolated := path.join tmpDir, "config-dedup-incremental"
+    await mkdir isolated, { recursive: true }
+    // `target: "es-too-old"` produces a tsconfig-level diagnostic (no source file).
+    await writeFile path.join(isolated, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: {
+        target: 'es-too-old'
+        module: 'ESNext'
+        moduleResolution: 'Bundler'
+        jsx: 'preserve'
+        strict: true
+        noEmit: true
+      }
+      include: ['src']
+    })
+    await mkdir path.join(isolated, 'src'), { recursive: true }
+    await writeFile path.join(isolated, 'src/clean.civet'), 'x: number := 42\n'
+
+    cwd := process.cwd()
+    process.chdir isolated
+    try
+      { stdErr } := await captureProcess =>
+        await cli ['--typecheck', '--no-config']
+      codeMatches := stdErr.match(/TS\d{4,5}/g) ?? []
+      seen: Set<string> := new Set
+      duplicates: string[] := []
+      for code of codeMatches
+        if seen.has code
+          duplicates.push code
+        seen.add code
+      assert.equal duplicates.length, 0,
+        `tsconfig parse errors duplicated in incremental path: ${duplicates.join(',')}\n${stdErr.slice(0, 800)}`
+    finally
+      process.chdir cwd
+
+  it "incremental path resolves package.json `imports` to .civet siblings", :any ->
+    @timeout 30000
+    isolated := path.join tmpDir, "pkg-imports-incremental"
+    await mkdir isolated, { recursive: true }
+    await writeFile path.join(isolated, 'package.json'), JSON.stringify({
+      name: "civet-pkg-imports-fixture-incremental"
+      type: "module"
+      imports: { "#dep": "./src/dep.civet" }
+    })
+    await writeFile path.join(isolated, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022'
+        module: 'node16'
+        moduleResolution: 'node16'
+        jsx: 'preserve'
+        strict: true
+        skipLibCheck: true
+        noEmit: true
+      }
+      include: ['src']
+    })
+    await mkdir path.join(isolated, 'src'), { recursive: true }
+    await writeFile path.join(isolated, 'src/dep.civet'),
+      "export foo: string := 'hello'\n"
+    await writeFile path.join(isolated, 'src/consumer.civet'), """
+      { foo } from '#dep'
+      n: number := foo
+    """
+
+    cwd := process.cwd()
+    process.chdir isolated
+    try
+      { exitCode, stdErr } := await captureProcess =>
+        await cli ['--typecheck', '--no-config']
+      assert exitCode? and exitCode > 0,
+        "type mismatch through #dep should fail typecheck; exit was: " + exitCode
+      assert not stdErr.includes("Cannot find module '#dep'"),
+        "'#dep' must resolve via package.json imports map: " + stdErr.slice(0, 600)
+      assert stdErr.includes("'string' is not assignable to type 'number'") or stdErr.includes("Type 'string'"),
+        "expected string→number mismatch through '#dep', got: " + stdErr.slice(0, 600)
+    finally
+      process.chdir cwd
+
+  it "incremental path surfaces isolatedDeclarations diagnostics (TS9007/TS9010)", :any ->
+    @timeout 30000
+    isolated := path.join tmpDir, "iso-decl-incremental"
+    await mkdir isolated, { recursive: true }
+    await writeFile path.join(isolated, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022'
+        module: 'ESNext'
+        moduleResolution: 'Bundler'
+        jsx: 'preserve'
+        strict: true
+        declaration: true
+        isolatedDeclarations: true
+        noEmit: true
+      }
+      include: ['src']
+    })
+    await mkdir path.join(isolated, 'src'), { recursive: true }
+    // Inferred return type fires TS9007 under isolatedDeclarations.
+    await writeFile path.join(isolated, 'src/decl.civet'),
+      'export f := () => 1 + 2\n'
+
+    cwd := process.cwd()
+    process.chdir isolated
+    try
+      { exitCode, stdErr } := await captureProcess =>
+        await cli ['--typecheck', '--no-config']
+      assert exitCode? and exitCode > 0,
+        "isolatedDeclarations error must drive non-zero exit; exit was: " + exitCode
+      assert stdErr.includes("TS9007") or stdErr.includes("TS9010"),
+        "expected TS9007/TS9010, got: " + stdErr.slice(0, 600)
+    finally
+      process.chdir cwd
+
+  it "--max-errors lets a project carry a baseline without failing CI", :any ->
+    // Two type errors in a single file; --max-errors 5 lets us pass.
+    @timeout 30000
+    inputFile := await makeCivetTempFile 'x: number := "wrong"\ny: number := "wrong"\n'
+    { exitCode, stdErr } := await captureProcess =>
+      await cli ['--typecheck', '--max-errors', '5', '--no-config', inputFile]
+    assert.equal exitCode ?? 0, 0,
+      "--max-errors 5 should accept ≤5 errors; stderr: " + stdErr
+    assert stdErr.includes("Within baseline of 5"),
+      "expected the baseline-not-failing message; got: " + stdErr
+
+  it "--max-errors below the diagnostic count still fails", :any ->
+    @timeout 30000
+    inputFile := await makeCivetTempFile 'x: number := "wrong"\ny: number := "wrong"\n'
+    { exitCode } := await captureProcess =>
+      await cli ['--typecheck', '--max-errors', '1', '--no-config', inputFile]
+    assert exitCode? and exitCode > 0,
+      "--max-errors 1 should fail with 2 errors over baseline; exit was: " + exitCode
+
+  it "CIVET_TYPECHECK_MAX_ERRORS env applies the same threshold", :any ->
+    @timeout 30000
+    inputFile := await makeCivetTempFile 'x: number := "wrong"\n'
+    process.env.CIVET_TYPECHECK_MAX_ERRORS = '5'
+    try
+      { exitCode, stdErr } := await captureProcess =>
+        await cli ['--typecheck', '--no-config', inputFile]
+      assert.equal exitCode ?? 0, 0,
+        "env baseline should accept the diagnostic; stderr: " + stdErr
+    finally
+      delete process.env.CIVET_TYPECHECK_MAX_ERRORS
+
+  it "--max-errors 1 produces the singular `diagnostic` message form", :any ->
+    // Covers the `threshold > 1 ? 's' : ''` else arm.
+    @timeout 30000
+    inputFile := await makeCivetTempFile 'x: number := "wrong"\n'
+    { stdErr } := await captureProcess =>
+      await cli ['--typecheck', '--max-errors', '1', '--no-config', inputFile]
+    assert stdErr.includes("Within baseline of 1 TypeScript diagnostic;"),
+      "expected singular form; got: " + stdErr
+
+  it "rejects --max-errors with a missing value (end of argv)", ->
+    // Covers the `args[++i] ?? ''` fallback when --max-errors is the last
+    // argument with no value following.
+    { exitCode, stdErr } := await captureProcess =>
+      await cli ['--typecheck', '--max-errors']
+    assert exitCode? and exitCode > 0,
+      "missing --max-errors value should exit non-zero; got: " + exitCode
+    assert stdErr.includes("Invalid value for --max-errors"),
+      "expected the validation message; got: " + stdErr
+
+  it "--tsbuildinfo persists incremental analysis between runs", :any ->
+    @timeout 60000
+    isolated := path.join tmpDir, "tsbuildinfo-isolated"
+    await mkdir isolated, { recursive: true }
+    await writeFile path.join(isolated, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022'
+        module: 'ESNext'
+        moduleResolution: 'Bundler'
+        jsx: 'preserve'
+        allowJs: true
+        strict: true
+        noEmit: true
+      }
+      include: ['src']
+    })
+    await mkdir path.join(isolated, 'src'), { recursive: true }
+    await writeFile path.join(isolated, 'src/clean.civet'), 'x: number := 42\nconsole.log x\n'
+
+    cwd := process.cwd()
+    process.chdir isolated
+    try
+      buildInfoPath := path.join isolated, '.tsbuildinfo'
+      // Cold run — no cache, should write the file.
+      await captureProcess => await cli ['--typecheck', '--tsbuildinfo', '.tsbuildinfo', '--no-config']
+      const fs2 = await import 'node:fs/promises'
+      stat1 := await fs2.stat buildInfoPath
+      assert stat1.size > 0, "tsbuildinfo should be written on cold run"
+      // Warm run with no source change — same content (same hash).
+      await captureProcess => await cli ['--typecheck', '--tsbuildinfo', '.tsbuildinfo', '--no-config']
+      stat2 := await fs2.stat buildInfoPath
+      assert.equal stat2.size, stat1.size,
+        "tsbuildinfo should be identical between unchanged runs (size: " + stat2.size + " vs " + stat1.size + ")"
+    finally
+      process.chdir cwd
+
+  for argv of [['--typecheck', '--tsbuildinfo'], ['--typecheck', '--tsbuildinfo', '--no-config']]
+    it `rejects --tsbuildinfo when PATH is missing or another flag (${argv.slice(1).join(' ')})`, ->
+      { exitCode, stdErr } := await captureProcess =>
+        await cli argv
+      assert exitCode? and exitCode > 0, "should exit non-zero; got: " + exitCode
+      assert stdErr.includes("Missing PATH after --tsbuildinfo"),
+        "expected validation message; got: " + stdErr
+
+  it "rejects --max-errors with a non-numeric value", ->
+    // parseArgs accumulates `errors` and process.exit's on any parse error;
+    // captureProcess intercepts the exit so the test can observe it.
+    { exitCode, stdErr } := await captureProcess =>
+      await cli ['--typecheck', '--max-errors', 'oops', 'foo.civet']
+    assert exitCode? and exitCode > 0,
+      "non-numeric --max-errors should exit non-zero; got: " + exitCode
+    assert stdErr.includes("Invalid value for --max-errors"),
+      "expected the validation message; got: " + stdErr
+
   // Covers line 514: ts: if options.js then 'civet' else 'preserve'
   it "typechecks with --js (strips types) without errors", :any ->
     @timeout 30000

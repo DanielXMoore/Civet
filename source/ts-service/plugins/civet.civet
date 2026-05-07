@@ -1,0 +1,131 @@
+/**
+ * Civet transpiler plugin.  Defaults to the bundled @danielx/civet; the
+ * LSP server passes a project-discovered Civet + loaded civetconfig so
+ * the type-check pipeline matches the language-layer behavior the editor
+ * sees.
+ */
+
+{ type CompileOptions, type ParseError, lib as BundledCivetLib } from @danielx/civet
+BundledCivetModule from @danielx/civet
+BundledCivetPackage from @danielx/civet/package.json with type: 'json'
+
+{ type Extension } from typescript
+
+{ type Plugin, type SourceMap, type TranspileResult } from ../types.civet
+{ type Cache, makeCacheKey } from ../../cache.civet
+
+interface CivetTraversalLib
+  gatherRecursiveAll(ast: unknown, predicate: (node: unknown) => boolean): unknown[]
+
+interface CachedTranspile
+  code: string
+  lines?: SourceMap["lines"]
+  commentRanges?: { pos: number, length: number }[]
+
+export interface CivetPluginOptions
+  /** Override the Civet module.  Defaults to the bundled @danielx/civet. */
+  Civet?: typeof BundledCivetModule
+  /** Override the lib export (provides `gatherRecursiveAll`).  Defaults to the bundled lib. */
+  CivetLib?: CivetTraversalLib
+  /** Override the version string.  Used to detect Civet 0.9.4+ SourceMap API. */
+  CivetVersion?: string
+  /** Civet compile config (typically loaded from civetconfig.json or similar).  Defaults to {}. */
+  config?: CompileOptions
+  /**
+   * Optional cache for transpile results.  When supplied, successful compiles
+   * (errors-empty) are stored and reused for matching inputs.  Cache keys are
+   * derived from source, sourcePath, civet version, and the user's config.
+   */
+  cache?: Cache
+
+/**
+ * Build a Civet transpiler Plugin.  The returned plugin's transpiler is
+ * synchronous and forces `parseOptions.comptime: false` because the
+ * TypeScript LanguageService snapshot path is sync; comptime macro execution
+ * (which is async) belongs in the build/CLI compile pipeline, not this one.
+ */
+export function makeCivetPlugin(options: CivetPluginOptions = {}): Plugin
+  Civet := options.Civet ?? BundledCivetModule
+  CivetLib := options.CivetLib ?? BundledCivetLib
+  CivetVersion := options.CivetVersion ?? BundledCivetPackage.version
+  civetConfig := options.config ?? {}
+  cache := options.cache
+
+  function transpileCivet(p: string, source: string): TranspileResult
+    errors: ParseError[] := []
+    options: CompileOptions & { sync: true } := {}
+      ...civetConfig
+      filename: p
+      errors
+      sync: true
+      parseOptions: {}
+        ...civetConfig.parseOptions
+        comptime: false
+
+    // Civet 0.9.4 introduced `new SourceMap` API.  Older project Civets fall
+    // through to the legacy single-call compile path (uncached — rare).
+    [major, minor, patch] := CivetVersion.split(".").map(Number)
+    if major is 0 and (minor < 9 or minor is 9 and patch < 4)
+      result := Civet.compile source, { ...options, sourceMap: true }
+      return { ...result, errors }
+
+    cacheKey := if cache then makeCacheKey {
+      source
+      sourcePath: p
+      compilerName: 'civet'
+      compilerVersion: CivetVersion
+      options: civetConfig
+    } else undefined
+
+    if cacheKey
+      hit := cache!.get cacheKey
+      if hit
+        try
+          parsed := JSON.parse(hit) as CachedTranspile
+          result: TranspileResult := {
+            code: parsed.code
+            sourceMap: { lines: parsed.lines } as SourceMap
+            errors
+          }
+          result.commentRanges = parsed.commentRanges if parsed.commentRanges
+          return result
+        catch
+          // corrupt cache entry — fall through and recompile
+
+    // Re-use the single parse for both code generation and comment extraction.
+    options.ast = true
+    ast := Civet.compile source, options
+    sourceMap := new Civet.SourceMap source, p
+    code := Civet.generate ast, {}
+      ...options
+      sourceMap
+    commentRanges := collectCommentRanges(ast)
+
+    if cacheKey and errors.length is 0
+      /* c8 ignore next -- `?? .data?.lines` only fires for legacy Civet (<0.9.4) sourcemap shape; bundled Civet always exposes .lines directly */
+      lines := (sourceMap as SourceMap).lines ?? (sourceMap as SourceMap).data?.lines
+      cache!.set cacheKey, JSON.stringify { code, lines, commentRanges }
+
+    {
+      code
+      sourceMap
+      commentRanges
+      errors
+    }
+
+  /** Collect `$loc` ranges of every Comment node in the AST. */
+  function collectCommentRanges(ast: unknown)
+    comments := CivetLib.gatherRecursiveAll(ast, (node: any) =>
+      node?.type is "Comment" and node.$loc?.length > 0
+    ) as { $loc: { pos: number, length: number } }[]
+    comments.map (comment) => comment.$loc
+
+  {
+    transpilers: [{
+      extension: ".civet"
+      target: ".tsx" as Extension
+      compile: transpileCivet
+    }]
+  }
+
+export default makeCivetPlugin

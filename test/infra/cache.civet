@@ -1,0 +1,217 @@
+{ describe, it } from mocha
+assert from assert
+
+{
+  hashParts
+  stableStringify
+  makeCacheKey
+  createMemoryCache
+  createDiskCache
+} from "../../source/cache.civet"
+
+* as path from "node:path"
+* as fs from "node:fs"
+* as os from "node:os"
+
+describe "cache primitives", ->
+  it "hashParts produces stable SHA1 hex", ->
+    a := hashParts ["x", "y", "z"]
+    b := hashParts ["x", "y", "z"]
+    c := hashParts ["x", "y", "w"]
+    assert.equal a, b
+    assert.notEqual a, c
+    assert.match a, /^[0-9a-f]{40}$/
+
+  it "stableStringify sorts keys recursively and drops functions", ->
+    s := stableStringify { b: 1, a: 2, nested: { z: "last", a: "first", fn: => 1 } }
+    assert.equal s, '{"a":2,"b":1,"nested":{"a":"first","z":"last"}}'
+
+  it "stableStringify handles arrays and primitives", ->
+    assert.equal stableStringify([3, 2, 1]), "[3,2,1]"
+    assert.equal stableStringify("hi"), '"hi"'
+    assert.equal stableStringify(null), "null"
+
+  it "makeCacheKey is order-independent for options", ->
+    k1 := makeCacheKey {
+      source: "x"
+      sourcePath: "/abs/foo.civet"
+      compilerName: "civet"
+      compilerVersion: "1.0"
+      options: { sync: true, js: false }
+    }
+    k2 := makeCacheKey {
+      source: "x"
+      sourcePath: "/abs/foo.civet"
+      compilerName: "civet"
+      compilerVersion: "1.0"
+      options: { js: false, sync: true }
+    }
+    assert.equal k1, k2
+
+  it "makeCacheKey resolves relative paths to the same key", ->
+    k1 := makeCacheKey {
+      source: "x"
+      sourcePath: "src/foo.civet"
+      compilerName: "civet"
+      compilerVersion: "1.0"
+    }
+    k2 := makeCacheKey {
+      source: "x"
+      sourcePath: "./src/foo.civet"
+      compilerName: "civet"
+      compilerVersion: "1.0"
+    }
+    k3 := makeCacheKey {
+      source: "x"
+      sourcePath: "src/../src/foo.civet"
+      compilerName: "civet"
+      compilerVersion: "1.0"
+    }
+    assert.equal k1, k2
+    assert.equal k1, k3
+
+  it "makeCacheKey changes when sourcePath changes (rename invalidates)", ->
+    a := makeCacheKey {
+      source: "same"
+      sourcePath: "/a/foo.civet"
+      compilerName: "civet"
+      compilerVersion: "1.0"
+    }
+    b := makeCacheKey {
+      source: "same"
+      sourcePath: "/a/bar.civet"
+      compilerName: "civet"
+      compilerVersion: "1.0"
+    }
+    assert.notEqual a, b
+
+  it "makeCacheKey distinguishes compiler families and versions", ->
+    base :=
+      source: "x"
+      sourcePath: "/a/foo"
+      options: {}
+    civet := makeCacheKey { ...base, compilerName: "civet", compilerVersion: "1.0" }
+    hera := makeCacheKey { ...base, compilerName: "hera", compilerVersion: "1.0" }
+    civet2 := makeCacheKey { ...base, compilerName: "civet", compilerVersion: "2.0" }
+    assert.notEqual civet, hera
+    assert.notEqual civet, civet2
+
+  it "createMemoryCache get/set roundtrips", ->
+    c := createMemoryCache()
+    assert.equal c.get("missing"), undefined
+    c.set "k", "v"
+    assert.equal c.get("k"), "v"
+
+  it "createDiskCache persists writes and reads after construction", ->
+    dir := fs.mkdtempSync path.join(os.tmpdir(), "civet-cache-test-")
+    try
+      c := createDiskCache dir
+      assert.equal c.get("missing"), undefined
+      c.set "k", "v"
+      assert.equal c.get("k"), "v"
+      // Second instance reads the same directory
+      c2 := createDiskCache dir
+      assert.equal c2.get("k"), "v"
+    finally
+      fs.rmSync dir, recursive: true, force: true
+
+  it "createDiskCache bumps mtime on get (for LRU culling)", ->
+    dir := fs.mkdtempSync path.join(os.tmpdir(), "civet-cache-touch-")
+    try
+      c := createDiskCache dir
+      c.set "k", "v"
+      target := path.join dir, "k"
+      // Backdate the entry so the touch on get() advances mtime by a
+      // measurable amount even on coarse-resolution filesystems
+      old := new Date Date.now() - 60_000
+      fs.utimesSync target, old, old
+      before := fs.statSync(target).mtimeMs
+      c.get "k"
+      after := fs.statSync(target).mtimeMs
+      assert after > before, `expected mtime advance after get; before=${before} after=${after}`
+    finally
+      fs.rmSync dir, recursive: true, force: true
+
+{ makeCivetPlugin, makeHeraPlugin } from "../../source/ts-service/index.civet"
+
+// Spy cache that records all get/set calls and delegates to a memory map
+function spyCache()
+  store: Map<string, string> := new Map
+  gets: string[] := []
+  sets: string[] := []
+  cache := {
+    get(key: string)
+      gets.push key
+      store.get key
+    set(key: string, value: string)
+      sets.push key
+      store.set key, value
+      return
+  }
+  { cache, gets, sets, store }
+
+describe "makeCivetPlugin cache option", ->
+  source := "x := 5\n"
+  filename := "/abs/sample.civet"
+
+  it "stores transpile result on first compile and serves it on second", ->
+    { cache, gets, sets } := spyCache()
+    plugin := makeCivetPlugin { cache }
+    transpiler := plugin.transpilers![0]
+
+    first := transpiler.compile filename, source
+    assert first
+    assert.equal sets.length, 1, "first compile should write one cache entry"
+    assert.equal gets.length, 1, "first compile should attempt one read (the miss)"
+
+    second := transpiler.compile filename, source
+    assert second
+    assert.equal sets.length, 1, "second compile should NOT write again"
+    assert.equal gets.length, 2, "second compile should read once (the hit)"
+    // Reconstructed result has same code and a sourceMap with the cached lines
+    assert.equal (second as { code: string }).code, (first as { code: string }).code
+
+  it "different sourcePath produces a different cache slot", ->
+    { cache, sets } := spyCache()
+    plugin := makeCivetPlugin { cache }
+    transpiler := plugin.transpilers![0]
+
+    transpiler.compile "/abs/a.civet", source
+    transpiler.compile "/abs/b.civet", source
+    assert.equal sets.length, 2, "distinct source paths must not share a cache slot"
+
+  it "ignores corrupted cache entries and recompiles cleanly", ->
+    { cache, store, sets } := spyCache()
+    plugin := makeCivetPlugin { cache }
+    transpiler := plugin.transpilers![0]
+
+    // Seed the cache with garbage at every plausible key the plugin might use
+    // (we don't import makeCacheKey here — just blast the store with junk that
+    // happens to live at whatever key transpileCivet computes)
+    transpiler.compile filename, source
+    cachedKey := Array.from(store.keys())[0]
+    store.set cachedKey, "{not valid json"
+
+    // Should not throw; should recompile and overwrite
+    result := transpiler.compile filename, source
+    assert result
+    assert.notEqual store.get(cachedKey), "{not valid json"
+    assert sets.length >= 2
+
+describe "makeHeraPlugin cache option", ->
+  // Trivial Hera grammar that emits a constant
+  heraSource := "Start = 'a' { -> 'matched-a' }\n"
+  filename := "/abs/sample.hera"
+
+  it "caches successful Hera compiles", ->
+    { cache, gets, sets } := spyCache()
+    plugin := makeHeraPlugin { cache }
+    transpiler := plugin.transpilers![0]
+
+    first := transpiler.compile filename, heraSource
+    assert first, "first compile should succeed"
+
+    setsAfterFirst := sets.length
+    transpiler.compile filename, heraSource
+    assert.equal sets.length, setsAfterFirst, "second compile should hit cache, not write"
+    assert gets.length >= 2, "should have attempted reads on both compiles"

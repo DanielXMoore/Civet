@@ -1,0 +1,116 @@
+/**
+ * Shared tsconfig parsing for the LanguageService (TSService) and the
+ * incremental typecheck pipelines.  Both need to widen TS's include
+ * walk to discover `.civet` / `.hera` files and rewrite matches to their
+ * synthetic `.tsx` siblings, parse the tsconfig, and apply the same
+ * Civet-aware compiler defaults — kept in one place here.
+ */
+
+ts from typescript
+path from path
+
+{ type Plugin, type Transpiler } from ./types.civet
+{ getExtensionFromPath } from ./path.civet
+
+/** Build a Map of source-extension → Transpiler from a plugin list. */
+export function buildTranspilers(plugins: readonly Plugin[]): Map<string, Transpiler>
+  m: Map<string, Transpiler> := new Map
+  for plugin of plugins
+    plugin.transpilers?.forEach (t) =>
+      m.set t.extension, t
+  m
+
+/**
+ * Rewrite transpilable extensions inside a `package.json#imports` map
+ * to their synthetic `.tsx` siblings.  TS resolves `imports` inside
+ * `ts.resolveModuleName` before any host-level module redirect runs,
+ * so consumers wire this in at `readFile` instead.
+ */
+export function mogrifyPackageJsonImports(
+  contents: string
+  transpilers: Map<string, Transpiler>
+): string
+  /* c8 ignore start -- defensive: package.json is JSON by spec; if a project
+     ships a malformed one we'd rather pass it through than crash module
+     resolution */
+  let parsed: Record<string, unknown>
+  try
+    parsed = JSON.parse contents
+  catch
+    return contents
+  /* c8 ignore stop */
+  return contents unless parsed.imports? <? "object"
+  let modified = false
+  function recurse(node: unknown): void
+    return unless node? <? "object"
+    obj := node as Record<string, unknown>
+    for key in obj
+      value := obj[key]
+      if value <? "string"
+        ext := getExtensionFromPath value
+        if t? := transpilers.get(ext)
+          obj[key] = value + t.target
+          modified = true
+      else if value
+        recurse value
+  recurse parsed.imports
+  if modified then JSON.stringify parsed else contents
+
+export interface ParseTsConfigOptions
+  /** Pre-loaded tsconfig JSON (skips reading `<projectPath>/tsconfig.json`). */
+  tsConfig?: any
+  /**
+   * When true (default), `readDirectory` is widened so the include
+   * filter discovers each transpiler's source extension and reports it
+   * as the synthetic `<src>.<target>` sibling.  Set false for consumers
+   * that drive the file set themselves (bundler `load()` hooks).
+   */
+  widenIncludeFilter?: boolean
+
+/**
+ * Parse `<projectPath>/tsconfig.json` (or the inline `tsConfig`),
+ * applying Civet-aware defaults (`allowNonTsExtensions`, JSX preserve).
+ * The returned `parsed.fileNames` reflects the widened include walk
+ * when `widenIncludeFilter` is on.
+ */
+export function parseTsConfigForCivet(
+  projectPath: string
+  transpilers: Map<string, Transpiler>
+  options: ParseTsConfigOptions = {}
+): ts.ParsedCommandLine
+  widen := options.widenIncludeFilter ?? true
+  extraExtensions := Array.from transpilers.keys()
+
+  configSys := if widen and extraExtensions.length > 0 then {
+    ...ts.sys
+    readDirectory: (
+      p: string
+      extensions?: readonly string[]
+      excludes?: readonly string[]
+      includes?: readonly string[]
+      depth?: number
+    ): string[] ->
+      /* c8 ignore next -- TS always supplies extensions */
+      exts := extensions ? [...extensions, ...extraExtensions] : undefined
+      ts.sys.readDirectory(p, exts, excludes, includes, depth).map (f) =>
+        for ext of extraExtensions
+          if f.endsWith(ext)
+            t := transpilers.get(ext)
+            return f + t.target if t
+        f
+  } else ts.sys
+
+  tsConfigPath := path.join projectPath, "tsconfig.json"
+  config := options.tsConfig ?? ts.readConfigFile(tsConfigPath, ts.sys.readFile).config
+  ts.parseJsonConfigFileContent(
+    config
+    configSys
+    projectPath
+    {
+      rootDir: projectPath
+      allowNonTsExtensions: true
+      jsx: ts.JsxEmit.Preserve
+    }
+    tsConfigPath
+    undefined
+  )
