@@ -12,6 +12,7 @@ import type {
   BreakStatement
   CallExpression
   Children
+  ClassExpression
   Declaration
   ForStatement
   FunctionNode
@@ -83,6 +84,7 @@ import {
   isFunction
   isLoopStatement
   isStatement
+  isToken
   isWhitespaceOrEmpty
   makeLeftHandSideExpression
   makeNode
@@ -384,10 +386,12 @@ function patternBindings(pattern: ASTNodeObject): BindingIdentifier[]
 // Ensure an `abstract class` expression has a name, generating a ref if it
 // doesn't, so it can be emitted as a class declaration. Returns the
 // identifier/ref to use for referring to the class afterwards.
-function nameAbstractClass(exp: ASTNodeObject): ASTNode
-  return exp.name if exp.name
+function nameAbstractClass(exp: ClassExpression): ASTNode
+  // ClassExpression `id` includes any leading whitespace from the source;
+  // strip it so `wrapWithReturn`'s `"return "` prefix doesn't double up.
+  return trimFirstSpace(exp.id) if exp.id
   ref := makeRef "Class"
-  classKwIdx := exp.children.findIndex &?.token is "class"
+  classKwIdx := exp.children.findIndex (c) => isToken(c) and c.token is "class"
   assert.notEqual classKwIdx, -1, "Could not find class keyword in ClassExpression children"
   exp.children.splice classKwIdx+1, 0, " ", ref
   return ref
@@ -419,7 +423,7 @@ function assignResults(node: StatementTuple[] | ASTNode, collect: (node: ASTNode
   return if isExit exp
 
   exp = exp as ASTNodeObject
-  outer .= exp
+  outer := exp
   if exp.type is "LabelledStatement"
     exp = exp.statement
 
@@ -428,11 +432,9 @@ function assignResults(node: StatementTuple[] | ASTNode, collect: (node: ASTNode
   if exp.type is "ParenthesizedExpression" and
      exp.expression?.type is "ClassExpression" and
      exp.expression.abstract
-    inner := exp.expression as ASTNodeObject
-    inner.parent = outer.parent
-    if outer is exp
-      node[1] = inner
-      outer = inner
+    inner := exp.expression
+    inner.parent = exp.parent
+    node[1] = inner if outer is exp
     exp = inner
 
   switch exp.type
@@ -562,7 +564,7 @@ function insertReturn(node: ASTNode): void
   return if semi?.type is "SemicolonDelimiter"
   assert exp, "insertReturn: statement tuple missing expression"
 
-  outer .= exp
+  outer := exp
   if exp.type is "LabelledStatement"
     exp = exp.statement
 
@@ -571,11 +573,9 @@ function insertReturn(node: ASTNode): void
   if exp.type is "ParenthesizedExpression" and
      exp.expression?.type is "ClassExpression" and
      exp.expression.abstract
-    inner := exp.expression as ASTNodeObject
-    inner.parent = outer.parent
-    if outer is exp
-      node[1] = inner
-      outer = inner
+    inner := exp.expression
+    inner.parent = exp.parent
+    node[1] = inner if outer is exp
     exp = inner
 
   switch exp.type
@@ -620,14 +620,17 @@ function insertReturn(node: ASTNode): void
       // `abstract class` is only valid as a declaration in TS, not an expression,
       // so emit it as a declaration followed by `return ClassName`
       if exp.abstract
-        parent := outer.parent as BlockStatement?
-        index := findChildIndex parent?.expressions, outer
+        parent := exp.parent as BlockStatement?
+        assert parent, "ClassExpression has no parent"
+        // exp may have been unwrapped from a ParenthesizedExpression above,
+        // so search by tuple-position rather than by `outer` reference.
+        index := parent.expressions.findIndex (t) => t[1] is exp
         assert.notEqual index, -1, "Could not find class declaration in parent"
         returnId := nameAbstractClass exp
-        parent!.expressions.splice index+1, 0, ["",
+        parent.expressions.splice index+1, 0, ["",
           wrapWithReturn returnId, exp, true
         ]
-        braceBlock parent!
+        braceBlock parent
         return
       break
     when "ForStatement", "IterationStatement", "DoStatement", "ComptimeStatement"
