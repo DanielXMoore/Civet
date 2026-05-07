@@ -17,7 +17,7 @@ suite 'TSConfig Reload', =>
     await vscode.workspace.fs.writeFile tsConfigUri, encoder.encode originalContent
 
   test 'Re-sends diagnostics and applies new tsconfig settings after change', ->
-    @timeout 120000
+    @timeout 30000
     // unused-local.civet has `x := 42`.  TS's IDE flow always emits a
     // Hint-severity TS6133 marker for `x` regardless of tsconfig; only an
     // Error-severity diagnostic indicates that the post-reload tsconfig
@@ -33,42 +33,86 @@ suite 'TSConfig Reload', =>
       if ds.length is 0 then '[]'
       else ds.map((d) => `sev=${d.severity}: ${d.message}`).join ' | '
 
-    // Wait until the initial diagnostic pass has settled (no Error-severity
-    // entries yet — Hint-only is the expected pre-reload state).
-    await poll(
-      () => Promise.resolve vscode.languages.getDiagnostics docUri
-      (ds) => not ds.some isError
-      30000
-      250
-      formatDiags
-    )
+    // DEBUG (remove once CI flakiness is understood): an independent
+    // file-system watcher in the test process tells us whether VS Code itself
+    // observed the tsconfig change.  Combined with the poll's last-value dump,
+    // this disambiguates failure layers:
+    //   - Test watcher fires + LSP doesn't republish → LSP-side issue
+    //     (URI casing, project-path mismatch, no-op detection misfire, …)
+    //   - Test watcher doesn't fire either → VS Code/OS-level issue
+    //     (first-event missed, write suppressed, watch glob mismatch, …)
+    t0 := Date.now()
+    watcherEvents: { kind: string, fsPath: string, t: number }[] := []
+    diagEvents: { uri: string, count: number, sevs: number[], t: number }[] := []
+    fsWatcher := vscode.workspace.createFileSystemWatcher '**/tsconfig.json'
+    record := (kind: string) => (uri: vscode.Uri) =>
+      watcherEvents.push { kind, fsPath: uri.fsPath, t: Date.now() - t0 }
+    diagSub := vscode.languages.onDidChangeDiagnostics (e) =>
+      for u of e.uris
+        ds := vscode.languages.getDiagnostics u
+        diagEvents.push {
+          uri: u.fsPath
+          count: ds.length
+          sevs: ds.map (d) => d.severity
+          t: Date.now() - t0
+        }
+    subs := [
+      fsWatcher.onDidCreate record 'create'
+      fsWatcher.onDidChange record 'change'
+      fsWatcher.onDidDelete record 'delete'
+      diagSub
+    ]
 
-    // Modify tsconfig to enable noUnusedLocals.  vscode.workspace.fs routes
-    // the change through VS Code's own watcher infrastructure, which fires
-    // didChangeWatchedFiles more reliably on Windows than raw node:fs.
-    parsed := JSON.parse originalContent
-    parsed.compilerOptions.noUnusedLocals = true
-    await vscode.workspace.fs.writeFile(
-      tsConfigUri
-      encoder.encode JSON.stringify(parsed, null, 2)
-    )
+    try
+      // Wait until the initial diagnostic pass has settled (no Error-severity
+      // entries yet — Hint-only is the expected pre-reload state).
+      await poll(
+        () => Promise.resolve vscode.languages.getDiagnostics docUri
+        (ds) => not ds.some isError
+        5000
+        250
+        formatDiags
+      )
 
-    // Poll for the substantive condition: an Error-severity diagnostic
-    // about `x`.  Polling rather than a one-shot onDidChangeDiagnostics
-    // listener is robust to:
-    //   - File-watcher attachment latency on Windows (no fixed warm-up needed)
-    //   - Stale empty/Hint-only publishes that would resolve a single-shot
-    //     listener early on a publish unrelated to the reload
-    //   - GHA Windows runner throughput jitter (poll until timeout)
-    //   - A late OLD-service publish overwriting NEW: any subsequent NEW
-    //     publish still satisfies the predicate
-    diagnostics := await poll(
-      () => Promise.resolve vscode.languages.getDiagnostics docUri
-      (ds) => ds.some isErrorAboutX
-      90000
-      500
-      formatDiags
-    )
+      // Modify tsconfig to enable noUnusedLocals.
+      parsed := JSON.parse originalContent
+      parsed.compilerOptions.noUnusedLocals = true
+      writeStart := Date.now() - t0
+      await vscode.workspace.fs.writeFile(
+        tsConfigUri
+        encoder.encode JSON.stringify(parsed, null, 2)
+      )
+      writeDone := Date.now() - t0
+      console.error `[tsconfig-reload] write started=${writeStart}ms done=${writeDone}ms`
 
-    assert diagnostics.some(isErrorAboutX),
-      `Expected an Error diagnostic about 'x'; got: ${formatDiags diagnostics}`
+      // Poll for the substantive condition: an Error-severity diagnostic
+      // about `x`.  Polling tolerates stale Hint-only publishes, file-watcher
+      // latency, and a transient OLD-service publish overwriting NEW.
+      diagnostics := await poll(
+        () => Promise.resolve vscode.languages.getDiagnostics docUri
+        (ds) => ds.some isErrorAboutX
+        10000
+        250
+        formatDiags
+      )
+
+      assert diagnostics.some(isErrorAboutX),
+        `Expected an Error diagnostic about 'x'; got: ${formatDiags diagnostics}`
+    catch e
+      console.error `[tsconfig-reload] FAILURE diagnostic dump:`
+      console.error `  expected docUri:    ${docUri.toString()}  (fsPath=${docUri.fsPath})`
+      console.error `  expected tsconfig:  ${tsConfigUri.toString()}  (fsPath=${tsConfigUri.fsPath})`
+      console.error `  test-side fs watcher events (${watcherEvents.length}):`
+      for ev of watcherEvents
+        console.error `    t=${ev.t}ms ${ev.kind} fsPath=${ev.fsPath}`
+      console.error `  diagnostic-changed events (${diagEvents.length}):`
+      for ev of diagEvents
+        console.error `    t=${ev.t}ms uri=${ev.uri} count=${ev.count} sevs=${ev.sevs.join ','}`
+      console.error `  open documents:`
+      for d of vscode.workspace.textDocuments
+        console.error `    ${d.uri.toString()}  (fsPath=${d.uri.fsPath})`
+      throw e
+    finally
+      for s of subs
+        s.dispose()
+      fsWatcher.dispose()
