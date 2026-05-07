@@ -514,8 +514,15 @@ connection.onCompletionResolve (item) =>
           changeDoc = changeMeta.transpiledDoc
           changeSourcemapLines = changeMeta.sourcemapLines
         else
-          // Non-transpiled file
-          changeDoc = documents.get(URI.file(changeFileName).toString())
+          // Non-transpiled file.  `changeFileName` is already canonical
+          // (lowercased on Windows); search documents by canonical path so
+          // the lookup succeeds even when VS Code's didOpen URI preserved
+          // mixed case (`URI.file(changeFileName).toString()` would yield a
+          // lowercased URI string that misses the original-case Map key).
+          for d of documents.all()
+            if getCanonicalFileName(documentToSourcePath(d)) is changeFileName
+              changeDoc = d
+              break
       /* c8 ignore stop */
       continue unless changeDoc
       for tc of change.textChanges
@@ -987,6 +994,17 @@ updateProjectDiagnostics := (
   // A single, short delay before starting the update for a project.
   await setTimeout(diagnosticsPropagationDelay)
 
+  // Build a canonical-path → open-doc lookup table.  Naïvely passing the
+  // URI we construct from `service.getSourceFileName(sourceFile.fileName)`
+  // to `documents.get(...)` misses on case-insensitive file systems: TS
+  // canonicalises `sourceFile.fileName` to lowercase, but the documents Map
+  // is keyed by VS Code's original-case URI from textDocument/didOpen.
+  // Going through `getCanonicalFileName` on both sides lets the lookup
+  // succeed regardless of FS case sensitivity.
+  canonicalToDoc := new Map<string, TextDocument>()
+  for d of documents.all()
+    canonicalToDoc.set getCanonicalFileName(documentToSourcePath(d)), d
+
   projectFiles := program.getSourceFiles()
   for sourceFile of projectFiles
     return if status.isCanceled
@@ -994,8 +1012,7 @@ updateProjectDiagnostics := (
     // We only need to send diagnostics for files the user has open
     // TypeScript is analyzing all files in memory anyway
     rawFileName := service.getSourceFileName(sourceFile.fileName)
-    docUri := URI.file(rawFileName).toString()
-    doc := documents.get(docUri)
+    doc := canonicalToDoc.get getCanonicalFileName(rawFileName)
     if doc
       await updateDiagnosticsForDoc(doc, service)
 
