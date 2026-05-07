@@ -63,14 +63,17 @@ Template literals and other computed specifiers are left unchanged.
 
 ## ECMAScript Compatibility
 
-Eventually, we plan a `jsCompat` compatibility flag to modify Civet to be
-closer to pure ECMAScript, removing the
-[few places where Civet is not a superset of ECMAScript](comparison).
-For now, we have the following related options:
+The `esCompat` compatibility flag modifies Civet to be
+closer to pure ECMAScript, removing some
+[places where Civet is not a superset of ECMAScript](comparison).
+Like `coffeeCompat`, this is useful for gradually converting an existing codebase.
+You can also turn on/off individual compatibility features.
 
 | Configuration       | What it enables |
 |---------------------|---------------------------------------|
-| [`-implicit-returns`](reference#no-implicit-returns) | turn off implicit return of last value in functions |
+| [`esCompat`](reference#ecmascript-compatibility) | enable all of the following ECMAScript compatibility flags |
+| [`esArrowFunction`](reference#single-argument-arrow-functions) | `x => x+1` as shorthand for `(x) => x+1`; does not affect `->` |
+| [`-implicit-returns`](reference#no-implicit-returns) | turn off implicit return of last value in functions, except in one-line `=>` |
 
 ## CoffeeScript Compatibility
 

@@ -3,6 +3,7 @@ import generate, { prune } from ./generate.civet
 import * as lib from ./parser/lib.civet
 import * as sourcemap from ./sourcemap.civet
 import { SourceMap, smRegexp, type SourceMapJSON } from ./sourcemap.civet
+import { dirname, relative as relativePath } from node:path
 export { parse, parseProgram, ParseError, generate, prune, lib, sourcemap, SourceMap }
 import type { BlockStatement } from ./parser/types.civet
 export type { ASTError, BlockStatement } from ./parser/types.civet
@@ -91,6 +92,8 @@ export type CompilerOptions
     coffeeCompat?: boolean
     comptime?: boolean
     globals?: string[]
+    esArrowFunction?: boolean
+    esCompat?: boolean
     operators?: string[] | Record<string, string>
     symbols?: string[]
   /** Specifying an empty array will prevent ParseErrors from being thrown */
@@ -108,8 +111,8 @@ let workerPool: WorkerPool?
 /** Decode raw Buffers while checking for Unicode BOM */
 export function decode(src: string | Buffer): string
   return src if src <? "string"
+  // Browser build: Buffer is undefined so return src unchanged
   return src if Buffer <? "undefined"
-  return src unless Buffer?.isBuffer src
   if src[0] is 0xEF and src[1] is 0xBB and src[2] is 0xBF // UTF-8
     src.toString 'utf8', 3
   else if src[0] is 0xFF and src[1] is 0xFE // UTF-16 LE BOM
@@ -219,21 +222,33 @@ export function compile<const T extends CompilerOptions>(src: string | Buffer, o
         throw new ParseErrors options.errors
 
     if options.sourceMap or options.inlineMap
-      //@ts-ignore sourceMap option for generate
-      options.sourceMap = new SourceMap src, filename
+      sourceMap := new SourceMap src, filename
+      //@ts-ignore assigning SourceMap to options.sourceMap (declared as boolean)
+      options.sourceMap = sourceMap
       code := generate ast, options
       checkErrors()
 
       // Compose with upstream sourcemap if provided via options or stripped from inline comment
       if options.upstreamSourceMap?
-        options.sourceMap.composeUpstream options.upstreamSourceMap
+        sourceMap.composeUpstream options.upstreamSourceMap
 
       if options.inlineMap
         outputFilename := options.outputFilename ??
           (options.js ? filename + '.jsx' : filename + '.tsx')
-        return `${code}\n${options.sourceMap.comment outputFilename}`
+        // Per source map v3 spec, `file` and `sources` are resolved
+        // relative to the directory containing the map (i.e., the output
+        // file's directory), not the CWD.  See issue #1959.
+        outDir := dirname outputFilename
+        /* c8 ignore start — `or` fallbacks fire only when path.relative()
+           returns '' (source path equals outDir); unreachable in normal builds
+           but preserved for edge cases like the filesystem root. */
+        sourceMap.sourceFileName =
+          relativePath(outDir, sourceMap.sourceFileName) or sourceMap.sourceFileName
+        relativeOut := relativePath(outDir, outputFilename) or outputFilename
+        /* c8 ignore stop */
+        return `${code}\n${sourceMap.comment relativeOut}`
       else
-        return { code, options.sourceMap }
+        return { code, sourceMap }
 
     result := generate ast, options
 
@@ -329,6 +344,7 @@ makeCache := ({hits, trace}: CacheOptions = {}): CacheEvents ->
       stateCache.set(key, result)
 
       //@ts-ignore
+      /* c8 ignore next 2 -- verbose mode requires parser-internal config; not exposed via compile options */
       if getConfig().verbose and result
         console.log `Parsed ${JSON.stringify state.input[state.pos...result.pos]} [pos ${state.pos}-${result.pos}] as ${ruleName}`//, JSON.stringify(result.value)
 

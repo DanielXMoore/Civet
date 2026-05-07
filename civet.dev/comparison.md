@@ -25,7 +25,7 @@ parentheses; otherwise, it gets treated like an implicit function call.
 x => x + 1
 </Playground>
 
-The advantage of this approach is that zero-argument functions do not need `()`
+The advantage of this approach is that zero-parameter functions do not need `()`
 to indicate arguments:
 
 <Playground>

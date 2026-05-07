@@ -4,7 +4,7 @@ Civet
 [![Build Status](https://img.shields.io/github/actions/workflow/status/DanielXMoore/Civet/build.yml?branch=main&logo=github&style=for-the-badge)](https://github.com/DanielXMoore/Civet/actions/workflows/build.yml)
 [![NPM Version](https://img.shields.io/npm/v/@danielx/civet.svg?style=for-the-badge)](https://www.npmjs.com/package/@danielx/civet)
 [![NPM Downloads](https://img.shields.io/npm/dm/@danielx/civet.svg?style=for-the-badge)](https://www.npmjs.com/package/@danielx/civet)
-[![Coverage Status](https://img.shields.io/coverallsCoverage/github/DanielXMoore/Civet?style=for-the-badge)](https://coveralls.io/github/DanielXMoore/Civet?branch=main)
+[![Coverage Status](https://img.shields.io/codecov/c/github/DanielXMoore/Civet/main?style=for-the-badge&logo=codecov)](https://codecov.io/gh/DanielXMoore/Civet)
 [![Discord](https://img.shields.io/discord/933472021310996512?style=for-the-badge)](https://discord.com/invite/xkrW9GebBc)
 [![Open Collective](https://img.shields.io/opencollective/all/civet?style=for-the-badge)](https://opencollective.com/civet)
 
@@ -18,10 +18,6 @@ The modern way to write TypeScript.
 - [Discord Server](https://discord.gg/xkrW9GebBc)
 - Plugins for
   [Vite, esbuild, Astro, Farm, Rolldown, Rollup, Webpack](source/unplugin),
-  <!--
-  [esbuild](source/esbuild-plugin.civet),
-  [Vite](https://github.com/edemaine/vite-plugin-civet),
-  -->
   [ESM/CJS loader](source/esm.civet),
   [Babel](source/babel-plugin.civet),
   [Jest](https://github.com/DanielXMoore/Civet/blob/main/integration/jest),
@@ -328,12 +324,12 @@ I strongly recommend using [esbuild](https://esbuild.github.io/) for building / 
 
 ```javascript
 import esbuild from 'esbuild'
-import civetPlugin from '@danielx/civet/esbuild-plugin'
+import civetPlugin from '@danielx/civet/esbuild'
 
 esbuild.build({
   ...,
   plugins: [
-    civetPlugin
+    civetPlugin({ ts: 'preserve' })
   ]
 }).catch(() => process.exit(1))
 ```

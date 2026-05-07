@@ -2,6 +2,7 @@
 assert from assert
 
 { SourceMap, base64Encode, decodeVLQ } from ../source/sourcemap.civet
+{ remapPosition } from ../source/ts-diagnostic.civet
 { transform } from esbuild
 
 describe "source map", ->
@@ -36,6 +37,22 @@ describe "source map", ->
     assert.ok match
     json := SourceMap.parseWithLines match[1]
     assert.equal json.file, "output.ts"
+
+  it "inline source map paths are relative to output directory (#1959)", ->
+    // Per source map v3 spec, `file` and `sources` should be relative to
+    // the directory containing the map (i.e., the output file's dir),
+    // not relative to the CWD.
+    src := "x := 1\n"
+    output := await compile src,
+      inlineMap: true
+      filename: "src/lib/text-table.lib.civet"
+      outputFilename: "src/lib/text-table.lib.ts"
+
+    match := output.match /sourceMappingURL=data:application\/json;base64,([+a-zA-Z0-9\/]*=?=?)/
+    assert.ok match
+    json := SourceMap.parseWithLines match[1]
+    assert.equal json.file, "text-table.lib.ts"
+    assert.deepEqual json.sources, ["text-table.lib.civet"]
 
   describe "decodeVLQ error cases", ->
     it "should throw error for unexpected early end of mapping data", ->
@@ -175,6 +192,56 @@ describe "source map", ->
 
       assertShiftedSourceMap srcMapJSON, sourceMap.lines
 
+    it "preserves downstream column offsets when upstream mappings only mark line starts", ->
+      civetSource := "x := y + 1"
+
+      { sourceMap: rawSourceMap } := await compile civetSource,
+        sourceMap: true
+        filename: "input.civet"
+
+      lineStartUpstreamMapJSON :=
+        version: 3
+        file: "input.civet"
+        sources: [originalFilename]
+        mappings: "AACE"
+        names: []
+        sourcesContent: ["\n  x := y + 1"]
+
+      { sourceMap } := await compile civetSource,
+        sourceMap: true
+        filename: "input.civet"
+        upstreamSourceMap: lineStartUpstreamMapJSON
+
+      srcMapJSON := sourceMap.json "input.ts"
+      rawEntries := rawSourceMap.lines[0].filter (entry) => entry.length is 4
+      mappedEntries := sourceMap.lines[0].filter (entry) => entry.length is 4
+
+      assert.equal srcMapJSON.sources[0], originalFilename
+      assert.deepEqual mappedEntries,
+        rawEntries.map ([colDelta, sourceFileIndex, srcLine, srcCol]) =>
+          [colDelta, sourceFileIndex, srcLine + 1, srcCol + 2]
+
+    it "does not backfill columns before the first upstream mapping on a line", ->
+      upstreamLines := [
+        [
+          [6]
+          [92, 0, 252, 8]
+        ]
+      ]
+      downstreamLines := [
+        [
+          [20, 0, 0, 28]
+          [80, 0, 0, 108]
+        ]
+      ]
+
+      assert.deepEqual SourceMap.composeLines(upstreamLines, downstreamLines), [
+        [
+          [20]
+          [80, 0, 252, 18]
+        ]
+      ]
+
   describe "SourceMap.remap", ->
     it "should compose source maps through civet -> ts -> js pipeline", ->
       civetSource := """
@@ -197,3 +264,153 @@ describe "source map", ->
         const x = 5;
         //# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoidGVzdC5qcyIsInNvdXJjZXMiOlsidGVzdC5jaXZldCJdLCJtYXBwaW5ncyI6IkFBQVMsTUFBVCxJQUFhOyIsIm5hbWVzIjpbXSwic291cmNlc0NvbnRlbnQiOlsieDogbnVtYmVyIDo9IDUiXX0=
       """
+
+  describe "@ shorthand remapping", ->
+    it "should remap generated this.name to within source line bounds", ->
+      src := """
+        class Greeter
+          name: string
+          @(@name)
+
+          greet()
+            `Hello, ${@name}!`
+
+      """
+
+      {code, sourceMap} := await compile src,
+        js: true
+        sourceMap: true
+        filename: "test.civet"
+
+      srcLines := src.split('\n')
+      outLines := code.split('\n')
+
+      // Walk every mapped segment and verify source positions are in bounds
+      for smLine, lineIdx of sourceMap.lines
+        continue unless smLine
+        for seg of smLine
+          continue unless seg.length is 4
+          srcLine := seg[2]
+          srcCol := seg[3]
+          assert srcLine < srcLines.length,
+            `Mapped source line ${srcLine} out of bounds (${srcLines.length} lines)`
+          assert srcCol <= srcLines[srcLine].length,
+            `Mapped source col ${srcCol} out of bounds on line ${srcLine} (${srcLines[srcLine].length} chars): ${JSON.stringify srcLines[srcLine]}`
+
+    it "should remap positions through remapPosition to within source line bounds", ->
+      src := """
+        class Greeter
+          name: string
+          @(@name)
+
+          greet()
+            `Hello, ${@name}!`
+
+      """
+
+      {code, sourceMap} := await compile src,
+        js: true
+        sourceMap: true
+        filename: "test.civet"
+
+      srcLines := src.split('\n')
+      outLines := code.split('\n')
+
+      // For every character in the output, remapPosition should land within source bounds
+      for outLine, lineIdx of outLines
+        for charIdx of [0...outLine.length]
+          pos := remapPosition({line: lineIdx, character: charIdx}, sourceMap.lines)
+          continue unless pos.line < srcLines.length
+          assert pos.character <= srcLines[pos.line].length,
+            `remap(${lineIdx}:${charIdx}) = (${pos.line}:${pos.character}) but source line ${pos.line} is only ${srcLines[pos.line].length} chars: ${JSON.stringify srcLines[pos.line]}`
+
+    it "should not produce negative character positions for import expansions", ->
+      src := """
+        { foo } from ./bar
+
+      """
+
+      {code, sourceMap} := await compile src,
+        sourceMap: true
+        filename: "test.civet"
+
+      srcLines := src.split('\n')
+      outLines := code.split('\n')
+
+      // import adds a prefix; positions in the expanded region must not go negative
+      for outLine, lineIdx of outLines
+        for charIdx of [0...outLine.length]
+          pos := remapPosition({line: lineIdx, character: charIdx}, sourceMap.lines)
+          assert pos.character >= 0,
+            `remap(${lineIdx}:${charIdx}) = (${pos.line}:${pos.character}) has negative character; TS line: ${JSON.stringify outLines[lineIdx]}, src line: ${JSON.stringify srcLines[pos.line]}`
+
+  describe "composeLines edge cases", ->
+    it "passes through length-1 (unmapped) downstream entries unchanged", ->
+      upstreamLines := [[[0, 0, 0, 0]]]
+      downstreamLines := [[[5]]]  // length-1 entry: no source mapping
+      result := SourceMap.composeLines upstreamLines, downstreamLines
+      assert.deepEqual result, [[[5]]]
+
+    it "handles length-5 downstream entries (entries with name index)", ->
+      upstreamLines := [[[0, 0, 0, 0]]]
+      // [colDelta, sourceFileIndex, srcLine, srcCol, nameIndex]
+      downstreamLines := [[[0, 0, 0, 0, 3]]]
+      result := SourceMap.composeLines upstreamLines, downstreamLines
+      assert.equal result[0][0].length, 5
+      assert.equal result[0][0][4], 3  // name index preserved
+
+    it "returns undefined for downstream entry referencing missing upstream line", ->
+      upstreamLines := []  // no upstream lines
+      downstreamLines := [[[5, 0, 0, 0]]]  // references srcLine=0 which doesn't exist
+      result := SourceMap.composeLines upstreamLines, downstreamLines
+      // When upstream line is missing, entry degrades to length-1 (unmapped)
+      assert.deepEqual result, [[[5]]]
+
+  describe "composeDownstream", ->
+    it "parses unparsed downstream map (plain JSON without lines)", ->
+      src := "x := 5\n"
+      { sourceMap } := await compile src,
+        sourceMap: true
+        filename: "input.civet"
+
+      downstreamMapJSON :=
+        version: 3
+        file: "output.ts"
+        sources: ["input.civet"]
+        // identity mapping: line 0, col 0 → src line 0, col 0
+        mappings: "AAAA"
+        names: []
+
+      // Should not throw — composeDownstream must parseWithLines internally
+      sourceMap.composeDownstream downstreamMapJSON
+      assert.ok Array.isArray(sourceMap.lines)
+      assert.ok sourceMap.lines.length > 0
+
+    it "parses unparsed downstream map (base64 string)", ->
+      src := "x := 5\n"
+      { sourceMap } := await compile src,
+        sourceMap: true
+        filename: "input.civet"
+
+      downstreamMapJSON :=
+        version: 3
+        file: "output.ts"
+        sources: ["input.civet"]
+        mappings: "AAAA"
+        names: []
+
+      sourceMap.composeDownstream base64Encode JSON.stringify downstreamMapJSON
+      assert.ok Array.isArray(sourceMap.lines)
+      assert.ok sourceMap.lines.length > 0
+
+  describe "parseWithLines error handling", ->
+    it "throws for source map entries with invalid VLQ field count", ->
+      // A single entry with 2 VLQ values is invalid (must be 1, 4, or 5)
+      assert.throws =>
+        SourceMap.parseWithLines
+          version: 3
+          file: "foo.ts"
+          sources: []
+          mappings: "AA"  // decodes to [0, 0] — 2 fields, which is invalid
+          names: []
+      , /Unknown source map entry/

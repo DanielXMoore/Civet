@@ -1,0 +1,1303 @@
+{
+  createConnection
+  TextDocuments
+  Diagnostic
+  ProposedFeatures
+  InitializeParams
+  DidChangeConfigurationNotification
+  TextDocumentSyncKind
+  InitializeResult
+  MarkupKind
+  TextDocumentIdentifier
+  DocumentSymbol
+  CompletionItem
+  CompletionItemKind
+  CompletionItemTag
+  CompletionList
+  Location
+  DiagnosticSeverity
+  TextEdit
+  SemanticTokensRequest
+  FileChangeType
+} from vscode-languageserver/node
+
+{
+  TextDocument
+  type Position
+} from vscode-languageserver-textdocument
+TSService from ./lib/typescript-service.civet
+* as Previewer from ./lib/previewer.civet
+{ convertNavTree, forwardMap, getCanonicalFileName, convertDiagnostic, remapPosition, logTiming, type WithResolvers, withResolvers, type SourcemapLines } from ./lib/util.civet
+{ asPlainTextWithLinks, tagsToMarkdown } from ./lib/textRendering.civet
+{
+  adjustCursorForEmptyQuotes
+  appendClosingQuoteToPathCompletions
+  convertCompletions
+  createCivetFileCompletions
+  extractImportPath
+  findCivetFilesInDir
+  getCurrentLineText
+  likelyImportContext
+  measureTokenLength
+  parseErrorRange
+  resolvePathAliasDir
+} from ./lib/completions.civet
+assert from assert
+path from node:path
+{ pathToFileURL } from node:url
+ts, {
+  sys as tsSys
+  displayPartsToString
+  GetCompletionsAtPositionOptions
+  findConfigFile
+  ScriptElementKindModifier
+  SemicolonPreference
+} from typescript
+{ URI } from vscode-uri
+{ setTimeout } from timers/promises
+{ ParseError } from @danielx/civet
+// TS 2020 semantic classification token types (order must match TypeScript's internal TokenType enum)
+// See: https://github.com/microsoft/TypeScript/blob/main/src/services/classifier2020.ts
+semanticTokenTypes := [
+  "class"          // 0
+  "enum"           // 1
+  "interface"      // 2
+  "namespace"      // 3
+  "typeParameter"  // 4
+  "type"           // 5
+  "parameter"      // 6
+  "variable"       // 7
+  "enumMember"     // 8
+  "property"       // 9
+  "function"       // 10
+  "member"         // 11
+  "comment"        // 12 (custom Civet token; TS classifier does not emit comments)
+] as const
+
+commentSemanticTokenType := semanticTokenTypes.indexOf("comment")
+
+// TS 2020 semantic classification token modifiers (order must match TypeScript's internal TokenModifier enum)
+semanticTokenModifiers := [
+  "declaration"    // 0
+  "static"         // 1
+  "async"          // 2
+  "readonly"       // 3
+  "defaultLibrary" // 4
+  "local"          // 5
+] as const
+
+// Create a connection for the server, using Node's IPC as a transport.
+// Also include all preview / proposed LSP features.
+connection := createConnection(ProposedFeatures.all)
+logger := connection.console
+
+// Create a simple text document manager.
+documents: TextDocuments<TextDocument> := new TextDocuments(TextDocument)
+
+hasConfigurationCapability .= false
+hasWorkspaceFolderCapability .= false
+// let hasDiagnosticRelatedInformationCapability = false
+// comment out unused variable
+
+// Mapping from abs file path -> path of nearest applicable project path (tsconfig.json base)
+sourcePathToProjectPathMap := new Map<string, string>()
+
+// Tracks pending promises for tsserver initialization to safeguard
+// against creating multiple tsserver instances for same project path
+projectPathToPendingPromiseMap := new Map<string, Promise<void>>()
+
+// Mapping from project path -> TSService instance operating on that base directory
+type ResolvedService = Awaited<ReturnType<typeof TSService>>
+projectPathToServiceMap := new Map<string, ResolvedService>()
+
+// Debounce timers for tsconfig.json reload (project path -> timer id)
+tsConfigReloadTimers := new Map<string, ReturnType<typeof globalThis.setTimeout>>()
+
+// Last known tsconfig.json content per project path (for no-op detection)
+tsConfigContentMap := new Map<string, string>()
+
+// Set of project paths currently undergoing a TSService rebuild
+rebuildInProgress := new Set<string>()
+
+// Set of project paths that need another rebuild after the current one completes
+rebuildQueued := new Set<string>()
+
+let rootUri: string | undefined, rootDir: string | undefined
+
+getProjectPathFromSourcePath := (sourcePath: string): string =>
+  projPath .= sourcePathToProjectPathMap.get(sourcePath)
+  return projPath if projPath
+
+  // If we're in a node_modules/foo directory, use that as the project path
+  dirname .= sourcePath
+  while dirname.includes("node_modules")
+    if path.basename(path.dirname(dirname)) is "node_modules"
+      projPath = URI.file(dirname + "/").toString()
+      break
+    else
+      dirname = path.dirname(dirname) // go up one level
+
+  // Otherwise, check for ancestor tsconfig
+  if !projPath
+    tsConfigPath := findConfigFile(sourcePath, tsSys.fileExists, 'tsconfig.json')
+    if tsConfigPath
+      projPath = URI.file(path.dirname(tsConfigPath) + "/").toString()
+
+  // Otherwise, check whether we're inside the root
+  if !projPath
+    // rootDir and rootUri are set together in onInitialize, so if rootDir is
+    // truthy, rootUri is too.
+    if rootDir and sourcePath.startsWith(rootDir)
+      projPath = rootUri!
+    else
+      projPath = URI.file(path.dirname(sourcePath) + "/").toString()
+
+  sourcePathToProjectPathMap.set(sourcePath, projPath)
+  return projPath
+
+ensureServiceForSourcePath := (sourcePath: string) =>
+  projPath := getProjectPathFromSourcePath(sourcePath)
+  await projectPathToPendingPromiseMap.get(projPath)
+  service .= projectPathToServiceMap.get(projPath)
+  return service if service
+
+  let resolveInit: () => void
+  initP := new Promise<void> (^resolveInit) =>
+  projectPathToPendingPromiseMap.set(projPath, initP)  // guard set BEFORE await
+
+  logger.log("Spawning language server for project path: " + projPath)
+  service = await TSService(projPath, connection.console)
+  await service.loadPlugins()
+  projectPathToServiceMap.set(projPath, service)
+  projectPathToPendingPromiseMap.delete(projPath)
+  resolveInit!()
+
+  return service
+
+// TODO Propagate this to an extension setting
+diagnosticsDelay := 16  // ms delay for primary updated file
+diagnosticsPropagationDelay := 100  // ms delay for other files
+
+connection.onInitialize (params: InitializeParams) =>
+  capabilities := params.capabilities
+
+  // Does the client support the `workspace/configuration` request?
+  // If not, we fall back using global settings.
+  hasConfigurationCapability = !!capabilities.workspace?.configuration
+  hasWorkspaceFolderCapability = !!capabilities.workspace?.workspaceFolders
+
+  result: InitializeResult := {
+    capabilities: {
+      textDocumentSync: TextDocumentSyncKind.Incremental
+      // Tell the client that this server supports code completion.
+      completionProvider: {
+
+        // TS extension's triggerCharacters: ['.', '"', '\'', '/', '@', '<']
+        // We'll also respond to space to handle e.g. `import module`
+        triggerCharacters: ['.', '"', "'", '/', '@', '<', ' ']
+
+        resolveProvider: true
+      }
+      // documentLinkProvider: {
+      //   resolveProvider: true
+      // }
+      documentSymbolProvider: true
+      definitionProvider: true
+      hoverProvider: true
+      referencesProvider: true
+      renameProvider: true
+      semanticTokensProvider:
+        legend:
+          tokenTypes: semanticTokenTypes as! string[]
+          tokenModifiers: semanticTokenModifiers as! string[]
+        full: true
+
+    }
+  }
+
+  if hasWorkspaceFolderCapability
+    result.capabilities.workspace =
+      workspaceFolders:
+        supported: true
+
+  // TODO: currently only using the first workspace folder
+  baseDir := params.workspaceFolders?.[0]?.uri.toString()
+  if !baseDir
+    logger.log("Warning: No workspace folders")
+    rootUri = rootDir = undefined
+  else
+    rootUri = baseDir + "/"
+    rootDir = URI.parse(rootUri).fsPath
+
+  logger.log "Init " + rootDir
+  return result
+
+connection.onInitialized () =>
+  if hasConfigurationCapability
+    // Register for all configuration changes.
+    connection.client.register(DidChangeConfigurationNotification.type, undefined)
+
+  if hasWorkspaceFolderCapability
+    connection.workspace.onDidChangeWorkspaceFolders (_event) =>
+      logger.log('Workspace folder change event received.')
+
+  return
+
+updating := (document: { uri: string }) => documentUpdateStatus.get(document.uri)?.promise
+tsSuffix := /\.[cm]?[jt]s$|\.json|\.[jt]sx/
+
+connection.onHover ({ textDocument, position }) =>
+  sourcePath := documentToSourcePath(textDocument)
+  assert sourcePath
+
+  service := await ensureServiceForSourcePath(sourcePath)
+
+  doc := documents.get(textDocument.uri)
+  assert doc
+
+  let info
+  await updating(textDocument)
+  if sourcePath.match tsSuffix // non-transpiled
+    p := doc.offsetAt(position)
+    info = service.getQuickInfoAtPosition(sourcePath, p)
+  else // Transpiled
+    // need to sourcemap the line/columns
+    meta := service.host.getMeta(sourcePath)
+    return unless meta
+    { sourcemapLines, transpiledDoc } := meta
+    return unless transpiledDoc
+
+    // Map input hover position into output TS position
+    // Don't map for files that don't have a sourcemap (plain .ts for example)
+    position = forwardMap(sourcemapLines, position) if sourcemapLines
+
+    p := transpiledDoc.offsetAt(position)
+    transpiledPath := documentToSourcePath(transpiledDoc)
+    info = service.getQuickInfoAtPosition(transpiledPath, p)
+
+  return unless info
+
+  display := displayPartsToString(info.displayParts)
+  // TODO: Replace Previewer
+  documentation := Previewer.plain(displayPartsToString(info.documentation))
+
+  return
+    // TODO: Range
+    contents:
+      kind: MarkupKind.Markdown
+      value: [
+        `\`\`\`typescript\n${display}\n\`\`\``
+        documentation
+        ...info.tags?.map(Previewer.getTagDocumentation).filter((t) => !!t) || []
+      ].join("\n\n")
+
+function getCivetFileCompletions(
+  service: ResolvedService
+  document: TextDocument
+  sourcePath: string
+  position: Position
+)
+  lineText := getCurrentLineText(document, position)
+  civetFileCompletions: CompletionItem[] .= []
+  show := {
+    relative:           false, // Civet files from relative paths
+    alias:              false, // Civet files from path alias
+    otherPaths:         false, // Other files, found by TypeScript
+    otherLspCompletions: true, // Other suggestions, including exports
+  }
+  cursorOffsetAdjustment .= 0
+  importPath .= ''
+  let closingQuoteSuffix: "'" | '"' | undefined
+
+  extracted := extractImportPath(lineText, position.character)
+  if extracted?
+    { statement, path: pathText, qt, endqt } := extracted
+
+    // require needs quotes to trigger completions
+    if statement !== 'require' or qt
+      show.otherPaths = true
+      if statement is 'from' or statement is 'require'
+        show.otherLspCompletions = false
+
+      // Hardcode special-case cursor offset
+      //
+      //     Source:      import a from ./a|
+      //     Transpiled:  import a from "./a"|
+      //     Adjusted:    import a from "./a|"
+      //
+      if not qt or qt !== endqt then cursorOffsetAdjustment = -1
+      if qt and qt !== endqt then closingQuoteSuffix = qt
+
+      importPath = pathText
+      show.relative = importPath.startsWith('./') or importPath.startsWith('../')
+      show.alias = importPath# > 0 and not show.relative
+
+  relativeCompletionItems: CompletionItem[] .= []
+  if show.relative
+    sourceDir := path.dirname(sourcePath)
+    searchDir := path.resolve(sourceDir, importPath.substring(0, importPath.lastIndexOf('/')))
+    relativeCivetFiles := findCivetFilesInDir(searchDir)
+    relativeCompletionItems = createCivetFileCompletions(relativeCivetFiles, sourcePath, position)
+
+  pathAliasCompletionItems: CompletionItem[] .= []
+  if show.alias
+    compilationSettings := service.host.getCompilationSettings()
+    aliasDir := resolvePathAliasDir(compilationSettings, importPath)
+    pathAliasCivetFiles := aliasDir ? findCivetFilesInDir(aliasDir) : []
+    pathAliasCompletionItems = createCivetFileCompletions(pathAliasCivetFiles, sourcePath, position)
+
+  civetFileCompletions = relativeCompletionItems.concat(pathAliasCompletionItems)
+
+  heuristics := { show, cursorOffsetAdjustment }
+  return { civetFileCompletions, heuristics, closingQuoteSuffix }
+
+// This handler provides the initial list of the completion items.
+connection.onCompletion ({ textDocument, position, context }) =>
+
+  document := documents.get(textDocument.uri)
+  assert document
+
+  // Fast path for space trigger
+  linePrefix := getCurrentLineText(document, position).slice(0, position.character)
+  isLikelyImportContext := likelyImportContext(linePrefix)
+  if context?.triggerCharacter is ' ' and not isLikelyImportContext
+    return []
+
+  await updating(textDocument)
+
+  sourcePath := documentToSourcePath(textDocument)
+  assert sourcePath
+  service := await ensureServiceForSourcePath(sourcePath)
+
+  logger.log "completion " + sourcePath + " " + (position.line+1) + ":" + position.character
+
+  { civetFileCompletions, heuristics, closingQuoteSuffix } := getCivetFileCompletions(
+    service, document, sourcePath, position
+  )
+
+  // Options for the downstream TS LSP
+  completionOptions: GetCompletionsAtPositionOptions :=
+    includeCompletionsForImportStatements: heuristics.show.otherPaths or isLikelyImportContext
+    includeCompletionsForModuleExports:    heuristics.show.otherLspCompletions
+    includeCompletionsWithSnippetText:     heuristics.show.otherLspCompletions
+
+    allowIncompleteCompletions: true
+    includeCompletionsWithInsertText: true
+    useLabelDetailsInCompletionEntries: true
+  if context?.triggerKind
+    completionOptions.triggerKind = context.triggerKind
+  if context?.triggerCharacter
+    completionOptions.triggerCharacter = context.triggerCharacter as ts.CompletionsTriggerCharacter
+
+    if context?.triggerCharacter is ' ' and isLikelyImportContext
+      // Civet recovers incomplete `import ` as `import ""` for TS.
+      // Treat this as if the user typed `"` so TS returns module path completions.
+      completionOptions.triggerCharacter = '"' as ts.CompletionsTriggerCharacter
+
+  if sourcePath.match tsSuffix
+    // Non-transpiled files
+    p := document.offsetAt(position)
+    tslCompletions := service.getCompletionsAtPosition(sourcePath, p, completionOptions)
+    completions := convertCompletions(
+      tslCompletions, document, sourcePath, position
+      undefined, // No sourcemap
+      true, // Show file extensions (and use them in path completions)
+      rootDir
+    )
+
+    return appendClosingQuoteToPathCompletions(
+      civetFileCompletions.concat(completions)
+      closingQuoteSuffix)
+
+  // Civet files
+
+  // … Sourcemap the line/columns
+  meta := service.host.getMeta(sourcePath)
+  return civetFileCompletions unless meta
+  { sourcemapLines, transpiledDoc } := meta
+  return civetFileCompletions unless transpiledDoc
+  if sourcemapLines
+    position = forwardMap(sourcemapLines, position)
+    logger.log 'remapped'
+  p .= transpiledDoc.offsetAt(position)
+
+  // … Adjust the cursor position, on a case-per-case basis, to access better completions.
+  //  0: Default, when sourcemap cursor position is already perfect.
+  // -1: Gets inside closing quotes for import file completion.
+  p += heuristics.cursorOffsetAdjustment
+
+  // A bare Civet `@` maps to TS `this`, often with the sourcemapped cursor
+  // inside the generated word. Move to after `this`/`this.` so TS returns
+  // member completions, and ask as if `.` triggered the completion.
+  if context?.triggerCharacter is '@'
+    text := transpiledDoc.getText()
+    searchStart := Math.max(0, p - 3)
+    beforeP := text.slice(searchStart, p + 1)
+    thisIdx := beforeP.lastIndexOf('this')
+    if thisIdx is not -1
+      thisEnd := searchStart + thisIdx + 4
+      if thisEnd >= p
+        p = if text[thisEnd] is '.' then thisEnd + 1 else thisEnd
+        completionOptions.triggerCharacter = '.' as ts.CompletionsTriggerCharacter
+
+  if isLikelyImportContext
+    // When we type `import` at EOF, sourcemapping is a bit wonky
+    // and we end up to the left of the quotes instead of inside them.
+    start := transpiledDoc.positionAt(p)
+    quoteRangeText := transpiledDoc.getText({
+      start
+      end: { line: start.line, character: start.character + 3 }
+    })
+    p += adjustCursorForEmptyQuotes(quoteRangeText)
+
+  // … Get completions from TS
+  transpiledPath := documentToSourcePath(transpiledDoc)
+  tslCompletions := service.getCompletionsAtPosition(
+    transpiledPath, p, completionOptions)
+  completions := convertCompletions(
+    tslCompletions
+    transpiledDoc
+    sourcePath
+    position
+    sourcemapLines
+    true
+    rootDir
+  )
+
+  // … Return.
+  items := appendClosingQuoteToPathCompletions(
+    civetFileCompletions.concat(completions)
+    closingQuoteSuffix)
+
+  if context?.triggerCharacter is '@'
+    return CompletionList.create(items, true)
+  return items
+
+connection.onCompletionResolve (item) =>
+  { sourcePath, position, name, source, data } .= item.data
+  service := await ensureServiceForSourcePath(sourcePath)
+  return item unless service
+
+  let document
+  let sourcemapLines: SourcemapLines | undefined
+  if sourcePath.match tsSuffix // non-transpiled
+    document = documents.get(URI.file(sourcePath).toString())
+    assert document
+  else
+    // use transpiled doc; forward source mapping already done
+    meta := service.host.getMeta(sourcePath)
+    return item unless meta
+    { transpiledDoc } := meta
+    sourcemapLines = meta.sourcemapLines
+    return item unless transpiledDoc
+    document = transpiledDoc
+    sourcePath = documentToSourcePath(transpiledDoc)
+  p := document.offsetAt(position)
+
+  let detail
+  try
+    detail = service.getCompletionEntryDetails(sourcePath, p, name, {
+      semicolons: SemicolonPreference.Remove
+    }, source, undefined, data)
+  /* c8 ignore start — defensive: TS service throwing on entry details
+     is rare and returning without `detail` leaves the item unchanged. */
+  catch e
+    logger.log "Failed to get completion details for " + name
+    logger.log String(e)
+  /* c8 ignore stop */
+  return item unless detail
+
+  // getDetails from https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
+  details: string[] := []
+  additionalEdits: TextEdit[] := []
+  for action of detail.codeActions ?? []
+    details.push action.description
+    // Convert code action changes (e.g. auto-import) to additionalTextEdits
+    for change of action.changes
+      // Canonicalize the path from TS (always forward slashes) so it
+      // matches sourcePath and service.host.getMeta keys on Windows.
+      changeFileName := getCanonicalFileName(change.fileName)
+      // Determine the document for this change and whether remapping is needed
+      let changeDoc: TextDocument | undefined
+      let changeSourcemapLines: SourcemapLines | undefined
+      if changeFileName is getCanonicalFileName(sourcePath)
+        // Change targets the current (possibly transpiled) document
+        changeDoc = document
+        changeSourcemapLines = sourcemapLines
+      /* c8 ignore start — TS auto-import usually edits the current file;
+         cross-file edits (e.g. barrel-file re-exports) are rare and don't
+         show up in normal completion flows. */
+      else
+        // Change targets another file; look up its transpiled doc
+        changeMeta := service.host.getMeta(changeFileName)
+        if changeMeta?.transpiledDoc
+          changeDoc = changeMeta.transpiledDoc
+          changeSourcemapLines = changeMeta.sourcemapLines
+        else
+          // Non-transpiled file
+          changeDoc = documents.get(URI.file(changeFileName).toString())
+      /* c8 ignore stop */
+      continue unless changeDoc
+      for tc of change.textChanges
+        start .= changeDoc.positionAt(tc.span.start)
+        end .= changeDoc.positionAt(tc.span.start + tc.span.length)
+        newText .= tc.newText
+        if changeSourcemapLines
+          start = remapPosition(start, changeSourcemapLines)
+          end = remapPosition(end, changeSourcemapLines)
+          // Convert TS import syntax to Civet:
+          // `import { foo } from "./bar"` → `{ foo } from ./bar`
+          newText = newText.replace(
+            /^import (.*?) from ["'](.+?)["'];?/gms
+            "$1 from $2"
+          )
+        additionalEdits.push { range: { start, end }, newText }
+  if additionalEdits#
+    item.additionalTextEdits = additionalEdits
+  details.push asPlainTextWithLinks(detail.displayParts)
+  item.detail = details.join("\n\n")
+
+  // getDocumentation from https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
+  documentations: string[] := []
+  if detail.documentation
+    documentations.push asPlainTextWithLinks(detail.documentation)
+  if detail.tags
+    documentations.push tagsToMarkdown(detail.tags)
+  if documentations#
+    item.documentation = {
+      kind: "markdown"
+      value: documentations.join("\n\n")
+      // @ts-ignore
+      baseUri: document.uri
+      isTrusted: { enabledCommands: ["_typescript.openJsDocLink"] }
+    }
+
+  return item
+
+connection.onDefinition ({ textDocument, position }) =>
+  sourcePath := documentToSourcePath(textDocument)
+  assert sourcePath
+  service := await ensureServiceForSourcePath(sourcePath)
+
+  let definitions
+
+  await updating(textDocument)
+  // Non-transpiled
+  if sourcePath.match tsSuffix
+    document := documents.get(textDocument.uri)
+    assert document
+    p := document.offsetAt(position)
+    definitions = service.getDefinitionAtPosition(sourcePath, p)
+  else
+    // need to sourcemap the line/columns
+    meta := service.host.getMeta(sourcePath)
+    return unless meta
+    { sourcemapLines, transpiledDoc } := meta
+    return unless transpiledDoc
+
+    // Map input hover position into output TS position
+    // Don't map for files that don't have a sourcemap (plain .ts for example)
+    position = forwardMap(sourcemapLines, position) if sourcemapLines
+
+    p := transpiledDoc.offsetAt(position)
+    transpiledPath := documentToSourcePath(transpiledDoc)
+    definitions = service.getDefinitionAtPosition(transpiledPath, p)
+
+  return unless definitions
+
+  program := service.getProgram()
+  assert program
+
+  defs := definitions as readonly ts.DefinitionInfo[]
+  defs.map((definition) =>
+    { fileName, textSpan } .= definition
+    // source file as it is known to TSServer
+    sourceFile := program.getSourceFile(fileName)
+    return unless sourceFile
+
+    start .= sourceFile.getLineAndCharacterOfPosition(textSpan.start)
+    end .= sourceFile.getLineAndCharacterOfPosition(textSpan.start + textSpan.length)
+    rawSourceName := service.getSourceFileName(fileName)
+
+    // Reverse map back to .civet source space if this definition is in a transpiled file
+    meta := service.host.getMeta(rawSourceName)
+    if meta
+      { sourcemapLines } := meta
+      if sourcemapLines
+        start = remapPosition(start, sourcemapLines)
+        end = remapPosition(end, sourcemapLines)
+
+    return {
+      uri: URI.file(rawSourceName).toString()
+      range: { start, end }
+    }
+  ).filter((d): d is Location => !!d)
+
+connection.onReferences ({ textDocument, position }) =>
+  sourcePath := documentToSourcePath(textDocument)
+  assert sourcePath
+  service := await ensureServiceForSourcePath(sourcePath)
+  // TODO: same source mapping as onDefinition I think...
+
+  let references
+
+  await updating(textDocument)
+  if sourcePath.match tsSuffix // non-transpiled
+    document := documents.get(textDocument.uri)
+    assert document
+    p := document.offsetAt(position)
+    references = service.getReferencesAtPosition(sourcePath, p)
+  else
+    // need to sourcemap the line/columns
+    meta := service.host.getMeta(sourcePath)
+    return unless meta
+    { sourcemapLines, transpiledDoc } := meta
+    return unless transpiledDoc
+
+    // Map input hover position into output TS position
+    // Don't map for files that don't have a sourcemap (plain .ts for example)
+    position = forwardMap(sourcemapLines, position) if sourcemapLines
+
+    p := transpiledDoc.offsetAt(position)
+    transpiledPath := documentToSourcePath(transpiledDoc)
+    references = service.getReferencesAtPosition(transpiledPath, p)
+
+  return unless references
+
+  program := service.getProgram()
+  assert program
+
+  refs := references as readonly ts.ReferenceEntry[]
+  refs.map((reference) =>
+    { fileName, textSpan } .= reference
+    // source file as it is known to TSServer
+    sourceFile := program.getSourceFile(fileName)
+    return unless sourceFile
+
+    start .= sourceFile.getLineAndCharacterOfPosition(textSpan.start)
+    end .= sourceFile.getLineAndCharacterOfPosition(textSpan.start + textSpan.length)
+    rawSourceName := service.getSourceFileName(fileName)
+
+    // Reverse map back to .civet source space if this definition is in a transpiled file
+    meta := service.host.getMeta(rawSourceName)
+    if meta
+      { sourcemapLines } := meta
+      if sourcemapLines
+        start = remapPosition(start, sourcemapLines)
+        end = remapPosition(end, sourcemapLines)
+
+    return {
+      uri: URI.file(rawSourceName).toString()
+      range: { start, end }
+    }
+  ).filter((d): d is Location => !!d)
+
+connection.onDocumentSymbol ({ textDocument }) =>
+  sourcePath := documentToSourcePath(textDocument)
+  assert sourcePath
+
+  service := await ensureServiceForSourcePath(sourcePath)
+
+  let document, navTree, sourcemapLines
+
+  await updating(textDocument)
+  if sourcePath.match tsSuffix // non-transpiled
+    document = documents.get(textDocument.uri)
+    assert document
+    navTree = service.getNavigationTree(sourcePath)
+  else
+    // Transpiled
+    meta := service.host.getMeta(sourcePath)
+    assert meta
+    { transpiledDoc } := meta
+    assert transpiledDoc
+
+    document = transpiledDoc
+    transpiledPath := documentToSourcePath(transpiledDoc)
+    navTree = service.getNavigationTree(transpiledPath)
+    sourcemapLines = meta.sourcemapLines
+
+  items: DocumentSymbol[] := []
+
+  // The root represents the file. Ignore this when showing in the UI
+  if navTree.childItems
+    for child of navTree.childItems
+      convertNavTree(child, items, document, sourcemapLines)
+
+  return items
+
+function getRenameSourceDetails(
+  service: ResolvedService
+  textDocumentId: TextDocumentIdentifier
+  sourcePath: string
+  position: Position
+)
+  isTypeScriptFile := sourcePath.match(tsSuffix)
+  if isTypeScriptFile
+    document := documents.get(textDocumentId.uri)
+    return unless document
+    return {
+      document
+      position
+      sourcePath
+      offset: document.offsetAt(position)
+    }
+  else
+    meta := service.host.getMeta(sourcePath)
+    return unless meta
+    { transpiledDoc: document, sourcemapLines } := meta
+    return unless document and sourcemapLines
+
+    mappedPosition := forwardMap(sourcemapLines, position)
+
+    return {
+      document
+      position: mappedPosition
+      sourcePath: documentToSourcePath(document)
+      offset: document.offsetAt(mappedPosition)
+    }
+
+function remapLocationRename(service: ResolvedService, sourceFile: ts.SourceFile, loc: ts.RenameLocation)
+  start := sourceFile.getLineAndCharacterOfPosition(loc.textSpan.start)
+  end := sourceFile.getLineAndCharacterOfPosition(loc.textSpan.start + loc.textSpan.length)
+
+  sourceFileName := service.getSourceFileName(loc.fileName)
+  meta := service.host.getMeta(sourceFileName)
+
+  if meta?.sourcemapLines
+    return {
+      start: remapPosition(start, meta.sourcemapLines)
+      end: remapPosition(end, meta.sourcemapLines)
+      uri: pathToFileURL(sourceFileName).toString()
+    }
+
+  return { start, end, uri: pathToFileURL(loc.fileName).toString() }
+
+function createRenameLocationChanges(
+  service: ResolvedService
+  program: ts.Program
+  locations: readonly ts.RenameLocation[]
+  newName: string
+)
+  changes: Record<string, TextEdit[]> := {}
+
+  for loc of locations
+    sourceFile := program.getSourceFile(loc.fileName)
+    continue unless sourceFile
+
+    { start, end, uri } := remapLocationRename(service, sourceFile, loc)
+    edit: TextEdit :=
+      range: { start, end }
+      newText: newName
+
+    if changes[uri]
+      changes[uri].push(edit)
+    else
+      changes[uri] = [edit]
+
+  return changes
+
+connection.onRenameRequest ({ textDocument, position, newName }) =>
+  sourcePath := documentToSourcePath(textDocument)
+  assert sourcePath
+
+  service := await ensureServiceForSourcePath(sourcePath)
+
+  await updating(textDocument)
+
+  mapped := getRenameSourceDetails(service, textDocument, sourcePath, position)
+  return unless mapped
+
+  locations := service.findRenameLocations(mapped.sourcePath, mapped.offset, false, false, {})
+  return unless locations?#
+
+  program := service.getProgram()
+  assert(program)
+
+  changes: createRenameLocationChanges(service, program, locations, newName)
+
+documents.onDidClose ({ document }) =>
+  logger.log "close " + document.uri
+  sourcePath := documentToSourcePath(document)
+  projPath := getProjectPathFromSourcePath(sourcePath)
+  service := projectPathToServiceMap.get(projPath)
+  service?.host.closeDocument(sourcePath)
+  // Drop any pending in-flight change for this doc so the queue doesn't
+  // re-add it to the host after close. The status resolver set by
+  // onDidChangeContent can leak if close fires inside the debounce window
+  // before executeQueue captures the doc — drop it too.
+  changeQueue.delete(document)
+  documentUpdateStatus.delete(document.uri)
+  // Clear diagnostics on the client side; without this the Problems panel
+  // keeps showing the last-known errors for a closed file.
+  connection.sendDiagnostics { uri: document.uri, diagnostics: [] }
+
+documents.onDidOpen ({ document }) =>
+  logger.log "open " + document.uri
+
+// Buffer up changes to documents so we don't stack transpilations and become unresponsive
+changeQueue .= new Set<TextDocument>()
+let executeTimeout: Promise<void> | undefined
+documentUpdateStatus := new Map<string, WithResolvers<boolean>>()
+function executeQueue(): Promise<void>
+  // Cancel any in-flight project-wide diagnostics update to avoid conflicts
+  if runningDiagnosticsUpdate
+    runningDiagnosticsUpdate.isCanceled = true
+  changed := Array.from(changeQueue)
+  changeQueue = new Set()
+  // `changed` may be empty if closeDocument.changeQueue.delete cleared the
+  // queue during scheduleExecuteQueue's debounce; the rest of this function
+  // is a no-op in that case (empty loops, empty diagnostics), so no early
+  // return needed.
+  logger.log `executeQueue: Processing batch of ${changed#} documents.` if changed#
+
+  docsByProject := new Map<string, { service: ResolvedService; docs: TextDocument[] }>()
+
+  // Group documents by their project path to ensure atomic updates per project.
+  for doc of changed
+    sourcePath := documentToSourcePath(doc)
+    projPath := getProjectPathFromSourcePath(sourcePath)
+    unless docsByProject.has(projPath)
+      service := await ensureServiceForSourcePath(sourcePath)
+      if service then docsByProject.set(projPath, { service, docs: [] })
+    docsByProject.get(projPath)?.docs.push(doc)
+
+  for { service, docs } of docsByProject.values()
+    // Phase 1: Stage all changes within this project.
+    docs.forEach (doc) => service.host.addOrUpdateDocument(doc)
+
+    // Phase 2: Analyze all staged documents within this project.
+    for doc of docs
+      await updateDiagnosticsForDoc(doc, service)
+      documentUpdateStatus.get(doc.uri)?.resolve(true)
+      Promise.resolve().then () => documentUpdateStatus.delete(doc.uri)
+  executeTimeout = undefined
+  /* c8 ignore start — race: another change arriving mid-execute is timing-
+     dependent and not reproducible in tests. */
+  if changeQueue.size
+    scheduleExecuteQueue()
+  /* c8 ignore stop */
+  else
+    scheduleUpdateDiagnostics(new Set(changed))
+
+function scheduleExecuteQueue()
+  // Schedule executeQueue() if there isn't one already running or scheduled
+  return if executeTimeout
+  return unless changeQueue.size
+  await (executeTimeout = setTimeout(diagnosticsDelay))
+  await executeQueue()
+
+// The content of a text document has changed. This event is emitted
+// when the text document first opened or when its content has changed.
+documents.onDidChangeContent ({ document }) =>
+  logger.log "onDidChangeContent " + document.uri
+  documentUpdateStatus.set(document.uri, withResolvers())
+  changeQueue.add(document)
+  scheduleExecuteQueue()
+
+// Both callers (executeQueue and updateProjectDiagnostics) pass a service
+// explicitly after staging the document, so `service` is always provided and
+// the doc is already staged when we arrive here.
+function updateDiagnosticsForDoc(document: TextDocument, service: ResolvedService)
+  logger.log("Updating diagnostics for doc: " + document.uri)
+  sourcePath := documentToSourcePath(document)
+  assert sourcePath
+
+  getTypeScriptDiagnostics := (
+    filePath: string
+    diagDocument: TextDocument
+    sourcemapLines?: SourcemapLines
+  ): Diagnostic[] =>
+    diagnostics: Diagnostic[] := []
+    diagnosticMethods := [
+      "getSyntacticDiagnostics"
+      "getSemanticDiagnostics"
+      "getSuggestionDiagnostics"
+    ] as const
+
+    for method of diagnosticMethods
+      try
+        fn := service[method].bind(service)
+        tsDiagnostics := logTiming(logger, `service.${method}`, fn)(filePath)
+        diagnostics.push(...tsDiagnostics.map((diagnostic) =>
+          convertDiagnostic(diagnostic, diagDocument, sourcemapLines)))
+      /* c8 ignore start — defensive: TS diagnostic methods throwing is
+         rare (usually only with corrupt source files or internal TS bugs)
+         and we surface the failure as a file-level diagnostic. */
+      catch error
+        errorMessage := if error instanceof Error then `${error.name}: ${error.message}` else String(error)
+        message := `TypeScript ${method} failed for ${filePath}: ${errorMessage}`
+        logger.error message
+        if error instanceof Error and error.stack
+          logger.error error.stack
+        diagnostics.push {
+          severity: DiagnosticSeverity.Error
+          range:
+            start: { line: 0, character: 0 }
+            end: { line: 0, character: 1 }
+          message
+          source: 'civet'
+        }
+        break
+      /* c8 ignore stop */
+
+    return diagnostics
+
+  // Non-transpiled
+  if sourcePath.match tsSuffix
+    diagnostics := getTypeScriptDiagnostics(sourcePath, document)
+
+    return connection.sendDiagnostics {
+      uri: document.uri
+      diagnostics
+    }
+
+  // Transpiled file
+  meta := service.host.getMeta(sourcePath)
+  return logger.log `no meta for ${sourcePath}` unless meta
+
+  { sourcemapLines, transpiledDoc, parseErrors, fatal } := meta
+  return logger.log `no transpiledDoc for ${sourcePath}` unless transpiledDoc
+
+  transpiledPath := documentToSourcePath(transpiledDoc)
+  diagnostics: Diagnostic[] := []
+
+  if parseErrors?#
+    diagnostics.push ...parseErrors.map (e) =>
+      if e <? ParseError
+        { start, end, message } := parseErrorRange(e)
+        return {
+          severity: DiagnosticSeverity.Error
+          // Range is already in source file coordinates
+          range: { start, end }
+          message
+          source: 'civet'
+        }
+      return {
+        severity: DiagnosticSeverity.Error
+        range:
+          start: { line: 0, character: 0 }
+          end:   { line: 0, character: 10 }
+        message: e.message
+        source: 'civet'
+      }
+
+  unless fatal
+    diagnostics.push(...getTypeScriptDiagnostics(transpiledPath, transpiledDoc, sourcemapLines))
+
+  connection.sendDiagnostics {
+    uri: document.uri
+    diagnostics
+  }
+
+  return
+
+// Using a cancellation token we prevent parallel executions of scheduleUpdateDiagnostics
+let runningDiagnosticsUpdate: { isCanceled: boolean } | undefined
+
+// Asynchronously update diagnostics for all the documents
+// in a project, based on the service instance.
+updateProjectDiagnostics := (
+  status: { isCanceled: boolean }
+  service: ResolvedService
+) =>
+  program := service.getProgram()
+  return unless program
+
+  // A single, short delay before starting the update for a project.
+  await setTimeout(diagnosticsPropagationDelay)
+
+  projectFiles := program.getSourceFiles()
+  for sourceFile of projectFiles
+    return if status.isCanceled
+
+    // We only need to send diagnostics for files the user has open
+    // TypeScript is analyzing all files in memory anyway
+    rawFileName := service.getSourceFileName(sourceFile.fileName)
+    docUri := URI.file(rawFileName).toString()
+    doc := documents.get(docUri)
+    if doc
+      await updateDiagnosticsForDoc(doc, service)
+
+// Schedule an update of diagnostics for all projects affected by recent changes.
+function scheduleUpdateDiagnostics(changedDocs: Set<TextDocument>)
+  if runningDiagnosticsUpdate
+    runningDiagnosticsUpdate.isCanceled = true
+
+  status := { isCanceled: false }
+  runningDiagnosticsUpdate = status
+
+  // Deduplicate by project path to avoid redundant updates.
+  servicesToUpdate := new Set<ResolvedService>()
+  for doc of changedDocs
+    sourcePath := documentToSourcePath(doc)
+    projPath := getProjectPathFromSourcePath(sourcePath)
+    service := projectPathToServiceMap.get(projPath)
+    if service
+      servicesToUpdate.add(service)
+
+  // Trigger updates for each affected project.
+  for service of servicesToUpdate
+    // Don't await; let updates for different projects run in parallel.
+    updateProjectDiagnostics(status, service)
+
+// Debounce delay (ms) before rebuilding a TSService after tsconfig.json changes
+tsConfigReloadDebounce := 300
+
+function scheduleServiceReload(projPath: string, tsConfigPath: string)
+  // Debounce: cancel existing timer and set a new one
+  existing := tsConfigReloadTimers.get(projPath)
+  globalThis.clearTimeout(existing) if existing
+
+  reloadCallback := () =>
+    tsConfigReloadTimers.delete(projPath)
+    doReloadServiceForProject(projPath, tsConfigPath)
+  timer := globalThis.setTimeout(reloadCallback, tsConfigReloadDebounce)
+  tsConfigReloadTimers.set(projPath, timer)
+
+async function doReloadServiceForProject(projPath: string, tsConfigPath: string): Promise<void>
+  /* c8 ignore start — coalescing requires a second didChange during the
+     ~1-3s TSService rebuild window; deterministic reproduction in tests
+     is flaky under coverage instrumentation. */
+  if rebuildInProgress.has(projPath)
+    rebuildQueued.add(projPath)
+    return
+  /* c8 ignore stop */
+
+  // Wait for any in-progress initial service creation to settle first, avoiding
+  // a race where both ensureServiceForSourcePath and this function call TSService
+  // concurrently and the slower one orphans the faster one's result.
+  await projectPathToPendingPromiseMap.get(projPath)
+
+  // No-op detection: skip rebuild if tsconfig content hasn't changed.
+  // We only get here after a didChangeWatchedFiles event for an existing
+  // tsconfig.json, so readFile must succeed.
+  newContent := tsSys.readFile(tsConfigPath)
+  assert newContent, `expected tsconfig to exist at ${tsConfigPath}`
+  /* c8 ignore start — no-op skip fires when a didChange arrives with the
+     same file content; the reload test hits it but v8 coverage of the
+     debounced timer callback is unreliable. */
+  if newContent is tsConfigContentMap.get(projPath)
+    logger.log `tsconfig.json unchanged for ${projPath}, skipping reload`
+    return
+  /* c8 ignore stop */
+
+  logger.log `Reloading TSService for ${projPath} due to tsconfig.json change`
+  rebuildInProgress.add(projPath)
+
+  try
+    newService := await TSService(projPath, connection.console)
+    await newService.loadPlugins()
+
+    // Only record the new content after a successful rebuild so that a failed
+    // rebuild doesn't permanently suppress retries for the same content.
+    tsConfigContentMap.set(projPath, newContent)
+
+    // Atomically swap: incoming requests continue using the old service until this point
+    oldService := projectPathToServiceMap.get(projPath)
+    projectPathToServiceMap.set(projPath, newService)
+
+    // Dispose old service after a short grace period so in-flight requests finish
+    if oldService
+      globalThis.setTimeout(() => oldService.dispose?.(), 1000)
+
+    // Re-send diagnostics for all open documents belonging to this project
+    openDocs := new Set<TextDocument>()
+    for doc of documents.all()
+      docProjPath := getProjectPathFromSourcePath(documentToSourcePath(doc))
+      openDocs.add(doc) if docProjPath is projPath
+    scheduleUpdateDiagnostics(openDocs) if openDocs.size > 0
+  /* c8 ignore start — defensive: TSService constructor throwing during
+     reload would leave us without a working service; log and move on. */
+  catch e
+    logger.error `Failed to reload TSService for ${projPath}: ${e}`
+  /* c8 ignore stop */
+
+  rebuildInProgress.delete(projPath)
+
+  // If another change arrived during the rebuild, run it now
+  /* c8 ignore start — queued-reload re-run pairs with the coalescing
+     branch above; same timing-reproduction difficulty. */
+  if rebuildQueued.has(projPath)
+    rebuildQueued.delete(projPath)
+    return doReloadServiceForProject(projPath, tsConfigPath)
+  /* c8 ignore stop */
+
+connection.onDidChangeWatchedFiles (change) =>
+  // Monitored files have change in VSCode
+  logger.log('We received a file change event')
+
+  for fileEvent of change.changes
+    filePath := URI.parse(fileEvent.uri).fsPath
+    basename := path.basename(filePath)
+
+    // Source file deletion: purge from the owning service and clear diagnostics
+    if fileEvent.type is FileChangeType.Deleted and basename is not 'tsconfig.json'
+      projPath := getProjectPathFromSourcePath(filePath)
+      service := projectPathToServiceMap.get(projPath)
+      service?.host.removeDocument(filePath)
+      connection.sendDiagnostics { uri: fileEvent.uri, diagnostics: [] }
+      continue
+
+    // Only react to tsconfig.json creates and changes (not deletes)
+    continue if fileEvent.type is FileChangeType.Deleted
+    continue unless basename is 'tsconfig.json'
+
+    // Compute the project path this tsconfig belongs to
+    projPath := URI.file(path.dirname(filePath) + "/").toString()
+
+    // Only reload if we already have (or are initializing) a service for this project.
+    // The `projectPathToPendingPromiseMap.has` arm is a race-window: a tsconfig
+    // change during the ~1-3s TSService init window isn't reproducible in tests.
+    hasProject .= projectPathToServiceMap.has(projPath)
+    /* c8 ignore next */
+    hasProject ||= projectPathToPendingPromiseMap.has(projPath)
+    if hasProject
+      logger.log `tsconfig.json changed for known project ${projPath}`
+      scheduleServiceReload(projPath, filePath)
+
+// Semantic tokens: use TypeScript's semantic classifications, remapped via sourcemap
+connection.onRequest SemanticTokensRequest.type, (params) =>
+  doc := documents.get params.textDocument.uri
+  return { data: [] } unless doc
+  sourcePath := documentToSourcePath params.textDocument
+
+  await updating(params.textDocument)
+  service := await ensureServiceForSourcePath(sourcePath)
+
+  // Determine transpiled file path and sourcemap
+  let transpiledPath: string
+  let sourcemapLines: SourcemapLines | undefined
+  let transpiledDoc: TextDocument | undefined
+  commentRanges: { pos: number, length: number }[] .= []
+  if sourcePath.match(tsSuffix)
+    // Non-transpiled TS/JS file
+    transpiledPath = sourcePath
+  else
+    meta := service.host.getMeta(sourcePath)
+    return { data: [] } unless meta?.transpiledDoc
+    transpiledDoc = meta.transpiledDoc
+    sourcemapLines = meta.sourcemapLines
+    commentRanges = meta.commentRanges ?? []
+    transpiledPath = documentToSourcePath(transpiledDoc)
+
+  try
+    tsDoc := transpiledDoc ?? doc
+    sourceText := tsDoc.getText()
+    span: ts.TextSpan := { start: 0, length: sourceText.length }
+    result := service.getEncodedSemanticClassifications(transpiledPath, span, ts.SemanticClassificationFormat.TwentyTwenty)
+
+    // TS 2020 spans: [start, length, encodedType, start, length, encodedType, ...]
+    // encodedType: (tokenType + 1) << 8 | modifierSet
+    // First collect remapped tokens, then sort by position before delta-encoding
+    civetText := if sourcemapLines then doc.getText() else undefined
+    remapped: { line: number, character: number, length: number, tokenType: number, tokenModifiers: number }[] := []
+    for i of [0...result.spans.length] by 3
+      tsStart := result.spans[i]
+      len := result.spans[i + 1]
+      encoded := result.spans[i + 2]
+
+      tokenType := ((encoded >> 8) - 1)
+      tokenModifiers := (encoded & 0xFF)
+      continue if tokenType < 0 or tokenType >= semanticTokenTypes.length
+
+      // Map position from transpiled TS back to Civet source
+      tsPos := tsDoc.positionAt(tsStart)
+      pos := remapPosition(tsPos, sourcemapLines)
+      // Skip tokens with invalid remapped positions
+      continue if pos.line < 0 or pos.character < 0
+
+      // Compute length from Civet source to handle tokens that change size
+      // (e.g. @name -> this.name). Use source text at remapped position.
+      length .= len
+      if civetText
+        offset := doc.offsetAt(pos)
+        continue if offset >= civetText.length
+        { length: measured, remaining } := measureTokenLength(civetText, offset, len)
+        length = measured
+        continue if length <= 0 or length > remaining
+
+      remapped.push { line: pos.line, character: pos.character, length, tokenType, tokenModifiers }
+
+    remapped.push ...collectCommentTokens doc, commentRanges
+
+    // Sort by position (required for valid delta encoding)
+    remapped.sort (a, b) => a.line - b.line or a.character - b.character
+
+    // Delta-encode, skipping overlapping/zero-length tokens
+    data: number[] := []
+    prevLine .= 0
+    prevChar .= 0
+    prevEnd .= 0  // end column of previous token on current line
+    for token of remapped
+      continue unless token.length > 0
+      if token.line is not prevLine
+        prevEnd = 0
+      else if token.character < prevEnd
+        continue
+      deltaLine := token.line - prevLine
+      deltaChar := if deltaLine is 0 then token.character - prevChar else token.character
+      data.push deltaLine, deltaChar, token.length, token.tokenType, token.tokenModifiers
+      prevLine = token.line
+      prevChar = token.character
+      prevEnd = token.character + token.length
+    { data }
+  /* c8 ignore start — defensive: TS's semantic classifier throwing is
+     rare and we return an empty token set to keep the editor responsive. */
+  catch e
+    logger.error("Semantic tokens error: " + e)
+    { data: [] }
+  /* c8 ignore stop */
+
+// Make the text document manager listen on the connection
+// for open, change and close text document events
+documents.listen(connection)
+
+// Listen on the connection
+connection.listen()
+
+// Utils
+
+function collectCommentTokens(
+  doc: TextDocument
+  commentRanges: { pos: number, length: number }[]
+)
+  sourceText := doc.getText()
+  tokens: { line: number, character: number, length: number, tokenType: number, tokenModifiers: number }[] := []
+
+  for { pos, length } of commentRanges
+    start .= Math.max(0, pos)
+    end .= Math.min(sourceText.length, pos + length)
+    while start < end
+      tokenEnd .= start
+      while tokenEnd < end and sourceText[tokenEnd] is not '\r' and sourceText[tokenEnd] is not '\n'
+        tokenEnd++
+
+      if length := tokenEnd - start
+        tokenPos := doc.positionAt start
+        tokens.push {
+          tokenPos.{line,character}
+          length
+          tokenType: commentSemanticTokenType
+          tokenModifiers: 0
+        }
+
+      break if tokenEnd >= end
+      if sourceText[tokenEnd] is '\r' and sourceText[tokenEnd + 1] is '\n'
+        start = tokenEnd + 2
+      else
+        start = tokenEnd + 1
+
+  tokens
+
+function documentToSourcePath(textDocument: TextDocumentIdentifier)
+  URI.parse(textDocument.uri).fsPath
+
+
+/*
+  References:
+  - Completion trigger characters used by the TS language server: '.', '"', '\'', '/', '@', '<'
+    https://github.com/typescript-language-server/typescript-language-server/blob/e91bd52a47c05ffd/src/lsp-server.ts#L193
+  - SignatureHelpProvider triggers: '(', ',', '<', and re-trigger ')'
+    https://github.com/typescript-language-server/typescript-language-server/blob/e91bd52a47c05ffd946e0abd27f242eb631b7604/src/lsp-server.ts#L234-L237
+*/

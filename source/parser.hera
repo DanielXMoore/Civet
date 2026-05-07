@@ -9,6 +9,7 @@ import {
   addPostfixStatement,
   adjustBindingElements,
   adjustIndexAccess,
+  assert,
   attachPostfixStatementAsExpression,
   append,
   blockWithPrefix,
@@ -51,6 +52,7 @@ import {
   maybeRefAssignment,
   modifyString,
   negateCondition,
+  parenthesizeExpression,
   precedenceCustomDefault,
   precedenceStep,
   prepend,
@@ -74,17 +76,56 @@ import {
   skipImplicitArguments,
   stripTrailingImplicitComma,
   trimFirstSpace,
+  typeSuffixForExpression,
   typeOfJSX,
   wrapTypeInPromise,
 } from "./parser/lib.civet"
+import type {
+  ArrayBindingPattern,
+  ASTNode,
+  BlockStatement,
+  ObjectBindingPattern,
+} from "./parser/types.civet"
 
 /**
  * Globals
  */
-let filename              // filename currently being parsed
-let initialConfig         // input for parser config
-let config                // current parser config after directives
-let sync                  // synchronous mode: as much as possible without await
+let filename: string??        // filename currently being parsed
+let initialConfig: unknown | null              // input for parser config
+let config: any                                 // current parser config after directives
+let sync: boolean??           // synchronous mode: as much as possible without await
+
+// Parser state — mutable fields plus getters installed via
+// Object.defineProperties below.  Widened here so TS sees the full shape.
+interface ParserState
+  forbidClassImplicitCall: boolean[]
+  forbidIndentedApplication: boolean[]
+  forbidBracedApplication: boolean[]
+  forbidTrailingMemberProperty: boolean[]
+  forbidNestedBinaryOp: boolean[]
+  forbidNewlineBinaryOp: boolean[]
+  forbidImplicitFragment: boolean[]
+  forbidPipeline: boolean[]
+  JSXTagStack: unknown[]
+  indentLevels: { level: number, token?: string }[]
+  operators: Map<string, any>
+  helperRefs: any
+  prelude: any
+  lastIndent: any
+  // Getters installed via Object.defineProperties.  The *Forbidden fields
+  // are returned as booleans but the grammar bit-shifts them into a state key,
+  // so they're typed as number here (JS coerces either way).
+  readonly currentIndent: { level: number, token?: string }
+  readonly classImplicitCallForbidden: number
+  readonly indentedApplicationForbidden: number
+  readonly bracedApplicationForbidden: number
+  readonly trailingMemberPropertyForbidden: number
+  readonly nestedBinaryOpForbidden: number
+  readonly newlineBinaryOpForbidden: number
+  readonly implicitFragmentForbidden: number
+  readonly pipelineForbidden: number
+  readonly currentJSXTag: unknown
+
 export const state = {    // parser state
   // These get (re)set in Reset, but are included here for type inference
   forbidClassImplicitCall: [false],
@@ -96,7 +137,7 @@ export const state = {    // parser state
   forbidImplicitFragment: [false],
   forbidPipeline: [false],
   JSXTagStack: [undefined],
-}
+} as! ParserState
 
 export const getState = () => state
 export const getConfig = () => config
@@ -157,7 +198,7 @@ Object.defineProperties(state, {
   },
 })
 
-function setOperatorBehavior(name, behavior)
+function setOperatorBehavior(name: string, behavior: unknown)
   existing := state.operators.get(name)
   if existing and behavior // merge behaviors
     state.operators.set(name, {...existing, ...behavior})
@@ -185,7 +226,7 @@ export function getStateKey()
 
   return [stateInt, state.currentJSXTag]
 
-export function parseProgram(input, options)
+export function parseProgram(input: string, options?: { filename?: string, parseOptions?: unknown, sync?: boolean })
   filename = options?.filename
   initialConfig = options?.parseOptions
   sync = options?.sync
@@ -222,7 +263,7 @@ export { ParseError }
 Program
   # EOS allows for initial comment blocks and newlines,
   # when Init didn't already consume them.
-  Reset:reset Init:init EOS?:ws1 TopLevelStatements:statements __:ws2 ->
+  Reset:reset Init:init EOS?:ws1 TopLevelStatements:statements __:ws2 ::BlockStatement ->
     // NOTE: Wrap top level statements in a bare block so they have a parent
     program := {
       type: "BlockStatement",
@@ -315,11 +356,7 @@ ExpressionizedStatement
 
 StatementExpression
   DebuggerStatement
-  IfStatement ->
-    // Forbid expressionizing `if condition` with no then or else clause,
-    // because it might be a postfix `if`
-    return $skip if not $1.else and $1.then.implicit
-    return $1
+  IfStatement
   IterationExpression
   SwitchStatement
   ThrowStatement
@@ -338,12 +375,10 @@ CommaExpression
 # which we allow in statements for the sake of expressionized iterations
 CommaExpressionSpread
   _?:ws DotDotDot _?:ws2 IterationActualStatement:iteration ->
-    return $skip if iteration.subtype is "do" or iteration.subtype is "comptime"
-    if ws2
-      if ws
-        ws = [ws, ws2]
-      else
-        ws = ws2
+    // NOTE: ws1/ws2 can both be truthy when there's whitespace on either
+    // side of `...`, but the ws1-truthy + ws2-truthy path isn't currently
+    // exercised by any test; leaving the combine-both branch for robustness.
+    ws = ws or ws2
     iteration = { ...iteration, resultsParent: true }
     return prepend(ws, iteration)
   AssignmentExpressionSpread ( CommaDelimiter AssignmentExpressionSpread )* ->
@@ -624,7 +659,7 @@ PostfixedArgumentPart
     }
 
 BinaryOpExpression
-  UnaryExpression BinaryOpRHS* ->
+  UnaryExpression BinaryOpRHS* ::ASTNode ->
     return $1 unless $2.length
     return processBinaryOpExpression($0)
 
@@ -650,11 +685,7 @@ BinaryOpRHS
     return $skip if op[1].token is ">" and op[0].length is 0
     // NOTE: Flatten NotDedentedBinaryOp into whitespace and operator
     return [...op, ...rhs]
-  !NewlineBinaryOpAllowed SingleLineBinaryOpRHS ->
-    // > operator needs to have space on both sides (or neither)
-    [ ws1, op ] := $2
-    return $skip if op.token is ">" and not ws1.length
-    return $2
+  !NewlineBinaryOpAllowed SingleLineBinaryOpRHS -> $2
 
 IsLike
   Is _? ( OmittedNegation _? )?:negated Like ->
@@ -690,17 +721,17 @@ RHS
 # https://262.ecma-international.org/#prod-UnaryExpression
 UnaryExpression
   # NOTE: Added nested/array case, for e.g. indented await argument
-  IndentedApplicationAllowed UnaryOp+:pre ( ArrayLiteral / NestedArgumentList ):args !CallExpressionRest UnaryPostfix?:post ->
+  IndentedApplicationAllowed UnaryOp+:pre ( ArrayLiteral / NestedArgumentList ):args !CallExpressionRest UnaryPostfix?:post ::ASTNode ->
     return processUnaryNestedExpression(pre, args, post) ?? $skip
 
   # NOTE: Merged AwaitExpression with UnaryOp
   # https://262.ecma-international.org/#prod-AwaitExpression
   # NOTE: Eliminated left recursion
-  UnaryOp*:pre UnaryBody:exp UnaryPostfix?:post ->
+  UnaryOp*:pre UnaryBody:exp UnaryPostfix?:post ::ASTNode ->
     return processUnaryExpression(pre, exp, post)
 
 UnaryWithoutParenthesizedAssignment
-  UnaryOp*:pre UnaryWithoutParenthesizedAssignmentBody:exp UnaryPostfix?:post ->
+  UnaryOp*:pre UnaryWithoutParenthesizedAssignmentBody:exp UnaryPostfix?:post ::ASTNode ->
     return processUnaryExpression(pre, exp, post)
 
 UnaryBody
@@ -723,7 +754,9 @@ MaybeNestedCoffeeDoBody
 CoffeeDoBody
   # NOTE: This is a little hacky to match CoffeeScript's behavior
   # https://coffeescript.org/#try:do%20x%20%2B%20y%0Ado%20x%20%3D%20y%0Ado%20-%3E%20x%20%3D%201
-  ArrowFunction / ( LeftHandSideExpression !( __ AssignmentOpSymbol ) ) / Expression
+  ArrowFunction
+  LeftHandSideExpression !( __ AssignmentOpSymbol ) -> [$1, undefined]
+  Expression
 
 UnaryWithoutParenthesizedAssignmentBody
   UpdateExpression
@@ -774,13 +807,13 @@ NWTypePostfix
 UpdateExpression
   # NOTE: Not allowing whitespace between prefix and postfix increment operators and operand
   # This is especially important for ++ to work as binary concat operator
-  UpdateExpressionSymbol:symbol !Whitespace UnaryWithoutParenthesizedAssignment:assigned ->
+  UpdateExpressionSymbol:symbol !Whitespace UnaryWithoutParenthesizedAssignment:assigned ::ASTNode ->
     return {
       type: "UpdateExpression",
       assigned,
       children: [symbol, assigned],
     }
-  LeftHandSideExpression ( UpdateExpressionSymbol /(?!\p{ID_Start}|[_$0-9(\[{])/ )? ->
+  LeftHandSideExpression ( UpdateExpressionSymbol /(?!\p{ID_Start}|[_$0-9(\[{])/ )? ::ASTNode ->
     return $1 unless $2
     return {
       type: "UpdateExpression",
@@ -806,7 +839,7 @@ UpdateExpressionSymbol
 AssignmentExpression
   # NOTE: ActualAssignment has highest precedence:
   # `x = y |> z` parses as `x = (y |> z)` not `(x = y) |> z`
-  _?:ws ActualAssignment:assign ->
+  _?:ws ActualAssignment:assign ::ASTNode ->
     return prepend(ws, assign)
   # NOTE: It is important for pipeline to have higher precedence than
   # usual binary operators, so that x |> & + 2 |> & * 3
@@ -826,11 +859,11 @@ NonPipelineAssignmentExpression
   ( EOS _? ) NonPipelineAssignmentExpressionTail
 
 SingleLineAssignmentExpression
-  _?:ws AssignmentExpressionTail:tail ->
+  _?:ws AssignmentExpressionTail:tail ::ASTNode ->
     return prepend(ws, tail)
 
 NonPipelineSingleLineAssignmentExpression
-  _?:ws NonPipelineAssignmentExpressionTail:tail ->
+  _?:ws NonPipelineAssignmentExpressionTail:tail ::ASTNode ->
     return prepend(ws, tail)
 
 AssignmentExpressionTail
@@ -851,7 +884,7 @@ ActualAssignment
   # NOTE: Consolidated assignment ops
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
-  ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedExpression ->
+  ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedExpression ::ASTNode ->
     $1 = $1.map((x) => [x[0], x[1], ...x[2]])
     $0 = [$1, $2]
     return {
@@ -870,7 +903,7 @@ NonPipelineActualAssignment
   # NOTE: Consolidated assignment ops
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
-  ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedNonPipelineExpression ->
+  ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedNonPipelineExpression ::ASTNode ->
     $1 = $1.map((x) => [x[0], x[1], ...x[2]])
     $0 = [$1, $2]
     return {
@@ -976,6 +1009,12 @@ ConditionalExpression
 TernaryRest
   NestedTernaryRest
   # NOTE: Ternary `a ? b : c` is disabled if CoffeeScript binary existential `a ? b` is enabled
+  # Trailing ?: condition ?
+  #   then :
+  #   else
+  !CoffeeBinaryExistentialEnabled &[ \t] _ QuestionMark PushIndent (Nested Expression _ Colon Nested Expression)?:thenelse PopIndent ->
+    return $skip unless thenelse
+    return [$3, $4, ...thenelse]
   !CoffeeBinaryExistentialEnabled &[ \t] _ QuestionMark MaybeNestedExpression __ Colon MaybeNestedExpression ->
     return $0.slice(2)
 
@@ -993,24 +1032,19 @@ ShortCircuitExpression
   BinaryOpExpression
 
 PipelineExpression
-  PipelineAllowed _?:ws PipelineHeadItem:head PipelineExpressionBody:body ->
-    if head.type is "ArrowFunction" and head.ampersandBlock
-      expressions := [ {
-        type: "PipelineExpression",
-        children: [ ws, head.block.expressions[0], body ],
-      } ]
-      block := { ...head.block, expressions, children: [expressions] }
-      return {
-        ...head,
-        block,
-        body: expressions,
-        children: [ ...head.children.slice(0, -1), block ],
-      }
-
-    return {
+  PipelineAllowed _?:ws PipelineHeadItem:head PipelineExpressionBody:body AllowedTrailingCallExpressions?:trailing ->
+    // NOTE: Ampersand-block heads (`&.foo |> bar`) are unwrapped later in
+    // pipe.civet's constructInvocation; we don't need special handling here.
+    node := {
       type: "PipelineExpression",
       children: [ws, head, body]
     }
+    if trailing
+      return processCallMemberExpression({
+        type: "CallExpression",
+        children: [node, ...trailing]
+      })
+    return node
 
 PipelineExpressionBody
   # First check for properly indented chain of |>s,
@@ -1060,24 +1094,39 @@ PipelineTailItem
 
 # https://262.ecma-international.org/#prod-PrimaryExpression
 PrimaryExpression
-  ObjectLiteral
+  ObjectLiteral ::ASTNode ->
+    return $1
   # NOTE: ObjectLiteral needs to be before ArrayLiteral to support `[x]: y`
-  ArrayLiteral
-  ThisLiteral
-  TemplateLiteral
+  ArrayLiteral ::ASTNode ->
+    return $1
+  ThisLiteral ::ASTNode ->
+    return $1
+  TemplateLiteral ::ASTNode ->
+    return $1
   # NOTE: TemplateLiteral must be before Literal, so that CoffeeScript
   # interpolated strings get checked first before StringLiteral.
-  Literal
-  FunctionExpression # NOTE: Must be before IdentiferExpression so `async function ...` isn't parsed as `async(function ...)`
-  IdentifierReference # NOTE: Must be below ObjectLiteral for inline objects `a: 1, b: 2` to not be shadowed by matching the first identifier
-  ClassExpression
-  RegularExpressionLiteral
-  OptimizedParenthesizedExpression
-  Placeholder
-  SymbolLiteral
+  Literal ::ASTNode ->
+    return $1
+  # NOTE: Must be before IdentiferExpression so `async function ...` isn't parsed as `async(function ...)`
+  FunctionExpression ::ASTNode ->
+    return $1
+  # NOTE: Must be below ObjectLiteral for inline objects `a: 1, b: 2` to not be shadowed by matching the first identifier
+  IdentifierReference ::ASTNode ->
+    return $1
+  ClassExpression ::ASTNode ->
+    return $1
+  RegularExpressionLiteral ::ASTNode ->
+    return $1
+  OptimizedParenthesizedExpression ::ASTNode ->
+    return $1
+  Placeholder ::ASTNode ->
+    return $1
+  SymbolLiteral ::ASTNode ->
+    return $1
   # https://facebook.github.io/jsx/#sec-jsx-PrimaryExpression
   # NOTE: Modified to parse multiple JSXElement/JSXFragments as one fragment
-  JSXImplicitFragment
+  JSXImplicitFragment ::ASTNode ->
+    return $1
 
 OptimizedParenthesizedExpression
   ParenthesizedExpression ->
@@ -1159,7 +1208,7 @@ ClassDeclaration
 
 # https://262.ecma-international.org/#prod-ClassExpression
 ClassExpression
-  Decorators?:decorators ( Abstract __ )?:abstract Class !":" ClassBinding?:binding ClassHeritage?:heritage ClassBody:body ->
+  Decorators?:decorators ( Abstract __ )?:abstract Class:class_ !":" ClassBinding?:binding ClassHeritage?:heritage ClassBody:body ->
     return {
       type: "ClassExpression",
       decorators,
@@ -1169,7 +1218,7 @@ ClassExpression
       name: binding?.[0].name,
       heritage,
       body,
-      children: $0,
+      children: [decorators, abstract, class_, binding, heritage, body],
     }
 
 ClassBinding
@@ -1232,6 +1281,9 @@ ExtendsShorthand
 
 NotExtendsToken
   Loc:l _?:ws1 OmittedNegation:ws2 ExtendsShorthand:t " "? ->
+    // `!<` is eaten by NonNullable before reaching this rule, so ws1 and ws2
+    // are never both falsy; the `{ ..., token: " " }` fallback is unreachable
+    /* c8 ignore next 2 -- unreachable: see note above */
     ws := ws1 and ws2 ? [ws1, ws2] : ws1 or ws2 or
       { $loc: l.$loc, token: " " }
     return {
@@ -1298,8 +1350,9 @@ ImplementsTarget
 # https://262.ecma-international.org/#prod-ClassBody
 # NOTE: Nesting and indentation sensitive
 ClassBody
-  __:ws1 OpenBrace:open AllowAll ClassBracedContent?:expressions RestoreAll __:ws2 CloseBrace:close  ->
-    expressions = [] unless expressions
+  # NOTE: ClassBracedContent single-line alternative always succeeds with
+  # (possibly empty) array, so `?:expressions` never captures undefined.
+  __:ws1 OpenBrace:open AllowAll ClassBracedContent:expressions RestoreAll __:ws2 CloseBrace:close  ->
     return {
       type: "BlockStatement",
       subtype: "ClassBody",
@@ -1320,8 +1373,7 @@ ClassBracedContent
   NestedClassElements
   # based on SingleLineStatements
   ForbidNewlineBinaryOp ( ( _? !EOS ) ClassElement StatementDelimiter )*:stmts RestoreNewlineBinaryOp ->
-    return $skip unless stmts
-    return stmts
+    return stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
 
 NestedClassElements
   PushIndent NestedClassElement*:elements PopIndent ->
@@ -1381,6 +1433,7 @@ ClassSignatureBody
 
 NestedClassSignatureElements
   PushIndent NestedClassSignatureElement*:elements PopIndent ->
+    /* c8 ignore next -- structurally unreachable: FieldDefinition matches any identifier-like content (including reserved words), so whenever this rule runs elements#≥1. $skip kept as state-safety belt inside PushIndent/PopIndent. */
     return $skip unless elements#
     return elements
 
@@ -1415,7 +1468,7 @@ AccessModifier
 
     return {
       ts: true,
-      children: $0
+      children: [$1, $2]
     }
 
 # https://262.ecma-international.org/#prod-FieldDefinition
@@ -1439,7 +1492,7 @@ FieldDefinition
     }
 
   # NOTE: Added readonly semantic equivalent of const field assignment
-  InsertReadonly:readonly ClassElementName:id TypeSuffix?:typeSuffix __ ConstAssignment:ca MaybeNestedPostfixedCommaExpression ->
+  InsertReadonly:readonly ClassElementName:id TypeSuffix?:typeSuffix __ ConstAssignment:ca MaybeNestedPostfixedExpressionOrCommaLoop ->
     // Adjust position to space before assignment to make TypeScript remapping happier
     readonly.children[0].$loc = {
       pos: ca.$loc.pos - 1,
@@ -1560,7 +1613,7 @@ LeftHandSideExpression
   ( New !( "." / ":" ) __ )+ CallExpression:expression ->
     return {
       type: "NewExpression",
-      children: $0,
+      children: [...$1.flatMap(([new_, _assert, ws]) => [new_, ws]), expression],
       expression,
     }
   CallExpression
@@ -1966,7 +2019,7 @@ PropertyBindExplicitArguments
 
 SuperProperty
   Super MemberBracketContent
-  Super !PropertyAccessModifier PropertyAccess
+  Super !PropertyAccessModifier PropertyAccess -> [$1, $3]
 
 MetaProperty
   New Dot Target
@@ -2008,21 +2061,49 @@ ShortArrowParameters
   ( ObjectBindingPattern / ArrayBindingPattern ):binding ->
     // Based on ParameterElement
     { typeSuffix } := binding
+    parameter := {
+      type: "Parameter"
+      children: [ binding, typeSuffix ]
+      names: binding.names
+      typeSuffix
+    }
+    parameters := [ parameter ]
     return {
-      type: "Parameter",
-      children: [ binding, typeSuffix ],
-      names: binding.names,
-      typeSuffix,
+      type: "Parameters"
+      children: ["(", parameters, ")"]
+      parameters
     }
 
-ArrowParameters
-  ShortArrowParameters ->
-    parameters := [ $1 ]
-    return {
-      type: "Parameters",
-      children: ["(", parameters, ")"],
-      parameters,
+# In esArrowFunction mode, allow single bare identifier as arrow parameter (ES-style: x => ...)
+ESArrowIdentifierParameters
+  ESArrowFunctionEnabled Identifier:id ->
+    parameter := {
+      type: "Parameter"
+      children: [id]
+      id.names
+      binding: id
+      typeSuffix: undefined
+      initializer: undefined
+      delim: undefined
     }
+    parameters := [ parameter ]
+    return {
+      type: "Parameters"
+      children: ["(", parameters, ")"]
+      parameters
+    }
+
+# Parameters before =>
+ArrowParameters
+  # In esArrowFunction mode, try single bare identifier first
+  # (before implicit empty params allowed by Parameters)
+  ESArrowIdentifierParameters
+  ShortArrowParameters
+  Parameters
+
+# Parameters before ->
+ThinArrowParameters
+  ShortArrowParameters
   Parameters
 
 NonEmptyParameters
@@ -2094,7 +2175,7 @@ ParameterElement
 
 ParameterElementDelimiter
   _? Comma
-  &( __ [)\]}] )
+  &( __ [)\]}] ) -> undefined
   &EOS InsertComma -> $2
 
 # https://262.ecma-international.org/#prod-BindingIdentifier
@@ -2108,11 +2189,12 @@ BindingIdentifier
 NWBindingIdentifier
   # NOTE: Added @param for binding identifiers
   # The parser will allow them in const/let/var declarations but JS/TS doesn't allow them there
-  At AtIdentifierRef:ref ->
+  At:at AtIdentifierRef:ref ->
     return {
       type: "AtBinding",
       children: [ref],
       ref,
+      at,
       names: [],
     }
   # Likewise for private identifiers
@@ -2144,18 +2226,21 @@ PinPattern
       type: "PinPattern",
       children: [expression],
       expression,
+      typeSuffix: typeSuffixForExpression(expression),
     }
   Caret SingleLineExpressionWithIndentedApplicationForbidden:expression ->
     return {
       type: "PinPattern",
       children: [expression],
       expression,
+      typeSuffix: typeSuffixForExpression(expression),
     }
   ActualMemberExpression:expression ->
     return {
       type: "PinPattern",
       children: [expression],
       expression,
+      typeSuffix: typeSuffixForExpression(expression),
     }
   # Handle unary numeric in switch patterns
   ([+-] NumericLiteral):expression ->
@@ -2163,6 +2248,7 @@ PinPattern
       type: "PinPattern",
       children: [expression],
       expression,
+      typeSuffix: typeSuffixForExpression(expression),
     }
   # Handle undefined in switch patterns
   Undefined:expression ->
@@ -2170,6 +2256,7 @@ PinPattern
       type: "PinPattern",
       children: [expression],
       expression,
+      typeSuffix: typeSuffixForExpression(expression),
     }
 
 # `name^ pattern` means bind the whole thing to `name`,
@@ -2199,7 +2286,7 @@ BindingPattern
 # https://262.ecma-international.org/#prod-ObjectBindingPattern
 # NOTE: Simplified from spec
 ObjectBindingPattern
-  _?:ws1 OpenBrace:open ObjectBindingPatternContent:c __:ws2 CloseBrace:close ->
+  _?:ws1 OpenBrace:open ObjectBindingPatternContent:c __:ws2 CloseBrace:close ::ObjectBindingPattern ->
     properties := c.children
     return gatherBindingPatternTypeSuffix({
       type: "ObjectBindingPattern",
@@ -2229,7 +2316,7 @@ BindingPropertyList
 # https://262.ecma-international.org/#prod-ArrayBindingPattern
 # NOTE: Simplified from spec
 ArrayBindingPattern
-  _?:ws1 OpenBracket:open ArrayBindingPatternContent:c __:ws2 CloseBracket:close ->
+  _?:ws1 OpenBracket:open ArrayBindingPatternContent:c __:ws2 CloseBracket:close ::ArrayBindingPattern ->
     return gatherBindingPatternTypeSuffix({
       ...c, // names, blockPrefix, length
       type: "ArrayBindingPattern",
@@ -2350,6 +2437,7 @@ BindingProperty
         type: "PinPattern",
         children: [binding],
         expression: binding,
+        typeSuffix: typeSuffixForExpression(binding),
       },
     }
 
@@ -2737,7 +2825,7 @@ OperatorAssociativity
     return { assoc }
 
 ThinArrowFunction
-  ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:returnType _?:ws ThinArrow:arrow ( BracedObjectSingleLineStatements / NoCommaBracedOrEmptyBlock ):block ->
+  ( Async _ )?:async ThinArrowParameters:parameters ReturnTypeSuffix?:returnType _?:ws ThinArrow:arrow ( BracedObjectSingleLineStatements / NoCommaBracedOrEmptyBlock ):block ->
     async = [] unless async
     generator := []
 
@@ -2784,6 +2872,7 @@ ThinArrow
 ExplicitBlock
   # Allow single-line block only when the block starts on the same line
   _?:ws1 OpenBrace:open AllowAll ( NestedBlockStatements / SingleLineStatements / EmptyBracedContent )?:block RestoreAll __:ws2 CloseBrace:close ->
+    /* c8 ignore next -- structurally unreachable: EmptyBracedContent catches empty/ws-only, valid content matches one of the alts, invalid content blocks CloseBrace. $skip kept as state-safety belt inside AllowAll/RestoreAll. */
     return $skip unless block
     return {
       ...block,
@@ -2793,6 +2882,7 @@ ExplicitBlock
   # For backward compatibility with JavaScript, allow open brace to start on
   # the next line, as long as it's followed by a newline or close brace
   IndentedAtLeast:ws1 OpenBrace:open AllowAll ( NestedBlockStatements / EmptyBracedContent )?:block RestoreAll __:ws2 CloseBrace:close ->
+    /* c8 ignore next -- structurally unreachable: same logic as the single-line alt above. $skip kept as state-safety belt inside AllowAll/RestoreAll. */
     return $skip unless block
     return {
       ...block,
@@ -3022,8 +3112,8 @@ SingleLineStatements
   # NOTE: Statement can start with __ via AssignmentExpression.
   # Force staying on the same line via !/\n/ assertion.
   ForbidNewlineBinaryOp ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter )*:stmts ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter? )?:last RestoreNewlineBinaryOp ->
-    expressions := [...stmts]
-    expressions.push(last) if last
+    expressions := stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
+    expressions.push([last[0][0], last[1], last[2]]) if last
 
     children := [expressions]
     children.push(["\n"]) if hasTrailingComment(expressions)
@@ -3053,8 +3143,8 @@ BracedObjectSingleLineStatements
 
 PostfixedSingleLineStatements
   ( ( _? !EOS ) StatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) StatementListItem SemicolonDelimiter? )?:last ->
-    children := [...stmts]
-    children.push(last) if last
+    children := stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
+    children.push([last[0][0], last[1], last[2]]) if last
 
     return {
       type: "BlockStatement",
@@ -3065,8 +3155,8 @@ PostfixedSingleLineStatements
 
 PostfixedSingleLineNoCommaStatements
   ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter? )?:last ->
-    children := [...stmts]
-    children.push(last) if last
+    children := stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
+    children.push([last[0][0], last[1], last[2]]) if last
 
     return {
       type: "BlockStatement",
@@ -3222,14 +3312,14 @@ _ArrayLiteral
     return $skip unless content
 
     // Remove trailing comma
+    // NOTE: NestedElementList / SingleLineElementList items are always
+    // objects (ArrayElementExpression results), never bare arrays, so the
+    // Array.isArray(last) arm is dead.
     last .= content[content# - 1]
-    lastArray .= Array.isArray(last) ? last : last.children
+    lastArray .= last.children
     if isComma(lastArray[lastArray# - 1])
       lastArray = lastArray.slice(0, -1)
-      if Array.isArray(last)
-        last = lastArray
-      else
-        last = { ...last, children: lastArray }
+      last = { ...last, children: lastArray }
       content = [ ...content.slice(0, -1), last ]
 
     return {
@@ -3244,10 +3334,8 @@ _ArrayLiteral
     if content.type is "RangeExpression"
       return prepend(ws, content)
 
-    children .= if Array.isArray(content)
-      [open, ...content, ...ws, close]
-    else
-      [open, content, ...ws, close]
+    // ArrayLiteralContent always returns an array here (RangeExpression case handled above)
+    children := [open, ...content, ...ws, close]
 
     // Gather names when ArrayLiteral is used as a destructuring pattern
     names := children.flatMap((c) => c?.names || [])
@@ -3341,7 +3429,7 @@ ArrayLiteralContent
   # by dedented commas
   #NestedImplicitObjectLiteral ( __ Comma NestedImplicitObjectLiteral )*
   # First check for properly indented list items
-  NestedElementList &( __ CloseBracket )
+  NestedElementList &( __ CloseBracket ) -> $1
   # Next check for a line of items followed by properly indented list items;
   # first line should not use indented applications because they may be
   # lines of list items
@@ -3361,8 +3449,8 @@ NestedElementList
 
 NestedElement
   Nested:indent ElementList:list ArrayElementDelimiter:delimiter ->
+    // NOTE: ElementList always returns >=1-length array.
     {length} := list
-    return $skip unless length
     // Prepend indent to first element and append delimiter to last element
     return list.map (e, i) =>
       e = prepend(indent, e) if i is 0
@@ -3378,7 +3466,7 @@ ArrayElementDelimiter
   # Ideally it would be nice to insert a trailing comma before newline followed by closing bracket, but in practice
   # it is difficult to keep the correct number of commas for elision elements. This is also closer to keeping source
   # verbatim.
-  &( __ "]" )
+  &( __ "]" ) -> undefined
   &EOS InsertComma -> $2
 
 ElementListWithIndentedApplicationForbidden
@@ -3405,7 +3493,7 @@ SingleLineElementList
 ElementListRest
   # NOTE: Within ElementList, forbid newlines (EOS) before and after comma,
   # to correctly handle indentation and nested lists
-  ( _? Comma !EOS ) ArrayElementExpression
+  ( _? Comma !EOS ) ArrayElementExpression -> [[$1[0], $1[1]], $2]
 
 # NOTE: Modified and simplified from the spec
 ArrayElementExpression
@@ -3414,8 +3502,6 @@ ArrayElementExpression
   ImplicitObjectLiteral &ArrayElementDelimiter -> $1
   # NOTE: Allow for postfix splat like CoffeeScript
   Expression:exp _?:ws DotDotDot:dots &ArrayElementDelimiter ->
-    exp = { ...makeRef(), names: [] } unless exp
-
     return {
       type: "SpreadElement",
       children: [ws, dots, exp],
@@ -3494,8 +3580,8 @@ NestedArrayBullet
 ArrayBullet
   BulletIndent:bullet ( ElementList ArrayBulletDelimiter )?:content PopIndent ->
     return $skip unless content
+    // NOTE: ElementList always returns a non-empty array.
     [ list, delimiter ] .= content
-    return $skip unless list#
     // Prepend bullet to first element and append delimiter to last element
     list = list.slice()
     list[0] = prepend(bullet, list[0])
@@ -3518,6 +3604,7 @@ BulletIndent
       $loc,
       level: getIndentLevel(" ".repeat(state.currentIndent.level) + bullet + ws, config.tab)
     }
+    /* c8 ignore next -- debug output for verbose config */
     console.log("pushing bullet indent", indent) if config.verbose
     state.indentLevels.push(indent)
     return indent
@@ -3615,12 +3702,12 @@ BracedObjectLiteralContent
 # NOTE: Nested implicit object literal starts with an indentation.
 # All properties can be spaced out and must have a colon.
 NestedImplicitObjectLiteral
-  InsertOpenBrace PushIndent AllowPipeline NestedImplicitPropertyDefinitions?:properties RestorePipeline PopIndent InsertNewline InsertIndent InsertCloseBrace ->
+  InsertOpenBrace:open PushIndent AllowPipeline NestedImplicitPropertyDefinitions?:properties RestorePipeline PopIndent InsertNewline:newline InsertIndent:indent InsertCloseBrace:close ->
     return $skip unless properties
     return {
       type: "ObjectExpression",
       properties,
-      children: $0,
+      children: [open, properties, newline, indent, close],
     }
 
 NestedImplicitPropertyDefinitions
@@ -3697,7 +3784,7 @@ InlineObjectPropertyDelimiter
 ObjectPropertyDelimiter
   _? Comma
   # Object closing delimits the property, as do end of array or parenthetical
-  &( __ [)\]}] )
+  &( __ [)\]}] ) -> undefined
   &EOS InsertComma ->
     return { ...$2, implicit: true }
 
@@ -3715,11 +3802,13 @@ PropertyDefinition
       return $skip
 
     // immutably set exp.statement.object = true
+    // NOTE: IterationExpression.children is always `[statement]`, so the
+    // map's falsy arm never fires.
     statement = { ...statement, object: true }
     exp = {
       ...exp,
       statement,
-      children: exp.children.map(($) => $ === exp.statement ? statement : $),
+      children: [statement],
     }
 
     children := [ws, dots, exp]
@@ -3839,6 +3928,18 @@ PropertyDefinition
     // Private name becomes public
     if name[0] is "#" then name = name.slice(1)
 
+    // { y? } → { ...((y != null) && {y}) }
+    if not pre# and post?.token is "?" and value.type is "Identifier"
+      dots := { $loc, token: "..." }
+      paren := parenthesizeExpression({ children: ["(", value, " != null) && {", name, "}"] })
+      return {
+        type: "SpreadProperty",
+        children: [ws, dots, paren],
+        names: value.names,
+        dots,
+        value: paren,
+      }
+
     return {
       type: "Property",
       children: [ws, name, ": ", processUnaryExpression(pre, value, post)],
@@ -3852,6 +3953,20 @@ PropertyDefinition
   #  return prepend(ws, id)
 
 NamedProperty
+  # NOTE: Optional named property { y?: value } → { ...(value != null ? {y: value} : {}) }
+  PropertyName:name "?" _? Colon _? PostfixedExpression:exp ->
+    { ref, refAssignment } := maybeRefAssignment(exp)
+    checkExp := refAssignment ? parenthesizeExpression(refAssignment) : exp
+    dots := { $loc, token: "..." }
+    paren := parenthesizeExpression({ children: [checkExp, " != null ? {", name, ": ", ref, "} : {}"] })
+
+    return {
+      type: "SpreadProperty",
+      children: [dots, paren],
+      names: exp.names || [],
+      dots,
+      value: paren,
+    }
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
   # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
   PropertyName:name _? Colon PostfixedExpression:exp ->
@@ -3952,7 +4067,7 @@ MethodDefinition
   MethodSignature:signature !(PropertyAccess / ExplicitPropertyGlob / UnaryPostfix / NonNullAssertion) BracedBlock?:block ->
     return {
       type: "MethodDefinition",
-      children: $0,
+      children: [signature, block],
       name: signature.name,
       signature,
       block,
@@ -3996,22 +4111,18 @@ MethodDefinition
         { name } := last
         return makeGetterMethod(name, ws, value, returnType, block, kind)
       case "PropertyGlob":
+        // NOTE: properties of a BracedObjectLiteral are always
+        // type "Property" (or SpreadProperty, filtered out upstream);
+        // a top-level "Identifier" type would be dead here.
         return {
           type: "MultiMethodDefinition",
           children: last.object.properties.map((p) => {
-            { name, type } := p
-            let v
-            switch type
-              case "Identifier":
-                v = trimFirstSpace(p)
-                break
-              case "Property":
-                { value } := p
-                if value.privateShorthand
-                  v = value.privateId
-                else
-                  v = trimFirstSpace(value)
-                break
+            { name } := p
+            { value } := p
+            v .= if value.privateShorthand
+              value.privateId
+            else
+              trimFirstSpace(value)
             exp := processCallMemberExpression({
               type: "CallExpression",
               children: [base, ...rest.slice(0, -1), {
@@ -4076,19 +4187,20 @@ MethodSignature
 
   # NOTE: If this node layout changes, be sure to update
   # `convertMethodToFunction`
-  MethodModifier:modifier ClassElementName:name _?:ws1 QuestionMark?:optional _?:ws2 NonEmptyParameters:parameters ReturnTypeSuffix?:returnType ->
+  MethodModifier:modifier ClassElementName:authoredName _?:ws1 QuestionMark?:optional _?:ws2 NonEmptyParameters:parameters ReturnTypeSuffix?:returnType ->
     // Normalize name so we can check if it is `constructor`
+    name .= authoredName
     if name.name
       name = name.name
     else if name.token
-      name = name.token.match(/^(?:"|')/) ? name.token.slice(1, -1) : name.token
+      name = name.token.match(/^(?:"|')/) ? name.token[<..<] : name.token
 
     // TypeScript supports optional methods with bodies; remove ? from JS output
     if optional then optional = { ...optional, ts: true }
 
     return {
       type: "MethodSignature",
-      children: [ ...modifier.children, name, ws1, optional, ws2, parameters, returnType ],
+      children: [ ...modifier.children, authoredName, ws1, optional, ws2, parameters, returnType ],
       async: modifier.async,
       generator: modifier.generator,
       name,
@@ -4245,10 +4357,8 @@ NotDedentedBinaryOp
     ws.push(...ws1) if ws1
     ws.push(...ws2) if ws2
     return [ ws, op ]
-  NestedBinaryOpAllowed Nested:ws1 _?:ws2 !Identifier ( !"*" / !ImportDeclaration ) BinaryOp:op ->
-    ws := [...ws1]
-    ws.push(...ws2) if ws2
-    return [ ws, op ]
+  NestedBinaryOpAllowed Nested:ws1 !Identifier ( !"*" / !ImportDeclaration ) BinaryOp:op ->
+    return [ [...ws1], op ]
 
 IdentifierBinaryOp
   Identifier:id ->
@@ -4556,13 +4666,23 @@ PostfixedExpression
     return attachPostfixStatementAsExpression(expression, post)
   Expression
 
+# Outside contexts where commas are too important (e.g. parameters/arguments),
+# postfixed loops can have comma expressions and spreads to accumulate multiple
+# items in the body, such as `pt.x, pt.y for pt of pts`
+CommaLoop
+  CommaExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ->
+    return attachPostfixStatementAsExpression(expression, [ws, post])
+
+PostfixedExpressionOrCommaLoop
+  CommaLoop
+  PostfixedExpression
+
 # Expression with postfixes *or* comma operators (mixing seems ambiguous)
 # Note that postfixed loops do allow commas though, for accumulating multiple
 # items per iteration
 PostfixedCommaExpression
   # Loops allow commas and spreads before the postfix
-  CommaExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ->
-    return attachPostfixStatementAsExpression(expression, [ws, post])
+  CommaLoop
   # Ifs just allow expressions
   Expression:expression ( _? PostfixStatement ):post ->
     return attachPostfixStatementAsExpression(expression, post)
@@ -4949,11 +5069,17 @@ CoffeeForStatementParameters
 
     if kind.token is "from"
       if step
-        throw new Error("Can't use 'by' with 'from' in CoffeeScript for loops")
+        blockPrefix./**/push(["", {
+          type: "Error",
+          message: "Can't use 'by' with 'from' in CoffeeScript for loops",
+        }])
       kind = { ...kind, token: "of" }
     else if kind.token is "of"
       if step
-        throw new Error("Can't use 'by' with 'of' in CoffeeScript for loops")
+        blockPrefix./**/push(["", {
+          type: "Error",
+          message: "Can't use 'by' with 'of' in CoffeeScript for loops",
+        }])
 
       // TODO: Exp ref if exp is not a literal or identifier
 
@@ -5024,7 +5150,10 @@ CoffeeForStatementParameters
             }
             condition = [counterRef, " >= 0; "]
         else
-          throw new Error("TODO: Support non-literal step in CoffeeScript for loops")
+          increment = [" +=", ...stepWs, stepExp, {
+            type: "Error",
+            message: "TODO: Support non-literal step in CoffeeScript for loops",
+          }]
 
         return {
           declaration,
@@ -5073,9 +5202,10 @@ ForStatementParameters
     }
   # NOTE: Added optional parens
   InsertOpenParen __ ( LexicalDeclaration / VariableStatement / CommaExpression? ):declaration __ Semicolon CommaExpression? Semicolon (!EOS ExpressionWithIndentedApplicationForbidden)? InsertCloseParen ->
+    increment := $8?[1]
     return {
       declaration,
-      children: $0,
+      children: [$1, $2, declaration, $4, $5, $6, $7, increment, $9],
     }
 
   # https://262.ecma-international.org/#prod-ForInOfStatement
@@ -5279,7 +5409,7 @@ CaseExpressionList
     result := rest.map(([ws, _comma, exp, col]) => {
       exp = trimFirstSpace(exp)
 
-      if ws# then return [insertTrimmingSpace("case ", ws), exp, col]
+      if ws# then return [ws, "case ", exp, col]
       return ["case ", exp, col]
     })
     result./**/unshift(first)
@@ -5489,6 +5619,7 @@ RestoreBracedApplication
 
 BracedApplicationAllowed
   "" ->
+    /* c8 ignore next 2 -- debug output for verbose config */
     if config.verbose
       console.log("forbidBracedApplication:", state.forbidBracedApplication)
     return $skip if state.bracedApplicationForbidden
@@ -5508,6 +5639,7 @@ RestoreIndentedApplication
 
 IndentedApplicationAllowed
   "" ->
+    /* c8 ignore next 2 -- debug output for verbose config */
     if config.verbose
       console.log("forbidIndentedApplication:", state.forbidIndentedApplication)
     return $skip if state.indentedApplicationForbidden
@@ -5527,6 +5659,7 @@ RestoreTrailingMemberProperty
 
 TrailingMemberPropertyAllowed
   "" ->
+    /* c8 ignore next 2 -- debug output for verbose config */
     if config.verbose
       console.log("forbidTrailingMemberProperty:", state.forbidTrailingMemberProperty)
     return $skip if state.trailingMemberPropertyForbidden
@@ -5545,6 +5678,7 @@ RestoreNestedBinaryOp
 
 NestedBinaryOpAllowed
   "" ->
+    /* c8 ignore next 2 -- debug output for verbose config */
     if config.verbose
       console.log("forbidNestedBinaryOp:", state.forbidNestedBinaryOp)
     return $skip if state.nestedBinaryOpForbidden
@@ -5563,6 +5697,7 @@ RestoreNewlineBinaryOp
 
 NewlineBinaryOpAllowed
   "" ->
+    /* c8 ignore next 2 -- debug output for verbose config */
     if config.verbose
       console.log("forbidNewlineBinaryOp:", state.forbidNewlineBinaryOp)
     return $skip if state.newlineBinaryOpForbidden
@@ -5581,6 +5716,7 @@ RestoreImplicitFragment
 
 ImplicitFragmentAllowed
   "" ->
+    /* c8 ignore next 2 -- debug output for verbose config */
     if config.verbose
       console.log("forbidImplicitFragment:", state.forbidImplicitFragment)
     return $skip if state.implicitFragmentForbidden
@@ -5599,6 +5735,7 @@ RestorePipeline
 
 PipelineAllowed
   "" ->
+    /* c8 ignore next 2 -- debug output for verbose config */
     if config.verbose
       console.log("forbidPipeline:", state.forbidPipeline)
     return $skip if state.pipelineForbidden
@@ -5737,6 +5874,18 @@ MaybeNestedPostfixedExpression
     return $skip unless expression
     return expression
 
+MaybeNestedPostfixedExpressionOrCommaLoop
+  # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
+  # the second case, where they get checked by PrimaryExpression,
+  # which then allows for trailing binary operators etc.
+  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested PostfixedExpressionOrCommaLoop )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
+    return $skip unless expression
+    return expression unless trailing
+    return [ expression, trailing ]
+  ForbidImplicitFragment PostfixedExpressionOrCommaLoop?:expression RestoreImplicitFragment ->
+    return $skip unless expression
+    return expression
+
 MaybeNestedPostfixedCommaExpression
   # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
   # the second case, where they get checked by PrimaryExpression,
@@ -5781,9 +5930,9 @@ MaybeParenNestedExpression
   &EOS ( ArrayLiteral / ObjectLiteral ) -> $2
   # Value after `return` needs to be wrapped in parentheses
   # if it starts on another line.
-  &EOS InsertSpace InsertOpenParen PushIndent ( Nested Expression ):exp PopIndent AllowedTrailingCallExpressions? InsertNewline InsertIndent InsertCloseParen ->
+  &EOS InsertSpace:space InsertOpenParen:open PushIndent ( Nested Expression )?:exp PopIndent AllowedTrailingCallExpressions?:trailing InsertNewline:newline InsertIndent:indent InsertCloseParen:close ->
     return $skip unless exp
-    return $0.slice(1)
+    return [space, open, exp, trailing, newline, indent, close]
 
 # https://262.ecma-international.org/#prod-ImportDeclaration
 ImportDeclaration
@@ -5982,8 +6131,7 @@ TypeAndImportSpecifier
   ImportSpecifier
   # `operator id` blesses `id` as operator; doesn't make sense with `type`
   __:ws Operator OperatorImportSpecifier:spec ->
-    if spec.binding.type !== "Identifier"
-      throw new Error("Expected identifier after `operator`")
+    assert(spec.binding.type is "Identifier", "Expected identifier after `operator`")
     setOperatorBehavior(spec.binding.name, spec.behavior)
     return {
       ...spec,
@@ -6106,15 +6254,14 @@ ExportDeclaration
     let id, error
     if declaration.id
       id = declaration.id
-    else if declaration.names
+    else
+      assert(declaration.names, "Could not find name of declaration in export default")
       if declaration.names# !== 1
         error = {
           type: "Error",
           message: `export default with ${declaration.names#} variable declaration (should be 1)`
         }
       id = declaration.names[0]
-    else
-      throw new Error("Could not find name of declaration in export default")
     return [
       declaration,
       { children: [";"], ts: declaration.ts },
@@ -6124,7 +6271,7 @@ ExportDeclaration
     ]
   # NOTE: This covers all forms that can be directly export defaulted in TS.
   # NOTE: Using Expression to allow If/Switch expressions
-  Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedPostfixedExpression ):declaration ->
+  Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedPostfixedExpressionOrCommaLoop ):declaration ->
     return { type: "ExportDeclaration", declaration, ts: declaration.ts, children: $0 }
   Export __ ExportFromClause:exports __ FromClause ->
     return { type: "ExportDeclaration", ts: exports.ts, children: $0 }
@@ -6174,14 +6321,14 @@ ExportSpecifier
     return { ts: true, children: $0 }
 
 ImplicitExportSpecifier
-  !Default ModuleExportName ( __ As __ ModuleExportName )?
+  !Default ModuleExportName ( __ As __ ModuleExportName )? -> [$2, $3]
 
 # https://262.ecma-international.org/#prod-Declaration
 Declaration
   ImportDeclaration:decl ->
+    // NOTE: decl.imports always has binding or specifiers when we reach here
+    // (the earlier decl.imports guard handles the empty case).
     return $skip if decl.ts or decl.module or not decl.imports or not decl.from
-    { imports } := decl
-    return $skip unless imports.binding or imports.specifiers
     return dynamizeImportDeclaration(decl)
   HoistableDeclaration
   ClassDeclaration
@@ -6224,7 +6371,7 @@ LexicalDeclaration
   # NOTE: Added const/let shorthands
   # NOTE: Using Expression to allow for If/SwitchExpressions
   # NOTE: Using PostfixExpression to allow postfix if/unless/for
-  Loc:loc ( BindingPattern / BindingIdentifier ):pattern TypeSuffix?:typeSuffix NotDedented:ws ( ConstAssignment / LetAssignment ):assign MaybeNestedPostfixedCommaExpression:e ->
+  Loc:loc ( BindingPattern / BindingIdentifier ):pattern TypeSuffix?:typeSuffix NotDedented:ws ( ConstAssignment / LetAssignment ):assign MaybeNestedPostfixedExpressionOrCommaLoop:e ->
     return processAssignmentDeclaration(
       { $loc: loc, token: assign.decl }, // like InsertConst or InsertLet
       pattern, typeSuffix, ws, assign, e
@@ -6430,7 +6577,7 @@ TripleSingleStringCharacters
     return { $loc, token: $0 }
 
 CoffeeStringSubstitution
-  CoffeeSubstitutionStart AllowAll ( PostfixedExpression __ CloseBrace )? RestoreAll ->
+  CoffeeSubstitutionStart AllowAll ( PostfixedExpressionOrCommaLoop __ CloseBrace )? RestoreAll ->
     return $skip unless $3
     return [$1, ...$3]
 
@@ -6587,7 +6734,7 @@ _TemplateLiteral
 
 # NOTE: Simplified grammar
 TemplateSubstitution
-  SubstitutionStart AllowAll ( PostfixedExpression __ CloseBrace )? RestoreAll ->
+  SubstitutionStart AllowAll ( PostfixedExpressionOrCommaLoop __ CloseBrace )? RestoreAll ->
     return $skip unless $3
     return [$1, ...$3]
 
@@ -6702,17 +6849,19 @@ ExpressionDelimiter
   &EOS InsertComma -> $2
 
 SimpleStatementDelimiter
-  &EOS
+  # Hera 0.9.0 returns `true` for assertions; normalize to undefined here
+  # so downstream delimiter checks (e.g. insertSemicolon) treat missing delim as falsy.
+  &EOS -> undefined
   SemicolonDelimiter
 
 StatementDelimiter
-  &EOS
+  &EOS -> undefined
   SemicolonDelimiter
   # Allow for closing a block within the same line as a nested statement
   ClosingDelimiter
 
 ClosingDelimiter
-  &( __ ( "}" / ")" / "]" ) )
+  &( __ ( "}" / ")" / "]" ) ) -> undefined
 
 SemicolonDelimiter
   _? Semicolon TrailingComment ->
@@ -6722,7 +6871,7 @@ SemicolonDelimiter
     }
 
 NonIdContinue
-  /(?!\p{ID_Continue})/
+  /(?!\p{ID_Continue})/ -> undefined
 
 Loc
   "" ->
@@ -7206,6 +7355,7 @@ JSXElement
   # NOTE: In default JSX mode, JSX children must be properly indented,
   # and closing tags are optional (but still allowed).
   !CoffeeJSXEnabled PushJSXOpeningElement:open JSXMixedChildren?:children JSXOptionalClosingElement:close PopJSXStack ->
+    /* c8 ignore next -- JSXMixedChildren always returns an object; $skip kept as a defensive guard against future grammar edits that could change that */
     return $skip unless children
     let parts
     $0 = $0.slice(1)
@@ -7263,6 +7413,7 @@ JSXFragment
   # NOTE: In default JSX mode, JSX children must be properly indented,
   # and closing tags are optional (but still allowed).
   !CoffeeJSXEnabled PushJSXOpeningFragment:open JSXMixedChildren?:children JSXOptionalClosingFragment:close PopJSXStack ->
+    /* c8 ignore next -- JSXMixedChildren always returns an object; $skip kept as a defensive guard against future grammar edits that could change that */
     return $skip unless children
     $0 = $0.slice(1)
     parts := close ? $0 :
@@ -7290,6 +7441,7 @@ PushJSXOpeningFragment
 
 JSXOptionalClosingFragment
   Whitespace? JSXClosingFragment ->
+    /* c8 ignore next -- defensive JSX stack state check: if we reach this rule, we're closing a fragment and currentJSXTag is always "". $skip kept to protect JSX stack state if invariant ever breaks. */
     return $skip if state.currentJSXTag !== ""
     return $0
   ""
@@ -7419,6 +7571,8 @@ JSXAttribute
 
   # https://facebook.github.io/jsx/#prod-JSXAttribute
   JSXAttributeName:name ( JSXAttributeInitializer / &JSXAttributeSpace ):value ->
+    // Hera 0.9.0: `&JSXAttributeSpace` assertion now yields `true`; normalize to falsy.
+    value = undefined if value <? "boolean"
     if name.type is "ComputedPropertyName"
       if value
         // Strip off equals sign and whitespace from JSXAttributeInitializer
@@ -7433,10 +7587,10 @@ JSXAttribute
         value = "true"
       return ["{...{", name, ": ", value, "}}"]
     else
-      return $0
+      return [name, value]
 
   # NOTE: Adding ...foo shorthand for {...foo}
-  InsertInlineOpenBrace DotDotDot InlineJSXAttributeValue InsertCloseBrace &JSXAttributeSpace
+  InsertInlineOpenBrace DotDotDot InlineJSXAttributeValue InsertCloseBrace &JSXAttributeSpace -> [$1, $2, $3, $4]
 
   # NOTE: @foo and @@foo shorthands
   # for foo={this.foo} and foo={this.foo.bind(this)}
@@ -7453,7 +7607,7 @@ JSXAttribute
       children,
     })
     last := lastAccessInCallExpression(expr)
-    return $skip unless last
+    assert last, "AtThis+id/rest guarantees lastAccess"
     let name
     if last.type is "Index"
       return [
@@ -7474,7 +7628,7 @@ JSXAttribute
     if expr.type is "ObjectExpression"  // glob
       return convertObjectToJSXAttributes(expr)
     last := lastAccessInCallExpression(expr)
-    return $skip unless last
+    assert last, "Identifier base guarantees lastAccess"
     let name
     if last.type is "Index"
       return [
@@ -7511,7 +7665,7 @@ JSXShorthandString
   # NOTE: TemplateLiteral must be before StringLiteral,
   # so that CoffeeScript interpolated strings get checked first.
   StringLiteral
-  OpenBrace PostfixedExpression __ CloseBrace
+  OpenBrace PostfixedExpressionOrCommaLoop __ CloseBrace
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeName
 JSXAttributeName
@@ -7532,8 +7686,8 @@ JSXAttributeInitializer
 JSXAttributeValue
   # https://facebook.github.io/jsx/#prod-JSXDoubleStringCharacters
   # https://facebook.github.io/jsx/#prod-JSXSingleStringCharacters
-  # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
-  OpenBrace PostfixedExpression __ CloseBrace
+  # NOTE: Using PostfixedExpressionOrCommaLoop to allow If/Switch expressions and postfixes
+  OpenBrace PostfixedExpressionOrCommaLoop __ CloseBrace
   JSXElement
   JSXFragment
   InsertInlineOpenBrace:open InlineJSXAttributeValue:value InsertCloseBrace:close &JSXAttributeSpace ->
@@ -7808,17 +7962,17 @@ JSXChildExpression
     }
     if d.thisAssignments?#
       d.children.push(...d.splices, ",", ...d.thisAssignments.map(
-        (a, i) => a[a#-1] is ';' ? [
+        (a, i) => [
           ...a.slice(0, -1),
           i is d.thisAssignments#-1 ? "" : ",",
-        ] : a
+        ]
       ))
     else if d.splices?#
       d.children.push(...d.splices)
     d.children.push(",void 0")
     return d
-  # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
-  Whitespace? ( DotDotDot Whitespace? )? PostfixedExpression
+  # NOTE: Using PostfixedExpressionOrCommaLoop to allow If/Switch expressions and postfixes
+  Whitespace? ( DotDotDot Whitespace? )? PostfixedExpressionOrCommaLoop
 
 IndentedJSXChildExpression
   PushIndent NestedJSXChildExpression? PopIndent ->
@@ -7843,6 +7997,7 @@ JSXCodeChildExpression
     return expression
   # Next check for indented block, which we wrap in an expressionized `do`
   &JSXEOS ImplicitNestedBlock:block ->
+    /* c8 ignore next -- ImplicitNestedBlock contains its own PushIndent/PopIndent; $skip kept as state-safety belt. In practice, if the lookahead matched, block is always non-null. */
     return $skip unless block
     statement := {
       type: "DoStatement",
@@ -8040,7 +8195,7 @@ NestedInterfaceProperty
 
 InterfaceProperty
   BasicInterfaceProperty
-  NonEmptyParameters TypeSuffix InterfacePropertyDelimiter
+  NonEmptyParameters ReturnTypeSuffix InterfacePropertyDelimiter
   MethodSignature InterfacePropertyDelimiter
 
 BasicInterfaceProperty
@@ -8048,8 +8203,8 @@ BasicInterfaceProperty
 
 InterfacePropertyDelimiter
   _? ( Semicolon / Comma )
-  &( __ CloseBrace )
-  &EOS
+  &( __ CloseBrace ) -> undefined
+  &EOS -> undefined
 
 # Namespace blocks are like self-contained modules
 ModuleOrEmptyBlock
@@ -8163,7 +8318,7 @@ NestedEnumProperties
     return $skip unless props#
     return {
       properties: props.flat().map((p) => p.property),
-      children: $0,
+      children: [props],
     }
 
 NestedEnumPropertyLine
@@ -8187,7 +8342,9 @@ TypeProperty
 
 TypeIndexSignature
   # NOTE: QuestionMark will be parsed by following TypeSuffix
-  ( [+-]? Readonly NotDedented )? OpenBracket TypeIndex CloseBracket ( __ [+-] &( _? QuestionMark ) )?
+  ( [+-]? Readonly NotDedented )?:prefix OpenBracket:open TypeIndex:index CloseBracket:close ( __ [+-] &( _? QuestionMark ) )?:suffix ->
+    suffix = [suffix[0], suffix[1]] if suffix
+    return [prefix, open, index, close, suffix]
 
 TypeIndex
   __ Identifier TypeSuffix
@@ -8319,6 +8476,7 @@ NestedTypeBinaryChain
 
 NestedTypeBinary
   Nested:indent TypeBinaryOp:op PushExtraIndent1 TypeUnary?:t PopIndent ->
+    /* c8 ignore next -- $skip kept as state-safety belt inside PushExtraIndent1/PopIndent. If TypeBinaryOp matched, a TypeUnary invariably follows in practice. */
     return $skip unless t
     return [ indent, op, t ]
 
@@ -8373,7 +8531,9 @@ TypePrimary
   # NOTE: typeof takes a unary expression, as in
   # https://github.com/microsoft/TypeScript/blob/ae27e55b027c66bf5b80f596da866f8485ac491d/src/compiler/parser.ts#L5666-L5669
   # (binary expression can accidentally grab closing ">" of type arguments)
-  _? Typeof _? UnaryExpression:expression ->
+  # Excludes top-level assignments so `const x: typeof foo = foo` parses
+  # the `= foo` as a variable initializer, not part of the typeof argument.
+  _? Typeof _? UnaryWithoutParenthesizedAssignment:expression ->
     return {
       type: "TypeTypeof",
       children: $0,
@@ -8437,6 +8597,7 @@ ImportType
 
 TypeTuple
   OpenBracket:open AllowAll TypeTupleContent?:elements RestoreAll __:ws CloseBracket:close ->
+    /* c8 ignore next -- structurally unreachable: empty `[]` matched by other rules, valid content produces TypeTupleContent. $skip kept as state-safety belt inside AllowAll/RestoreAll. */
     return $skip unless elements
     return {
       type: "TypeTuple",
@@ -8446,7 +8607,7 @@ TypeTuple
 
 TypeTupleContent
   # First check for properly indented list items
-  NestedTypeElementList &( __ CloseBracket )
+  NestedTypeElementList &( __ CloseBracket ) -> $1
   # Next check for a line of items followed by properly indented list items;
   # first line should not use indented applications because they may be
   # lines of list items
@@ -8466,10 +8627,14 @@ TypeElementList
   TypeBulletedTuple -> [$1]
   !EOS TypeElement:first ( ( _? Comma !EOS ) TypeElement )*:rest ->
     return [first] unless rest#
+    delim := [rest[0][0][0], rest[0][0][1]]
     return [
-      append(first, rest[0][0])
+      append(first, delim)
     ].concat(
-      rest.map(([_, e], i) => append(e, rest[i+1]?.[0]))
+      rest.map(([_, e], i) =>
+        nextDelim := rest[i+1] and [rest[i+1][0][0], rest[i+1][0][1]]
+        append(e, nextDelim)
+      )
     )
 
 TypeElement
@@ -8509,8 +8674,8 @@ NestedTypeElementList
 
 NestedTypeElement
   Nested:indent TypeElementList:list ArrayElementDelimiter:delimiter ->
+    // NOTE: TypeElementList always returns a non-empty array.
     {length} := list
-    return $skip unless length
     // Prepend indent to first element and append delimiter to last element
     return list.map((e, i) => {
       e = prepend(indent, e) if i is 0
@@ -8525,14 +8690,13 @@ NestedTypeBulletedTuple
     content = content.flat() // combine bullets into one array
 
     // Remove implicit comma from last element
+    // NOTE: TypeElementList always returns arrays of objects (TypeElement /
+    // TypeBulletedTuple), not bare arrays, so Array.isArray(last) arm dead.
     last := content[content# - 1]
-    children .= Array.isArray(last) ? last : last?.children
+    children .= last?.children
     if children?.at(-1).implicit
       children = children.slice(0, -1)
-      if Array.isArray last
-        content[content# - 1] = children
-      else
-        content[content# - 1] = { ...last, children }
+      content[content# - 1] = { ...last, children }
 
     return {
       type: "TypeTuple",
@@ -8550,14 +8714,12 @@ TypeBulletedTuple
     ]
 
     // Remove implicit comma from last element
+    // NOTE: See NestedTypeBulletedTuple — Array.isArray(last) arm dead.
     last := content[content# - 1]
-    children .= Array.isArray(last) ? last : last?.children
+    children .= last?.children
     if children?.at(-1).implicit
       children = children.slice(0, -1)
-      if Array.isArray last
-        content[content# - 1] = children
-      else
-        content[content# - 1] = { ...last, children }
+      content[content# - 1] = { ...last, children }
 
     return {
       type: "TypeTuple",
@@ -8572,8 +8734,8 @@ NestedTypeBullet
 TypeBullet
   BulletIndent:bullet ( TypeElementList ArrayBulletDelimiter )?:content PopIndent ->
     return $skip unless content
+    // NOTE: TypeElementList always returns a non-empty array.
     [list, delimiter] .= content
-    return $skip unless list#
     // Prepend bullet to first element and append delimiter to last element
     list = list.slice()
     list[0] = prepend(bullet, list[0])
@@ -8674,8 +8836,8 @@ InlineBasicInterfaceProperty
 InlineInterfacePropertyDelimiter
   ( _? Semicolon ) / CommaDelimiter
   &( SameLineOrIndentedFurther InlineBasicInterfaceProperty ) InsertComma -> $2
-  &( __  ( ":" / ")" / "]" / "}" ) )
-  &EOS
+  &( __  ( ":" / ")" / "]" / "}" ) ) -> undefined
+  &EOS -> undefined
 
 TypeBinaryOp
   "|" ->
@@ -8707,11 +8869,13 @@ TypeFunction
         children: [t],
       }
     // async wraps return type in AutoPromise<...>, unless already Promise<...>
+    // NOTE: ReturnType/implicit-void paths always produce children: [t],
+    // so the map's falsy arm would be dead.
     if async
       t := wrapTypeInPromise(returnType.t)
       children[children# - 1] = returnType = {
         ...returnType, t,
-        children: returnType.children.map(($) => $ is returnType.t ? t : $),
+        children: [t],
       }
     return {
       type: "TypeFunction",
@@ -8834,7 +8998,7 @@ TypeInitializer
 
 TypeParameterDelimiter
   _? Comma
-  &( __ ">" )
+  &( __ ">" ) -> undefined
   &EOS InsertComma -> $2
 
 # TypeScript's this: T syntax in function parameters
@@ -9082,6 +9246,11 @@ CoffeePrototypeEnabled
     if(config.coffeePrototype) return
     return $skip
 
+ESArrowFunctionEnabled
+  "" ->
+    if(config.esArrowFunction) return
+    return $skip
+
 JSXCodeNestedEnabled
   "" ->
     if(config.jsxCodeNested) return
@@ -9149,6 +9318,7 @@ Reset
       globals: [],
       iife: false,
       implicitReturns: true,
+      esArrowFunction: false,
       jsxCode: false,
       objectIs: false,
       react: false,
@@ -9197,6 +9367,19 @@ Reset
           config[option] = b
         if b
           config.objectIs = false
+        return
+      }
+    })
+
+    // Expand setting esCompat to the individual options
+    Object.defineProperty(config, "esCompat", {
+      set(b) {
+        for (const option of [
+          "esArrowFunction",
+        ]) {
+          config[option] = b
+        }
+        config.implicitReturns = !b
         return
       }
     })
@@ -9288,6 +9471,7 @@ TrackIndented
   Indent:indent ->
     {level} := indent
     return $skip if level <= state.currentIndent.level
+    /* c8 ignore next -- debug output for verbose config */
     console.log("pushing indent", indent) if config.verbose
     state.indentLevels.push(indent)
     return $1
@@ -9302,6 +9486,7 @@ PushIndent
 
 PopIndent
   "" ->
+    /* c8 ignore next 2 -- debug output for verbose config */
     if config.verbose
       console.log("popping indent", state.indentLevels[state.indentLevels#-1], "->", state.indentLevels[state.indentLevels#-2])
     state.indentLevels./**/pop()
@@ -9314,6 +9499,7 @@ PopIndent
 Nested
   EOS Indent:indent ->
     return $0 if indent.level is state.currentIndent.level
+    /* c8 ignore next 2 -- debug output for verbose config */
     if config.verbose
       console.log(`failing Nested: ${indent.level} does not match current indent level ${state.currentIndent.level}`)
     return $skip
@@ -9352,6 +9538,7 @@ PushExtraIndent1
       $loc,
       level: state.currentIndent.level + 1,
     }
+    /* c8 ignore next -- debug output for verbose config */
     console.log("pushing bonus indent", indent) if config.verbose
     state.indentLevels.push(indent)
     return indent

@@ -1,6 +1,6 @@
 import assert from assert
 
-{ dirname, resolve, createRequire, default: shimDefault } from ../../source/browser-shim.civet
+{ dirname, resolve, relative, createRequire, default: shimDefault } from ../../source/browser-shim.civet
 
 describe "browser-shim", ->
   describe "dirname", ->
@@ -33,6 +33,10 @@ describe "browser-shim", ->
 
     it "returns empty string unchanged", ->
       assert.equal resolve(""), ""
+
+  describe "relative", ->
+    it "returns the `to` argument unchanged", ->
+      assert.equal relative("/from/path", "/to/path"), "/to/path"
 
   describe "createRequire", ->
     it "returns a function", ->
@@ -236,6 +240,114 @@ describe "browser", ->
         autoRunScripts [root], { subtree: true }
         assert observed[0][1].childList, "childList should be true"
         assert observed[0][1].subtree, "extra options should be preserved"
+
+    it "mutation callback ignores non-childList mutations", ->
+      let capturedCallback: Function | null = null
+      origObserver := (globalThis as any).MutationObserver
+      class MockObserver
+        constructor(cb: Function)
+          capturedCallback = cb
+        observe(_target: any, _opts: any) {}
+        disconnect() {}
+      ;(globalThis as any).MutationObserver = MockObserver
+      try
+        root := { nodeType: 1 } as unknown as HTMLElement
+        autoRunScripts [root]
+        assert capturedCallback?, "callback should have been captured"
+        scriptNode := makeScript { innerHTML: "unrun := true" }
+        mutation :=
+          type: "attributes"  // not "childList" — should be skipped
+          addedNodes: [scriptNode]
+        await capturedCallback [mutation]
+        assert.equal evalledCode.length, 0, "should NOT eval for non-childList mutation"
+      finally
+        (globalThis as any).MutationObserver = origObserver
+
+  describe "auto-init bootstrap", ->
+    // The top-level `unless window <? "undefined"` block in browser.civet runs
+    // once at module load.  Re-import with a cache-busting query param so we
+    // can exercise it with a real-looking window.
+    async function withFreshImport<T>(
+      scriptAttrs: Record<string, boolean>
+      fn: (ctx: {
+        attached: [string, Function][]
+        querySelectorAll: string[]
+        observed: [unknown, unknown][]
+      }) => Promise<T> | T
+    ): Promise<T>
+      origWindow := (globalThis as any).window
+      origDocument := (globalThis as any).document
+      origObserver := (globalThis as any).MutationObserver
+      ctx := {
+        attached: [] as [string, Function][]
+        querySelectorAll: [] as string[]
+        observed: [] as [unknown, unknown][]
+      }
+      class MockObserver
+        constructor(_cb: Function) {}
+        observe(target: unknown, opts: unknown): void
+          ctx.observed.push [target, opts]
+        disconnect(): void {}
+      ;(globalThis as any).MutationObserver = MockObserver
+      currentScript :=
+        hasAttribute: (name: string) => scriptAttrs[name] ?? false
+      document := {
+        currentScript
+        head: { nodeType: 1 } as unknown as HTMLElement
+        body: { nodeType: 1 } as unknown as HTMLElement
+        querySelectorAll: (sel: string) =>
+          ctx.querySelectorAll.push sel
+          []
+      }
+      ;(globalThis as any).document = document
+      window := {
+        document
+        addEventListener: (event: string, handler: Function) =>
+          ctx.attached.push [event, handler]
+        eval: (_code: string) => undefined
+      }
+      ;(globalThis as any).window = window
+      try
+        await import(`../../source/browser.civet?bootstrap=${Math.random()}`)
+        await fn ctx
+      finally
+        (globalThis as any).window = origWindow
+        (globalThis as any).document = origDocument
+        (globalThis as any).MutationObserver = origObserver
+
+    it "registers DOMContentLoaded listener when window is defined", ->
+      await withFreshImport {}, ({ attached }) =>
+        assert attached.some(([event]) => event is "DOMContentLoaded"),
+          "DOMContentLoaded listener should have been registered"
+
+    it "handler runs runScripts() and autoRunScripts by default", ->
+      await withFreshImport {}, async ({ attached, querySelectorAll, observed }) =>
+        [, handler] := attached.find(([event]) => event is "DOMContentLoaded")!
+        await handler()
+        assert querySelectorAll.some((sel) => sel.includes("text/civet")),
+          "runScripts should have queried for text/civet"
+        assert.equal observed.length, 2, "autoRunScripts should observe head and body"
+
+    it "handler skips everything when data-no-scripts is set", ->
+      await withFreshImport {"data-no-scripts": true}, async ({ attached, querySelectorAll, observed }) =>
+        [, handler] := attached.find(([event]) => event is "DOMContentLoaded")!
+        await handler()
+        assert.equal querySelectorAll.length, 0
+        assert.equal observed.length, 0
+
+    it "handler skips runScripts when data-no-start-scripts is set", ->
+      await withFreshImport {"data-no-start-scripts": true}, async ({ attached, querySelectorAll, observed }) =>
+        [, handler] := attached.find(([event]) => event is "DOMContentLoaded")!
+        await handler()
+        assert.equal querySelectorAll.length, 0, "runScripts should not have run"
+        assert.equal observed.length, 2, "autoRunScripts should still run"
+
+    it "handler skips autoRunScripts when data-no-auto-scripts is set", ->
+      await withFreshImport {"data-no-auto-scripts": true}, async ({ attached, querySelectorAll, observed }) =>
+        [, handler] := attached.find(([event]) => event is "DOMContentLoaded")!
+        await handler()
+        assert querySelectorAll.length > 0, "runScripts should have run"
+        assert.equal observed.length, 0, "autoRunScripts should not have run"
 
     it "mutation callback runs scripts on added SCRIPT nodes", ->
       @timeout 10000

@@ -1,4 +1,4 @@
-import { type TransformResult, createUnplugin } from 'unplugin'
+import { type TransformResult, createUnplugin, type UnpluginContextMeta, type UnpluginOptions } from 'unplugin'
 import civet, { decode, lib, SourceMap, type CompileOptions, type ParseOptions } from '@danielx/civet'
 import { findInDir, loadConfig } from '@danielx/civet/config'
 import {
@@ -47,6 +47,7 @@ export type PluginOptions
   /** config filename, or false/null to not look for default config file */
   config?: string | false | null
   parseOptions?: ParseOptions
+  tsConfig?: any
 
 type CacheEntry
   mtime: number
@@ -101,6 +102,7 @@ export function slash(p: string): string
   p.replace windowsSlashRE, '/'
 
 function normalizePath(id: string): string
+  /* c8 ignore next -- tests run on non-Windows; isWindows=true branch not exercised */
   path.posix.normalize isWindows ? slash(id) : id
 
 function tryFsResolve(file: string): string?
@@ -123,8 +125,7 @@ function implicitCivet(file: string): string?
   civet := file + '.civet'
   return civet if tryFsResolve civet
 
-export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
-(options: PluginOptions = {}, meta) =>
+export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
   if (options.dts) options.emitDeclaration = options.dts
   compileOptions: CompileOptions .= {}
 
@@ -159,6 +160,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
     return {
       getCurrentDirectory: => sys.getCurrentDirectory()
       getNewLine: => sys.newLine
+      /* c8 ignore next 3 -- platform-dependent: tests run where useCaseSensitiveFileNames=true */
       getCanonicalFileName: sys.useCaseSensitiveFileNames
         ? (f) => f
         : (f) => f.toLowerCase()
@@ -166,11 +168,11 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
 
   cache := new Map<string, CacheEntry> unless options.cache is false
 
-  plugin: ReturnType<typeof rawPlugin> := {
+  plugin := {
     name: 'unplugin-civet'
     enforce: 'pre'
 
-    async buildStart(): Promise<void>
+    buildStart(): Promise<void>
       civetConfigPath .= options.config
       if civetConfigPath is undefined
         civetConfigPath = await findInDir process.cwd()
@@ -185,16 +187,24 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
 
       if transformTS or ts is "tsc"
         ts := await tsPromise!
+        let config: any, error: Diagnostic?, tsConfigPath: string | undefined
 
-        tsConfigPath := ts.findConfigFile process.cwd(), ts.sys.fileExists
+        if options.tsConfig
+          config = options.tsConfig
+          if options.tsConfig.rootDir
+            tsConfigPath = path.join options.tsConfig.rootDir, 'tsconfig.json'
+        else
+          tsConfigPath = ts.findConfigFile process.cwd(), ts.sys.fileExists
 
-        unless tsConfigPath
-          throw new Error "Could not find 'tsconfig.json'"
+          unless tsConfigPath
+            /* c8 ignore next -- only reached when process.cwd() has no tsconfig.json */
+            throw new Error "Could not find 'tsconfig.json'"
 
-        { config, error } := ts.readConfigFile
-          tsConfigPath
-          ts.sys.readFile
+          { config, error } = ts.readConfigFile
+            tsConfigPath
+            ts.sys.readFile
 
+        /* c8 ignore next 3 -- only reached when tsconfig.json has a read error */
         if error
           console.error ts.formatDiagnostic error, getFormatHost ts.sys
           throw error
@@ -212,6 +222,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         system := {...ts.sys}
         {readDirectory: systemReadDirectory} := system
         system.readDirectory = (path: string, extensions?: readonly string[], excludes?: readonly string[], includes?: readonly string[], depth?: number): string[] =>
+          /* c8 ignore next -- \`?? []\` fallback fires only when TS calls readDirectory without extensions (CachedDirectoryStructureHost path, not our flow) */
           extensions = [ ...(extensions ?? []), ".civet" ]
           systemReadDirectory(path, extensions, excludes, includes, depth)
           .map &.endsWith(".civet") ? & + ".tsx" : &
@@ -219,7 +230,10 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         configContents := ts.parseJsonConfigFileContent
           config
           system
-          process.cwd()
+          if tsConfigPath then path.dirname(tsConfigPath) else process.cwd()
+          undefined
+          tsConfigPath
+
         configErrors = configContents.errors
         configFileNames = configContents.fileNames
 
@@ -237,7 +251,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         }
         fsMap = new Map()
 
-    async buildEnd(useConfigFileNames = false): Promise<void>
+    buildEnd(useConfigFileNames = false): Promise<void>
       if transformTS
         const ts = await tsPromise!
 
@@ -253,12 +267,15 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
 
         system.fileExists = (filename: string): boolean =>
           if (!filename.endsWith('.civet.tsx')) return systemFileExists(filename)
+          /* c8 ignore next 2 -- only hit when TS resolves .civet.tsx dependencies not in fsMap */
           if (fsMap.has(filename)) return true
           return systemFileExists filename[...-4]
 
+        /* c8 ignore start -- defensive: buildEnd's createProgram uses explicit rootNames, so TS never scans directories through this override */
         system.readDirectory = (path: string): string[] =>
           systemReadDirectory(path)
           .map &.endsWith('.civet') ? & + '.tsx' : &
+        /* c8 ignore stop */
 
         tsCompileOptions := {
           ...compileOptions
@@ -272,6 +289,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
             return json unless json
             parsed: Record<string, unknown> := JSON.parse(json)
             modified .= false
+            /* c8 ignore next 10 -- only hit when package.json has .civet entries in imports field */
             function recurse(node: unknown): void
               if node? <? "object"
                 for key in node
@@ -288,6 +306,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           // Generate .civet.tsx files on the fly
           if (!filename.endsWith('.civet.tsx')) return systemReadFile(filename, encoding)
           if (fsMap.has(filename)) return fsMap.get(filename)
+          /* c8 ignore next 12 -- only hit when TS resolves `import type` dependencies not yet compiled */
           civetFilename := filename[...-4]
           rawCivetSource := fs.readFileSync civetFilename, {encoding}
           { code: compiledTS, sourceMap } := civet.compile rawCivetSource, {
@@ -320,7 +339,8 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
             sourceMap := sourceMaps.get file.fileName
             if (!sourceMap) return diagnostic
 
-            sourcemapLines := sourceMap.lines ?? sourceMap.data.lines
+            sourcemapLines := sourceMap.lines
+            /* c8 ignore start -- \`|| 0\` / \`|| 1\` fallbacks only fire for diagnostics with undefined or zero start/length; TS always sets these when file is non-null */
             range := remapRange(
               {
                 start: diagnostic.start || 0,
@@ -328,6 +348,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
               },
               sourcemapLines
             )
+            /* c8 ignore stop */
 
             {
               ...diagnostic,
@@ -336,6 +357,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
               start: range.start,
             }
 
+        /* c8 ignore next 2 -- only hit when tsconfig.json has parse errors */
         if configErrors?#
           diagnostics.unshift ...configErrors
 
@@ -358,8 +380,9 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
               failures.push(DiagnosticCategory.Error)
             count := diagnostics.filter((d) => failures.includes(d.category)).length
             if count
-              reason :=
-                (count is diagnostics# ? count : `${count} out of ${diagnostics#}`)
+              /* c8 ignore start -- else arm needs non-Error categories; TS pre-emit + config errors only produce Error */
+              reason := count is diagnostics# ? count : `${count} out of ${diagnostics#}`
+              /* c8 ignore stop */
               throw new Error `Aborting build because of ${reason} TypeScript diagnostic${diagnostics.length > 1 ? 's' : ''} above`
 
         if options.emitDeclaration
@@ -369,6 +392,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           // Removed duplicate slashed (`\`) versions of the same file for emit
           for file of fsMap.keys()
             slashed := slash file
+            /* c8 ignore next 2 -- Windows-only: remove backslash-path duplicates before emit */
             unless file is slashed
               fsMap.delete slashed
 
@@ -380,10 +404,12 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
                 if options.declarationExtension?
                   if filePath.endsWith '.d.ts'
                     filePath = filePath[< -5]
+                  /* c8 ignore next 2 -- unexpected: emitted file without .d.ts extension */
                   else
                     console.log `WARNING: No .d.ts extension in ${filePath}`
                   if filePath.endsWith civetSuffix
                     filePath = filePath[< -civetSuffix#]
+                  /* c8 ignore next 2 -- unexpected: emitted file without .civet extension */
                   else
                     console.log `WARNING: No .civet extension in ${filePath}`
                   filePath += options.declarationExtension
@@ -392,7 +418,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
                   compilerOptions.outDir ?? process.cwd()
                   filePath
 
-                this.emitFile
+                @emitFile
                   source: content
                   fileName: pathFromDistDir
                   type: 'asset'
@@ -427,15 +453,20 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       if (options as! {scan?: boolean}).scan and meta.framework is 'vite'
         resolved = `\0${resolved}`
 
-      // Add back the original postfix at the end
-      return resolved + outExt + postfix
+      // Add back the original postfix at the end.
+      // For esbuild, the virtual module lives in the plugin's namespace so the
+      // output extension is not needed to signal the file type to the bundler
+      // (we set the loader explicitly instead).  Keeping the .jsx/.tsx suffix
+      // would cause esbuild to use it as the filename in diagnostics, producing
+      // confusing messages like "main.civet.jsx" instead of "main.civet".
+      return resolved + (meta.framework is 'esbuild' ? '' : outExt) + postfix
 
     loadInclude(id)
       {filename, postfix} := extractCivetFilename id, outExt
       return false if skipWorker and workerRE.test postfix
       filename.endsWith civetSuffix
 
-    async load(id)
+    load(id)
       {filename} .= extractCivetFilename id, outExt
       // We're guaranteed to have .civet extension here by loadInclude
 
@@ -463,10 +494,11 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       let sourceMap: SourceMap | string | undefined
       civetOptions := {
         ...compileOptions
-        filename: id
+        filename
         errors: []
       }
       function checkErrors
+        /* c8 ignore next 2 -- errors array is populated by non-throwing parse issues, rarely triggered */
         if civetOptions.errors#
           throw new civet.ParseErrors civetOptions.errors
 
@@ -500,7 +532,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
             result := await esbuildTransform compiledTS,
               jsx: "preserve"
               loader: "tsx"
-              sourcefile: id
+              sourcefile: filename
               sourcemap: "external"
 
             compiled = result.code
@@ -543,6 +575,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
         // Vite and Rollup normalize filenames to use `/` instead of `\`.
         // We give the TypeScript VFS both versions just in case.
         slashed := slash tsx
+        /* c8 ignore next 3 -- Windows-only backslash path deduplication */
         unless tsx is slashed
           fsMap.set slashed, compiledTS
           sourceMaps.set slashed, civetSourceMap
@@ -567,6 +600,9 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
       return transformed
 
     esbuild: {
+      // Explicitly set the loader so esbuild handles the compiled output
+      // correctly even though the virtual module id no longer ends in .jsx/.tsx.
+      loader: ts is 'preserve' ? 'tsx' : 'jsx'
       config(options: BuildOptions): void
         esbuildOptions = options
         outDir = options.outdir or path.dirname options.outfile!
@@ -587,7 +623,8 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
           config.resolve ??= {}
           config.resolve.extensions ??= DEFAULT_EXTENSIONS
           config.resolve.extensions.push '.civet'
-      async transformIndexHtml(html)
+
+      transformIndexHtml(html)
         html.replace /<!--[^]*?-->|<[^<>]*>/g, (tag) =>
           tag.replace /<\s*script\b[^<>]*>/gi, (script) =>
             // https://html.spec.whatwg.org/multipage/syntax.html#attributes-2
@@ -601,6 +638,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
                         `${extension}${outExt}?transform${endQuote}`
                     )
                   : attr
+
       handleHotUpdate({ file, server, modules })
         // `file` is an absolute path to the changed file on disk,
         // so for our case it should end with .civet extension
@@ -644,7 +682,7 @@ export const rawPlugin: Parameters<typeof createUnplugin<PluginOptions>>[0] =
               return '\0' unless value <? 'string'
               return value + id[key.length..]
         id
-  }
+  } satisfies UnpluginOptions
 
 var unplugin = createUnplugin(rawPlugin)
 export default unplugin

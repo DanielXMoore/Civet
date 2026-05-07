@@ -85,12 +85,14 @@ import {
   makeNode
   maybeWrap
   maybeUnwrap
+  parenthesizeExpression
   parenthesizeType
   prepend
   replaceNode
   replaceNodes
   stripTrailingImplicitComma
   trimFirstSpace
+  typeSuffixForExpression
   wrapIIFE
   wrapWithReturn
 } from ./util.civet
@@ -232,8 +234,7 @@ function rewriteModuleSpecifier(module: ASTLeaf | Literal): ASTLeaf | Literal
       return {
         ...module
         raw: rewritten.token
-        children:
-          module.children.map (&: LiteralContentNode) is child ? rewritten : &
+        children: [rewritten]
       }
 
   { token } .= module
@@ -255,20 +256,22 @@ function rewriteModuleSpecifier(module: ASTLeaf | Literal): ASTLeaf | Literal
 function rewriteDynamicImportCall(call: Call): Call
   i := call.args.findIndex (arg) =>
     not isWhitespaceOrEmpty(arg) and not isComma(arg)
+
   return call if i < 0
 
   firstArg := call.args[i]
-  target := firstArg?.type is "Argument" ? firstArg.expression : firstArg
+  // ArgumentPart rules always wrap arguments in an Argument node
+  assert firstArg?.type is "Argument", "rewriteDynamicImportCall: expected firstArg to be an Argument"
+  target := firstArg.expression
   return call unless target?.type is "Literal"
   rewrittenArg .= rewriteModuleSpecifier(target)
   return call if rewrittenArg is target
 
-  if firstArg?.type is "Argument"
-    rewrittenArg = {
-      ...firstArg
-      expression: rewrittenArg
-      children: firstArg.children.map & is firstArg.expression ? rewrittenArg : &
-    }
+  rewrittenArg = {
+    ...firstArg
+    expression: rewrittenArg
+    children: [rewrittenArg]
+  }
 
   args := call.args[..]
   args[i] = rewrittenArg
@@ -279,12 +282,11 @@ function rewriteDynamicImportCall(call: Call): Call
   }
 
 // Negate expression inside condition
-function negateCondition(condition)
+function negateCondition(condition: Condition)
   { expression } .= condition
   children := condition.children.slice()
   i := children.indexOf(expression)
-  if i < 0
-    throw new Error `Could not find expression in condition`
+  assert.notEqual i, -1, "negateCondition: expression must be directly in condition.children"
   pre := ["!"]
   expression = makeLeftHandSideExpression expression
   children[i] = expression = {
@@ -304,12 +306,7 @@ determine when we have to wrap if blocks in IIFE instead of
 converting to ternary expressions.
 */
 function isExpression(node: ASTNode): boolean
-  if Array.isArray(node)
-    return node.every(isExpression)
-
-  if typeof node is "string"
-    // TODO: may not quite be correct
-    return true
+  return node.every(isExpression) if Array.isArray(node)
 
   switch node?.type
     case "BlockStatement"
@@ -713,7 +710,7 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
           }
         else
           parts.push {
-            type: part.type is "Identifier" ? "Property" : part.type
+            type: part.type
             name
             value
             delim: part.delim
@@ -873,7 +870,9 @@ function lastAccessInCallExpression(exp)
       children[i].type is "NonNullAssertion" ||
       children[i].type is "Optional"
     )) i--
-    if (i < 0) return
+
+    assert i >= 0, "lastAccessInCallExpression: no base access found"
+
     // Recurse into nested MemberExpression, e.g. from `x.y()`
     exp = children[i]
   if exp.type is "Identifier" or exp.type is "PropertyAccess" or exp.type is "Index"
@@ -884,7 +883,7 @@ function lastAccessInCallExpression(exp)
 function convertMethodToFunction(method)
   { signature, block } := method
   { async, modifier, optional } := signature
-  return if optional
+
   return if modifier?.get or modifier?.set
   func := ["function "]
   if async?
@@ -893,13 +892,19 @@ function convertMethodToFunction(method)
     // ensure space after `async` (absent in e.g. `async* f()`)
     if async# and not async.-1?.#
       async.push " "
+
+  sigChildren := signature.children.slice(1)
+  if optional
+    optIdx := sigChildren.indexOf optional
+    sigChildren.splice optIdx, 1 if optIdx >= 0
+
   return {
     ...signature
     id: signature.name
     signature
     type: "FunctionExpression"
     children: [
-      [...func, ...signature.children.slice(1)]
+      [...func, ...sigChildren]
       block
     ]
     block
@@ -909,12 +914,9 @@ function convertFunctionToMethod(id, exp)
   fnTokenIndex := exp.children.findIndex (c) -> c?.token?.startsWith("function")
   // copy
   children := exp.children.slice()
-  if exp.generator
-    // replace "function" and move generator ahead of id
-    children.splice(fnTokenIndex, 2, children[fnTokenIndex+1], id)
-  else
-    // replace "function" token with id
-    children.splice(fnTokenIndex, 1, id)
+  // Replace "function" and move the generator slot ahead of id so a "*"
+  // later pushed by processSignature (for implicit yield) lands before id.
+  children.splice(fnTokenIndex, 2, children[fnTokenIndex+1], id)
 
   {
     ...exp,
@@ -984,8 +986,6 @@ function convertObjectToJSXAttributes(obj: ObjectExpression)
       continue
     if (i > 0) parts.push(' ')
     switch part.type
-      when "Identifier"
-        parts.push([part.name, '={', part.name, '}'])
       when "Property"
         if part.name.type is "ComputedPropertyName"
           rest.push(part)
@@ -999,8 +999,6 @@ function convertObjectToJSXAttributes(obj: ObjectExpression)
           parts.push([part.name, '={', convertMethodToFunction(part), '}'])
         else
           rest.push(part)
-      else
-        throw new Error `invalid object literal type in JSX attribute: ${part.type}`
   if rest#
     parts.push " " if parts# and parts.-1 is not " "
     parts.push(["{...{", ...rest, "}}"])
@@ -1106,15 +1104,62 @@ function processAssignments(statements): void
       while expr.type is "ParenthesizedExpression"
         expr = expr.expression
       if expr.type is like "AssignmentExpression", "UpdateExpression"
-        if expr.type is "UpdateExpression" and
-            expr.children[0] is expr.assigned  // postfix update
+        // Postfix-inner update runs second (via post); non-postfix runs first (via pre).
+        // For non-postfix we inline ref-assignments inside the original `lhs`
+        // (which runs first). For postfix we hoist them into `pre` so they run
+        // before both the outer and the inner reads.
+        postfix := expr.type is "UpdateExpression" and
+            expr.children[0] is expr.assigned
+        // refsToHoist accumulates [refAssignment, ", "] pairs for the postfix case
+        const refsToHoist = []
+        if postfix
           pre.push("(")
           post.push([", ", lhs, ")"])
         else
           pre.push(["(", lhs, ", "])
           post.push(")")
-        // TODO: use ref to avoid duplicating function calls
-        return expr.assigned
+        // Use refs to avoid duplicating side-effectful member access and indices
+        { assigned } := expr
+        return assigned unless assigned?.children
+        { children } := assigned
+
+        // Find the terminal member access (last PropertyAccess or Index)
+        j .= children.findLastIndex (c: any) => c?.type is like "PropertyAccess", "Index"
+        return assigned if j <= 0
+
+        // Cache the base (everything before terminal access) if it has side effects
+        { ref: baseRef, refAssignment: baseRefAssignment } := maybeRefAssignment children.slice 0, j
+        if baseRefAssignment
+          // Non-postfix: inline (ref = base) into the original. Postfix: keep bare
+          // ref in the original and hoist (ref = base) into pre so the chain stays
+          // in the AST for hoistDec resolution.
+          innerBase := makeLeftHandSideExpression (if postfix then baseRef else baseRefAssignment)
+          children.splice 0, j, innerBase
+          innerBase.parent = assigned
+          j = 1  // terminal is now at index 1 after splice
+          if postfix
+            (baseRefAssignment as ASTNodeObject).parent = exp
+            refsToHoist.push baseRefAssignment, ", "
+
+        // Cache the terminal Index expression if it has side effects
+        terminal := children[j]
+        outerTerminal .= terminal
+        if terminal?.type is "Index"
+          { ref, refAssignment } := maybeRefAssignment terminal.expression
+          if refAssignment
+            replaceNode terminal.expression, (if postfix then ref else refAssignment), terminal
+            outerTerminal = { type: "Index", children: ["[", ref, "]"], expression: ref }
+            if postfix
+              (refAssignment as ASTNodeObject).parent = exp
+              refsToHoist.push refAssignment, ", "
+
+        if refsToHoist#
+          // Insert hoisted ref-assignments after the leading "(" in pre
+          pre.push ...refsToHoist
+
+        return assigned unless baseRefAssignment or outerTerminal is not terminal
+        outerBase := if baseRefAssignment then [baseRef] else children.slice 0, j
+        { ...assigned, children: [...outerBase, outerTerminal, ...children.slice j + 1] }
 
     const pre = [], post = []
     switch exp.type
@@ -1166,12 +1211,11 @@ function processAssignments(statements): void
 
     // identifier=, xor=, ++=
     if $1.some &.-1.special
-      if ($1.length !== 1) throw new Error("Only one assignment with id= is allowed")
       [, lhs, , op] := $1[0]
       { call, omitLhs } := op
       // Wrap right-hand side with call
       index := exp.children.indexOf($2)
-      if (index < 0) throw new Error("Assertion error: exp not in AssignmentExpression")
+      assert.notEqual index, -1, "processAssignments: $2 must be directly in exp.children"
       exp.children.splice index, 1,
         exp.expression = $2 = [call, "(", lhs, ", ", $2, ")"]
       if omitLhs
@@ -1231,7 +1275,10 @@ function processAssignments(statements): void
             if (isWhitespaceOrEmpty(lastAssignment[2])) lastAssignment.pop()
             // TODO: this only works for the last assignment, not multiple splice assignments, or splice assignments earlier in the chain
             if $1.length > 1
-              throw new Error("Not implemented yet! TODO: Handle multiple splice assignments")
+              lhs.children.push
+                type: "Error"
+                message: "Not implemented yet! TODO: Handle multiple splice assignments"
+              break
 
             exp.children = [$1]
             exp.names = []
@@ -1293,7 +1340,7 @@ function processAssignments(statements): void
 
     if tail#
       index := exp.children.indexOf($2)
-      if (index < 0) throw new Error("Assertion error: exp not in AssignmentExpression")
+      assert.notEqual index, -1, "processAssignments tail: $2 must be directly in exp.children"
       exp.children.splice(index + 1, 0, ...tail)
 
 function unchainOptionalMemberExpression(exp: MemberExpression | CallExpression, ref: ASTRef, innerExp: (exp) => ASTNode)
@@ -1366,8 +1413,6 @@ function attachPostfixStatementAsExpression(exp, post: [WSNode, IfStatement | It
       }
     when "IfStatement"
       return expressionizeIfStatement { ...postfixStatement, then: exp }
-    else
-      throw new Error("Unknown postfix statement")
 
 function processTypes(node: ASTNode)
   // T? -> T | undefined; T?? -> T | undefined | null; T! -> NonNullable<T>
@@ -1401,7 +1446,7 @@ function processTypes(node: ASTNode)
               unary.suffix.splice suffixIndex+1, 0, suffix // put back
               continue
             inplaceInsertTrimmingSpace unary, ""
-            t := parenthesizeType if unary.suffix# then unary else unary.t
+            t := parenthesizeType unary.t
             replace = [
               space
               "("
@@ -1498,10 +1543,7 @@ function processStatementExpressions(statements: StatementTuple[]): void
 
     switch statement.type
       when "IfStatement"
-        if expression := expressionizeIfStatement(statement)
-          replaceNode statement, expression, exp
-        else
-          replaceNode statement, wrapIIFE([["", statement]]), exp
+        replaceNode statement, expressionizeIfStatement(statement), exp
       when "IterationExpression"
         if statement.subtype is "ComptimeStatement"
           replaceNode statement,
@@ -1526,11 +1568,10 @@ function processNegativeIndexAccess(statements: StatementTuple[]): void
         ref = maybeRef(child)
         if ref !== child
           subexp = children.splice start, 1
-      else if index > start+1
+      else
+        assert index > start+1, "Invalid parse tree for negative index access"
         ref = makeRef()
         subexp = children.splice start, index - start
-      else
-        throw new Error("Invalid parse tree for negative index access")
 
       if subexp
         { refAssignment } := makeRefAssignment ref, subexp
@@ -1546,8 +1587,9 @@ function processFinallyClauses(statements: StatementTuple[]): void
   for each let f of gatherRecursiveAll statements, ($): $ is FinallyClause => (
     $.type is "FinallyClause" and $.parent?.type is not "TryStatement"
   )
-    unless { block, index } := blockContainingStatement f
-      throw new Error "finally clause must be inside try statement or block"
+    containing := blockContainingStatement f
+    assert containing, "finally clause must be inside try statement or block"
+    { block, index } := containing
     indent := block.expressions[index][0]
     expressions := block.expressions[>index]
     t: BlockStatement := makeNode {
@@ -1855,6 +1897,9 @@ function processPlaceholders(statements: StatementTuple[]): void
             ancestor.children.indexOf ancestor.expression
           type is "ReturnStatement"
           type is "YieldExpression"
+      /* c8 ignore start -- the `else ancestor = undefined` fallbacks below
+        are defensive: findAncestor guarantees `child` is directly under
+        `ancestor`, so findChildIndex should always succeed. */
       switch ancestor?.type
         when "Call"
           i := findChildIndex ancestor.args, child
@@ -1892,6 +1937,7 @@ function processPlaceholders(statements: StatementTuple[]): void
         replaceNode exp,
           type: "Error"
           message: 'Ampersand placeholder & outside of block'
+      /* c8 ignore stop */
 
     if ancestor?
       if placeholderMap.has ancestor
@@ -2036,28 +2082,30 @@ function typeOfJSXElement(node, config)
     else  // client only (default)
       return clientType
 
+function collectJSXFragmentTypes(node, config)
+  type := []
+  let lastType
+  for child of node.jsxChildren
+    switch child.type
+      when "JSXText"
+        // Solid combines multiple consecutive texts into one string
+        unless lastType is "JSXText"
+          type.push "string"
+      when "JSXElement"
+        type.push typeOfJSXElement child, config
+      when "JSXFragment"
+        // Solid flattens fragments of fragments into one array.
+        type.push ...collectJSXFragmentTypes child, config
+      when "JSXChildExpression"
+        // Solid discards empty expressions
+        if child.expression
+          type.push [ "typeof ", child.expression ]
+    lastType = child.type
+  return type
+
 function typeOfJSXFragment(node, config)
   if config.solid
-    type .= []
-    let lastType
-    for child of node.jsxChildren
-      switch child.type
-        when "JSXText"
-          // Solid combines multiple consecutive texts into one string
-          unless lastType is "JSXText"
-            type.push "string"
-        when "JSXElement"
-          type.push typeOfJSXElement child, config
-        when "JSXFragment"
-          // Solid flattens fragments of fragments into one array.
-          type.push ...typeOfJSXFragment child, config
-        when "JSXChildExpression"
-          // Solid discards empty expressions
-          if child.expression
-            type.push [ "typeof ", child.expression ]
-        else
-          throw new Error `unknown child in JSXFragment: ${JSON.stringify(child)}`
-      lastType = child.type
+    type .= collectJSXFragmentTypes node, config
     // Solid doesn't wrap single fragment child in an array
     if type# is 1
       return type[0]
@@ -2068,6 +2116,7 @@ function typeOfJSXFragment(node, config)
 
 export {
   addPostfixStatement
+  assert
   adjustBindingElements
   adjustIndexAccess
   append
@@ -2119,6 +2168,7 @@ export {
   maybeRefAssignment
   modifyString
   negateCondition
+  parenthesizeExpression
   precedenceCustomDefault
   precedenceStep
   prepend
@@ -2143,6 +2193,7 @@ export {
   skipImplicitArguments
   stripTrailingImplicitComma
   trimFirstSpace
+  typeSuffixForExpression
   typeOfJSX
   wrapIIFE
   wrapTypeInPromise

@@ -1,0 +1,469 @@
+import TSService from "../source/lib/typescript-service.civet"
+import { pathToFileURL } from "url"
+import { TextDocument } from "vscode-languageserver-textdocument"
+import fs from "fs"
+import { mkdtempSync, writeFileSync, rmSync } from "fs"
+import { tmpdir } from "os"
+import path from "path"
+
+{ forwardMap, getCanonicalFileName } from ../source/lib/util.civet
+
+assert from assert
+
+nullLogger :=
+  log: ->
+  info: ->
+  error: ->
+
+bundledCivetMain := path.resolve("../../dist/main.js")
+bundledCivetConfig := path.resolve("../../dist/config.js")
+
+loadFile := (service: Awaited<ReturnType<typeof TSService>>, path: string) ->
+  document := TextDocument.create(pathToFileURL(path).href, "civet", 0, fs.readFileSync(path, "utf8"))
+  service.host.addOrUpdateDocument(document)
+
+projectURL := pathToFileURL("./integration/project-test/").href
+aPath := "./integration/project-test/a.civet"
+bPath := "./integration/project-test/b.civet"
+
+describe "ts service", ->
+  it "should launch ts service", async ->
+    service := await TSService(projectURL, nullLogger)
+    await service.loadPlugins()
+
+    loadFile(service, aPath)
+
+    diagnostics := service.getSemanticDiagnostics(aPath + ".tsx")
+
+    assert.equal diagnostics.length, 0
+
+    { transpiledDoc, sourcemapLines } := service.host.getMeta(aPath)!
+    assert sourcemapLines
+
+    position := transpiledDoc!.offsetAt forwardMap(sourcemapLines, {
+      line: 0
+      character: 0
+    })
+    info := service.getQuickInfoAtPosition(aPath + ".tsx", position)
+
+    assert info
+
+describe "ts service features", ->
+  service .= null as any as Awaited<ReturnType<typeof TSService>>
+
+  before async ->
+    service = await TSService(projectURL, nullLogger)
+    await service.loadPlugins()
+    loadFile(service, aPath)
+    loadFile(service, bPath)
+
+  it "should go to definition cross-file", async ->
+    { transpiledDoc, sourcemapLines } := service.host.getMeta(aPath)!
+    assert sourcemapLines
+
+    // "b" is at character 0 on line 0 of a.civet: `b, {b as b2} from ./b.civet`
+    offset := transpiledDoc!.offsetAt forwardMap(sourcemapLines, {line: 0, character: 0})
+    defs := service.getDefinitionAtPosition(aPath + ".tsx", offset)
+    assert defs?.length
+
+    rawName := service.getSourceFileName(defs![0].fileName)
+    assert rawName.endsWith("b.civet"), `expected definition in b.civet, got ${rawName}`
+
+  it "should return completions at console.", async ->
+    { transpiledDoc, sourcemapLines } := service.host.getMeta(aPath)!
+    assert sourcemapLines
+
+    src := fs.readFileSync(aPath, "utf8")
+    lines := src.split("\n")
+    consoleLine := lines.findIndex (l) => l.includes("console.log")
+    consoleCol := lines[consoleLine].indexOf("console.") + "console.".length
+    offset := transpiledDoc!.offsetAt forwardMap(sourcemapLines, {line: consoleLine, character: consoleCol})
+    completions := service.getCompletionsAtPosition(aPath + ".tsx", offset, {})
+
+    assert completions?.entries.some .name is "log"
+
+  it "should detect type errors and map to civet positions", async ->
+    // Use absolute path so addOrUpdateDocument and getMeta agree on the key
+    errorPath := path.resolve("./integration/project-test/error.civet")
+    errorDoc := TextDocument.create(pathToFileURL(errorPath).href, "civet", 0, 'x: number := "not a number"')
+    service.host.addOrUpdateDocument(errorDoc)
+    diagnostics := service.getSemanticDiagnostics(errorPath + ".tsx")
+
+    assert diagnostics.length > 0
+
+    // Verify it's the right error
+    msg := diagnostics[0].messageText <? "string"
+      ? diagnostics[0].messageText
+      : diagnostics[0].messageText.messageText
+    assert.match msg, /not assignable/
+    // Verify sourcemap lines are populated (needed for diagnostic remapping)
+    { sourcemapLines } := service.host.getMeta(errorPath)!
+
+    assert sourcemapLines
+
+  it "should compute change range when a civet file is updated", ->
+    absPath := path.resolve(aPath)
+    transpiledPath := absPath + ".tsx"
+
+    // First snapshot
+    snap1 := service.host.getScriptSnapshot(transpiledPath)
+    assert snap1, "expected first snapshot"
+
+    // Prepend a comment so the transpiled output differs from the start
+    // (avoids the "prefix-only" case where fullDiffTextChangeRange returns undefined)
+    origContent := fs.readFileSync(absPath, "utf8")
+    updatedDoc := TextDocument.create(pathToFileURL(absPath).href, "civet", 1, "// extra\n" + origContent)
+    service.host.addOrUpdateDocument(updatedDoc)
+
+    // Second snapshot — new Snap instance with updated transpiled text
+    snap2 := service.host.getScriptSnapshot(transpiledPath)
+    assert snap2, "expected second snapshot"
+    assert.notStrictEqual snap2, snap1
+
+    // Exercises fullDiffTextChangeRange and Snap.getChangeRange (also createOrUpdateMeta update branch)
+    changeRange := snap2.getChangeRange(snap1)
+    assert changeRange, "expected a defined change range when content differs from the start"
+    assert.ok changeRange!.span.start >= 0
+    assert.ok changeRange!.newLength >= 0
+
+    // Calling again returns the cached result
+    assert.strictEqual snap2.getChangeRange(snap1), changeRange
+
+  it "should add a non-transpiled ts document without error", ->
+    tsPath := path.resolve("./integration/project-test/t.ts")
+    tsDoc := TextDocument.create(pathToFileURL(tsPath).href, "typescript", 0, "const x = 1")
+    service.host.addOrUpdateDocument(tsDoc)
+    // No transpiler for .ts — exercises the plain-document branch
+
+  it "should return undefined meta for a plain ts path", ->
+    tsPath := path.resolve("./integration/project-test/t.ts")
+    meta := service.host.getMeta(tsPath)
+    // No meta recorded for non-transpiled files — exercises getTranspiledPath fallback
+    assert.equal meta, undefined
+
+  it "should call writeFile without error", ->
+    service.host.writeFile!("out.js", "const x = 1;")
+    // writeFile just delegates to logger.log; no assertion needed beyond no throw
+
+  it "should return original filename when target extension does not match transpiler target", ->
+    // .civet transpiler targets .tsx; passing .civet.js means target (.js) != .tsx
+    // so remapFileName falls through to the final return (line 557)
+    result := service.getSourceFileName("foo.civet.js")
+    assert.equal result, "foo.civet.js"
+
+  it "should return undefined change range when snapshots have identical text", ->
+    // Getting the same cached snapshot and calling getChangeRange on itself
+    // exercises fullDiffTextChangeRange(text, text) → all chars match → return undefined (line 586)
+    transpiledPath := path.resolve(aPath) + ".tsx"
+    snap := service.host.getScriptSnapshot(transpiledPath)
+    assert snap
+
+    result := snap!.getChangeRange(snap!)
+    assert.equal result, undefined
+
+  it "should compute change range when content changes in the middle", ->
+    // Two civet snapshots differing only in the middle (shared prefix and suffix)
+    // exercises the break in the suffix-scan loop (line 572)
+    snapPath := path.resolve("./integration/project-test/snap-test.civet")
+    snapTranspiledPath := snapPath + ".tsx"
+
+    doc1 := TextDocument.create(pathToFileURL(snapPath).href, "civet", 0, "x := 1")
+    service.host.addOrUpdateDocument(doc1)
+    snap1 := service.host.getScriptSnapshot(snapTranspiledPath)
+
+    assert snap1
+
+    doc2 := TextDocument.create(pathToFileURL(snapPath).href, "civet", 1, "x := 2")
+    service.host.addOrUpdateDocument(doc2)
+    snap2 := service.host.getScriptSnapshot(snapTranspiledPath)
+
+    assert snap2
+    assert.notStrictEqual snap1, snap2
+
+    // "const x = 1;" vs "const x = 2;" — common suffix ";" hits break after one match
+    changeRange := snap2!.getChangeRange(snap1!)
+
+    assert changeRange, "expected a change range for middle-of-string diff"
+    assert changeRange!.span.start >= 0
+
+  it "should store fatal parse error in meta when transpiler throws", ->
+    // Null bytes cause Civet.compile to throw rather than returning errors in the array
+    // exercises the catch block in doTranspileAndUpdateMeta (lines 352-355)
+    errorPath := path.resolve("./integration/project-test/throw-test.civet")
+    throwDoc := TextDocument.create(pathToFileURL(errorPath).href, "civet", 0, "\x00invalid")
+    service.host.addOrUpdateDocument(throwDoc)
+    meta := service.host.getMeta(errorPath)
+
+    assert meta, "expected meta to be recorded after a compile throw"
+    assert meta!.fatal, "expected fatal=true when compile throws"
+    assert meta!.parseErrors?.length, "expected parse errors to be recorded"
+
+describe "ts service document lifecycle", ->
+  it "closeDocument should drop editor doc but keep civet file in project", ->
+    // Mirrors LSP didClose: editor tab closed, file still on disk.
+    // Editor-tied caches must clear so next read falls back to disk,
+    // but scriptFileNames must keep the transpiled path since other
+    // open files may still import this one.
+    service := await TSService(projectURL, nullLogger)
+    await service.loadPlugins()
+
+    civetPath := path.resolve("./integration/project-test/close-test.civet")
+    transpiledPath := civetPath + ".tsx"
+    doc := TextDocument.create(pathToFileURL(civetPath).href, "civet", 0, "x := 1")
+    service.host.addOrUpdateDocument(doc)
+    // Prime caches
+    preMeta := service.host.getMeta(civetPath)
+    assert preMeta, "precondition: meta should exist after add"
+
+    service.host.closeDocument(civetPath)
+
+    assert.equal service.host.getScriptVersion(civetPath), "0",
+      "source editor doc should be forgotten after close"
+    assert service.host.getScriptFileNames().includes(getCanonicalFileName transpiledPath),
+      "transpiled path should remain in scriptFileNames after close (file may still be imported)"
+
+  it "removeDocument should fully drop civet doc from project", ->
+    // Mirrors file deletion: file no longer exists on disk, drop everything.
+    service := await TSService(projectURL, nullLogger)
+    await service.loadPlugins()
+
+    civetPath := path.resolve("./integration/project-test/remove-test.civet")
+    transpiledPath := civetPath + ".tsx"
+    doc := TextDocument.create(pathToFileURL(civetPath).href, "civet", 0, "x := 1")
+    service.host.addOrUpdateDocument(doc)
+    service.host.getMeta(civetPath)  // prime caches
+
+    service.host.removeDocument(civetPath)
+
+    assert.equal service.host.getScriptVersion(civetPath), "0",
+      "source path should be forgotten after removeDocument"
+    assert.equal service.host.getScriptVersion(transpiledPath), "0",
+      "transpiled path should be forgotten after removeDocument"
+    assert not service.host.getScriptFileNames().includes(getCanonicalFileName transpiledPath),
+      "transpiled path should be removed from scriptFileNames"
+
+  it "closeDocument should keep plain ts file in scriptFileNames", ->
+    service := await TSService(projectURL, nullLogger)
+    await service.loadPlugins()
+
+    tsPath := path.resolve("./integration/project-test/close-plain.ts")
+    doc := TextDocument.create(pathToFileURL(tsPath).href, "typescript", 0, "const x = 1")
+    service.host.addOrUpdateDocument(doc)
+
+    service.host.closeDocument(tsPath)
+
+    assert service.host.getScriptFileNames().includes(getCanonicalFileName tsPath),
+      "plain ts file should remain in scriptFileNames after close"
+    assert.equal service.host.getScriptVersion(tsPath), "0",
+      "editor doc for plain ts should be forgotten after close"
+
+  it "removeDocument should drop plain ts file from scriptFileNames", ->
+    service := await TSService(projectURL, nullLogger)
+    await service.loadPlugins()
+
+    tsPath := path.resolve("./integration/project-test/remove-plain.ts")
+    doc := TextDocument.create(pathToFileURL(tsPath).href, "typescript", 0, "const x = 1")
+    service.host.addOrUpdateDocument(doc)
+
+    assert service.host.getScriptFileNames().includes(getCanonicalFileName tsPath),
+      "precondition: plain ts should be in scriptFileNames"
+
+    service.host.removeDocument(tsPath)
+
+    assert not service.host.getScriptFileNames().includes(getCanonicalFileName tsPath),
+      "plain ts should be removed from scriptFileNames"
+    assert.equal service.host.getScriptVersion(tsPath), "0",
+      "plain ts path should be forgotten after removeDocument"
+
+describe "ts service module resolution", ->
+  it "resolves a directory import via index.civet", async ->
+    // Exercises resolveModuleNames + resolvedModule's index-file lookup
+    // (typescript-service.civet lines 131-137) where transpiler is picked up
+    // from the implicit `<dir>/index.civet` file for a directory import.
+    service := await TSService(projectURL, nullLogger)
+    await service.loadPlugins()
+
+    dirImportPath := path.resolve("./integration/project-test/dir-import.civet")
+    loadFile(service, dirImportPath)
+    // Semantic diagnostics force TS to resolve `./lib` which hits the
+    // directory-import branch that scans for `index + transpiler.extension`.
+    diagnostics := service.getSemanticDiagnostics(dirImportPath + ".tsx")
+    assert.equal diagnostics.length, 0,
+      `expected no diagnostics, got ${diagnostics.map(.messageText).join(", ")}`
+
+  it "accepts a plain filesystem path (not a file:// URL) as projectURL", async ->
+    // Exercises line 434: projectURL.startsWith("file:") ? ... : path.resolve(projectURL)
+    // (the else branch that normalizes a bare path).
+    plainPath := path.resolve("./integration/project-test") + path.sep
+    service := await TSService(plainPath, nullLogger)
+    await service.loadPlugins()
+    // Constructing the service and loading plugins is enough to cover
+    // the path-normalization else branch.
+    assert service
+
+  it "takes the pathsBasePath fallback when baseUrl is unset", async ->
+    // Exercises the right side of `pathsBase := baseUrl ?? (pathsBasePath ...)`
+    // at typescript-service.civet line 158.  TS 5.0+ allows `paths` without an
+    // explicit `baseUrl`; parseJsonConfigFileContent sets options.pathsBasePath
+    // to the tsconfig's directory, so our fallback chain lands on pathsBasePath.
+    //
+    // We only need resolveModuleNames to *run* the fallback branch — the import
+    // itself doesn't have to resolve.  An unresolvable alias import triggers
+    // the paths loop (covering the `baseUrl ??` right side), then TS reports
+    // "Cannot find module", proving the code path executed.
+    tmpDir := mkdtempSync(path.join(tmpdir(), 'civet-no-baseurl-'))
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'), JSON.stringify({
+        compilerOptions:
+          target: 'es2020'
+          module: 'NodeNext'
+          paths:
+            '@missing/*': ['nowhere/*']
+      })
+      consumerPath := path.join(tmpDir, 'consumer.civet')
+      writeFileSync consumerPath, 'x from @missing/anything\n'
+
+      service := await TSService(pathToFileURL(tmpDir + path.sep).href, nullLogger)
+      await service.loadPlugins()
+      loadFile(service, consumerPath)
+
+      // TS invokes our resolveModuleNames for `@missing/anything`, which runs
+      // the paths-resolution block (the branch we're here to cover) and then
+      // reports the module as unresolved.
+      diagnostics := service.getSemanticDiagnostics(consumerPath + '.tsx')
+      assert diagnostics.some((d) => String(d.messageText).includes("Cannot find module")),
+        `expected a 'Cannot find module' diagnostic, got: ${diagnostics.map(.messageText).join(' | ')}`
+    finally
+      rmSync(tmpDir, { recursive: true, force: true })
+
+describe "ts service without civet dependencies", ->
+  let tmpDir: string
+  before ->
+    tmpDir = mkdtempSync(path.join(tmpdir(), 'civet-lsp-bundled-'))
+    writeFileSync path.join(tmpDir, 'tsconfig.json'), '{"compilerOptions":{"target":"es2020"}}'
+
+  after ->
+    rmSync(tmpDir, { recursive: true, force: true }) if tmpDir
+
+  it "falls back to bundled civet when the project can't resolve @danielx/civet", async ->
+    // Exercises lines 486-487 (USING BUNDLED CIVET) + 496-497 (No Civet config found).
+    // `tmpDir` has no node_modules, so projectRequire('@danielx/civet') throws,
+    // and findConfig walks up without finding a civetconfig.
+    service := await TSService(tmpDir + path.sep, nullLogger)
+    await service.loadPlugins()
+    // Service should still be usable after bundled fallback
+    assert service
+
+  it "logs an error when civet config fails to load", async ->
+    // Exercises the catch arm at line 498-499: CivetConfig.loadConfig throws
+    // on a malformed civetconfig.json.
+    badConfigDir := mkdtempSync(path.join(tmpdir(), 'civet-lsp-badcfg-'))
+    try
+      writeFileSync path.join(badConfigDir, 'tsconfig.json'), '{"compilerOptions":{"target":"es2020"}}'
+      writeFileSync path.join(badConfigDir, 'civetconfig.json'), '{"not valid json'
+      errors: string[] := []
+      capturingLogger := {
+        log: ->
+        info: ->
+        error: (msg: string) => errors.push msg
+      }
+      service := await TSService(badConfigDir + path.sep, capturingLogger)
+      await service.loadPlugins()
+      assert service
+      assert errors.some((e) => e.includes("Error loading Civet config")),
+        `expected config error, got: ${errors.join(" | ")}`
+    finally
+      rmSync(badConfigDir, { recursive: true, force: true })
+
+describe "ts service with partial project civet packages", ->
+  tmpDirs: string[] := []
+
+  after ->
+    for tmpDir of tmpDirs
+      rmSync tmpDir, { recursive: true, force: true }
+
+  writeFakeProjectCivet := (options: { version: string, includeLib?: boolean, includeConfig?: boolean }) ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-lsp-partial-project-'
+    tmpDirs.push tmpDir
+
+    writeFileSync path.join(tmpDir, 'tsconfig.json'),
+      '{"compilerOptions":{"target":"es2020"}}'
+    samplePath := path.join tmpDir, 'sample.civet'
+    writeFileSync samplePath, '// comment\nx := 1\n'
+
+    packageDir := path.join tmpDir, 'node_modules', '@danielx', 'civet'
+    fs.mkdirSync packageDir, recursive: true
+    exports: Record<string, string> :=
+      '.': './index.cjs'
+      './package.json': './package.json'
+    exports['./config'] = './config.js' if options.includeConfig ?? true
+    writeFileSync path.join(packageDir, 'package.json'), JSON.stringify {}
+      name: '@danielx/civet'
+      version: options.version
+      main: 'index.cjs'
+      exports
+
+    if options.includeConfig ?? true
+      writeFileSync path.join(packageDir, 'config.js'),
+        `module.exports = require(${JSON.stringify bundledCivetConfig});\n`
+
+    if options.includeLib ?? true
+      writeFileSync path.join(packageDir, 'index.cjs'),
+        `module.exports = require(${JSON.stringify bundledCivetMain});\n`
+    else
+      writeFileSync path.join(packageDir, 'index.cjs'), ```
+        const real = require(${JSON.stringify bundledCivetMain});
+        const { lib, ...rest } = real;
+        module.exports = rest;
+      ```
+
+    { tmpDir, samplePath }
+
+  it "falls back to bundled lib when project civet is missing lib export", async ->
+    { tmpDir, samplePath } := writeFakeProjectCivet
+      version: '0.11.7'
+      includeLib: false
+
+    errors: string[] := []
+    capturingLogger :=
+      log: ->
+      info: ->
+      error: (msg: string) => errors.push msg
+
+    service := await TSService(pathToFileURL(tmpDir + path.sep).href, capturingLogger)
+    loadFile(service, samplePath)
+    meta := service.host.getMeta(samplePath)
+
+    assert meta?.commentRanges?.length, 'expected bundled lib fallback to collect comment ranges'
+    assert errors.some((msg) => msg.includes('MISSING lib EXPORT')),
+      `expected missing lib warning, got: ${errors.join(' | ')}`
+
+  it "logs the missing config module when project civet is missing config module", async ->
+    { tmpDir } := writeFakeProjectCivet
+      version: '0.11.7'
+      includeConfig: false
+
+    infos: string[] := []
+    capturingLogger :=
+      log: ->
+      info: (msg: string) => infos.push msg
+      error: ->
+
+    service := await TSService(pathToFileURL(tmpDir + path.sep).href, capturingLogger)
+    await service.loadPlugins()
+
+    assert service
+    assert infos.some((msg) => msg.includes('PROJECT CIVET 0.11.7 IS MISSING CONFIG MODULE')),
+      `expected missing config log, got: ${infos.join(' | ')}`
+
+  it "uses the legacy compile path when project civet predates 0.9.4", async ->
+    { tmpDir, samplePath } := writeFakeProjectCivet
+      version: '0.9.3'
+
+    service := await TSService(pathToFileURL(tmpDir + path.sep).href, nullLogger)
+    loadFile(service, samplePath)
+    meta := service.host.getMeta(samplePath)
+
+    assert meta?.sourcemapLines, 'expected legacy compile path to populate sourcemap lines'
+    assert.equal meta?.commentRanges, undefined,
+      'legacy compile path should not collect comment ranges even when the input contains comments'

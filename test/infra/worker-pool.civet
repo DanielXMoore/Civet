@@ -1,5 +1,6 @@
 assert from assert
 { WorkerPool } from ../../source/worker-pool.civet
+{ SourceMap } from ../../source/sourcemap.civet
 
 describe "WorkerPool", ->
   pool: WorkerPool .= undefined!
@@ -123,3 +124,55 @@ describe "WorkerPool", ->
     assert.equal pool.jobId, 1
     await pool.run "compile", "y := 2", {}
     assert.equal pool.jobId, 2
+
+  it "reconstructs error using globalThis type when error type is a known global", ->
+    // When the worker throws an Error (type "Error"), and "Error" is in globalThis,
+    // the pool reconstructs it via `new globalThis["Error"](message)` (line 51).
+    @timeout 10000
+    pool = new WorkerPool 1
+    try
+      await pool.run "unknownOp", "x := 1", {}
+      assert.fail "should have thrown"
+    catch err
+      assert err instanceof Error
+      assert.match (err as Error).message, /Unknown operation/
+
+  it "restores SourceMap instance from worker result when sourceMap option is true", ->
+    // Covers the sourceMap restoration branch (lines 58-60 of worker-pool.civet)
+    @timeout 10000
+    pool = new WorkerPool 1
+    result := await pool.run "compile", "x := 1", { sourceMap: true }
+    assert result, "should get a result object"
+    assert (result as any).sourceMap instanceof SourceMap,
+      "sourceMap should be restored as a SourceMap instance"
+
+  it "restores errors array from worker result when errors option is provided", ->
+    // Covers the errors array aliasing restoration (lines 62-63 of worker-pool.civet)
+    @timeout 10000
+    pool = new WorkerPool 1
+    errors: unknown[] := []
+    await pool.run "compile", "=> yield 5", { errors }
+    assert errors.length > 0, "errors should be populated by worker"
+
+  it "terminates worker after job if thread count was reduced while busy", ->
+    // Covers lines 67-68 of worker-pool.civet: worker self-terminates when
+    // @spawned > @threads after finishing a job (set by a prior setThreads call).
+    @timeout 20000
+    pool = new WorkerPool 1
+    // Start a job (worker spawns and begins)
+    jobPromise := pool.run "compile", "a := 1", {}
+    // Immediately reduce threads to 0 — worker is busy, so setThreads can't terminate it
+    pool.setThreads 0
+    // Wait for the job to finish: worker checks @spawned > @threads and self-terminates
+    result := await jobPromise
+    assert result, "job should complete even after setThreads(0) while busy"
+    assert.equal pool.spawned, 0, "spawned should drop to 0 after worker self-terminates"
+
+  it "handles an idle worker being reused for a second job", ->
+    // Covers line 29 (worker.ref()) when a previously idle worker is reused
+    @timeout 15000
+    pool = new WorkerPool 1
+    await pool.run "compile", "x := 1", {}
+    // Worker is now idle; second job should reuse it via the @idle path
+    result := await pool.run "compile", "y := 2", {}
+    assert typeof result is "string"

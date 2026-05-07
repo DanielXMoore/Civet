@@ -28,6 +28,11 @@ describe "findConfig", ->
       result := await findInDir(dir)
       assert.equal result, undefined
 
+  it "returns undefined when no config exists up to filesystem root", ->
+    // findConfig traverses up to the filesystem root; covers the `return` at end of loop
+    result := await findConfig(os.tmpdir())
+    assert.equal result, undefined
+
   it "finds config in a parent directory", ->
     await withTempDir async (dir) ->
       await fs.writeFile join(dir, "civetconfig.json"), "{}"
@@ -46,6 +51,47 @@ describe "findConfig", ->
       assert result, "should find config in .config subdir"
       assert result!.endsWith("civetconfig.json"), "path should end with civetconfig.json"
       assert result!.includes(".config"), "path should contain .config"
+
+  it "ignores a .config entry that is a file, not a directory", ->
+    // Exercises the `.isDirectory()` false branch of the `.config` check.
+    await withTempDir async (dir) ->
+      // Create `.config` as a file, and a real config next to it.
+      await fs.writeFile join(dir, ".config"), ""
+      await fs.writeFile join(dir, "civetconfig.json"), "{}"
+      result := await findConfig(dir)
+      assert result, "should fall through to civetconfig.json"
+      assert result!.endsWith("civetconfig.json")
+
+  it "tolerates a dangling .config symlink (stat failure)", ->
+    // Exercises the `try`'s catch branch when fs.stat throws on an entry
+    // that readdir saw.
+    await withTempDir async (dir) =>
+      try
+        await fs.symlink join(dir, "does-not-exist"), join(dir, ".config")
+      catch error
+        // Windows symlink creation can require elevation or Developer Mode.
+        @skip() if process.platform is 'win32' and
+                   (error as NodeJS.ErrnoException).code is 'EPERM'
+        throw error
+      await fs.writeFile join(dir, "civetconfig.json"), "{}"
+      result := await findConfig(dir)
+      assert result, "should fall through after stat failure"
+      assert result!.endsWith("civetconfig.json")
+
+  it "tolerates a dangling config-file symlink (stat failure)", ->
+    // Same TOCTOU tolerance for the main configName loop.
+    await withTempDir async (dir) =>
+      try
+        await fs.symlink join(dir, "does-not-exist"), join(dir, "civetconfig.json")
+      catch error
+        // Windows symlink creation can require elevation or Developer Mode.
+        @skip() if process.platform is 'win32' and
+                   (error as NodeJS.ErrnoException).code is 'EPERM'
+        throw error
+      await fs.writeFile join(dir, "civet.config.yaml"), "jsOutput: true\n"
+      result := await findInDir(dir)
+      assert result, "should fall through to civet.config.yaml"
+      assert result!.endsWith("civet.config.yaml")
 
 describe "findInDir", ->
   it "returns undefined for empty directory", ->

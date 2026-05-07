@@ -192,6 +192,18 @@ headers :=
   Content-Encoding: "gzip"
 </Playground>
 
+### Optional Properties
+
+Braced object literals support `?` shorthand for properties
+that get included only when the value is non-null:
+
+<Playground>
+options := { filename?, data?: getData() }
+</Playground>
+
+This is especially helpful for satisfying TypeScript's
+[`exactOptionalPropertyTypes` mode](https://www.typescriptlang.org/tsconfig/#exactOptionalPropertyTypes).
+
 ### Object Globs
 
 Inspired by
@@ -1113,8 +1125,8 @@ function add(a: number, b: number): number
 ### Arrow Functions
 
 ::: info
-Unlike ECMAScript, zero-argument arrows do not need a `()` prefix,
-but one-argument arrows do need parentheses around the argument.
+Unlike ECMAScript, zero-parameter arrows do not need a `()` prefix,
+but one-parameter arrows do need parentheses around the argument.
 :::
 
 <Playground>
@@ -2791,6 +2803,13 @@ let i: number?
 let x: string??
 </Playground>
 
+One exception: immediately inside a tuple type, `T?` means an
+[optional element](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-3-0.html#optional-elements-in-tuple-types):
+
+<Playground>
+let name: [string, string, string?]
+</Playground>
+
 To allow for type inference and the initial `undefined` value:
 
 <Playground>
@@ -3490,6 +3509,72 @@ and/or the server:
 link := <a href="https://civet.dev/">Civet
 </Playground>
 
+## ECMAScript Compatibility
+
+By default, Civet aims to be mostly compatible with JavaScript and TypeScript,
+so that most JavaScript/TypeScript code is valid Civet code.
+See [comparison](comparison) for the few exceptions.
+
+To bring Civet closer to JavaScript/TypeScript,
+you can turn on full ECMAScript compatibility mode
+with a `"civet esCompat"` directive at the top of your file,
+or use more specific directive(s) as listed below.
+This is useful for gradually converting an existing JavaScript codebase to Civet.
+
+### No Implicit Returns
+
+To disable [implicit returns from functions](#function),
+use the directive `"civet -implicitReturns"` (or `"civet esCompat"`):
+
+<Playground>
+"civet -implicitReturns"
+function processAll(array)
+  for item of array
+    process item
+</Playground>
+
+One-line `=>` arrow functions still have implicit returns,
+like in JavaScript, but one-line `->` and `function` do not.
+
+<Playground>
+"civet -implicitReturns"
+=> "returned"
+-> "not returned"
+function() "not returned"
+</Playground>
+
+### Single-Argument Arrow Functions
+
+By default, Civet requires parentheses around a single arrow function parameter:
+`(x) => x + 1`.
+With `"civet esArrowFunction"` (or `"civet esCompat"`),
+you can write `x => x + 1` as in ECMAScript.
+If not preceded by an identifier,
+`=> body` still works as a zero-parameter arrow function.
+The behavior of `->` remains unchanged.
+
+<Playground>
+"civet esArrowFunction"
+double := x => x * 2
+greet := (name) => `Hello, ${name}!`
+noArgs := => console.log "Hello, world!"
+</Playground>
+
+### Strict Mode
+
+Output from Civet runs by default in JavaScript's sloppy mode,
+unless it is loaded as an ECMAScript module.
+To turn on
+[JavaScript's strict mode](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Strict_mode),
+add the directive `"use strict"` as usual, or the Civet directive
+`"civet strict"`. The latter is useful because it can be specified in
+[Civet configuration files](config).
+
+<Playground>
+"civet strict"
+x = 5 // invalid
+</Playground>
+
 ## [CoffeeScript](https://coffeescript.org/) Compatibility
 
 Turn on full [CoffeeScript](https://coffeescript.org/) compatibility mode
@@ -3693,37 +3778,3 @@ This behavior is usually helpful in a REPL context: it lets you attempt to
 correct a previous declaration.
 It also matches Chrome's console behavior (but not NodeJS's CLI behavior).
 :::
-
-## JavaScript Compatibility
-
-Civet aims to be mostly compatible with JavaScript and TypeScript,
-so that most JavaScript/TypeScript code is valid Civet code.
-See [comparison](comparison) for the few exceptions.
-You can increase JavaScript compatibility with the following options:
-
-### No Implicit Returns
-
-To disable [implicit returns from functions](#function),
-use the directive `"civet -implicitReturns"`:
-
-<Playground>
-"civet -implicitReturns"
-function processAll(array)
-  for item of array
-    process item
-</Playground>
-
-### Strict Mode
-
-Output from Civet runs by default in JavaScript's sloppy mode,
-unless it is loaded as an ECMAScript module.
-To turn on
-[JavaScript's strict mode](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Strict_mode),
-add the directive `"use strict"` as usual, or the Civet directive
-`"civet strict"`. The latter is useful because it can be specified in
-[Civet configuration files](config).
-
-<Playground>
-"civet strict"
-x = 5 // invalid
-</Playground>
