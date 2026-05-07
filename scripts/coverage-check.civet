@@ -1,0 +1,52 @@
+// Gate the merged coverage report at 100% on every c8 metric.
+// Reads `coverage/coverage-summary.json` (written by `pnpm coverage:merge`)
+// and exits 1 with a per-metric breakdown if any falls short.
+
+{ readFileSync } from 'fs'
+{ resolve, join } from 'path'
+{ fileURLToPath } from 'url'
+
+root := typeof __dirname !== "undefined" ?
+  resolve __dirname, '..' :
+  fileURLToPath new URL('..', import.meta.url)
+
+summary := JSON.parse readFileSync join(root, 'coverage', 'coverage-summary.json'), 'utf8'
+total := summary.total as Record<string, { pct: number, total: number, covered: number }>
+
+failed: string[] := []
+for metric of ['statements', 'branches', 'functions', 'lines']
+  m := total[metric]
+  failed.push `${metric}: ${m.covered}/${m.total} (${m.pct}%)` if m.pct < 100
+
+if failed.length
+  console.error `Coverage gate failed — every metric must be 100%:`
+  failed.forEach (line) => console.error `  - ${line}`
+  // Dump per-file partials + missing branch arms from coverage-final.json
+  // so the CI log alone tells you what to investigate (no need to re-run
+  // coverage:show locally).
+  finalPath := join root, 'coverage', 'coverage-final.json'
+  final := JSON.parse readFileSync(finalPath, 'utf8')
+  for [path, file] of Object.entries(summary)
+    continue if path is "total"
+    f := file as Record<string, { pct: number, total: number, covered: number }>
+    rawMetrics := for metric of ['statements', 'branches', 'functions', 'lines']
+      m := f[metric]
+      `${metric} ${m.covered}/${m.total}` if m.pct < 100
+    metricLines := rawMetrics.filter Boolean
+    continue unless metricLines.length
+    console.error `\n  ${path}`
+    metricLines.forEach (line) => console.error `    ${line}`
+    fileData := final[path]
+    continue unless fileData
+    bm: Record<string, any> := fileData.branchMap ?? {}
+    bHits: Record<string, number[]> := fileData.b ?? {}
+    for [id, arms] of Object.entries(bHits)
+      missed: number[] := []
+      arms.forEach (count, i) => missed.push i if count is 0
+      continue unless missed.length
+      m := bm[id]
+      ln := m?.line ?? m?.loc?.start?.line ?? "?"
+      console.error `    branch ${id} line ${ln} (${m?.type ?? '?'}) arms ${JSON.stringify arms} missed [${missed.join ','}]`
+  process.exit(1)
+
+console.log `Coverage gate passed: 100% statements / branches / functions / lines.`

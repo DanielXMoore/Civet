@@ -1,0 +1,446 @@
+/**
+ * Shared TypeScript LanguageServiceHost factory.  Maintains a virtual
+ * filesystem where each registered transpiler's source files (.civet,
+ * .hera, …) appear as siblings of their transpiled targets (.civet.tsx,
+ * .hera.tsx, …); resolveModuleNames + readFile / fileExists overrides
+ * route TS's resolver through them.  vscode-languageserver-textdocument
+ * + vscode-uri are abstracted via DocFactory so non-LSP consumers can
+ * use simpler in-memory docs.
+ */
+
+assert from assert
+path from path
+
+ts from typescript
+{ isExternalModuleNameRelative } := ts
+{ type CompilerHost, type CompilerOptions, type IScriptSnapshot, type LanguageServiceHost } from typescript
+sys := ts.sys
+
+{
+  type DocFactory
+  type FileMeta
+  type Logger
+  type Transpiler
+  type TranspiledDoc
+} from ./types.civet
+{ Snap } from ./snapshot.civet
+{
+  getCanonicalFileName
+  getExtensionFromPath
+  getTranspiledExtensionsFromPath
+  removeExtension
+} from ./path.civet
+{ mogrifyPackageJsonImports } from ./config.civet
+
+// ts doesn't have this key in the type
+interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithFailedLookupLocations
+  failedLookupLocations: string[]
+
+export interface Host extends LanguageServiceHost
+  /** Per-file metadata (sourcemap, parse errors, …) for a transpiled source. */
+  getMeta(p: string): FileMeta?
+  /**
+   * Add or replace an editor-tracked source document.  Transpilable
+   * extensions (.civet, .hera, …) get a synthetic `<src>.<target>`
+   * sibling registered as the program root; plain .ts/.js are added
+   * to scriptFileNames directly.
+   */
+  addOrUpdateDocument(doc: TranspiledDoc): void
+  /**
+   * Register a path as a program root without a TranspiledDoc — TS reads
+   * it from disk on demand.  For consumers that want project-wide scope
+   * over a tsconfig-discovered file list.
+   */
+  addScriptFileName(p: string): void
+  /**
+   * Drop editor-tied caches for a document on LSP didClose.  Project
+   * membership is preserved; the next access re-reads from disk.
+   */
+  closeDocument(p: string): void
+  /**
+   * Fully drop a document (and its transpiled sibling) from the project,
+   * including the scriptFileNames entry.  Used when the file is deleted.
+   */
+  removeDocument(p: string): void
+
+export function TSHost(
+  compilationSettings: CompilerOptions
+  initialFileNames: string[]
+  baseHost: CompilerHost
+  transpilers: Map<string, Transpiler>
+  docFactory: DocFactory<TranspiledDoc>
+  _logger: Logger = console
+  libDir?: string
+): Host
+  { rootDir } := compilationSettings
+  assert(rootDir, "TSHost requires a rootDir in compilationSettings")
+
+  // Explicit `files: [...]` entries from tsconfig don't flow through
+  // service.civet's configSys mogrify (only `include` does), so rewrite
+  // any raw transpilable extensions to their synthetic targets here —
+  // otherwise `getOrCreatePathSnapshot` would parse raw `.civet` as TS.
+  scriptFileNames: Set<string> := new Set(initialFileNames.map getTranspiledPath)
+  fileMetaData: Map<string, FileMeta> := new Map
+
+  pathMap: Map<string, TranspiledDoc> := new Map
+  snapshotMap: Map<string, IScriptSnapshot> := new Map
+
+  projectVersion .= 0
+
+  resolutionCache: ts.ModuleResolutionCache := ts.createModuleResolutionCache(rootDir, (fileName) => fileName, compilationSettings)
+
+  baseReadFile := baseHost.readFile.bind baseHost
+  baseFileExists := baseHost.fileExists.bind baseHost
+
+  let self: Host
+
+  return self = Object.assign({}, baseHost, {
+    /** Mogrifies transpilable extensions inside `package.json#imports` on read. */
+    readFile(filename: string)
+      contents := baseReadFile filename
+      if contents and path.basename(filename) is "package.json"
+        return mogrifyPackageJsonImports contents, transpilers
+      contents
+
+    /** Treats synthetic `<src>.<target>` siblings as existing whenever the source does. */
+    fileExists(filename: string)
+      baseFileExists(filename) or syntheticTargetExists(filename)
+
+    /**
+     * LSP bundles its own lib copies under `<dist>/lib` (libDir set);
+     * other consumers fall through to TS's resolved-module lookup.
+     */
+    getDefaultLibFileName(options: ts.CompilerOptions)
+      if libDir
+        return path.join(libDir, ts.getDefaultLibFileName(options))
+      ts.getDefaultLibFilePath(options)
+
+    getModuleResolutionCache()
+      resolutionCache
+
+    /**
+     * Defer to TS's standard resolver first; fall back to our own walk
+     * (paths / baseUrl / relative) for transpilable extensions TS doesn't
+     * know about.  Requires `allowNonTsExtensions`; matches resolve to a
+     * synthetic `<src>.<target>` so subsequent `getScriptSnapshot` calls
+     * hit the transpiler.
+     */
+    resolveModuleNames(moduleNames: string[], containingFile: string, _reusedNames: string[] | undefined, _redirectedReference: ts.ResolvedProjectReference | undefined, compilerOptions: CompilerOptions, _containingSourceFile?: ts.SourceFile)
+      moduleNames.map (name) =>
+        // Try to resolve the module using the standard TypeScript logic
+        { resolvedModule } := ts.resolveModuleName(name, containingFile, compilerOptions, self, resolutionCache) as ResolvedModuleWithFailedLookupLocations
+        return resolvedModule if resolvedModule
+
+        // get the transpiler for the extension
+        extension := getExtensionFromPath(name)
+        transpiler .= transpilers.get(extension)
+        if transpiler or !extension
+          exists := (transpiler ? sys.fileExists : sys.directoryExists).bind(sys)
+          resolvedModule := (resolved: string) =>
+            // Assumes exists(resolved) is true
+            // Directories don't yet have a transpiler chosen; try to find one
+            // via implicit index file.
+            // TODO: Only when state.features & NodeResolutionFeatures.EsmMode
+            // TODO: Read package.json as in loadNodeModuleFromDirectoryWorker
+            if !transpiler
+              for [_, t] of transpilers
+                index := path.join(resolved, "index" + t.extension)
+                if sys.fileExists(index)
+                  transpiler = t
+                  resolved = index
+                  break
+
+              return unless transpiler
+            // Now sys.fileExists(resolved) should be true
+            { target } := transpiler
+            return {
+              resolvedFileName: resolved + target
+              extension: target
+              isExternalLibraryImport: false
+            }
+
+          // Mimic tryResolve from
+          // https://github.com/microsoft/TypeScript/blob/cf33fd0cde22905effce371bb02484a9f2009023/src/compiler/moduleNameResolver.ts
+          // tryLoadModuleUsingOptionalResolutionSettings.
+          // `baseUrl` is @deprecated in TS 5.0+ but TS still reads it first as
+          // the paths base, so we mirror that behavior for legacy tsconfigs.
+          { paths, pathsBasePath } := compilationSettings
+          baseUrl := (compilationSettings as { baseUrl?: string }).baseUrl
+          if !isExternalModuleNameRelative(name) // absolute
+            // tryLoadModuleUsingPathsIfEligible
+            if paths
+              // tryLoadModuleUsingPaths.  parseJsonConfigFileContent always
+              // assigns options.pathsBasePath the tsconfig's directory when
+              // `paths` is set, so baseUrl ?? pathsBasePath suffices.  See
+              // https://github.com/microsoft/TypeScript/blob/bbef6a7a31cff1d0d9f94b082996334baca74caa/src/compiler/utilities.ts#L6317-L6320
+              pathsBase := baseUrl ?? pathsBasePath as string
+              // TODO: more closely follow tryParsePatterns from
+              // https://github.com/microsoft/TypeScript/blob/bbef6a7a31cff1d0d9f94b082996334baca74caa/src/compiler/utilities.ts#L9743-L9745
+              best .= ''
+              bestPrefix .= ''
+              for [pattern, replacements] of Object.entries(paths)
+                if pattern.endsWith("*")
+                  prefix := pattern.slice(0, -1)
+                  if name.startsWith(prefix)
+                    for replacement of replacements
+                      resolved := path.resolve
+                        pathsBase
+                        replacement.replace('*', name.slice(prefix.length))
+
+                      if exists(resolved) and prefix.length > bestPrefix.length
+                        best = resolved
+                        bestPrefix = prefix
+
+                else if name is pattern
+                  for replacement of replacements
+                    resolved := path.resolve(pathsBase, replacement)
+                    if exists(resolved) and pattern.length > bestPrefix.length
+                      best = resolved
+                      bestPrefix = pattern
+
+              return resolvedModule(best) if best
+
+            // tryLoadModuleUsingBaseUrl
+            if baseUrl
+              /* c8 ignore next 2 -- only fires for tsconfigs with `baseUrl`; test fixtures don't set it */
+              resolved := path.resolve(baseUrl, name)
+              return resolvedModule(resolved) if exists(resolved)
+
+          else // relative
+            // TODO: tryLoadModuleUsingRootDirs
+
+          // This backup resolver is really just for relative paths.
+          // TODO: Implement absolute case from tryResolve
+          // https://github.com/microsoft/TypeScript/blob/cf33fd0cde22905effce371bb02484a9f2009023/src/compiler/moduleNameResolver.ts#L3221
+          resolved := path.resolve(path.dirname(containingFile), name)
+          return resolvedModule(resolved) if exists(resolved)
+          // TODO: add to resolution cache?
+
+        return undefined
+
+    addOrUpdateDocument(doc: TranspiledDoc): void
+      const p = getCanonicalFileName docFactory.uriToPath(doc.uri)
+      snapshotMap.delete(p)
+      projectVersion++
+
+      extension := getExtensionFromPath(p)
+      transpiler := transpilers.get(extension)
+
+      if transpiler
+        { target } := transpiler
+        transpiledPath := p + target
+
+        transpiledDoc .= pathMap.get(transpiledPath)
+        initTranspiledDoc(transpiledPath) unless transpiledDoc
+        snapshotMap.delete(transpiledPath)
+
+        // Source doc lives in pathMap (not scriptFileNames) so the
+        // transpiled sibling can pick up updates via getOrCreatePathSnapshot.
+        pathMap.set(p, doc)
+        return
+
+      scriptFileNames.add(p)
+      pathMap.set(p, doc)
+
+    addScriptFileName(p: string): void
+      target := getTranspiledPath p
+      return if scriptFileNames.has target
+
+      scriptFileNames.add target
+      projectVersion++
+
+    closeDocument(rawPath: string): void
+      canonical := getCanonicalFileName rawPath
+      transpiledPath := getTranspiledPath(canonical)
+
+      pathMap.delete(canonical)
+      snapshotMap.delete(canonical)
+      fileMetaData.delete(canonical)
+
+      if transpiledPath !== canonical
+        pathMap.delete(transpiledPath)
+        snapshotMap.delete(transpiledPath)
+
+      projectVersion++
+
+    removeDocument(rawPath: string): void
+      canonical := getCanonicalFileName rawPath
+      transpiledPath := getTranspiledPath(canonical)
+
+      pathMap.delete(canonical)
+      snapshotMap.delete(canonical)
+      fileMetaData.delete(canonical)
+      scriptFileNames.delete(canonical)
+
+      if transpiledPath !== canonical
+        pathMap.delete(transpiledPath)
+        snapshotMap.delete(transpiledPath)
+        scriptFileNames.delete(transpiledPath)
+
+      projectVersion++
+
+    getMeta(p: string)
+      p = getCanonicalFileName p
+      // Force snapshot creation so meta is populated before lookup.
+      getOrCreatePathSnapshot(getTranspiledPath(p))
+      fileMetaData.get(p)
+
+    getProjectVersion()
+      projectVersion.toString()
+
+    getCompilationSettings()
+      compilationSettings
+
+    // TS passes forward-slash paths on every OS; both methods
+    // normalize through getCanonicalFileName before lookup.
+    getScriptSnapshot(p: string)
+      getOrCreatePathSnapshot(getCanonicalFileName p)
+    getScriptVersion(p: string)
+      pathMap.get(getCanonicalFileName p)?.version.toString() || "0"
+
+    getScriptFileNames()
+      Array.from(scriptFileNames)
+
+    // CompilerHost requires writeFile, but our consumers always pass an
+    // explicit writeFile to program.emit() / builder.emit(), so this is
+    // unreachable — keep as a no-op to satisfy the interface.
+    writeFile(_fileName: string, _content: string): void
+      return
+  })
+
+  /**
+   * Whether `<src>.<target>` "exists" — true whenever the underlying
+   * `<src>` source is on disk.  Backs the `fileExists` override so TS's
+   * resolver accepts the synthetic siblings produced by
+   * `mogrifyPackageJsonImports`.
+   */
+  function syntheticTargetExists(filename: string): boolean
+    for [ext, t] of transpilers
+      if filename.endsWith(t.target)
+        source := filename.slice(0, -t.target.length)
+        if source.endsWith(ext) and baseFileExists(source)
+          return true
+    false
+
+  /** Open editor docs win over disk. */
+  function getPathSource(p: string)
+    p = getCanonicalFileName p
+    doc := pathMap.get(p)
+    return doc.getText() if doc
+    return sys.readFile(p)! if sys.fileExists(p)
+    ""
+
+  /** Returns the synthetic-target path for a transpilable source, or `p` unchanged. */
+  function getTranspiledPath(p: string)
+    p = getCanonicalFileName p
+    extension := getExtensionFromPath(p)
+    transpiler := transpilers.get(extension)
+    return p + transpiler.target if transpiler
+    p
+
+  /**
+   * Memoized snapshot factory.  For transpilable targets, re-runs the
+   * transpiler when the source doc has advanced past the cached version
+   * and falls back to the previous transpiled text on compile errors.
+   */
+  function getOrCreatePathSnapshot(p: string)
+    p = getCanonicalFileName p
+    snapshot .= snapshotMap.get(p)
+    return snapshot if snapshot
+
+    let transpiler
+
+    // p arrives with the transpiler's target extension already applied
+    // (e.g. `foo.civet.tsx`); the second-to-last extension picks the
+    // transpiler.
+    exts := getTranspiledExtensionsFromPath(p)
+    if exts and (transpiler = transpilers.get(exts[0]))
+      sourcePath := removeExtension(p)
+      sourceDoc := pathMap.get(sourcePath)
+      transpiledDoc .= pathMap.get(p)
+      transpiledDoc = initTranspiledDoc(p) unless transpiledDoc
+
+      let source
+      sourceDocVersion .= 0
+      if !sourceDoc
+        source = sys.readFile(sourcePath)
+      else
+        source = sourceDoc.getText()
+        sourceDocVersion = sourceDoc.version
+
+      if source and sourceDocVersion > transpiledDoc.version
+        transpiledCode := doTranspileAndUpdateMeta(transpiledDoc, sourceDocVersion, transpiler, sourcePath, source)
+        snapshot = Snap(transpiledCode) if transpiledCode?
+
+      // Fall back to the previous transpiled text if the new compile errored.
+      snapshot = Snap(transpiledDoc.getText()) unless snapshot
+
+      snapshotMap.set(p, snapshot)
+      return snapshot
+
+    snapshot = Snap(getPathSource(p))
+    snapshotMap.set(p, snapshot)
+    return snapshot
+
+  /** Upsert FileMeta for `p` (merges into the existing entry if present). */
+  function createOrUpdateMeta(p: string, update: FileMeta & { transpiledDoc: TranspiledDoc })
+    p = getCanonicalFileName p
+    meta .= fileMetaData.get(p)
+    if !meta
+      fileMetaData.set(p, update)
+    else
+      Object.assign(meta, update)
+
+  /**
+   * Run the transpiler, update FileMeta, write the new text into the
+   * transpiledDoc.  Returns the transpiled code or `undefined` on any
+   * failure (parse error, async result, falsy compile output) — errors
+   * thrown here would crash TS's snapshot/version path so we trap and
+   * surface them through `FileMeta.parseErrors` instead.
+   */
+  function doTranspileAndUpdateMeta(transpiledDoc: TranspiledDoc, version: number, transpiler: Transpiler, sourcePath: string, sourceCode: string): string?
+    let result
+    try
+      result = transpiler.compile(sourcePath, sourceCode)
+    catch e
+      createOrUpdateMeta sourcePath, {
+        transpiledDoc
+        sourcemapLines: undefined
+        commentRanges: undefined
+        parseErrors: [e as Error]
+        fatal: true
+      }
+      return
+
+    // Async transpilers aren't supported on this code path yet — the
+    // LanguageService snapshot interface is sync.  Treat any Promise as
+    // not-yet-ready and return the previous text.
+    /* c8 ignore next 2 -- forward-compat guard: makeCivetPlugin / makeHeraPlugin are sync; only future async transpilers would hit this */
+    if result <? Promise
+      return
+
+    return unless result
+
+    { code: transpiledCode, sourceMap, commentRanges, errors } := result
+    sourcemapLines .= sourceMap?.lines
+    /* c8 ignore start -- Civet <0.9.4 sourcemap shape (lines nested under .data) */
+    sourcemapLines ??= sourceMap?.data?.lines
+    /* c8 ignore stop */
+    createOrUpdateMeta sourcePath, {
+      transpiledDoc
+      sourcemapLines
+      commentRanges
+      parseErrors: errors
+      fatal: false
+    }
+    docFactory.update transpiledDoc, transpiledCode, version
+    transpiledCode
+
+  /** Empty placeholder; `getOrCreatePathSnapshot` fills it on first request. */
+  function initTranspiledDoc(p: string)
+    p = getCanonicalFileName p
+    uri := docFactory.pathToUri(p)
+    transpiledDoc := docFactory.create(uri, "none", -1, "")
+    pathMap.set(p, transpiledDoc)
+    scriptFileNames.add(p)
+    transpiledDoc

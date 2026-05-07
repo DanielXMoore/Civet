@@ -1,4 +1,5 @@
 assert from assert
+{ execFileSync } from "child_process"
 { type UnpluginBuildContext, type UnpluginContext } from unplugin
 { slash, rawPlugin, type PluginOptions } from ../../source/unplugin/unplugin.civet
 { writeFile, mkdir, rm } from fs/promises
@@ -70,6 +71,22 @@ describe "unplugin: loadInclude()", ->
 
     // With ts:'preserve', outExt should be .tsx
     assert.equal plugin.loadInclude("foo.civet.tsx"), true
+
+describe "unplugin: lazy typescript loading", ->
+  it "plain `ts: 'civet'` path doesn't transitively load typescript", ->
+    @timeout 15000
+    // Fresh subprocess: the surrounding mocha already loaded typescript
+    // via typecheck-mode tests, so checking the parent's require.cache
+    // would yield a false positive.
+    unpluginPath := path.resolve "./dist/unplugin/unplugin.js"
+    out := execFileSync "node", ["-e", `
+      const unplugin = require(${JSON.stringify unpluginPath});
+      unplugin.rawPlugin({ ts: 'civet' }, { framework: 'rollup' });
+      const tsLoaded = Object.keys(require.cache).some(p => /[\\\\/]typescript[\\\\/]lib[\\\\/]typescript\\.js$/.test(p));
+      console.log(tsLoaded ? '1' : '0');
+    `], cwd: process.cwd(), encoding: "utf8"
+    assert.equal out.trim(), "0",
+      "typescript was eagerly loaded for plain `ts: 'civet'` — the plain transform path should stay on the optional peer dep"
 
 describe "unplugin: options normalization", ->
   it "dts: true is aliased to emitDeclaration: true (plugin loads)", ->
@@ -401,7 +418,7 @@ describe "unplugin: file system", ->
 
   describe "unplugin: tsc", ->
     it "typecheck: true runs tsc type checking", ->
-      @timeout 10000
+      @timeout 30000
 
       fileWithTSError := await makeCivetTempFile "x: number := 'not a number'\n"
       rootDir := path.dirname fileWithTSError
@@ -438,8 +455,157 @@ describe "unplugin: file system", ->
 
       assert errored
 
+    it "options.tsConfig.compilerOptions reaches TSService", ->
+      @timeout 30000
+
+      // Pins both: inline tsConfig drives the program (no disk tsconfig.json),
+      // and declaration-emit diagnostics surface (TS9010 from
+      // isolatedDeclarations only fires through ts.getPreEmitDiagnostics).
+      inlineDir := path.join tmpDir, "inline-tsconfig-#{fileNum++}"
+      await mkdir inlineDir, recursive: true
+      civetFile := path.join inlineDir, "decl.civet"
+      await writeFile civetFile, "export f := () => 1 + 2\n"
+
+      plugin := rawPlugin {
+        ts: 'tsc'
+        config: false
+        typecheck: true
+        tsConfig: {
+          rootDir: inlineDir
+          compilerOptions:
+            declaration: true
+            isolatedDeclarations: true
+            strict: true
+            skipLibCheck: true
+            target: "es2020"
+            jsx: "preserve"
+          files: [ civetFile ]
+        }
+      }, { framework: 'esbuild' }
+      ctx := { ...nullContext, ...plugin }
+
+      plugin.esbuild.config { outdir: testOutDir }
+
+      capturedErrors: string[] .= []
+      origError := console.error
+      console.error = (msg) => { capturedErrors.push msg }
+      let thrown: Error?
+      try
+        await plugin.buildStart.call ctx
+        await plugin.load.call ctx, civetFile + ".jsx"
+        await plugin.buildEnd.call ctx
+      catch e
+        thrown = e as Error
+      finally
+        console.error = origError
+
+      assert thrown,
+        "expected buildEnd to throw — inline tsConfig.compilerOptions.isolatedDeclarations should drive a declaration error"
+      combined := capturedErrors.join "\n"
+      assert combined.includes("TS9010") or combined.includes("TS9007"),
+        `expected TS9010 / TS9007 in output, got: ${combined.slice(0, 400)}`
+
+    it "package.json `imports` map resolves to a .civet file", ->
+      @timeout 30000
+
+      // The type mismatch in consumer.civet is the proof-positive: it
+      // fires only when `#dep` actually resolves to dep.civet and dep's
+      // typed export flows through.  Resolution failure produces the
+      // distinct TS2307 "Cannot find module" diagnostic instead.
+      pkgDir := path.join tmpDir, "pkg-imports-#{fileNum++}"
+      await mkdir pkgDir, recursive: true
+      await writeFile path.join(pkgDir, "package.json"), JSON.stringify({
+        name: "civet-pkg-imports-fixture"
+        type: "module"
+        imports: { "#dep": "./dep.civet" }
+      })
+      await writeFile path.join(pkgDir, "dep.civet"), "export foo: string := 'hello'\n"
+      consumerPath := path.join pkgDir, "consumer.civet"
+      await writeFile consumerPath, """
+        { foo } from '#dep'
+        n: number := foo
+      """
+
+      plugin := rawPlugin {
+        ts: 'tsc'
+        config: false
+        typecheck: true
+        tsConfig: {
+          rootDir: pkgDir
+          compilerOptions:
+            target: "es2020"
+            module: "node16"
+            moduleResolution: "node16"
+            strict: true
+            skipLibCheck: true
+            jsx: "preserve"
+          files: [ consumerPath ]
+        }
+      }, { framework: 'esbuild' }
+      ctx := { ...nullContext, ...plugin }
+      plugin.esbuild.config { outdir: testOutDir }
+
+      capturedErrors: string[] .= []
+      origError := console.error
+      console.error = (msg) => { capturedErrors.push msg }
+      let thrown: Error?
+      try
+        await plugin.buildStart.call ctx
+        await plugin.load.call ctx, consumerPath + ".jsx"
+        await plugin.buildEnd.call ctx
+      catch e
+        thrown = e as Error
+      finally
+        console.error = origError
+
+      combined := capturedErrors.join "\n"
+      assert thrown, "expected buildEnd to throw on the resulting type mismatch"
+      assert combined.includes("'string' is not assignable to type 'number'") or combined.includes("Type 'string'"),
+        `expected string→number mismatch through '#dep', got: ${combined.slice(0, 600)}`
+      assert not combined.includes("Cannot find module '#dep'"),
+        `'#dep' did not resolve via package.json imports map: ${combined.slice(0, 600)}`
+
+    it "buildEnd(true) typechecks tsConfig.files entries that load() never saw", ->
+      @timeout 30000
+
+      // Both files have a TS error; only one is load()-ed.  buildEnd(true)
+      // pulls the unloaded sibling into scope via configFileNames.
+      loadedFile := await makeCivetTempFile "x: number := 'not a number'\n"
+      unloadedFile := await makeCivetTempFile "y: number := 'also not a number'\n"
+      rootDir := path.dirname loadedFile
+
+      plugin := rawPlugin {
+        ts: 'tsc'
+        config: false
+        typecheck: true
+        tsConfig: {
+          rootDir
+          files: [ loadedFile, unloadedFile ]
+        }
+      }, { framework: 'esbuild' }
+      ctx := { ...nullContext, ...plugin }
+
+      plugin.esbuild.config { outdir: testOutDir }
+
+      origError := console.error
+      console.error = ->
+      let thrown: Error?
+      try
+        await plugin.buildStart.call ctx
+        await plugin.load.call ctx, loadedFile + ".jsx"
+        await plugin.buildEnd.call ctx, true
+      catch e
+        thrown = e as Error
+      finally
+        console.error = origError
+
+      assert thrown, "expected buildEnd to throw on TS errors"
+      assert.equal thrown!.message,
+        "Aborting build because of 2 TypeScript diagnostics above",
+        `expected 2-error abort, got: ${thrown!.message}`
+
     it "emitDeclaration: true emits .d.ts files", ->
-      @timeout 10000
+      @timeout 30000
       plugin := rawPlugin {
         ts: 'tsc'
         config: false
@@ -465,7 +631,7 @@ describe "unplugin: file system", ->
         console.error = origError
 
     it "transformTS rewrites .mts import extensions in module specifiers", ->
-      @timeout 10000
+      @timeout 30000
       // Use a file with an import that has a .mts extension,
       // which should be rewritten to .mjs by the transformTS block
       fileWithImport := await makeCivetTempFile "import foo from './helper.mts'\nfoo\n"
@@ -489,7 +655,7 @@ describe "unplugin: file system", ->
         console.error = origError
 
     it "tsConfig without rootDir uses process.cwd() as base", ->
-      @timeout 10000
+      @timeout 30000
       plugin := rawPlugin {
         ts: 'tsc'
         config: false
@@ -535,7 +701,7 @@ describe "unplugin: file system", ->
         console.error = origError
 
     it "declarationExtension renames .d.ts output files", ->
-      @timeout 10000
+      @timeout 30000
       fileForDecl := await makeCivetTempFile "x: number := 5\n"
       rootDir := path.dirname fileForDecl
 

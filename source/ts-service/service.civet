@@ -1,0 +1,149 @@
+/**
+ * Shared TSService factory: builds a TypeScript LanguageService over a
+ * Civet-aware host so any consumer (LSP, CLI typecheck, unplugin) can
+ * drive Civet/Hera type checking, navigation, and diagnostics from one
+ * place.  Project-path-based — the LSP wrapper resolves URIs to fsPaths
+ * and handles project-Civet detection before calling in.
+ */
+
+path from path
+
+ts from typescript
+{ type LanguageService } from typescript
+{
+  createCompilerHost
+  createLanguageService
+  sys
+} := ts
+
+{
+  type DocFactory
+  type Logger
+  type Plugin
+  type TranspiledDoc
+} from ./types.civet
+{ type Host, TSHost } from ./host.civet
+{ getCanonicalFileName, remapFileName } from ./path.civet
+{ buildTranspilers, parseTsConfigForCivet } from ./config.civet
+
+export interface TSServiceOptions
+  /** Initial plugins; later additions go through registerPlugin / loadPlugins. */
+  plugins?: Plugin[]
+  /** Document constructor + URI parsing.  Required (no sensible default). */
+  docFactory: DocFactory<TranspiledDoc>
+  /** Defaults to console. */
+  logger?: Logger
+  /**
+   * Directory containing TypeScript lib.*.d.ts files.  Set by the LSP server
+   * which bundles its own lib copies; left undefined elsewhere so the host
+   * falls back to ts.getDefaultLibFilePath.
+   */
+  libDir?: string
+  /**
+   * When `true` (default), the service walks the tsconfig include patterns
+   * for every registered transpiler extension (.civet, .hera, …) and
+   * pre-populates scriptFileNames with the discovered files.  Right for
+   * batch typecheck (`pnpm typecheck`) and for an LSP that wants
+   * cross-file types to resolve before any document is opened.
+   *
+   * Set `false` for consumers that drive the file set themselves through
+   * `addOrUpdateDocument` — e.g. unplugin's bundler-driven `load()` hook,
+   * which only wants TS to typecheck files it has actually seen, not the
+   * whole project.
+   */
+  discoverProjectFiles?: boolean
+  /**
+   * Compiler options merged on top of the parsed tsconfig.  Used for
+   * toggling features without rewriting tsconfig.json — e.g. the CLI
+   * typecheck flag sets `incremental` + `tsBuildInfoFile`.
+   */
+  extraCompilerOptions?: ts.CompilerOptions
+  /**
+   * Pre-loaded tsconfig JSON (as readConfigFile returns it).  When
+   * provided, bypasses `<projectPath>/tsconfig.json` on disk — lets
+   * consumers pass an inline tsConfig without writing it down first.
+   */
+  tsConfig?: any
+
+export interface ResolvedService extends LanguageService
+  host: Host
+  /** Map a TypeScript file name (e.g. `foo.civet.tsx`) to its source path (`foo.civet`). */
+  getSourceFileName(fileName: string): string
+  /** Register a plugin's transpilers at runtime.  Existing snapshots are not invalidated. */
+  registerPlugin(plugin: Plugin): void
+  /**
+   * Discover `<projectPath>/.civet/*-plugin.mjs` files and dynamic-import each
+   * as a Plugin.  Returns once all plugins have either loaded or failed
+   * (failures are logged, not thrown).
+   */
+  loadPlugins(): Promise<void>
+
+export function TSService(projectPath: string, options: TSServiceOptions): ResolvedService
+  { plugins = [], docFactory, libDir, discoverProjectFiles = true, extraCompilerOptions } := options
+  /* c8 ignore next -- console default fires for ad-hoc consumers; tests always supply a logger */
+  logger: Logger := options.logger ?? console
+
+  // Populate transpilers before parseTsConfigForCivet runs — its
+  // configSys wrapper closes over the map to widen the include walk.
+  // registerPlugin mutates the same map for runtime plugin loads
+  // (loadPlugins below).  Existing snapshots aren't invalidated: a
+  // plugin registered after a file has been transpiled won't apply
+  // until that file is re-snapshotted.
+  transpilers := buildTranspilers plugins
+  function registerPlugin(plugin: Plugin): void
+    plugin.transpilers?.forEach (t) =>
+      transpilers.set t.extension, t
+
+  parsedConfig := parseTsConfigForCivet projectPath, transpilers, {
+    tsConfig: options.tsConfig
+    widenIncludeFilter: discoverProjectFiles
+  }
+
+  hostOptions := if extraCompilerOptions
+    { ...parsedConfig.options, ...extraCompilerOptions }
+  else
+    parsedConfig.options
+
+  //@ts-expect-error
+  baseHost := createCompilerHost(parsedConfig)
+
+  host := TSHost(hostOptions, parsedConfig.fileNames, baseHost, transpilers, docFactory, logger, libDir)
+  service := createLanguageService(host)
+
+  loadPlugins := async function (): Promise<void>
+    civetFolder := path.join(projectPath, "./.civet/")
+    // Current TS returns [] for missing dirs, but the catch arm is
+    // forward-compat insurance: a future TS or alternative System impl
+    // throwing ENOENT shouldn't take the service down.
+    let civetFiles: string[]
+    try
+      civetFiles = sys.readDirectory(civetFolder)
+    /* c8 ignore start -- ts.sys.readDirectory returns [] for missing dirs in
+       tested versions; this catch is forward-compat insurance */
+    catch e
+      logger.info `No .civet plugin folder at ${civetFolder} (${(e as Error).message})`
+      return
+    /* c8 ignore stop */
+    pluginFiles := civetFiles.filter((file) => file.endsWith("plugin.mjs"))
+
+    for filePath of pluginFiles
+      // pathToUri produces a `file:///` URI dynamic import accepts on
+      // every OS (Windows needs `file:///C:/…`).
+      pluginUri := docFactory.pathToUri(filePath)
+      logger.info("Loading plugin " + pluginUri)
+      try
+        { default: plugin }: { default: Plugin } := await import(pluginUri)
+        logger.info("Loaded plugin " + plugin)
+        registerPlugin plugin
+      catch e
+        logger.error("Error loading plugin " + pluginUri + " " + e)
+    return
+
+  return Object.assign {}, service, {
+    host
+    /** `foo.civet.tsx` → `foo.civet`; passthrough for non-transpiled files. */
+    getSourceFileName(fileName: string)
+      getCanonicalFileName remapFileName(fileName, transpilers)
+    registerPlugin
+    loadPlugins
+  }
