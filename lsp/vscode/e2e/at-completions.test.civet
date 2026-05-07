@@ -1,6 +1,14 @@
-{ commands, Position, type CompletionList } from vscode
+{ commands, Position, type CompletionItem, type CompletionList } from vscode
 assert from assert
-{ getDocUri, activate } from ./helper.civet
+{ getDocUri, activate, poll } from ./helper.civet
+
+getLabel := (item: CompletionItem) =>
+  item.label <? 'string' ? item.label : item.label.label
+
+getInsertText := (item: CompletionItem) =>
+  item.insertText <? 'string'
+    ? item.insertText
+    : item.insertText?.value ?? ''
 
 suite '@foo completions', =>
   test 'Does not insert extra this. when completing after @', async =>
@@ -21,10 +29,8 @@ suite '@foo completions', =>
 
     // Every item's insertText and label must not contain `this.`
     for item of completions.items
-      insertText := item.insertText <? 'string'
-        ? item.insertText
-        : item.insertText?.value ?? ''
-      label := item.label <? 'string' ? item.label : item.label.label
+      insertText := getInsertText item
+      label := getLabel item
 
       assert !insertText.includes('this.'),
         `Completion '${label}' has insertText containing 'this.': ${insertText}`
@@ -32,5 +38,28 @@ suite '@foo completions', =>
         `Completion label contains 'this.': ${label}`
 
     // `name` should be among the offered completions
-    labels := completions.items.map((i) => i.label <? 'string' ? i.label : i.label.label)
+    labels := completions.items.map(getLabel)
     assert labels.includes('name'), `Expected 'name' in completions, got: ${labels.join(', ')}`
+
+  test 'Returns member completions when @ is the trigger character', async =>
+    // widget-bare-at.civet has a bare `@` inside a method. This exercises the
+    // source-map cursor adjustment path where `@` has only compiled to `this`.
+    docUri := getDocUri 'widget-bare-at.civet'
+    await activate docUri
+
+    completions := await poll
+      => commands.executeCommand(
+        'vscode.executeCompletionItemProvider'
+        docUri
+        new Position 3, 5
+        '@'
+      ) as Promise<CompletionList>
+      (list) => list?.items.some (item) => getLabel(item) is 'name'
+
+    assert completions.isIncomplete, 'Expected @ trigger completions to be incomplete'
+
+    name := completions.items.find (item) => getLabel(item) is 'name'
+    assert name, 'Expected name member completion for bare @'
+    insertText := getInsertText name
+    assert !insertText.includes 'this.',
+      `Completion 'name' has insertText containing 'this.': ${insertText}`
