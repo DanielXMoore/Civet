@@ -1,71 +1,74 @@
 * as vscode from vscode
-* as fs from 'node:fs'
 assert from assert
-{ getDocUri, getDocPath, activate, onNextDiagnostics, poll } from ./helper.civet
+{ getDocUri, getDocPath, activate, poll } from ./helper.civet
 
 suite 'TSConfig Reload', =>
   tsConfigPath := getDocPath 'tsconfig.json'
+  tsConfigUri := vscode.Uri.file tsConfigPath
+  encoder := new TextEncoder()
+  decoder := new TextDecoder()
   originalContent .= ''
 
   setup =>
-    originalContent = fs.readFileSync tsConfigPath, 'utf8'
+    bytes := await vscode.workspace.fs.readFile tsConfigUri
+    originalContent = decoder.decode bytes
 
   teardown =>
-    fs.writeFileSync tsConfigPath, originalContent
+    await vscode.workspace.fs.writeFile tsConfigUri, encoder.encode originalContent
 
   test 'Re-sends diagnostics and applies new tsconfig settings after change', ->
     @timeout 120000
-    // unused-local.civet has `x := 42` — unused local.
-    // With the default tsconfig (no noUnusedLocals) there should be no errors.
+    // unused-local.civet has `x := 42`.  TS's IDE flow always emits a
+    // Hint-severity TS6133 marker for `x` regardless of tsconfig; only an
+    // Error-severity diagnostic indicates that the post-reload tsconfig
+    // (with noUnusedLocals) is in effect.
     docUri := getDocUri 'unused-local.civet'
     await activate docUri
 
-    // Wait until the initial diagnostic pass has run (no errors).
-    // TS's IDE flow always emits an Information-level "unused"
-    // marker for `x := 42` (TS6133, severity Hint) regardless of
-    // noUnusedLocals — only `Error`-severity entries indicate that
-    // the post-modification state has actually arrived.
+    isError := (d: vscode.Diagnostic) =>
+      d.severity is vscode.DiagnosticSeverity.Error
+    isErrorAboutX := (d: vscode.Diagnostic) =>
+      isError(d) and d.message.includes 'x'
+    formatDiags := (ds: readonly vscode.Diagnostic[]) =>
+      if ds.length is 0 then '[]'
+      else ds.map((d) => `sev=${d.severity}: ${d.message}`).join ' | '
+
+    // Wait until the initial diagnostic pass has settled (no Error-severity
+    // entries yet — Hint-only is the expected pre-reload state).
     await poll(
       () => Promise.resolve vscode.languages.getDiagnostics docUri
-      (d) => d.every (e) => e.severity is not vscode.DiagnosticSeverity.Error
-      40000
+      (ds) => not ds.some isError
+      30000
+      250
+      formatDiags
     )
 
-    diagEvents: { uri: string, count: number }[] := []
-    diagSub := vscode.languages.onDidChangeDiagnostics (e) =>
-      for u of e.uris
-        ds := vscode.languages.getDiagnostics u
-        diagEvents.push { uri: u.fsPath, count: ds.length }
-
-    // Subscribe to the next diagnostics event BEFORE modifying tsconfig
-    // so we cannot miss it.
-    diagPromise := onNextDiagnostics docUri, 60000
-
-    // Modify tsconfig to enable noUnusedLocals — this should surface an
-    // error in unused-local.civet once the server reloads the TSService.
+    // Modify tsconfig to enable noUnusedLocals.  vscode.workspace.fs routes
+    // the change through VS Code's own watcher infrastructure, which fires
+    // didChangeWatchedFiles more reliably on Windows than raw node:fs.
     parsed := JSON.parse originalContent
     parsed.compilerOptions.noUnusedLocals = true
-    encoder := new TextEncoder()
     await vscode.workspace.fs.writeFile(
-      vscode.Uri.file(tsConfigPath)
+      tsConfigUri
       encoder.encode JSON.stringify(parsed, null, 2)
     )
 
-    let diagnostics: vscode.Diagnostic[]
-    try
-      diagnostics = await diagPromise
-    catch e
-      console.error `=== diag events seen (${diagEvents.length}) ===`
-      console.error `expected fsPath: ${docUri.fsPath}`
-      for d of diagEvents
-        console.error `  ${d.uri} count=${d.count}`
-      console.error `current diagnostics for unused-local.civet:`,
-        vscode.languages.getDiagnostics(docUri).map((d) => `sev=${d.severity} code=${(d.code as any)?.value ?? d.code}: ${d.message}`).join(' | ')
-      diagSub.dispose()
-      throw e
-    diagSub.dispose()
+    // Poll for the substantive condition: an Error-severity diagnostic
+    // about `x`.  Polling rather than a one-shot onDidChangeDiagnostics
+    // listener is robust to:
+    //   - File-watcher attachment latency on Windows (no fixed warm-up needed)
+    //   - Stale empty/Hint-only publishes that would resolve a single-shot
+    //     listener early on a publish unrelated to the reload
+    //   - GHA Windows runner throughput jitter (poll until timeout)
+    //   - A late OLD-service publish overwriting NEW: any subsequent NEW
+    //     publish still satisfies the predicate
+    diagnostics := await poll(
+      () => Promise.resolve vscode.languages.getDiagnostics docUri
+      (ds) => ds.some isErrorAboutX
+      90000
+      500
+      formatDiags
+    )
 
-    assert diagnostics.length >= 1,
-      `Expected at least one diagnostic after enabling noUnusedLocals, got ${diagnostics.length}`
-    assert diagnostics.some((d) => d.message.includes 'x'),
-      `Expected a diagnostic about 'x', got: ${diagnostics.map((d) => d.message).join(', ')}`
+    assert diagnostics.some(isErrorAboutX),
+      `Expected an Error diagnostic about 'x'; got: ${formatDiags diagnostics}`
