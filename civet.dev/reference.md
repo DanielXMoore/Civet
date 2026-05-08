@@ -1037,6 +1037,39 @@ Here is a table of all currently supported:
 
 </div>
 
+### Unicode Identifiers
+
+Identifiers can include non-identifier Unicode codepoints (emoji, dingbats,
+math symbols not in the [Unicode Operators](#unicode-operators) table)
+anywhere in the name, mixed freely with regular identifier characters.
+Each non-id-unicode codepoint is escaped to `u$<HEX>$` (mirroring JS's
+`\u{XXXX}` escape syntax) so the compiled name is a valid JS identifier.
+
+<Playground>
+let △ = 3
+let 😊 = 1
+let pre😊post = 2
+let 😊😔 = 4
+</Playground>
+
+Codepoints already in `\p{ID_Continue}` (letters with diacritics like `é`,
+`ő`, `ω`; digits; combining marks) are valid JS identifier chars and pass
+through unchanged.
+
+<Playground>
+let pokémon = "Pikachu"
+let Erdős = 1
+</Playground>
+
+Implicit function application still requires whitespace, so `∀N` is one
+identifier — write `∀ N` to call.
+
+<Playground>
+function ∀(arr) arr.every (x) => !!x
+N := [1, 2, 3]
+∀ N
+</Playground>
+
 ## Functions
 
 ### Function Calls

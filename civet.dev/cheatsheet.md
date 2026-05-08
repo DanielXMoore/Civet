@@ -319,7 +319,8 @@ floor # / 2
 ## ASCII Symbols
 
 Here is a list of ASCII symbols and their various contextual meanings in Civet.
-(There are also more [Unicode symbols](/reference#unicode-operators).)
+(There are also more [Unicode symbols](/reference#unicode-operators)
+and [non-identifier Unicode codepoints in identifiers](/reference#unicode-identifiers).)
 
 | Symbol | Meanings |
 |--------|----------|
