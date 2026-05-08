@@ -1,8 +1,12 @@
 assert from assert
 { execFileSync } from "child_process"
+{ build as esbuildBuild } from "esbuild"
+{ build as viteBuild } from "vite"
 { type UnpluginBuildContext, type UnpluginContext } from unplugin
+esbuildCivetPlugin from ../../source/unplugin/esbuild.civet
+viteCivetPlugin from ../../source/unplugin/vite.civet
 { slash, rawPlugin, type PluginOptions } from ../../source/unplugin/unplugin.civet
-{ writeFile, mkdir, rm } from fs/promises
+{ readFile, readdir, writeFile, mkdir, rm } from fs/promises
 path from "path"
 { tmpdir } from "os"
 
@@ -314,6 +318,100 @@ describe "unplugin: file system", ->
       assert result and result <? "object"
       assert result.code.includes("greet"), "output contains function name"
       assert !result.code.includes(": string"), "type param stripped"
+
+  describe "bundler sourcemaps", ->
+    function createSourcemapFixture(name: string)
+      projectDir := path.join tmpDir, `${name}-${fileNum++}`
+      pkgDir := path.join projectDir, "node_modules", "civet-pkg"
+      await mkdir path.join(projectDir, "src", "imported"), recursive: true
+      await mkdir path.join(projectDir, "src", "nested"), recursive: true
+      await mkdir path.join(pkgDir, "lib"), recursive: true
+
+      await writeFile path.join(projectDir, "package.json"), JSON.stringify type: "module"
+      await writeFile path.join(pkgDir, "package.json"), JSON.stringify
+        name: "civet-pkg"
+        type: "module"
+        exports:
+          "./lib/math": "./lib/math.civet"
+      await writeFile path.join(pkgDir, "lib", "math.civet"), "export function meaningOfLife\n  42\n"
+      await writeFile path.join(projectDir, "src", "imported", "index.civet"), "export function imported\n  11\n"
+      await writeFile path.join(projectDir, "src", "nested", "helper.civet"), "export function helper\n  7\n"
+      await writeFile path.join(projectDir, "src", "nested", "index.civet"), "import { meaningOfLife } from 'civet-pkg/lib/math'\nimport { imported } from '../imported/index.civet'\nimport { helper } from './helper'\nconsole.log meaningOfLife(), imported(), helper()\n"
+
+      projectDir
+
+    it "does not duplicate node_modules package paths in esbuild", ->
+      projectDir := await createSourcemapFixture "sourcemap-esbuild-node-modules"
+      outdir := path.join projectDir, "dist"
+      cwd := process.cwd()
+      try
+        process.chdir projectDir
+        pluginOptions: PluginOptions :=
+          config: false
+          ts: "civet"
+        await esbuildBuild
+          entryPoints: ["src/nested/index.civet"]
+          outdir: outdir
+          bundle: true
+          sourcemap: true
+          format: "esm"
+          target: ["node20"]
+          plugins: [esbuildCivetPlugin(pluginOptions)]
+      finally
+        process.chdir cwd
+
+      map := JSON.parse await readFile path.join(outdir, "index.js.map"), "utf8"
+      sources := map.sources as string[]
+      expected := "../node_modules/civet-pkg/lib/math.civet"
+      expectedEntry := "../src/nested/index.civet"
+      expectedImported := "../src/imported/index.civet"
+      assert sources.includes(expected),
+        `Expected sources to include ${expected} but got ${JSON.stringify sources}`
+      assert sources.includes(expectedEntry),
+        `Expected sources to include ${expectedEntry} but got ${JSON.stringify sources}`
+      assert sources.includes(expectedImported),
+        `Expected sources to include ${expectedImported} but got ${JSON.stringify sources}`
+      assert !sources.some((source) => source.includes("civet-pkg/node_modules/civet-pkg")),
+        `Expected sources not to duplicate civet-pkg path but got ${JSON.stringify sources}`
+
+    it "does not duplicate node_modules package paths in vite", ->
+      projectDir := await createSourcemapFixture "sourcemap-vite-node-modules"
+      await writeFile path.join(projectDir, "index.html"), '<script type="module" src="/src/nested/index.civet"></script>'
+
+      outdir := path.join projectDir, "dist"
+      pluginOptions: PluginOptions :=
+        config: false
+        ts: "civet"
+      await viteBuild
+        root: projectDir
+        logLevel: "silent"
+        build:
+          sourcemap: true
+          outDir: outdir
+          emptyOutDir: true
+        plugins: [viteCivetPlugin(pluginOptions)]
+
+      assetsDir := path.join outdir, "assets"
+      mapFile := readdir assetsDir
+        |> await
+        |> .find(.endsWith ".js.map")
+      assert mapFile, "Vite build should emit a JS source map"
+      map := JSON.parse await readFile path.join(assetsDir, mapFile), "utf8"
+      sources := map.sources as string[]
+      expected := "../../node_modules/civet-pkg/lib/math.civet"
+      expectedEntry := "../../src/nested/index.civet"
+      expectedHelper := "../../src/nested/helper.civet"
+      expectedImported := "../../src/imported/index.civet"
+      assert sources.includes(expected),
+        `Expected sources to include ${expected} but got ${JSON.stringify sources}`
+      assert sources.includes(expectedEntry),
+        `Expected sources to include ${expectedEntry} but got ${JSON.stringify sources}`
+      assert sources.includes(expectedHelper),
+        `Expected sources to include ${expectedHelper} but got ${JSON.stringify sources}`
+      assert sources.includes(expectedImported),
+        `Expected sources to include ${expectedImported} but got ${JSON.stringify sources}`
+      assert !sources.some((source) => source.includes("civet-pkg/node_modules/civet-pkg")),
+        `Expected sources not to duplicate civet-pkg path but got ${JSON.stringify sources}`
 
   describe "load() ts:'preserve'", ->
     it "returns TypeScript output without stripping types", ->
