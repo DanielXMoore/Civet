@@ -188,6 +188,7 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
   let esbuildOptions: BuildOptions
   let configErrors: Diagnostic[]?
   let configFileNames: string[] = []
+  pluginResolvedIds: Set<string> := new Set
   skipWorker .= false
 
   let tsBuildInfoTarget: string?
@@ -240,6 +241,7 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
     enforce: 'pre'
 
     buildStart(): Promise<void>
+      pluginResolvedIds.clear()
       civetConfigPath .= options.config
       if civetConfigPath is undefined
         civetConfigPath = await findInDir process.cwd()
@@ -679,6 +681,8 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         if (!implicitId) return null
         resolved = implicitId
 
+      pluginResolvedIds.add resolved
+
       // Tell Vite that this is a virtual module during dependency scanning
       if (options as! {scan?: boolean}).scan and meta.framework is 'vite'
         resolved = `\0${resolved}`
@@ -737,8 +741,18 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         ...civetOptions
         ast: true
       }
+      // Load maps are normally relative to the loaded module. Esbuild's adapter
+      // inlines maps first, so modules resolved by this plugin need paths
+      // relative to the final output map. Modules esbuild resolved itself (for
+      // example package exports) stay module-local; otherwise package paths are
+      // duplicated when esbuild rebases the inline map.
+      sourceMapSource :=
+        if meta.framework is 'esbuild' and pluginResolvedIds.has filename
+          path.relative outDir, filename
+        else
+          path.basename filename
       civetSourceMap := new SourceMap rawCivetSource,
-        normalizePath path.relative outDir, filename
+        normalizePath sourceMapSource
 
       if ts is "civet"
         compiled = await civet.generate ast, {
