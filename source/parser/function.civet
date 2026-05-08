@@ -12,6 +12,7 @@ import type {
   BreakStatement
   CallExpression
   Children
+  ClassExpression
   Declaration
   ForStatement
   FunctionNode
@@ -83,6 +84,7 @@ import {
   isFunction
   isLoopStatement
   isStatement
+  isToken
   isWhitespaceOrEmpty
   makeLeftHandSideExpression
   makeNode
@@ -381,6 +383,19 @@ function patternBindings(pattern: ASTNodeObject): BindingIdentifier[]
       when "Identifier", "AtBinding"
         bindings.push pattern
 
+// Ensure an `abstract class` expression has a name, generating a ref if it
+// doesn't, so it can be emitted as a class declaration. Returns the
+// identifier/ref to use for referring to the class afterwards.
+function nameAbstractClass(exp: ClassExpression): ASTNode
+  // ClassExpression `id` includes any leading whitespace from the source;
+  // strip it so `wrapWithReturn`'s `"return "` prefix doesn't double up.
+  return trimFirstSpace(exp.id) if exp.id
+  ref := makeRef "Class"
+  classKwIdx := exp.children.findIndex (c) => isToken(c) and c.token is "class"
+  assert.notEqual classKwIdx, -1, "Could not find class keyword in ClassExpression children"
+  exp.children.splice classKwIdx+1, 0, " ", ref
+  return ref
+
 // NOTE: this is almost the same as insertReturn but doesn't remove `breaks` in `when` and
 // does construct an else clause pushing undefined in if statements that lack them
 // and adds to the beginning and the end of the expression's children.
@@ -412,6 +427,16 @@ function assignResults(node: StatementTuple[] | ASTNode, collect: (node: ASTNode
   if exp.type is "LabelledStatement"
     exp = exp.statement
 
+  // Anonymous abstract classes get wrapped in parens by ClassDeclaration; unwrap
+  // so the ClassExpression case below can emit a class declaration.
+  if exp.type is "ParenthesizedExpression" and
+     exp.expression?.type is "ClassExpression" and
+     exp.expression.abstract
+    inner := exp.expression
+    inner.parent = exp.parent
+    node[1] = inner if outer is exp
+    exp = inner
+
   switch exp.type
     when "DebuggerStatement", "EmptyStatement"
       return
@@ -435,6 +460,17 @@ function assignResults(node: StatementTuple[] | ASTNode, collect: (node: ASTNode
       /* c8 ignore next 3 */
       // This is currently never hit because anonymous FunctionExpressions are already wrapped in parens by this point
       // Add return in normal way for functions without ids
+      break
+    when "ClassExpression"
+      // `abstract class` is only valid as a declaration in TS, not an expression,
+      // so emit it as a declaration followed by `;<collect ClassName>`
+      if exp.abstract
+        id := nameAbstractClass exp
+        exp.children.push [
+          "", [";", collect(id)]
+        ]
+        updateParentPointers exp
+        return
       break
     when "ForStatement", "IterationStatement", "DoStatement", "ComptimeStatement"
       wrapIterationReturningResults exp, collect
@@ -532,6 +568,16 @@ function insertReturn(node: ASTNode): void
   if exp.type is "LabelledStatement"
     exp = exp.statement
 
+  // Anonymous abstract classes get wrapped in parens by ClassDeclaration; unwrap
+  // so the ClassExpression case below can emit a class declaration.
+  if exp.type is "ParenthesizedExpression" and
+     exp.expression?.type is "ClassExpression" and
+     exp.expression.abstract
+    inner := exp.expression
+    inner.parent = exp.parent
+    node[1] = inner if outer is exp
+    exp = inner
+
   switch exp.type
     when "DebuggerStatement", "EmptyStatement", "ReturnStatement", "ThrowStatement"
       return
@@ -569,6 +615,23 @@ function insertReturn(node: ASTNode): void
       /* c8 ignore next 3 */
       // This is currently never hit because anonymous FunctionExpressions are already wrapped in parens by this point
       // Add return in normal way for functions without ids
+      break
+    when "ClassExpression"
+      // `abstract class` is only valid as a declaration in TS, not an expression,
+      // so emit it as a declaration followed by `return ClassName`
+      if exp.abstract
+        parent := exp.parent as BlockStatement?
+        assert parent, "ClassExpression has no parent"
+        // exp may have been unwrapped from a ParenthesizedExpression above,
+        // so search by tuple-position rather than by `outer` reference.
+        index := parent.expressions.findIndex (t) => t[1] is exp
+        assert.notEqual index, -1, "Could not find class declaration in parent"
+        returnId := nameAbstractClass exp
+        parent.expressions.splice index+1, 0, ["",
+          wrapWithReturn returnId, exp, true
+        ]
+        braceBlock parent
+        return
       break
     when "ForStatement", "IterationStatement", "DoStatement", "ComptimeStatement"
       wrapIterationReturningResults exp

@@ -114,6 +114,33 @@ your branch tip.  If `main` has changed a file your PR doesn't touch, CI's
 happens, `git fetch && git merge origin/main` first — once `md5sum dist/main.js`
 matches CI's, the failure reproduces locally and you can fix it properly.
 
+## Typecheck
+
+CI gates type errors against a baseline (`pnpm typecheck --max-errors N` in
+[`.github/workflows/build.yml`](.github/workflows/build.yml)).  A PR must not
+introduce new errors — fix them at the source rather than bumping the
+baseline.  Identifying what's new can be tricky because adding code shifts
+line numbers, so a naive `diff` flags every shifted preexisting error as
+"new".  Use the diff helper instead:
+
+```sh
+git stash && git checkout origin/main -- '*.civet' '*.hera'
+pnpm build
+CIVET_TYPECHECK_MAX_ERRORS=99999 pnpm typecheck &>/tmp/before.log
+git checkout HEAD -- '*.civet' '*.hera' && git stash pop
+pnpm build
+CIVET_TYPECHECK_MAX_ERRORS=99999 pnpm typecheck &>/tmp/after.log
+civet scripts/typecheck-diff.civet /tmp/before.log /tmp/after.log
+```
+
+`typecheck-diff` matches by `(file, code, message)` ignoring line/column, so
+shifted-but-otherwise-identical errors don't show as drift — only genuinely
+new diagnostics appear under "Regressions".  Once those are at zero, no
+baseline bump is needed.
+
+For a one-off summary of where errors live, `bash scripts/typecheck-summary.sh`
+prints per-file and per-error-code counts.
+
 ## Debugging
 
 A useful trick is to add a `debugger` statement inside a rule handler in
