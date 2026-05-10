@@ -15,6 +15,7 @@ import {
   blockWithPrefix,
   braceBlock,
   bracedBlock,
+  buildExportSplitClause,
   convertArrowFunctionToMethod,
   convertFunctionToMethod,
   convertNamedImportsToObject,
@@ -6207,17 +6208,27 @@ TypeAndImportSpecifier
 
 # https://262.ecma-international.org/#prod-ImportSpecifier
 ImportSpecifier
-  __ ModuleExportName:source ImportAsToken __ ImportedBinding:binding ObjectPropertyDelimiter ->
+  __:ws1 ModuleExportName:source ImportAsToken:as __:ws2 ImportedBinding:binding ObjectPropertyDelimiter:delim ->
+    // For unicode source `import { 😊 as x }`, quote the module-side name
+    // since the actual export is `"😊"`, not the mangled `u$1F60A$`.
     return {
       source,
       binding,
-      children: $0,
+      children: [ws1, propertyKey(source), as, ws2, binding, delim],
     }
-  __ ImportedBinding:binding ObjectPropertyDelimiter ->
+  __:ws ImportedBinding:binding ObjectPropertyDelimiter:delim ->
+    // Shorthand `import { 😊 }` expands to explicit `"😊" as u$1F60A$` so
+    // the module-side name is the user-visible source string.
+    if binding.unicode
+      return {
+        source: binding,
+        binding,
+        children: [ws, propertyKey(binding), " as ", binding, delim],
+      }
     return {
       source: binding,
       binding,
-      children: $0,
+      children: [ws, binding, delim],
     }
 
 OperatorImportSpecifier
@@ -6349,7 +6360,19 @@ ExportDeclaration
   # NOTE: Declaration and VariableStatement should come before NamedExports
   # so that NamedExports doesn't grab function, async, type, var, etc.
   # NOTE: TS decorators come before `export` keyword but TC39 stage 3 decorators proposal come after
-  Decorators? Export __ ( Declaration / VariableStatement / TypeAndNamedExports / ExportVarDec ):declaration ->
+  Decorators?:dec Export __ ( Declaration / VariableStatement / TypeAndNamedExports / ExportVarDec ):declaration ->
+    // For declarations that bind unicode-named identifiers (`export 😊 := 3`,
+    // `export { 😊 } := data`), JS forbids string-named exports inside the
+    // combined `export const ...` form. Split into `<decl>; export {...}`
+    // so each unicode binding is re-exported under its user-visible name.
+    splitClause := buildExportSplitClause(declaration)
+    if splitClause
+      return {
+        type: "ExportDeclaration",
+        declaration,
+        ts: declaration.ts,
+        children: [dec, declaration, splitClause],  // omit Export keyword + ws
+      }
     return { type: "ExportDeclaration", declaration, ts: declaration.ts, children: $0 }
 
 # CoffeeScript style `export x = 3` -> `export var x = 3`
@@ -6380,12 +6403,27 @@ NamedExports
 
 # https://262.ecma-international.org/#prod-ExportSpecifier
 ExportSpecifier
-  __ ( TypeKeyword __ )? ModuleExportName ( __ As __ ModuleExportName )? ObjectPropertyDelimiter ->
-    return $0 unless $2
-    return { ts: true, children: $0 }
+  __:ws1 ( TypeKeyword __ )?:ts ModuleExportName:local ( __ As __ ModuleExportName )?:rename ObjectPropertyDelimiter:delim ->
+    // Local-side keeps its mangled identifier (it's a JS variable reference).
+    // External-side (after `as`, or implicit `as` for shorthand) uses the
+    // user-visible source via propertyKey so the export name matches.
+    children :=
+      if rename
+        [ws1, ts, local, rename[0], rename[1], rename[2], propertyKey(rename[3]), delim]
+      else if local.unicode
+        [ws1, ts, local, " as ", propertyKey(local), delim]
+      else
+        [ws1, ts, local, delim]
+    return children unless ts
+    return { ts: true, children }
 
 ImplicitExportSpecifier
-  !Default ModuleExportName ( __ As __ ModuleExportName )? -> [$2, $3]
+  !Default ModuleExportName:local ( __ As __ ModuleExportName )?:rename ->
+    if rename
+      return [local, rename[0], rename[1], rename[2], propertyKey(rename[3])]
+    if local.unicode
+      return [local, " as ", propertyKey(local)]
+    return [local, rename]
 
 # https://262.ecma-international.org/#prod-Declaration
 Declaration
@@ -8403,7 +8441,7 @@ EnumProperty
     }
 
 TypeProperty
-  ReadonlyModifier? PropertyName
+  ReadonlyModifier?:r PropertyName:n -> [r, propertyKey(n)]
 
 TypeIndexSignature
   # NOTE: QuestionMark will be parsed by following TypeSuffix
