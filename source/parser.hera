@@ -57,6 +57,7 @@ import {
   precedenceCustomDefault,
   precedenceStep,
   prepend,
+  propertyKey,
   processAssignmentDeclaration,
   processBinaryOpExpression,
   processCallMemberExpression,
@@ -1491,7 +1492,7 @@ FieldDefinition
         return {
           type: "FieldDefinition",
           id,
-          children: [id, " = ", exp],
+          children: [propertyKey(id), " = ", exp],
         }
     }
 
@@ -1506,14 +1507,14 @@ FieldDefinition
       type: "FieldDefinition",
       id,
       typeSuffix,
-      children: $0,
+      children: [readonly, propertyKey(id), ...$0.slice(2)],
       readonly,
     }
 
   AbstractModifier?:abstract ReadonlyModifier?:readonly ClassElementName:id TypeSuffix?:typeSuffix Initializer?:initializer ->
     return {
       type: "FieldDefinition",
-      children: $0,
+      children: [abstract, readonly, propertyKey(id), typeSuffix, initializer],
       ts: abstract ? true : undefined,
       id,
       typeSuffix,
@@ -1527,6 +1528,24 @@ ThisLiteral
   # NOTE: Added @identifier shorthand, also works for private identifiers
   # Converts 'IdentifierName' node to string so this won't interfere with refs
   AtThis:at $( Hash? IdentifierName ):id ->
+    // For non-id-unicode names (`@😊`), emit `this["😊"]` so the property
+    // name matches what the binding side stores (also bracketed).
+    escaped := escapeIdentifier(id)
+    if escaped !== id
+      return {
+        type: "MemberExpression",
+        children: [at, {
+          type: "Index",
+          children: ["[", {
+            $loc: {
+              pos: $loc.pos + 1,
+              length: $loc# - 1,
+            },
+            token: `"${id}"`
+          }, "]"],
+        }],
+        thisShorthand: true,
+      }
     return {
       type: "MemberExpression",
       children: [at, {
@@ -1932,6 +1951,18 @@ PropertyAccess
     }
 
   AccessStart:dot InlineComment*:comments ( IdentifierName / PrivateIdentifier / LengthShorthand ):id ->
+    // Escaped Unicode property `data.😊` becomes `data["😊"]` since the
+    // mangled `u$1F60A$` is a valid JS identifier but not the actual property name.
+    if id.unicode
+      return {
+        type: "Index",
+        children: [
+          adjustIndexAccess(dot),
+          ...comments,
+          propertyKey(id),
+          "]",
+        ],
+      }
     return {
       type: "PropertyAccess",
       name: id.name,
@@ -2219,7 +2250,11 @@ AtIdentifierRef
   ReservedWord:r ->
     return makeRef(`_${r}`, r)
   IdentifierName:id ->
-    return makeRef(id.name)
+    ref := makeRef(id.name)
+    // Carry the source string so binding-side `this.X = X` can emit
+    // bracket access matching the expression-side `this["X"]`.
+    if id.unicode then ref.unicode = id.unicode
+    return ref
 
 PinPattern
   # Forbid ImplicitObjectLiterals such as `x: y` in pinned pattern,
@@ -2404,7 +2439,7 @@ BindingProperty
       }
     return {
       type: "BindingProperty",
-      children: [ws1, name, ws2, colon, ws3, value, initializer],  // omit typeSuffix
+      children: [ws1, propertyKey(name), ws2, colon, ws3, value, initializer],  // omit typeSuffix
       name,
       value,
       typeSuffix,
@@ -2447,7 +2482,7 @@ BindingProperty
 
   # NOTE: name^ means we should bind name, but we do anyway, so allow but ignore
   _?:ws BindingIdentifier:binding Caret?:bind BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
-    children := [ws, binding, initializer]  // omit bind, typeSuffix
+    children .= [ws, binding, initializer]  // omit bind, typeSuffix
 
     if binding.type is "AtBinding"
       return {
@@ -2459,6 +2494,11 @@ BindingProperty
         initializer,
         names: [],
       }
+
+    // Escaped Unicode binding shorthand `{ 😊 }` becomes `{ "😊": u$1F60A$ }`
+    // so the lookup uses the user-visible property name.
+    if binding.unicode
+      children = [ws, propertyKey(binding), ": ", binding, initializer]
 
     return {
       type: "BindingProperty",
@@ -3292,6 +3332,10 @@ IdentifierName
     return {
       type: "Identifier",
       name,
+      // Original source string when escaping changed it, so property-key
+      // sites (object destructuring / literal shorthand / explicit key)
+      // can emit the user-visible name as a quoted string.
+      ...($0 !== name and { unicode: $0 }),
       names: [name],
       children: [{
         $loc: $loc,
@@ -3850,6 +3894,17 @@ PropertyDefinition
         value,
       }
 
+    // Escaped Unicode property shorthand `{ 😊 }` becomes `{ "😊": u$1F60A$ }`
+    // so the resulting object uses the user-visible property name.
+    if id.unicode
+      return {
+        type: "Property",
+        children: [ws, propertyKey(id), ": ", id],
+        name: id,
+        names: id.names,
+        value: id,
+      }
+
     return {
       type: "Property",
       children: [ws, id],
@@ -3980,7 +4035,7 @@ NamedProperty
   PropertyName:name _? Colon PostfixedExpression:exp ->
     return {
       type: "Property",
-      children: $0,
+      children: [propertyKey(name), ...$0.slice(1)],
       name: name,
       names: exp.names || [],
       value: exp,
@@ -3996,7 +4051,7 @@ SnugNamedProperty
       expression = attachPostfixStatementAsExpression(expression, post[0])
     return {
       type: "Property",
-      children: [name, colon, expression],
+      children: [propertyKey(name), colon, expression],
       name,
       names: expression.names || [],
     }
@@ -4208,7 +4263,7 @@ MethodSignature
 
     return {
       type: "MethodSignature",
-      children: [ ...modifier.children, authoredName, ws1, optional, ws2, parameters, returnType ],
+      children: [ ...modifier.children, propertyKey(authoredName), ws1, optional, ws2, parameters, returnType ],
       async: modifier.async,
       generator: modifier.generator,
       name,
