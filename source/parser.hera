@@ -88,8 +88,24 @@ import type {
   AssignmentExpression,
   ASTNode,
   BlockStatement,
+  Declaration,
+  DebuggerStatement,
+  ForStatement,
+  Identifier,
+  IfStatement,
   Index,
+  IterationExpression,
+  IterationStatement,
   ObjectBindingPattern,
+  PinPattern,
+  Property,
+  SpreadProperty,
+  SwitchStatement,
+  ThrowStatement,
+  TryStatement,
+  WithClause,
+  Yield,
+  YieldExpression,
 } from "./parser/types.civet"
 
 /**
@@ -360,12 +376,12 @@ ExpressionizedStatement
     }
 
 StatementExpression
-  DebuggerStatement ::unknown
-  IfStatement ::unknown
-  IterationExpression ::unknown
-  SwitchStatement ::unknown
-  ThrowStatement ::unknown
-  TryStatement ::unknown
+  DebuggerStatement ::DebuggerStatement
+  IfStatement ::IfStatement
+  IterationExpression ::IterationExpression
+  SwitchStatement ::SwitchStatement
+  ThrowStatement ::ThrowStatement
+  TryStatement ::TryStatement
 
 # https://262.ecma-international.org/#prod-Expression
 CommaExpression
@@ -504,11 +520,11 @@ ArgumentsWithTrailingCallExpressions
 # Does not match in the empty case
 TrailingCallExpressions
   # NOTE: Forbid nested implicit calls because trailing calls are dedented
-  ExplicitCallExpressionRest* IndentedTrailingCallExpressions? ::unknown ->
-    $1 = $1.flat()
-    return $skip unless $1.length or $2
-    return $1 unless $2
-    return [...$1, ...$2]
+  ExplicitCallExpressionRest* IndentedTrailingCallExpressions? ::ASTNode[] ->
+    flat := $1.flat() as ASTNode[]
+    return $skip as never unless flat.length or $2
+    return flat unless $2
+    return [...flat, ...$2]
 
 # Does not match in the empty case
 IndentedTrailingCallExpressions
@@ -521,7 +537,7 @@ IndentedTrailingCallExpressions
     return $1.flat()
 
 NestedTrailingCallExpression
-  Nested:ws &( "?"? "." ![0-9] ) CallExpressionRest+:rests ::unknown ->
+  Nested:ws &( "?"? "." ![0-9] ) CallExpressionRest+:rests ::ASTNode[] ->
     [ first, ...rest ] := rests.flat()
     return [ prepend(ws, first), ...rest ]
 
@@ -927,7 +943,7 @@ NonPipelineActualAssignment
 
 # https://262.ecma-international.org/#prod-YieldExpression
 YieldExpression
-  Yield ( ( _? Star )? MaybeParenNestedExpression )? ::unknown ->
+  Yield ( ( _? Star )? MaybeParenNestedExpression )? ::YieldExpression ->
     if $2
       [ star, expression ] := $2
       return {
@@ -1079,25 +1095,27 @@ PipelineExpressionBodySameLine
 
 PipelineHeadItem
   # Needed to avoid left recursion
-  NonPipelineExpression ::unknown
+  NonPipelineExpression ::ASTNode
   # Allow a pipeline to be part of first step if within parenthesis
-  OptimizedParenthesizedExpression ::unknown
+  OptimizedParenthesizedExpression ::ASTNode
 
 PipelineTailItem
-  ( AwaitOp / Return / Throw ) !AccessStart !MaybeParenNestedExpression ::unknown -> $1
-  $( Yield ( _? Star )? ) !AccessStart !MaybeParenNestedExpression ::unknown ->
+  ( AwaitOp / Return / Throw ) !AccessStart !MaybeParenNestedExpression ::ASTNode -> $1
+  $( Yield ( _? Star )? ) !AccessStart !MaybeParenNestedExpression ::Yield ->
     return { $loc, token: $1, type: "Yield" }
-  Import !AccessStart ::unknown ->
+  Import !AccessStart ::Identifier ->
     return {
       type: "Identifier",
+      name: $1,
+      names: [$1],
       children: [ $1 ],
     }
-  NWTypePostfix TypePostfix* ::unknown ->
+  NWTypePostfix TypePostfix* ::ASTNode ->
     return makeAmpersandFunction({
       body: [" ", $1, ...$2],
     })
-  ForbidNewlineBinaryOp PipelineHeadItem? RestoreNewlineBinaryOp ::unknown ->
-    return $skip unless $2
+  ForbidNewlineBinaryOp PipelineHeadItem? RestoreNewlineBinaryOp ::ASTNode ->
+    return $skip as never unless $2
     return $2
 
 # https://262.ecma-international.org/#prod-PrimaryExpression
@@ -1252,19 +1270,19 @@ ExtendsClause
 WithClause
   # Nested form where C, D appear on separate lines, indented
   # Also allows for arbitrary expressions
-  NotDedented With PushIndent ( Nested Expression _? Comma? )*:targets PopIndent ::unknown ->
-    return $skip unless targets#
+  NotDedented With PushIndent ( Nested Expression _? Comma? )*:targets PopIndent ::WithClause ->
+    return $skip as never unless targets#
     targets = targets.map(($) => $.slice(0, -1)) // strip Comma?
     return {
       type: "WithClause",
       children: $0,
       targets,
     }
-  NotDedented With NotDedented:ws ExtendsTarget:t ( _? Comma NotDedented ExtendsTarget )*:rest ::unknown ->
+  NotDedented With NotDedented:ws ExtendsTarget:t ( _? Comma NotDedented ExtendsTarget )*:rest ::WithClause ->
     return {
       type: "WithClause",
       children: $0,
-      targets: [[ws, t], ...rest.map(([ws1, _comma, ws2, target]) => [prepend(ws1, ws2), target])],
+      targets: [[ws, t], ...rest.map(([ws1, _comma, ws2, target]) => [prepend(ws1, ws2), target])] as WithClause["targets"],
     }
 
 ExtendsToken
@@ -2309,21 +2327,21 @@ PinPattern
   # Forbid ImplicitObjectLiterals such as `x: y` in pinned pattern,
   # to allow for typed arguments of the form `(^x: T) =>`
   # and because comparing to object literals isn't generally helpful
-  Caret IdentifierName:expression &Colon ::unknown ->
+  Caret IdentifierName:expression &Colon ::PinPattern ->
+    return {
+      type: "PinPattern",
+      children: [expression],
+      expression: expression as Identifier,
+      typeSuffix: typeSuffixForExpression(expression),
+    }
+  Caret SingleLineExpressionWithIndentedApplicationForbidden:expression ::PinPattern ->
     return {
       type: "PinPattern",
       children: [expression],
       expression,
       typeSuffix: typeSuffixForExpression(expression),
     }
-  Caret SingleLineExpressionWithIndentedApplicationForbidden:expression ::unknown ->
-    return {
-      type: "PinPattern",
-      children: [expression],
-      expression,
-      typeSuffix: typeSuffixForExpression(expression),
-    }
-  ActualMemberExpression:expression ::unknown ->
+  ActualMemberExpression:expression ::PinPattern ->
     return {
       type: "PinPattern",
       children: [expression],
@@ -2331,15 +2349,15 @@ PinPattern
       typeSuffix: typeSuffixForExpression(expression),
     }
   # Handle unary numeric in switch patterns
-  ([+-] NumericLiteral):expression ::unknown ->
+  ([+-] NumericLiteral):expression ::PinPattern ->
     return {
       type: "PinPattern",
       children: [expression],
-      expression,
-      typeSuffix: typeSuffixForExpression(expression),
+      expression: expression as ASTNode,
+      typeSuffix: typeSuffixForExpression(expression as ASTNode),
     }
   # Handle undefined in switch patterns
-  Undefined:expression ::unknown ->
+  Undefined:expression ::PinPattern ->
     return {
       type: "PinPattern",
       children: [expression],
@@ -3205,7 +3223,7 @@ DeclarationOrStatement
 SingleLineStatements
   # NOTE: Statement can start with __ via AssignmentExpression.
   # Force staying on the same line via !/\n/ assertion.
-  ForbidNewlineBinaryOp ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter )*:stmts ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter? )?:last RestoreNewlineBinaryOp ::unknown ->
+  ForbidNewlineBinaryOp ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter )*:stmts ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter? )?:last RestoreNewlineBinaryOp ::BlockStatement ->
     expressions := stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
     expressions.push([last[0][0], last[1], last[2]]) if last
 
@@ -3248,7 +3266,7 @@ PostfixedSingleLineStatements
     }
 
 PostfixedSingleLineNoCommaStatements
-  ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter? )?:last ::unknown ->
+  ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter? )?:last ::BlockStatement ->
     children := stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
     children.push([last[0][0], last[1], last[2]]) if last
 
@@ -3598,7 +3616,7 @@ ElementList
 
 SingleLineElementList
   # NOTE: Forbid EOS to prevent eating indentation in Expression
-  !EOS ArrayElementExpression:first ElementListRest*:rest ::unknown ->
+  !EOS ArrayElementExpression:first ElementListRest*:rest ::ASTNode[] ->
     return [first] unless rest#
     return [
       append(first, rest[0][0])
@@ -3941,13 +3959,13 @@ PropertyDefinition
       dots,
       value: exp,
     }
-  _?:ws NamedProperty:prop ::unknown ->
-    return prepend(ws, prop)
+  _?:ws NamedProperty:prop ::Property | SpreadProperty ->
+    return prepend(ws, prop) as Property | SpreadProperty
 
   # NOTE: Added LiveScript flagging shorthand {+x, -y} -> {x: true, y: false}
   # NOTE: extended to allow {!y} -> {y: false}
   # NOTE: Must be after NamedProperty
-  _?:ws $[!+-]?:toggle PropertyName:id &ObjectPropertyDelimiter ::unknown ->
+  _?:ws $[!+-]?:toggle PropertyName:id &ObjectPropertyDelimiter ::Property ->
     if toggle
       value := toggle is "+" ? "true" : "false"
       return {
@@ -3989,7 +4007,7 @@ PropertyDefinition
     // shorthand for `foo: foo()`
     return $skip unless def.block and not def.block.empty
     return prepend(ws, def)
-  _?:ws DotDotDot:dots Expression:exp ::unknown ->
+  _?:ws DotDotDot:dots Expression:exp ::SpreadProperty ->
     return {
       type: "SpreadProperty",
       children: [ws, dots, exp],
@@ -4773,14 +4791,14 @@ ModuleItem
 
 # https://262.ecma-international.org/#prod-StatementListItem
 StatementListItem
-  Declaration ::unknown
+  Declaration ::Declaration
   # NOTE: Allow bulleted array literals as top-level statements.
-  BulletedArrayWithTrailing:array ::unknown
+  BulletedArrayWithTrailing:array ::ASTNode
   # NOTE: Allow multi-line implicit object literals as top-level statements.
-  ImplicitObjectLiteral ::unknown ->
+  ImplicitObjectLiteral ::ASTNode ->
     return makeLeftHandSideExpression($1)
   # NOTE: Added postfix conditionals/loops
-  PostfixedStatement ::unknown
+  PostfixedStatement ::ASTNode
 
 PostfixedStatement
   Statement:statement ( _? PostfixStatement )?:post ->
@@ -4799,12 +4817,12 @@ PostfixedNoCommaStatement
 
 PostfixedExpression
   # Loops allow spreads before the postfix
-  AssignmentExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ::unknown ->
+  AssignmentExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ::ASTNode ->
     return attachPostfixStatementAsExpression(expression, [ws, post])
   # Ifs just allow expressions
-  Expression:expression ( _? PostfixStatement ):post ::unknown ->
+  Expression:expression ( _? PostfixStatement ):post ::ASTNode ->
     return attachPostfixStatementAsExpression(expression, post)
-  Expression ::unknown
+  Expression ::ASTNode
 
 # Outside contexts where commas are too important (e.g. parameters/arguments),
 # postfixed loops can have comma expressions and spreads to accumulate multiple
@@ -4814,8 +4832,8 @@ CommaLoop
     return attachPostfixStatementAsExpression(expression, [ws, post])
 
 PostfixedExpressionOrCommaLoop
-  CommaLoop ::unknown
-  PostfixedExpression ::unknown
+  CommaLoop ::ASTNode
+  PostfixedExpression ::ASTNode
 
 # Expression with postfixes *or* comma operators (mixing seems ambiguous)
 # Note that postfixed loops do allow commas though, for accumulating multiple
@@ -4829,13 +4847,13 @@ PostfixedCommaExpression
   CommaExpression
 
 PostfixStatement
-  /(?=for|if|loop|unless|until|while)/ _PostfixStatement ::unknown -> $2
+  /(?=for|if|loop|unless|until|while)/ _PostfixStatement ::ForStatement | IfStatement | IterationStatement -> $2
 
 _PostfixStatement
-  ForClause ::unknown
-  IfClause ::unknown
-  LoopClause ::unknown
-  WhileClause ::unknown
+  ForClause ::ForStatement
+  IfClause ::IfStatement
+  LoopClause ::IterationStatement
+  WhileClause ::IterationStatement
 
 # https://262.ecma-international.org/#prod-Statement
 Statement
@@ -6015,8 +6033,8 @@ MaybeNestedPostfixedExpression
     return $skip unless expression
     return expression unless trailing
     return [ expression, trailing ]
-  ForbidImplicitFragment PostfixedExpression?:expression RestoreImplicitFragment ::unknown ->
-    return $skip unless expression
+  ForbidImplicitFragment PostfixedExpression?:expression RestoreImplicitFragment ::ASTNode ->
+    return $skip as never unless expression
     return expression
 
 MaybeNestedPostfixedExpressionOrCommaLoop
@@ -6027,8 +6045,8 @@ MaybeNestedPostfixedExpressionOrCommaLoop
     return $skip unless expression
     return expression unless trailing
     return [ expression, trailing ]
-  ForbidImplicitFragment PostfixedExpressionOrCommaLoop?:expression RestoreImplicitFragment ::unknown ->
-    return $skip unless expression
+  ForbidImplicitFragment PostfixedExpressionOrCommaLoop?:expression RestoreImplicitFragment ::ASTNode ->
+    return $skip as never unless expression
     return expression
 
 MaybeNestedPostfixedCommaExpression
