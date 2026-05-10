@@ -1070,6 +1070,43 @@ N := [1, 2, 3]
 ∀ N
 </Playground>
 
+#### Property keys
+
+When a non-id-unicode identifier appears as a *property key* — in an
+object literal, a destructure, a class member, an `@`-shorthand, or
+a member access — the source name is the emitted property name (so
+JS lookup hits the right key) while the variable side uses the
+mangled form. Member access switches from dot to bracket, since
+`obj.😊` isn't valid JS.
+
+<Playground>
+{ 😊 } := data
+x := { 😊 }
+x := { 😊: 1 }
+data.😊
+data?.😊
+class Foo
+  😊 = 1
+  😊() 2
+function foo(@😊)
+  @😊
+</Playground>
+
+#### Imports and exports
+
+Module-facing names (the side passed to / from another module) use the
+source form; the local-variable side keeps the mangled form. The
+combined `export X := value` declaration splits into a regular
+declaration plus an explicit re-export, since JS doesn't allow
+string-named exports inside `export const`.
+
+<Playground>
+import { 😊 } from "mod"
+import { 😊 as x } from "mod"
+export { 😊 }
+export 😊 := 3
+</Playground>
+
 ## Functions
 
 ### Function Calls
