@@ -43,6 +43,7 @@ export interface Options extends CompileOptions
   config?: string | false | undefined
   ast?: boolean | "raw"
   repl?: boolean
+  watch?: boolean
   typecheck?: boolean
   /**
    * Allow up to N TypeScript diagnostics before exiting non-zero.
@@ -105,6 +106,9 @@ export function parseArgs(args: string[], isTTY = process.stdin.isTTY): Promise<
       when '-h', '--help'
         options.help = true
       when '-c', '--compile'
+        options.compile = true
+      when '-w', '--watch'
+        options.watch = true
         options.compile = true
       when '-o', '--output'
         options.output = args[++i]
@@ -173,7 +177,7 @@ export function parseArgs(args: string[], isTTY = process.stdin.isTTY): Promise<
     parsed := parseInt process.env.CIVET_TYPECHECK_MAX_ERRORS, 10
     options.maxErrors = parsed unless isNaN parsed
 
-  unless filenames.length or options.typescript or options.eval
+  unless filenames.length or options.typescript or options.eval or options.watch
     if isTTY
       options.repl = true
     else
@@ -489,6 +493,7 @@ Options:
   --version        Show the version number
   -o / --output XX Specify output directory and/or extension, or filename
   -c / --compile   Compile input files to TypeScript (or JavaScript)
+  -w / --watch     Watch input files and recompile on change (implies -c)
   -e / --eval XX   Evaluate specified code (or compile it with -c)
   --config XX      Specify a config file (default scans for a config.civet, civet.json, civetconfig.civet or civetconfig.json file, optionally in a .config directory, or starting with a .)
   --civet XX       Specify civet compiler flag, as in "civet XX" prologue
@@ -712,6 +717,46 @@ You can override this behavior via: --civet rewriteCivetImports=.ext
           console.error error
           process.exit 1
       /* c8 ignore stop */
+
+  if options.watch and not unplugin?
+    unless filenames.length and not (filenames.length is 1 and filenames[0] is '-')
+      console.error `--watch requires one or more input filenames`
+      process.exit 1
+    fsSync from node:fs
+    console.error `Civet watching for changes... (Ctrl+C to stop)`
+    debounceTimers := new Map<string, ReturnType<typeof setTimeout>>
+    recompile := (filename: string): Promise<void> =>
+      outputFilename := makeOutputFilename filename, options
+      try
+        content := await fs.readFile filename, encoding
+        output := await compile content, {...options, filename, outputFilename}
+        if options.output is '-'
+          process.stdout.write output
+        else
+          outputDir := path.dirname outputFilename
+          await fs.mkdir outputDir, recursive: true unless outputDir is '.'
+          await fs.writeFile outputFilename, output
+          console.error `[${new Date().toLocaleTimeString()}] Compiled ${filename} -> ${outputFilename}`
+      catch error
+        console.error `[${new Date().toLocaleTimeString()}] Failed to compile ${filename}:`
+        console.error error
+    scheduleRebuild := (filename: string): void =>
+      existing := debounceTimers.get filename
+      clearTimeout existing if existing?
+      cb := =>
+        debounceTimers.delete filename
+        void recompile filename
+      debounceTimers.set filename, setTimeout cb, 100
+    for filename of filenames
+      continue if filename is '-'  // can't watch stdin
+      try
+        fsSync.watch filename, (eventType: string) =>
+          return unless eventType is 'change' or eventType is 'rename'
+          scheduleRebuild filename
+      catch error
+        console.error `Could not watch ${filename}:`
+        console.error error
+    return  // Skip unplugin.buildEnd; watchers keep the process alive
 
   process.exitCode = Math.min 255, errors
   if unplugin?
