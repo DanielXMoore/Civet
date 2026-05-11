@@ -1531,9 +1531,10 @@ ThisLiteral
   AtThis:at $( Hash? IdentifierName ):id ->
     // `@😊` → `this["😊"]` (matches the binding-side bracket form), but
     // private `@#😊` keeps dot access since private fields can't be
-    // string-keyed — emit `this.#u$1F60A$` instead.
-    escaped := escapeIdentifier(id)
-    if escaped !== id and not id.startsWith("#")
+    // string-keyed — emit `this.#u$1F60A$` instead. IdentifierName's
+    // own action already filtered out-of-range `\u` escapes via $skip.
+    escaped := escapeIdentifier(id)!
+    if escaped.token !== id and not id.startsWith("#")
       return {
         type: "MemberExpression",
         children: [at, {
@@ -1552,13 +1553,13 @@ ThisLiteral
       type: "MemberExpression",
       children: [at, {
         type: "PropertyAccess",
-        name: escaped,
+        name: escaped.name,
         children: [".", {
           $loc: {
             pos: $loc.pos + 1,
             length: $loc# - 1,
           },
-          token: escaped
+          token: escaped.token
         }],
       }],
       thisShorthand: true,
@@ -3329,18 +3330,24 @@ Identifier
 # https://262.ecma-international.org/#prod-IdentifierName
 IdentifierName
   /(?:\p{ID_Start}|[_$]|\\u\{[\dA-Fa-f]+\}|\\u[\dA-Fa-f]{4}|[^\u0000-\u007F\p{ID_Continue}\s÷—‖’•‥…⁇→⇒∈∉∋∌≔≠≡≢≣≤≥≪≫⋙▷⧺⩵⩶])(?:\p{ID_Continue}|[\u200C\u200D$]|\\u\{[\dA-Fa-f]+\}|\\u[\dA-Fa-f]{4}|[^\u0000-\u007F\p{ID_Continue}\s÷—‖’•‥…⁇→⇒∈∉∋∌≔≠≡≢≣≤≥≪≫⋙▷⧺⩵⩶])*/ ->
-    name := escapeIdentifier($0)
+    escaped := escapeIdentifier($0)
+    // Out-of-range codepoint (e.g. `\u{110000}`) — reject so the parser
+    // backtracks and reports a ParseError instead of crashing later.
+    return $skip unless escaped
+    { name, token } := escaped
     return {
       type: "Identifier",
       name,
-      // Original source string when escaping changed it, so property-key
-      // sites (object destructuring / literal shorthand / explicit key)
-      // can emit the user-visible name as a quoted string.
-      ...($0 !== name and { unicode: $0 }),
+      // Original source string when emission differs from source (mangling
+      // happened), so property-key sites (object destructuring / literal
+      // shorthand / explicit key) emit the user-visible name as a quoted
+      // string. `\u`-escapes for valid id chars pass through verbatim and
+      // don't need this indirection.
+      ...(token !== $0 and { unicode: $0 }),
       names: [name],
       children: [{
         $loc: $loc,
-        token: name,
+        token,
       }],
     }
 
@@ -4293,8 +4300,11 @@ ClassElementName
 PrivateIdentifier
   $(Hash IdentifierName):id ->
     // Private fields can't be string-keyed, so escape unicode in-place
-    // (`#😊` → `#u$1F60A$`) without setting `unicode` — keeps `#`-dot access.
-    name := escapeIdentifier(id)
+    // (`#😊` → `#u$1F60A$`) without setting `unicode` — keeps `#`-dot
+    // access. IdentifierName's action already filtered out-of-range
+    // escapes; we always emit the canonical/mangled name since `#`-dot
+    // access can't reference the verbatim escape form anyway.
+    name := escapeIdentifier(id)!.name
     return {
       type: "Identifier",
       name,

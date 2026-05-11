@@ -1,23 +1,38 @@
 import { gatherRecursive } from ./traversal.civet
 import type { Identifier } from ./types.civet
 
-// Escape non-identifier Unicode codepoints to `u$<HEX>$` so the result is
-// a valid JS identifier. The trailing `$` terminates each codepoint so
+// Compute canonical `name` (for binding / ref resolution) and emitted JS
+// `token` from an identifier source string. Non-identifier Unicode
+// codepoints (emoji, math symbols not claimed as operators) are mangled to
+// `u$<HEX>$` for both — the trailing `$` terminates each codepoint so
 // `pre😊post` → `preu$1F60A$post` is unambiguous. `\p{ID_Continue}` chars
-// (letters / digits / combining marks like `é`, `ő`) pass through unchanged.
-// Unicode escape sequences (`\uXXXX` and `\u{X+}`) are decoded first so
-// e.g. `a` and `a` produce the same name.
-function escapeIdentifier(raw: string): string
-  decoded := raw.replace /\\u\{([\dA-Fa-f]+)\}|\\u([\dA-Fa-f]{4})/g, (_, braces, simple) =>
-    String.fromCodePoint parseInt(braces ?? simple, 16)
-  result .= ""
-  for char of decoded
-    cp := char.codePointAt(0)!
-    if cp > 0x7F and not /\p{ID_Continue}/u.test(char)
-      result += `u$${cp.toString(16).toUpperCase()}$`
+// (letters / digits / combining marks like `é`, `ő`) pass through.
+// `\uXXXX` and `\u{X+}` escapes are decoded into `name` so `a` and
+// `a` resolve to the same binding; in `token` they pass through verbatim
+// when they spell a valid JS identifier char (JS treats `a` ≡ `a`),
+// and are mangled to `u$<HEX>$` only when they decode to a non-ID char.
+// Returns `undefined` if any escape decodes to a codepoint > 0x10FFFF
+// (invalid per ECMAScript) so the caller can reject the match.
+function escapeIdentifier(raw: string): { name: string, token: string } | undefined
+  name .= ""
+  token .= ""
+  for m of raw.matchAll /\\u\{([\dA-Fa-f]+)\}|\\u([\dA-Fa-f]{4})|[\s\S]/gu
+    [unit, brace, simple] := m
+    cp .= 0
+    if brace? or simple?
+      cp = parseInt (brace ?? simple)!, 16
+      return undefined if cp > 0x10FFFF
     else
-      result += char
-  result
+      cp = unit.codePointAt(0)!
+    char := String.fromCodePoint cp
+    if cp > 0x7F and not /\p{ID_Continue}/u.test(char)
+      mangled := `u$${cp.toString(16).toUpperCase()}$`
+      name += mangled
+      token += mangled
+    else
+      name += char
+      token += unit
+  { name, token }
 
 // In property-key positions, emit the source as a quoted string so the
 // lookup uses the user-visible name instead of the escaped form.
