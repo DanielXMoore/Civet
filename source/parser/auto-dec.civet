@@ -17,6 +17,10 @@ import {
   getIndent
 } from ./block.civet
 
+import {
+  buildExportSplitClause
+} from ./identifier.civet
+
 { getConfig } from "../parser.hera"
 
 function findDecs(statements: ASTNode)
@@ -63,8 +67,33 @@ function createConstLetDecs(statements, scopes, letOrConst: "let" | "const"): vo
   fnNodes := gatherNodes statements, isFunction
   forNodes := gatherNodes statements, .type is "ForStatement"
 
+  // `export x = …` from ExportVarDec under autoConst/autoLet would emit
+  // `export let x = …`, which collides if `x` is already declared. Rewrite
+  // such statements to `x = …; export {x}` so the prior binding is reused.
+  function splitAutoExport(statement): boolean
+    exportDec := statement[1]
+    return false unless exportDec?.type is "ExportDeclaration"
+    innerDecl := exportDec.declaration
+    return false unless innerDecl?.autoExport
+    declNames := innerDecl.names
+    return false unless declNames?# and declNames.every hasDec
+
+    bareDeclChildren := innerDecl.children.slice(1)
+    needsParens := !!innerDecl.bindings?.some (b) =>
+      b.pattern?.type is "ObjectBindingPattern"
+    splitClause := buildExportSplitClause(innerDecl) ?? `; export { ${declNames.join(", ")} }`
+    exportDec.children =
+      if needsParens
+        ["(", bareDeclChildren, ")", splitClause]
+      else
+        [bareDeclChildren, splitClause]
+    return true
+
   targetStatements: StatementTuple[] .= []
   for each statement of statements
+    if splitAutoExport statement
+      targetStatements.push statement
+      continue
     nodes := gatherBlockOrOther statement
     undeclaredIdentifiers .= []
     for each node of nodes
