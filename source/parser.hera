@@ -15,6 +15,7 @@ import {
   blockWithPrefix,
   braceBlock,
   bracedBlock,
+  buildExportSplitClause,
   convertArrowFunctionToMethod,
   convertFunctionToMethod,
   convertNamedImportsToObject,
@@ -25,6 +26,7 @@ import {
   deepCopy,
   dynamizeImportDeclaration,
   dynamizeImportDeclarationExpression,
+  escapeIdentifier,
   expressionizeTypeIf,
   forRange,
   gatherBindingCode,
@@ -56,6 +58,7 @@ import {
   precedenceCustomDefault,
   precedenceStep,
   prepend,
+  propertyKey,
   processAssignmentDeclaration,
   processBinaryOpExpression,
   processCallMemberExpression,
@@ -1526,17 +1529,36 @@ ThisLiteral
   # NOTE: Added @identifier shorthand, also works for private identifiers
   # Converts 'IdentifierName' node to string so this won't interfere with refs
   AtThis:at $( Hash? IdentifierName ):id ->
+    // `@😊` → `this["😊"]` (matches the binding-side bracket form), but
+    // private `@#😊` keeps dot access since private fields can't be
+    // string-keyed — emit `this.#u$1F60A$` instead.
+    escaped := escapeIdentifier(id)
+    if escaped !== id and not id.startsWith("#")
+      return {
+        type: "MemberExpression",
+        children: [at, {
+          type: "Index",
+          children: ["[", {
+            $loc: {
+              pos: $loc.pos + 1,
+              length: $loc# - 1,
+            },
+            token: `"${id}"`
+          }, "]"],
+        }],
+        thisShorthand: true,
+      }
     return {
       type: "MemberExpression",
       children: [at, {
         type: "PropertyAccess",
-        name: id,
+        name: escaped,
         children: [".", {
           $loc: {
             pos: $loc.pos + 1,
             length: $loc# - 1,
           },
-          token: id
+          token: escaped
         }],
       }],
       thisShorthand: true,
@@ -1931,6 +1953,17 @@ PropertyAccess
     }
 
   AccessStart:dot InlineComment*:comments ( IdentifierName / PrivateIdentifier / LengthShorthand ):id ->
+    // `data.😊` → `data["😊"]` since `u$1F60A$` isn't the real property.
+    if id.unicode
+      return {
+        type: "Index",
+        children: [
+          adjustIndexAccess(dot),
+          ...comments,
+          propertyKey(id),
+          "]",
+        ],
+      }
     return {
       type: "PropertyAccess",
       name: id.name,
@@ -2218,7 +2251,10 @@ AtIdentifierRef
   ReservedWord:r ->
     return makeRef(`_${r}`, r)
   IdentifierName:id ->
-    return makeRef(id.name)
+    ref := makeRef(id.name)
+    // Propagate so the binding side can emit `this["X"]` matching `@X`.
+    if id.unicode then ref.unicode = id.unicode
+    return ref
 
 PinPattern
   # Forbid ImplicitObjectLiterals such as `x: y` in pinned pattern,
@@ -2446,7 +2482,7 @@ BindingProperty
 
   # NOTE: name^ means we should bind name, but we do anyway, so allow but ignore
   _?:ws BindingIdentifier:binding Caret?:bind BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
-    children := [ws, binding, initializer]  // omit bind, typeSuffix
+    children .= [ws, binding, initializer]  // omit bind, typeSuffix
 
     if binding.type is "AtBinding"
       return {
@@ -2459,11 +2495,17 @@ BindingProperty
         names: [],
       }
 
+    // `{ 😊 }` → `{ "😊": u$1F60A$ }` so the lookup uses the source name.
+    if binding.unicode
+      children = [ws, propertyKey(binding), ": ", binding, initializer]
+
     return {
       type: "BindingProperty",
       children,
       name: binding,
-      value: undefined,
+      // Setting value to the binding when expanded keeps the AST shape
+      // consistent (downstream code distinguishes shorthand by `value: undefined`).
+      value: binding.unicode ? binding : undefined,
       typeSuffix,
       initializer,
       names: binding.names,
@@ -3277,20 +3319,28 @@ SymbolElement
   SymbolLiteral -> [ "[", $1, "]" ]
 
 # https://262.ecma-international.org/#prod-Identifier
+# Extended: identifiers may include non-identifier Unicode (emoji, math
+# symbols not claimed as operators); escapeIdentifier converts them to a
+# JS-valid form.
 Identifier
   # perf: assertion to exit early
-  /(?=\p{ID_Start}|[_$])/ !ReservedWord IdentifierName:id -> id
+  /(?=\p{ID_Start}|[_$]|[^\u0000-\u007F\p{ID_Continue}\s÷—‖’•‥…⁇→⇒∈∉∋∌≔≠≡≢≣≤≥≪≫⋙▷⧺⩵⩶])/ !ReservedWord IdentifierName:id -> id
 
 # https://262.ecma-international.org/#prod-IdentifierName
 IdentifierName
-  /(?:\p{ID_Start}|[_$])(?:\p{ID_Continue}|[\u200C\u200D$])*/ ->
+  /(?:\p{ID_Start}|[_$]|[^\u0000-\u007F\p{ID_Continue}\s÷—‖’•‥…⁇→⇒∈∉∋∌≔≠≡≢≣≤≥≪≫⋙▷⧺⩵⩶])(?:\p{ID_Continue}|[\u200C\u200D$]|[^\u0000-\u007F\p{ID_Continue}\s÷—‖’•‥…⁇→⇒∈∉∋∌≔≠≡≢≣≤≥≪≫⋙▷⧺⩵⩶])*/ ->
+    name := escapeIdentifier($0)
     return {
       type: "Identifier",
-      name: $0,
-      names: [$0],
+      name,
+      // Original source string when escaping changed it, so property-key
+      // sites (object destructuring / literal shorthand / explicit key)
+      // can emit the user-visible name as a quoted string.
+      ...($0 !== name and { unicode: $0 }),
+      names: [name],
       children: [{
         $loc: $loc,
-        token: $0,
+        token: name,
       }],
     }
 
@@ -3845,6 +3895,18 @@ PropertyDefinition
         value,
       }
 
+    // `{ 😊 }` → `{ "😊": u$1F60A$ }`. PropertyName already rewrote `id`'s
+    // children to render the quoted source; `id.identifier` is the original
+    // Identifier whose children render the mangled local-variable reference.
+    if id.unicode
+      return {
+        type: "Property",
+        children: [ws, id, ": ", id.identifier],
+        name: id,
+        names: id.names,
+        value: id.identifier,
+      }
+
     return {
       type: "Property",
       children: [ws, id],
@@ -4009,7 +4071,16 @@ PropertyName
       token: `"${$1}"`,
       $loc,
     }
-  IdentifierName
+  # Unicode `id` renders quoted via children so PropertyName consumers emit
+  # the source name automatically; `id.identifier` carries the original for
+  # shorthand value-side reads.
+  IdentifierName:id ->
+    return id unless id.unicode
+    return {
+      ...id,
+      children: [{$loc: id.children[0].$loc, token: `"${id.unicode}"`}],
+      identifier: id,
+    }
   LengthShorthand
   SymbolElement
 
@@ -4221,13 +4292,16 @@ ClassElementName
 
 PrivateIdentifier
   $(Hash IdentifierName):id ->
+    // Private fields can't be string-keyed, so escape unicode in-place
+    // (`#😊` → `#u$1F60A$`) without setting `unicode` — keeps `#`-dot access.
+    name := escapeIdentifier(id)
     return {
       type: "Identifier",
-      name: id,
-      names: [id],
+      name,
+      names: [name],
       children: [{
         $loc: $loc,
-        token: id,
+        token: name,
       }],
     }
 
@@ -6150,17 +6224,25 @@ TypeAndImportSpecifier
 
 # https://262.ecma-international.org/#prod-ImportSpecifier
 ImportSpecifier
-  __ ModuleExportName:source ImportAsToken __ ImportedBinding:binding ObjectPropertyDelimiter ->
+  __:ws1 ModuleExportName:source ImportAsToken:as __:ws2 ImportedBinding:binding ObjectPropertyDelimiter:delim ->
+    // `import { 😊 as x }` → `"😊" as x` (module-side is the source name).
     return {
       source,
       binding,
-      children: $0,
+      children: [ws1, propertyKey(source), as, ws2, binding, delim],
     }
-  __ ImportedBinding:binding ObjectPropertyDelimiter ->
+  __:ws ImportedBinding:binding ObjectPropertyDelimiter:delim ->
+    // `import { 😊 }` → `"😊" as u$1F60A$` (expand shorthand to source name).
+    if binding.unicode
+      return {
+        source: binding,
+        binding,
+        children: [ws, propertyKey(binding), " as ", binding, delim],
+      }
     return {
       source: binding,
       binding,
-      children: $0,
+      children: [ws, binding, delim],
     }
 
 OperatorImportSpecifier
@@ -6292,7 +6374,17 @@ ExportDeclaration
   # NOTE: Declaration and VariableStatement should come before NamedExports
   # so that NamedExports doesn't grab function, async, type, var, etc.
   # NOTE: TS decorators come before `export` keyword but TC39 stage 3 decorators proposal come after
-  Decorators? Export __ ( Declaration / VariableStatement / TypeAndNamedExports / ExportVarDec ):declaration ->
+  Decorators?:dec Export __ ( Declaration / VariableStatement / TypeAndNamedExports / ExportVarDec ):declaration ->
+    // `export 😊 := 3` → `const u$…$ = 3; export { u$…$ as "😊" }`
+    // (JS forbids string-named exports inside `export const`).
+    splitClause := buildExportSplitClause(declaration)
+    if splitClause
+      return {
+        type: "ExportDeclaration",
+        declaration,
+        ts: declaration.ts,
+        children: [dec, declaration, splitClause],  // omit Export keyword + ws
+      }
     return { type: "ExportDeclaration", declaration, ts: declaration.ts, children: $0 }
 
 # CoffeeScript style `export x = 3` -> `export var x = 3`
@@ -6323,12 +6415,26 @@ NamedExports
 
 # https://262.ecma-international.org/#prod-ExportSpecifier
 ExportSpecifier
-  __ ( TypeKeyword __ )? ModuleExportName ( __ As __ ModuleExportName )? ObjectPropertyDelimiter ->
-    return $0 unless $2
-    return { ts: true, children: $0 }
+  __:ws1 ( TypeKeyword __ )?:ts ModuleExportName:local ( __ As __ ModuleExportName )?:rename ObjectPropertyDelimiter:delim ->
+    // Local stays mangled (JS variable ref); external side uses propertyKey
+    // so the exported name is the user-visible source.
+    children :=
+      if rename
+        [ws1, ts, local, rename[0], rename[1], rename[2], propertyKey(rename[3]), delim]
+      else if local.unicode
+        [ws1, ts, local, " as ", propertyKey(local), delim]
+      else
+        [ws1, ts, local, delim]
+    return children unless ts
+    return { ts: true, children }
 
 ImplicitExportSpecifier
-  !Default ModuleExportName ( __ As __ ModuleExportName )? -> [$2, $3]
+  !Default ModuleExportName:local ( __ As __ ModuleExportName )?:rename ->
+    if rename
+      return [local, rename[0], rename[1], rename[2], propertyKey(rename[3])]
+    if local.unicode
+      return [local, " as ", propertyKey(local)]
+    return [local, rename]
 
 # https://262.ecma-international.org/#prod-Declaration
 Declaration
@@ -6755,14 +6861,15 @@ TemplateBlockCharacters
     return { $loc, token: $0 }
 
 # https://262.ecma-international.org/#sec-comments
+# Keywords sorted longest-first so prefix conflicts (e.g. `instanceof`
+# before `in`) match the longest match first; boundary check via NonIdContinue.
+# `let` added since Civet assumes strict mode.
 ReservedWord
-  /(?:on|off|yes|no)(?!\p{ID_Continue})/ CoffeeBooleansEnabled
-  /(?:isnt)(?!\p{ID_Continue})/ CoffeeIsntEnabled
-  /(?:by)(?!\p{ID_Continue})/ CoffeeForLoopsEnabled
-  /(?:of)(?!\p{ID_Continue})/ CoffeeOfEnabled
-  # NOTE: Added `let`, Civet assumes strict mode
-  /(?:and|await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|interface|is|let|loop|new|not|null|or|private|protected|public|return|static|super|switch|this|throw|true|try|typeof|unless|until|var|void|while|with|yield)(?!\p{ID_Continue})/
-
+  /(?:off|yes|on|no)/ NonIdContinue CoffeeBooleansEnabled -> $1
+  /isnt/ NonIdContinue CoffeeIsntEnabled -> $1
+  /by/ NonIdContinue CoffeeForLoopsEnabled -> $1
+  /of/ NonIdContinue CoffeeOfEnabled -> $1
+  /(?:instanceof|interface|protected|continue|debugger|function|default|extends|finally|private|delete|export|import|public|return|static|switch|typeof|unless|await|break|catch|class|const|false|super|throw|until|while|yield|case|else|enum|loop|null|this|true|void|with|and|for|let|new|not|try|var|do|if|in|is|or)/ NonIdContinue -> $1
 # https://262.ecma-international.org/#sec-comments
 Comment
   # perf: assertion to exit early
@@ -6878,7 +6985,7 @@ SemicolonDelimiter
     }
 
 NonIdContinue
-  /(?!\p{ID_Continue})/ -> undefined
+  /(?!\p{ID_Continue}|[^\u0000-\u007F\p{ID_Continue}\s÷—‖’•‥…⁇→⇒∈∉∋∌≔≠≡≢≣≤≥≪≫⋙▷⧺⩵⩶])/ -> undefined
 
 Loc
   "" ->
@@ -7675,6 +7782,17 @@ JSXShorthandString
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeName
 JSXAttributeName
+  # `<div 😊={x}>` — tried first so it claims the whole identifier (incl.
+  # ASCII parts adjacent to unicode); wrapped as a synthetic
+  # ComputedPropertyName so JSXAttribute emits `{...{"😊": value}}`.
+  IdentifierName:id ->
+    return $skip unless id.unicode
+    key := propertyKey(id)
+    return {
+      type: "ComputedPropertyName",
+      children: [key],
+      expression: key,
+    }
   # NOTE: Merged JSXIdentifier and JSXNamespacedName
   JSXIdentifierName ( Colon JSXIdentifierName )?
   ComputedPropertyName
@@ -8270,13 +8388,17 @@ EnumDeclaration
           ["let ", id, " = {};\n"],
           ...block.properties.map((property, i) => {
             let init, isString
+            // Use the source string for the property key so the runtime
+            // enum is keyed by the user-visible name (mangled would be
+            // unreachable from `E.😊` style access).
+            propKey := property.name.unicode ?? property.name.name
             if property.initializer
               // Replace references to other enum members.
               // TS further restricts this to past enum members,
               // but we don't need to enforce that here.
               init = replaceNodes(deepCopy(property.initializer),
                 (n) => n.type is "Identifier" and names.has(n.name),
-                (n) => [id, '["', n.name, '"]'])
+                (n) => [id, '["', n.unicode ?? n.name, '"]'])
               value := init[init# - 1]
               isString = value.type is "TemplateLiteral" or
                 (value.type is "Literal" and value.subtype is "StringLiteral")
@@ -8284,17 +8406,18 @@ EnumDeclaration
               // Default initializer is previous property + 1, or 0 if first.
               // TS further restricts this to when previous property is
               // constant, but we don't need to enforce that here.
+              prev := block.properties[i-1]?.name
               init = i is 0 ? " = 0" :
-                [" = ", id, '["', block.properties[i-1].name, '"] + 1']
+                [" = ", id, '["', prev?.unicode ?? prev?.name, '"] + 1']
             // String enums do not get back references
             if isString
               return [
-                id, '["', property.name, '"]', init, ";\n",
+                id, '["', propKey, '"]', init, ";\n",
               ]
             else
               return [
-                id, "[", id, '["', property.name, '"]', init,
-                '] = "', property.name, '";\n',
+                id, "[", id, '["', propKey, '"]', init,
+                '] = "', propKey, '";\n',
               ]
           }),
         ],
@@ -8340,11 +8463,14 @@ EnumProperty
       type: "EnumProperty",
       name,
       initializer,
-      children: $0,
+      // Unicode member: emit `"name" = …` so the TS-form enum has a
+      // string-literal member; runtime emission (in EnumDeclaration) also
+      // uses the source string for the property key.
+      children: [propertyKey(name), ...$0.slice(1)],
     }
 
 TypeProperty
-  ReadonlyModifier? PropertyName
+  ReadonlyModifier?:r PropertyName:n -> [r, propertyKey(n)]
 
 TypeIndexSignature
   # NOTE: QuestionMark will be parsed by following TypeSuffix

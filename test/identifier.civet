@@ -1,4 +1,6 @@
-{testCase} from ./helper.civet
+{testCase, throws} from ./helper.civet
+fs from fs
+assert from assert
 
 describe "identifier", ->
   testCase """
@@ -20,3 +22,541 @@ describe "identifier", ->
     __ = 3
     _  = 2
   """
+
+  describe "unicode", ->
+    // -- Basic mangling: each non-id-unicode codepoint becomes `u$<HEX>$`.
+
+    testCase """
+      BMP symbol as identifier
+      ---
+      let △ = 3
+      ---
+      let u$25B3$ = 3
+    """
+
+    testCase """
+      astral emoji as identifier
+      ---
+      let 😊 = 3
+      ---
+      let u$1F60A$ = 3
+    """
+
+    testCase """
+      multi-codepoint unicode identifier
+      ---
+      let 😊😔 = 3
+      ---
+      let u$1F60A$u$1F614$ = 3
+    """
+
+    // ZWJ-joined emoji (family) and modifier-extended emoji (skin tone)
+    // are sequences of distinct codepoints — each codepoint mangles
+    // independently, with ZWJ (U+200D, in \p{ID_Continue}) passing through.
+    testCase """
+      ZWJ-sequence emoji as identifier
+      ---
+      let 👨‍👩‍👧‍👦 = "family"
+      ---
+      let u$1F468$‍u$1F469$‍u$1F467$‍u$1F466$ = "family"
+    """
+
+    testCase """
+      modifier-extended emoji as identifier
+      ---
+      let 👍🏾 = "thumbs"
+      ---
+      let u$1F44D$u$1F3FE$ = "thumbs"
+    """
+
+    testCase """
+      ASCII mixed with unicode at every position
+      ---
+      let happy😊 = 1
+      let 😊happy = 2
+      let pre😊post = 3
+      ---
+      let happyu$1F60A$ = 1
+      let u$1F60A$happy = 2
+      let preu$1F60A$post = 3
+    """
+
+    testCase """
+      reference unicode identifier
+      ---
+      let △ = 3
+      console.log △
+      ---
+      let u$25B3$ = 3
+      console.log(u$25B3$)
+    """
+
+    testCase """
+      hand-written mangled name still works
+      ---
+      let u$25B3$ = 3
+      ---
+      let u$25B3$ = 3
+    """
+
+    // -- Property-key sites quote the source so the lookup uses the
+    //    user-visible name, not the mangled binding form.
+
+    testCase """
+      destructuring shorthand with unicode key
+      ---
+      { 😊 } := data
+      ---
+      const { "😊": u$1F60A$ } = data
+    """
+
+    testCase """
+      object literal shorthand with unicode key
+      ---
+      x := { 😊 }
+      ---
+      const x = { "😊": u$1F60A$ }
+    """
+
+    testCase """
+      destructuring with explicit unicode key
+      ---
+      { 😊: x } := data
+      ---
+      const { "😊": x } = data
+    """
+
+    testCase """
+      object literal with explicit unicode key
+      ---
+      x := { 😊: y }
+      ---
+      const x = { "😊": y }
+    """
+
+    testCase """
+      ASCII keys still use shorthand alongside unicode
+      ---
+      { 😊, ascii } := data
+      ---
+      const { "😊": u$1F60A$, ascii } = data
+    """
+
+    // -- Member access: `.😊` → `["😊"]` since dot access requires a
+    //    JS identifier and `u$1F60A$` is the wrong property name.
+
+    testCase """
+      member access with unicode property
+      ---
+      data.😊
+      ---
+      data["😊"]
+    """
+
+    testCase """
+      optional member access with unicode property
+      ---
+      data?.😊
+      ---
+      data?.["😊"]
+    """
+
+    // -- Methods and class fields use the user-visible name as a quoted key.
+
+    testCase """
+      class method with unicode name
+      ---
+      class Foo
+        😊() 1
+      ---
+      class Foo {
+        "😊"() { return 1 }
+      }
+    """
+
+    testCase """
+      object literal method shorthand with unicode name
+      ---
+      x := { 😊() 1 }
+      ---
+      const x = { "😊"() { return 1 } }
+    """
+
+    testCase """
+      class field with unicode name
+      ---
+      class Foo
+        😊 = 1
+      ---
+      class Foo {
+        "😊" = 1
+      }
+    """
+
+    // Private fields can't be string-keyed, so unicode in `#name` mangles
+    // the IdentifierName part and keeps `#`-dot access throughout.
+    testCase """
+      private class field with unicode name
+      ---
+      class Foo
+        #😊 = 1
+      ---
+      class Foo {
+        #u$1F60A$ = 1
+      }
+    """
+
+    testCase """
+      private member access with unicode name
+      ---
+      class Foo
+        #😊 = 1
+        get(obj) obj.#😊
+      ---
+      class Foo {
+        #u$1F60A$ = 1
+        get(obj) { return obj.#u$1F60A$ }
+      }
+    """
+
+    testCase """
+      private this-shorthand with unicode name
+      ---
+      class Foo
+        #😊 = 1
+        get() @#😊
+      ---
+      class Foo {
+        #u$1F60A$ = 1
+        get() { return this.#u$1F60A$ }
+      }
+    """
+
+    // Enum members with unicode keys emit the user-visible name as a
+    // string-literal member (TS form) and as the runtime key (JS form),
+    // so `E.😊` lookups work at runtime. Cross-references between members
+    // (`X = 😊 + 1` or `X = E.😊 + 1`) also resolve to the source key.
+    testCase """
+      TS enum with unicode member
+      ---
+      enum E
+        😊 = 1
+        ascii = 2
+      ---
+      enum E {
+        "😊" = 1,
+        ascii = 2,
+      }
+    """
+
+    testCase.js """
+      JS enum with unicode member uses source key
+      ---
+      enum E
+        😊 = 1
+        X = 😊 + 1
+      ---
+      let E = {};
+      E[E["😊"] = 1] = "😊";
+      E[E["X"] = E["😊"] + 1] = "X";
+
+    """
+
+    // -- @-binding (constructor param) and @-expression both compile to
+    //    bracket access so the property stored matches the property read.
+    testCase """
+      this-shorthand with unicode name
+      ---
+      function foo(@😊)
+        @😊
+      ---
+      function foo(u$1F60A$) {
+        this["😊"] = u$1F60A$;
+        return this["😊"]
+      }
+    """
+
+    // -- TS type literal property names match the runtime property.
+
+    testCase """
+      TS type literal with unicode key
+      ---
+      type T = { 😊: number }
+      ---
+      type T = { "😊": number }
+    """
+
+    testCase """
+      TS readonly type property with unicode key
+      ---
+      type T = { readonly 😊: number }
+      ---
+      type T = { readonly "😊": number }
+    """
+
+    // -- Import/export specifiers use the user-visible name on the
+    //    module-facing side and the mangled name on the local side.
+
+    testCase """
+      import shorthand with unicode name
+      ---
+      import { 😊 } from "mod"
+      ---
+      import { "😊" as u$1F60A$ } from "mod"
+    """
+
+    testCase """
+      import explicit with unicode source
+      ---
+      import { 😊 as x } from "mod"
+      ---
+      import { "😊" as x } from "mod"
+    """
+
+    testCase """
+      import explicit with unicode local
+      ---
+      import { x as 😊 } from "mod"
+      ---
+      import { x as u$1F60A$ } from "mod"
+    """
+
+    testCase """
+      export shorthand with unicode name
+      ---
+      export { 😊 }
+      ---
+      export { u$1F60A$ as "😊" }
+    """
+
+    testCase """
+      export explicit with unicode source
+      ---
+      export { 😊 as x }
+      ---
+      export { u$1F60A$ as x }
+    """
+
+    testCase """
+      export explicit with unicode external name
+      ---
+      export { x as 😊 }
+      ---
+      export { x as "😊" }
+    """
+
+    testCase """
+      unbraced export with unicode name
+      ---
+      a := 1
+      export 😊, a
+      ---
+      const a = 1
+      export {u$1F60A$ as "😊", a}
+    """
+
+    // The combined `export X := value` form splits into `<decl>; export {…}`
+    // because JS doesn't allow string-named exports inside `export const`.
+    testCase """
+      combined export-declaration with unicode name
+      ---
+      export 😊 := 3
+      ---
+      const u$1F60A$ = 3; export { u$1F60A$ as "😊" }
+    """
+
+    testCase """
+      combined export-declaration with destructured unicode
+      ---
+      export { 😊 } := data
+      ---
+      const { "😊": u$1F60A$ } = data; export { u$1F60A$ as "😊" }
+    """
+
+    testCase """
+      combined export-declaration with multiple unicode and ASCII interleaved
+      ---
+      export { 😊, ascii, 😔 } := data
+      ---
+      const { "😊": u$1F60A$, ascii, "😔": u$1F614$ } = data; export { u$1F60A$ as "😊", ascii, u$1F614$ as "😔" }
+    """
+
+    testCase """
+      combined export-declaration without unicode unchanged
+      ---
+      export ascii := 3
+      ---
+      export const ascii = 3
+    """
+
+    // -- Unicode JSX attribute names compile to spread-with-string-key.
+    //    Tag names remain unsupported (JSX spec restricts JSXIdentifier).
+
+    testCase """
+      JSX attribute with unicode name
+      ---
+      <div 😊={x} />
+      ---
+      <div {...{"😊": x}} />
+    """
+
+    testCase """
+      JSX attribute with mixed-codepoint unicode name
+      ---
+      <div pre😊post={x} />
+      ---
+      <div {...{"pre😊post": x}} />
+    """
+
+    testCase """
+      JSX bare unicode attribute defaults to true
+      ---
+      <div 😊 />
+      ---
+      <div {...{"😊": true}} />
+    """
+
+    // -- Pattern matching: existence checks and nested property access
+    //    use the user-visible name on the runtime side.
+
+    testCase """
+      pattern match object shorthand with unicode key
+      ---
+      switch x
+        { 😊 } then 😊
+        else 0
+      ---
+      if(typeof x === 'object' && x != null && '😊' in x) {const { "😊": u$1F60A$ } = x; u$1F60A$}
+      else  { 0 }
+    """
+
+    testCase """
+      pattern match object explicit unicode key
+      ---
+      switch x
+        { 😊: y } then y
+        else 0
+      ---
+      if(typeof x === 'object' && x != null && '😊' in x) {const { "😊": y } = x; y}
+      else  { 0 }
+    """
+
+    testCase """
+      pattern match nested unicode key
+      ---
+      switch x
+        { 😊: { y } } then y
+        else 0
+      ---
+      if(typeof x === 'object' && x != null && '😊' in x && typeof x["😊"] === 'object' && x["😊"] != null && 'y' in x["😊"]) {const { "😊": { y } } = x; y}
+      else  { 0 }
+    """
+
+    testCase """
+      if-let with unicode key
+      ---
+      if { 😊 } := data
+        console.log 😊
+      ---
+      if ((data) && typeof data === 'object' && '😊' in data) {const { "😊": u$1F60A$ } = data;
+        console.log(u$1F60A$)
+      }
+    """
+
+    // -- Pass-through: ID_Continue letters are already valid JS identifiers.
+
+    testCase """
+      ID_Continue letters pass through unchanged
+      ---
+      let pokémon = 3
+      let Erdős = 3
+      ---
+      let pokémon = 3
+      let Erdős = 3
+    """
+
+    // -- Use case from discussion #1034.
+
+    testCase """
+      define and call as function
+      ---
+      function ∀(arr) arr.every (x) => !!x
+      N := [1,2,3]
+      ∀ N
+      ---
+      function u$2200$(arr) { return arr.every((x) => !!x) }
+      const N = [1,2,3]
+      u$2200$(N)
+    """
+
+    testCase """
+      operator codepoints still parse as operators
+      ---
+      a ≤ b
+      ---
+      a <= b
+    """
+
+    testCase """
+      adjoined without whitespace is one identifier
+      ---
+      function u$2200$N() 1
+      u$2200$N()
+      ---
+      function u$2200$N() { return 1 }
+      u$2200$N()
+    """
+
+    // Civet labels are `:label` (colon on the left) — unicode names
+    // mangle to JS-valid labels via the standard identifier path.
+    testCase """
+      labeled loop with unicode label
+      ---
+      :😊
+      for x of arr
+        break :😊
+      ---
+      u$1F60A$:
+      for (const x of arr) {
+        break u$1F60A$
+      }
+    """
+
+    // -- Combining marks and non-ASCII digits are valid mid-identifier
+    //    (\p{ID_Continue}) but reject as identifier starts.
+
+    throws """
+      standalone combining mark rejects
+      ---
+      let ̀ = 3
+      ---
+      ParseError
+    """
+
+    throws """
+      standalone non-ASCII digit rejects
+      ---
+      let ٠ = 3
+      ---
+      ParseError
+    """
+
+    // Drift guard: any non-ASCII codepoint in parser grammar must be in
+    // the operator-exclusion list, else a future operator silently parses
+    // as part of an identifier.
+    it "every non-ASCII codepoint in parser.hera grammar is in the operator-exclusion list", ->
+      src := fs.readFileSync("source/parser.hera", "utf8")
+      stripped := src
+        .replace(/\/\*[\s\S]*?\*\//g, "")    // /* block */ comments
+        .replace(/^[ \t]*#.*$/gm, "")        // hera # line comments
+        .replace(/^[ \t]*\/\/.*$/gm, "")     // JS // line comments
+      operatorChars := /[÷—‖’•‥…⁇→⇒∈∉∋∌≔≠≡≢≣≤≥≪≫⋙▷⧺⩵⩶]/u
+      seen := new Set<string>
+      for ch of stripped
+        cp := ch.codePointAt(0)
+        continue unless cp? and cp > 0x7F
+        seen.add(ch)
+      for ch of seen
+        cp := ch.codePointAt(0)!
+        assert.match ch, operatorChars,
+          `Non-ASCII U+${cp.toString(16).toUpperCase()} ('${ch}') in parser.hera grammar missing from operator-exclusion list — add to [÷—‖…] in IdentifierName, ReservedWord, NonIdContinue regexes.`

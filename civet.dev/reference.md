@@ -1037,6 +1037,76 @@ Here is a table of all currently supported:
 
 </div>
 
+### Unicode Identifiers
+
+Identifiers can include non-identifier Unicode codepoints (emoji, dingbats,
+math symbols not in the [Unicode Operators](#unicode-operators) table)
+anywhere in the name, mixed freely with regular identifier characters.
+Each non-id-unicode codepoint is escaped to `u$<HEX>$` (mirroring JS's
+`\u{XXXX}` escape syntax) so the compiled name is a valid JS identifier.
+
+<Playground>
+let △ = 3
+let 😊 = 1
+let pre😊post = 2
+let 😊😔 = 4
+</Playground>
+
+Codepoints already in `\p{ID_Continue}` (letters with diacritics like `é`,
+`ő`, `ω`; digits; combining marks) are valid JS identifier chars and pass
+through unchanged.
+
+<Playground>
+let pokémon = "Pikachu"
+let Erdős = 1
+</Playground>
+
+Implicit function application still requires whitespace, so `∀N` is one
+identifier — write `∀ N` to call.
+
+<Playground>
+function ∀(arr) arr.every (x) => !!x
+N := [1, 2, 3]
+∀ N
+</Playground>
+
+#### Property keys
+
+When a non-id-unicode identifier appears as a *property key* — in an
+object literal, a destructure, a class member, an `@`-shorthand, or
+a member access — the source name is the emitted property name (so
+JS lookup hits the right key) while the variable side uses the
+mangled form. Member access switches from dot to bracket, since
+`obj.😊` isn't valid JS.
+
+<Playground>
+{ 😊 } := data
+x := { 😊 }
+x := { 😊: 1 }
+data.😊
+data?.😊
+class Foo
+  😊 = 1
+  😊() 2
+function foo(@😊)
+  @😊
+</Playground>
+
+#### Imports and exports
+
+Module-facing names (the side passed to / from another module) use the
+source form; the local-variable side keeps the mangled form. The
+combined `export X := value` declaration splits into a regular
+declaration plus an explicit re-export, since JS doesn't allow
+string-named exports inside `export const`.
+
+<Playground>
+import { 😊 } from "mod"
+import { 😊 as x } from "mod"
+export { 😊 }
+export 😊 := 3
+</Playground>
+
 ## Functions
 
 ### Function Calls
