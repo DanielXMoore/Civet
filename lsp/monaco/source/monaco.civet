@@ -378,10 +378,22 @@ export function registerCivetCompletionProvider(
         items: CivetCompletionItem[] := Array.isArray(result) ? result : result?.items ?? []
 
         suggestions: for each item of items
-          toMonacoCompletionItem monacoApi, model, position, item, options.client
+          toMonacoCompletionItem monacoApi, model, position, item
         incomplete: completionList and !!result.isIncomplete
       catch
         suggestions: []
+    resolveCompletionItem: async (item: CivetMonacoCompletionItem) =>
+      lspItem := item.lspItem
+      return item unless lspItem
+      resolved := await options.client.completionResolve lspItem
+      Object.assign item,
+        detail: resolved?.detail ?? item.detail
+        documentation: toMonacoDocumentation(resolved?.documentation) ?? item.documentation
+      if resolved?.additionalTextEdits?#
+        item.additionalTextEdits = resolved.additionalTextEdits.map (edit) =>
+          range: toMonacoRange(monacoApi, edit.range)
+          text: edit.newText
+      return item
 
 function toLspPosition(position: monaco.Position): CivetLspPosition
   line: position.lineNumber - 1
@@ -425,14 +437,13 @@ function toLspCompletionTriggerKind(
 
 interface CivetMonacoCompletionItem extends monaco.languages.CompletionItem
   data?: unknown
-  resolve?: () => Promise<void>
+  lspItem?: CivetCompletionItem
 
 function toMonacoCompletionItem(
   monacoApi: typeof monaco
   model: monaco.editor.ITextModel
   position: monaco.Position
   item: CivetCompletionItem
-  client: CivetCompletionClient
 ): CivetMonacoCompletionItem
   word := model.getWordUntilPosition position
   fallbackRange := new monacoApi.Range
@@ -442,6 +453,7 @@ function toMonacoCompletionItem(
     word.endColumn
   suggestion: CivetMonacoCompletionItem := {}
     label: item.label
+    lspItem: item
     insertText: item.insertText ?? item.label
     kind: toMonacoCompletionKind(monacoApi, item.kind)
     range: item.textEdit?.range ? toMonacoRange(monacoApi, item.textEdit.range) : fallbackRange
@@ -468,16 +480,6 @@ function toMonacoCompletionItem(
       text: edit.newText
   if item.command
     suggestion.command = toMonacoCommand item.command
-  suggestion.resolve = async (): Promise<void> =>
-    resolved := await client.completionResolve item
-    Object.assign suggestion,
-      detail: resolved?.detail ?? suggestion.detail
-      documentation: toMonacoDocumentation(resolved?.documentation) ?? suggestion.documentation
-    if resolved?.additionalTextEdits?#
-      suggestion.additionalTextEdits = resolved.additionalTextEdits.map (edit) =>
-        range: toMonacoRange(monacoApi, edit.range)
-        text: edit.newText
-    return
   return suggestion
 
 function toMonacoCommand(command: CivetCommand): monaco.languages.Command

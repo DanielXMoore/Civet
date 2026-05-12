@@ -10,7 +10,7 @@ import {
 import {
   createCivetLspWorker,
   createCivetLspWorkerClient,
-  type CivetLspDiagnostic,
+  type Diagnostic,
 } from '../../../lsp/server/dist/worker.js';
 import {
   forwardMap,
@@ -352,7 +352,7 @@ function createPlaygroundLspClient(monaco: any, uri: string) {
     uri,
     workspaceName: 'Playground',
   }) as PlaygroundLspClient;
-  let diagnosticsCache: CivetLspDiagnostic[] = [];
+  let diagnosticsCache: Diagnostic[] = [];
 
   const updateMarkers = () => {
     const showTypes = showTypeDiagnostics.value && !compileFatal.value;
@@ -375,7 +375,7 @@ function createPlaygroundLspClient(monaco: any, uri: string) {
   client.updateMarkers = updateMarkers;
   return client;
 
-  function toMarker(diagnostic: CivetLspDiagnostic) {
+  function toMarker(diagnostic: Diagnostic) {
     return {
       severity: diagnostic.severity === 1 ? monaco.MarkerSeverity.Error :
         diagnostic.severity === 2 ? monaco.MarkerSeverity.Warning :
