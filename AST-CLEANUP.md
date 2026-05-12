@@ -81,6 +81,11 @@ the typecheck baseline.
 - Per tightened node: audit producers (`type: "X"` literals + `makeNode`),
   audit consumers (property accesses, destructuring, narrowing), then
   update.  Existence is the reference.
+- `civet scripts/audit-node.civet <NodeName>` dumps the type def, every
+  producer with its `children: [...]` literal extracted, and grep
+  starters for consumer-side accesses.  Run before tightening to see
+  children-layout drift in one screenful, and after to confirm
+  normalization.
 - Prefer braced object literals (`{ ... }`) for AST node construction.
   Civet's shorthand property syntax (bare `field`, or access-path
   shorthand like `{ post.$loc }` → `{ $loc: post.$loc }`) only works
