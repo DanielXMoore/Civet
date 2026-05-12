@@ -1,8 +1,13 @@
+import type { SourcemapLines } from '@danielx/civet/ts-diagnostic';
+
 let playgroundWorker: Worker;
 
 interface WorkerResult {
   inputHtml: string;
   outputHtml?: string;
+  sourceMapLines?: SourcemapLines;
+  civetOutput?: string;
+  prettierOutput?: string;
   errors?: unknown[];
   fatal: boolean;
   jsCode?: string;

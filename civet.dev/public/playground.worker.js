@@ -8,15 +8,17 @@ onmessage = async (e) => {
   const highlighter = await getHighlighter();
   const inputHtml = highlighter.codeToHtml(code, { lang: 'civet' });
 
-  let tsCode, ast
+  let tsCode, ast, sourceMap
   let errors = []
   try {
     ast = await Civet.compile(code, { ast: true, parseOptions });
-    tsCode = Civet.generate(ast, { js: !tsOutput, errors });
+    sourceMap = new Civet.SourceMap(code);
+    tsCode = Civet.generate(ast, { js: !tsOutput, errors, sourceMap });
     if (errors.length) {
       // Rerun with SourceMap to get error location
       errors = []
-      tsCode = Civet.generate(ast, { errors, sourceMap: new Civet.SourceMap(code) });
+      sourceMap = new Civet.SourceMap(code);
+      tsCode = Civet.generate(ast, { errors, sourceMap });
     }
   } catch (e) {
     return postError([e], true)
@@ -88,6 +90,9 @@ onmessage = async (e) => {
     }
   }
 
+  const civetOutput = tsCode;
+  const sourceMapLines = sourceMap?.lines ?? sourceMap?.data?.lines;
+  let formattedOutput;
   if (prettierOutput) {
     try {
       tsCode = await prettier.format(tsCode, {
@@ -95,6 +100,7 @@ onmessage = async (e) => {
         plugins: prettierPlugins,
         printWidth: 50,
       });
+      formattedOutput = tsCode;
     } catch (err) {
       console.info('Prettier error. Fallback to raw civet output', {
         tsCode,
@@ -108,7 +114,17 @@ onmessage = async (e) => {
     outputHtml = `${errorHtml(errors[0])}<hr class="playground-output-separator">${outputHtml}`;
   }
 
-  postMessage({ uid, inputHtml, outputHtml, jsCode, errors, fatal: false });
+  postMessage({
+    uid,
+    inputHtml,
+    outputHtml,
+    sourceMapLines,
+    civetOutput,
+    prettierOutput: formattedOutput,
+    jsCode,
+    errors,
+    fatal: false
+  });
 };
 
 // Load the shiki highlighter once

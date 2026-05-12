@@ -12,6 +12,11 @@ import {
   createCivetLspWorkerClient,
   type CivetLspDiagnostic,
 } from '../../../lsp/server/dist/worker.js';
+import {
+  forwardMap,
+  type Position as SourcePosition,
+  type SourcemapLines,
+} from '@danielx/civet/ts-diagnostic';
 
 const emit = defineEmits(['input']);
 const props = defineProps<{
@@ -31,16 +36,26 @@ const props = defineProps<{
 type PlaygroundLspClient = ReturnType<typeof createCivetLspWorkerClient> & {
   updateMarkers(): void;
 };
+type OutputCursor = {
+  top: number;
+  left: number;
+  height: number;
+  hover: boolean;
+};
 
 const userCode = ref(b64.decode(props.b64Code));
 const compileError = ref<unknown>();
 const inputHtml = ref('');
 const outputHtml = ref('');
+const sourceMapLines = ref<SourcemapLines>();
+const outputSourceText = ref<string>();
+const outputOffsetMap = ref<number[]>();
 const inputHtmlEl = ref<HTMLDivElement>();
 const outputHtmlEl = ref<HTMLDivElement>();
 const textareaEl = ref<HTMLTextAreaElement>();
 const monacoEl = ref<HTMLDivElement>();
 const monacoReady = ref(false);
+const outputCursor = ref<OutputCursor>();
 const monacoHorizontalPadding = 18;
 let monacoEditor: any;
 let monacoModel: any;
@@ -138,14 +153,20 @@ async function compile() {
   compileError.value = snippet.errors?.[0];
   compileFatal.value = snippet.fatal;
   inputHtml.value = snippet.inputHtml;
-  lspClient?.updateMarkers();
+  sourceMapLines.value = snippet.sourceMapLines;
+  outputSourceText.value = snippet.civetOutput;
 
   if (snippet.outputHtml) {
     outputHtml.value = snippet.outputHtml;
   }
 
+  outputOffsetMap.value = snippet.prettierOutput
+    ? buildFormattedOffsetMap(snippet.civetOutput ?? '', snippet.prettierOutput)
+    : undefined;
   await nextTick();
+  lspClient?.updateMarkers();
   fixTextareaSize();
+  updateOutputCursorFromEditor();
 }
 
 async function initMonaco() {
@@ -219,7 +240,20 @@ async function initMonaco() {
     }
     lspClient?.change(code);
   });
+  monacoEditor.onDidChangeCursorPosition((event: any) => {
+    updateOutputCursor(event.position, false);
+  });
+  monacoEditor.onMouseMove((event: any) => {
+    if (event.target.position) {
+      updateOutputCursor(event.target.position, true);
+    }
+  });
+  monacoEditor.onMouseLeave?.(() => {
+    updateOutputCursorFromEditor();
+  });
   monacoReady.value = true;
+  await nextTick();
+  updateOutputCursorFromEditor();
 }
 
 async function registerCivetTextMateSyntax(monaco: any) {
@@ -441,6 +475,206 @@ function fixTextareaSize() {
   }px`;
 }
 
+function updateOutputCursorFromEditor() {
+  if (!monacoEditor) {
+    outputCursor.value = undefined;
+    return;
+  }
+  updateOutputCursor(monacoEditor.getPosition(), false);
+}
+
+function updateOutputCursor(
+  position: { lineNumber: number; column: number } | null | undefined,
+  hover: boolean
+) {
+  if (!position || !sourceMapLines.value) {
+    outputCursor.value = undefined;
+    return;
+  }
+
+  const generatedPosition = forwardMap(sourceMapLines.value, {
+    line: position.lineNumber - 1,
+    character: position.column - 1,
+  });
+  outputCursor.value = outputCursorForPosition(generatedPosition, hover);
+}
+
+// Convert a generated-code line/column into an absolute overlay position in
+// the rendered Shiki output. The last code block is used so non-fatal compile
+// errors can show their caret block before the generated TypeScript block.
+function outputCursorForPosition(
+  position: SourcePosition,
+  hover: boolean
+): OutputCursor | undefined {
+  const output = outputHtmlEl.value;
+  if (!output) return undefined;
+
+  const codeBlocks = output.querySelectorAll('code');
+  const code = codeBlocks[codeBlocks.length - 1];
+  if (!code?.textContent) return undefined;
+
+  const mappedCode = outputSourceText.value ?? code.textContent;
+  let offset = offsetForPosition(mappedCode, position);
+  if (offset === undefined) return undefined;
+  offset = outputOffsetMap.value?.[offset] ?? offset;
+
+  const rangeRect = textOffsetRect(code, offset);
+  if (!rangeRect) return undefined;
+
+  const outputRect = output.getBoundingClientRect();
+  return {
+    top: rangeRect.top - outputRect.top,
+    left: rangeRect.left - outputRect.left,
+    height: rangeRect.height || parseFloat(getComputedStyle(code).lineHeight),
+    hover,
+  };
+}
+
+function offsetForPosition(
+  text: string,
+  position: SourcePosition
+): number | undefined {
+  let offset = 0;
+  for (let line = 0; line < position.line; line++) {
+    const nextLine = text.indexOf('\n', offset);
+    if (nextLine < 0) return undefined;
+    offset = nextLine + 1;
+  }
+
+  const lineEnd = text.indexOf('\n', offset);
+  const maxColumn = (lineEnd < 0 ? text.length : lineEnd) - offset;
+  return offset + Math.min(position.character, Math.max(maxColumn, 0));
+}
+
+// Build a raw-generated-code offset -> formatted-output offset table once per
+// compile. Prettier mostly preserves token order, so a lockstep resync handles
+// nearby insertions/removals such as added whitespace or trailing commas.
+function buildFormattedOffsetMap(source: string, formatted: string): number[] {
+  const map: number[] = [];
+  let sourceOffset = 0;
+  let formattedOffset = 0;
+
+  while (sourceOffset < source.length) {
+    map[sourceOffset] = formattedOffset;
+
+    if (formattedOffset >= formatted.length) {
+      sourceOffset++;
+      continue;
+    }
+
+    const sourceChar = source[sourceOffset];
+    const formattedChar = formatted[formattedOffset];
+    if (
+      sourceChar === formattedChar ||
+      isWhitespace(sourceChar) && isWhitespace(formattedChar)
+    ) {
+      sourceOffset++;
+      formattedOffset++;
+      continue;
+    }
+
+    if (isWhitespace(sourceChar)) {
+      sourceOffset++;
+      continue;
+    }
+    if (isWhitespace(formattedChar)) {
+      formattedOffset++;
+      continue;
+    }
+
+    const maxDistance = Math.max(
+      source.length - sourceOffset,
+      formatted.length - formattedOffset
+    );
+    let resynced = false;
+    for (let distance = 1; distance <= maxDistance; distance++) {
+      const nextFormattedOffset = formattedOffset + distance;
+      if (formatted[nextFormattedOffset] === sourceChar) {
+        formattedOffset = nextFormattedOffset;
+        resynced = true;
+        break;
+      }
+
+      const nextSourceOffset = sourceOffset + distance;
+      if (source[nextSourceOffset] === formattedChar) {
+        while (sourceOffset < nextSourceOffset) {
+          map[sourceOffset] = formattedOffset;
+          sourceOffset++;
+        }
+        resynced = true;
+        break;
+      }
+    }
+    if (resynced) {
+      continue;
+    }
+
+    sourceOffset++;
+    formattedOffset++;
+  }
+
+  map[source.length] = formatted.length;
+  return map;
+}
+
+function isWhitespace(char: string | undefined): boolean {
+  return Boolean(char && /\s/.test(char));
+}
+
+function textOffsetRect(element: Element, offset: number): DOMRect | undefined {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let remaining = offset;
+  let node: Text | null;
+  while ((node = walker.nextNode() as Text | null)) {
+    const length = node.data.length;
+    if (remaining < length) {
+      return textCaretRect(node, remaining);
+    }
+    remaining -= length;
+  }
+
+  if (offset === element.textContent?.length) {
+    const lastText = lastTextNode(element);
+    if (lastText) return textCaretRect(lastText, lastText.data.length);
+  }
+}
+
+function lastTextNode(element: Element): Text | undefined {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let last: Text | undefined;
+  let node: Text | null;
+  while ((node = walker.nextNode() as Text | null)) {
+    last = node;
+  }
+  return last;
+}
+
+function textCaretRect(node: Text, offset: number): DOMRect | undefined {
+  const range = document.createRange();
+  if (offset < node.data.length) {
+    range.setStart(node, offset);
+    range.setEnd(node, offset + 1);
+    const nextRect = range.getBoundingClientRect();
+    if (nextRect.width || nextRect.height) {
+      return new DOMRect(nextRect.left, nextRect.top, 0, nextRect.height);
+    }
+  }
+
+  if (offset > 0) {
+    range.setStart(node, offset - 1);
+    range.setEnd(node, offset);
+    const previousRect = range.getBoundingClientRect();
+    if (previousRect.width || previousRect.height) {
+      return new DOMRect(
+        previousRect.right,
+        previousRect.top,
+        0,
+        previousRect.height
+      );
+    }
+  }
+}
+
 let feedbackTimeout;
 async function copyToClipboard(text: string, pointerEvent) {
   let success = false;
@@ -541,6 +775,18 @@ const playgroundUrl = computed(() => {
       <div class="code code--output" ref="outputHtmlEl">
         <div v-if="outputHtml" v-html="outputHtml" />
         <slot v-else name="output" />
+        <span
+          v-if="outputCursor"
+          :class="{
+            'output-cursor': true,
+            'output-cursor--hover': outputCursor.hover,
+          }"
+          :style="{
+            top: `${outputCursor.top}px`,
+            left: `${outputCursor.left}px`,
+            height: `${outputCursor.height}px`,
+          }"
+        />
       </div>
       <div class="compilation-info">
         <label v-if="showComptime && hasComptime">
@@ -729,10 +975,32 @@ const playgroundUrl = computed(() => {
   overflow: visible;
 }
 
+.code--output {
+  position: relative;
+}
+
 .code--output:deep(.playground-output-separator) {
   border: 0;
   border-top: 1px solid var(--vp-c-divider);
   margin: 0 18px;
+}
+
+.output-cursor {
+  position: absolute;
+  z-index: 3;
+  width: 2px;
+  min-height: 1em;
+  pointer-events: none;
+  background: var(--vp-c-green-2);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--vp-c-green-2) 35%, transparent);
+  opacity: 0.9;
+  transition: top 0.08s ease, left 0.08s ease, opacity 0.12s ease;
+}
+
+.output-cursor--hover {
+  background: var(--vp-c-yellow-2);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--vp-c-yellow-2) 35%, transparent);
+  opacity: 0.75;
 }
 
 input {
