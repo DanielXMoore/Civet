@@ -51,8 +51,23 @@ function createTestWorker(): Worker
           result = { contents: 'hover text' };
         } else if (message.method === 'textDocument/semanticTokens/full') {
           result = { data: [0, 0, 1, 10, 0] };
+        } else if (message.method === 'textDocument/definition') {
+          result = {
+            uri: 'file:///workspace/definition.civet',
+            range: {
+              start: { line: 0, character: 0 },
+              end: { line: 0, character: 1 },
+            },
+          };
+        } else if (message.method === 'textDocument/completion') {
+          result = [{ label: 'completion' }];
+        } else if (message.method === 'completionItem/resolve') {
+          result = { ...message.params, detail: 'resolved' };
         } else if (message.method === 'test/messages') {
           result = messages.map(({ method, params }) => ({ method, params }));
+        } else if (message.method === 'test/error') {
+          self.postMessage({ jsonrpc: '2.0', id: message.id, error: { message: 'bad request' } });
+          return;
         }
         self.postMessage({ jsonrpc: '2.0', id: message.id, result });
       }
@@ -62,6 +77,45 @@ function createTestWorker(): Worker
   return new WebWorker(url) as! Worker
 
 describe "worker helper", ->
+  it "revokes the generated worker URL on startup error", ->
+    originalWorker := (globalThis as any).Worker
+    originalBlob := globalThis.Blob
+    originalCreateObjectURL := URL.createObjectURL
+    originalRevokeObjectURL := URL.revokeObjectURL
+    revoked: string[] := []
+    let errorListener: (() => void)?
+
+    class FakeWorker
+      name: string
+      constructor(public url: string, options: { name: string })
+        @name = options.name
+      addEventListener(event: string, listener: () => void)
+        errorListener = listener if event is 'error'
+      terminate() {}
+
+    try
+      (globalThis as any).Worker = FakeWorker
+      (globalThis as any).Blob = TestBlob
+      URL.createObjectURL = (() => 'blob:test-worker') as typeof URL.createObjectURL
+      URL.revokeObjectURL = ((url: string) =>
+        revoked.push url
+      ) as typeof URL.revokeObjectURL
+
+      worker := createCivetLspWorker
+        civetUrl: 'test://civet.js'
+        serverUrl: 'test://server.js'
+      assert.equal (worker as any).name, 'civet-lsp'
+      errorListener!()
+      assert.deepEqual revoked, ['blob:test-worker']
+    finally
+      if originalWorker
+        (globalThis as any).Worker = originalWorker
+      else
+        delete (globalThis as any).Worker
+      globalThis.Blob = originalBlob
+      URL.createObjectURL = originalCreateObjectURL
+      URL.revokeObjectURL = originalRevokeObjectURL
+
   it "creates a worker and reports type diagnostics for queued source", ->
     originalWorker := (globalThis as any).Worker
     originalBlob := globalThis.Blob
@@ -95,6 +149,10 @@ describe "worker helper", ->
         civetUrl: civetUrl
         serverUrl: serverUrl
         name: 'test-civet-lsp'
+      defaultNamedWorker := createCivetLspWorker
+        civetUrl: civetUrl
+        serverUrl: serverUrl
+      defaultNamedWorker.terminate()
 
       uri := 'file:///workspace/created-worker.civet'
       client := createCivetLspWorkerClient
@@ -134,6 +192,20 @@ describe "worker helper", ->
       worker: worker
       uri: uri
 
+    assert.deepEqual await client.semanticTokensFull(), data: []
+    assert.equal await client.hover(line: 0, character: 1), undefined
+    assert.equal await client.definition(line: 0, character: 1), undefined
+    assert.deepEqual await client.completion({
+      position: { line: 0, character: 1 }
+      context: { triggerKind: 1 }
+    }), []
+    unresolved :=
+      label: 'unresolved'
+    assert.equal await client.completionResolve(unresolved), unresolved
+
+    ignoredDiagnostics .= 0
+    ignoredDisposable := client.onDiagnostics => ignoredDiagnostics++
+    ignoredDisposable.dispose()
     diagnosticPromise := new Promise<PublishDiagnosticsParams> (resolve) =>
       client.onDiagnostics resolve
 
@@ -152,6 +224,26 @@ describe "worker helper", ->
     assert semanticTokens
     assert.deepEqual semanticTokens.data, [0, 0, 1, 10, 0]
 
+    definition := await client.definition line: 0, character: 1
+    assert definition
+    assert.equal (definition as any).uri, 'file:///workspace/definition.civet'
+
+    completions := await client.completion
+      position: { line: 0, character: 1 }
+      context: { triggerKind: 1 }
+    assert Array.isArray completions
+    assert.equal completions[0].label, 'completion'
+    resolved := await client.completionResolve completions[0]
+    assert.equal resolved.detail, 'resolved'
+
+    client.change 'after-ready'
+
+    try
+      await client.request 'test/error', {}
+      assert.fail 'expected request to reject'
+    catch error
+      assert.deepEqual error, message: 'bad request'
+
     messages := await client.request<RecordedMessage[]> 'test/messages', {}
     assert.deepEqual messages.map(.method), [
       'initialize'
@@ -160,8 +252,14 @@ describe "worker helper", ->
       'textDocument/didChange'
       'textDocument/hover'
       'textDocument/semanticTokens/full'
+      'textDocument/definition'
+      'textDocument/completion'
+      'completionItem/resolve'
+      'textDocument/didChange'
+      'test/error'
       'test/messages'
     ]
+    assert.equal ignoredDiagnostics, 0
     openParams := messages[2].params
     assert openParams.textDocument
     assert.equal openParams.textDocument.text, 'initial'
@@ -205,3 +303,27 @@ describe "worker helper", ->
         contents: 'hover text'
 
     worker.terminate()
+
+  it "rejects pending requests on worker error and dispose", async ->
+    makeFakeWorker := =>
+      worker: any :=
+        postMessage: (_message: ???) =>
+        terminate: =>
+      worker as Worker
+
+    errorWorker := makeFakeWorker()
+    errorClient := createCivetLspWorkerClient
+      worker: errorWorker
+      uri: 'file:///workspace/error.civet'
+    errorRequest := errorClient.request 'test/pending', {}
+    (errorWorker as any).onerror new Error 'worker failed'
+    await assert.rejects errorRequest, /worker failed/
+
+    disposeWorker := makeFakeWorker()
+    disposeClient := createCivetLspWorkerClient
+      worker: disposeWorker
+      uri: 'file:///workspace/dispose.civet'
+    disposeRequest := disposeClient.request 'test/pending', {}
+    disposeClient.dispose()
+    disposeClient.notify 'test/ignored'
+    await assert.rejects disposeRequest, /disposed/

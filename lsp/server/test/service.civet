@@ -15,7 +15,9 @@ import ts from "typescript"
   makeIncrementalTypecheckProgram
   TSService as SharedTSService
   createInMemoryDocFactory
+  remapFileName
 } from "@danielx/civet/ts-service"
+{ createBaseHost } from "../../../source/ts-service/service.civet"
 { URI } from "vscode-uri"
 { forwardMap, getCanonicalFileName } from ../source/lib/util.civet
 
@@ -623,6 +625,59 @@ describe "ts-service direct factory usage", ->
     fileNames := program!.getSourceFiles().map .fileName
     assert.equal fileNames.some(.endsWith ".civet.tsx"), false, "expected no .civet.tsx without a Civet plugin"
 
+  it "custom base compiler host delegates to the supplied system", ->
+    writes: [string, string][] := []
+    system := {
+      args: []
+      newLine: '\n'
+      useCaseSensitiveFileNames: false
+      write: ->
+      readFile: (fileName: string) =>
+        if fileName is '/file.ts' then 'export const x = 1\n' else undefined
+      writeFile: (fileName: string, content: string) =>
+        writes.push [fileName, content]
+      resolvePath: (p: string) => p
+      fileExists: (fileName: string) => fileName is '/file.ts'
+      directoryExists: (dir: string) => dir is '/workspace'
+      createDirectory: ->
+      getExecutingFilePath: => '/typescript.js'
+      getCurrentDirectory: => '/workspace'
+      getDirectories: (dir: string) => if dir is '/workspace' then ['src'] else []
+      readDirectory: => ['/file.ts']
+      exit: ->
+      realpath: (p: string) => `/real${p}`
+    } as any as ts.System
+    baseHost := createBaseHost { target: ts.ScriptTarget.ES2020 }, system
+
+    sourceFile := baseHost.getSourceFile '/file.ts', ts.ScriptTarget.ES2020
+    assert sourceFile
+    assert.equal sourceFile.text, 'export const x = 1\n'
+    assert.equal baseHost.getSourceFile('/missing.ts', ts.ScriptTarget.ES2020), undefined
+    assert.equal baseHost.getDefaultLibFileName({}), path.join('/typescript/lib', ts.getDefaultLibFileName({}))
+    baseHost.writeFile '/out.js', 'out'
+    assert.deepEqual writes, [['/out.js', 'out']]
+    assert.equal baseHost.getCurrentDirectory(), '/workspace'
+    assert.deepEqual baseHost.getDirectories('/workspace'), ['src']
+    assert.equal baseHost.fileExists('/file.ts'), true
+    assert.equal baseHost.readFile('/file.ts'), 'export const x = 1\n'
+    assert.equal baseHost.useCaseSensitiveFileNames(), false
+    assert.equal baseHost.getCanonicalFileName('A.TS'), 'a.ts'
+    assert.equal baseHost.getNewLine(), '\n'
+    assert.equal baseHost.directoryExists!('/workspace'), true
+    assert.deepEqual baseHost.readDirectory('/workspace'), ['/file.ts']
+    assert.equal baseHost.realpath!('/file.ts'), '/real/file.ts'
+
+  it "remaps transpiled filenames back to source filenames", ->
+    transpilers := new Map()
+    transpilers.set '.civet',
+      extension: '.civet'
+      target: '.tsx'
+      compile: (_path: string, _source: string) =>
+        code: ''
+    assert.equal remapFileName('/workspace/file.civet.tsx', transpilers), '/workspace/file.civet'
+    assert.equal remapFileName('/workspace/file.ts', transpilers), '/workspace/file.ts'
+    assert.equal remapFileName('/workspace/file.civet.js', transpilers), '/workspace/file.civet.js'
+
   it "registers plugins lazily through registerPlugin after construction", ->
     service := SharedTSService projectPath, {
       docFactory: directDocFactory
@@ -798,6 +853,51 @@ describe "ts-service direct factory usage", ->
         BrowserTSService 'file:///workspace/', nullLogger
         /requires globalThis\.Civet/
       )
+    finally
+      if originalCivet?
+        (globalThis as any).Civet = originalCivet
+      else
+        delete (globalThis as any).Civet
+
+  it "browser wrapper creates a service using the browser Civet global", async ->
+    originalCivet := (globalThis as any).Civet
+    try
+      realCivet := await import pathToFileURL(path.resolve "../../dist/main.mjs").href
+      (globalThis as any).Civet = { ...realCivet, version: undefined }
+
+      fsMap := createDefaultMapFromNodeModules({ target: ts.ScriptTarget.ES2020 }, ts)
+      for [filePath, text] of Array.from fsMap
+        fsMap.set `/typescript/lib/${filePath.slice 1}`, text
+      system := {
+        ...createSystem(fsMap)
+        getCurrentDirectory: => '/workspace'
+        getExecutingFilePath: => '/typescript.js'
+        resolvePath: (p: string) => p
+        createHash: (data: string) => data
+      }
+      logs: string[] := []
+      logger :=
+        log: ->
+        info: (message: string) => logs.push message
+        error: ->
+      BrowserTSService := createBrowserTSService system
+      service := await BrowserTSService 'file:///workspace/', logger
+      fallbackService := await BrowserTSService 'test:', logger
+      assert fallbackService.getProgram()
+      filePath := '/workspace/index.civet'
+      service.host.addOrUpdateDocument TextDocument.create(
+        'file:///workspace/index.civet'
+        'civet'
+        1
+        'x: number := 1\n'
+      )
+
+      diagnostics := service.getSemanticDiagnostics filePath + '.tsx'
+      assert.equal diagnostics.length, 0
+      meta := service.host.getMeta filePath
+      assert meta?.transpiledDoc
+      assert meta.transpiledDoc.getText().includes 'const x'
+      assert logs.some (message) => message is 'CIVET BROWSER LSP browser'
     finally
       if originalCivet?
         (globalThis as any).Civet = originalCivet
