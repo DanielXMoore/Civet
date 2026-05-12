@@ -196,6 +196,9 @@ async function initMonaco() {
     import('monaco-editor/esm/vs/editor/editor.worker?worker'),
     import('monaco-editor/esm/vs/editor/edcore.main.js'),
   ]);
+  // Vue clears template refs on unmount; stop if async Monaco loading
+  // resumed after navigation away from this Playground instance.
+  if (!monacoEl.value) return;
 
   (globalThis as any).MonacoEnvironment ??= {
     getWorker: () => new EditorWorker(),
@@ -203,6 +206,7 @@ async function initMonaco() {
 
   registerCivetLanguage(monaco);
   await registerCivetTextMateSyntax(monaco);
+  if (!monacoEl.value) return;
 
   const uri = monaco.Uri.parse('file:///workspace/index.civet');
   monacoModel = monaco.editor.getModel(uri) ??
@@ -247,6 +251,7 @@ async function initMonaco() {
     if (useDomLib.value) {
       await updateLspLibs();
     }
+    if (!monacoEl.value) return;
     lspProviders?.dispose();
     lspProviders = registerCivetLspProviders(monaco, {
       uri: uri.toString(),
@@ -278,6 +283,7 @@ async function initMonaco() {
   });
   monacoReady.value = true;
   await nextTick();
+  if (!monacoEl.value) return;
   updateOutputCursorFromEditor();
 }
 

@@ -1,0 +1,111 @@
+// Focused tests for server-core request handlers that are awkward to hit
+// through the browser worker integration under coverage.
+
+import assert from assert
+{ startServer } from ../source/server.civet
+
+nullLogger :=
+  log: ->
+  info: ->
+  error: ->
+
+function createMockConnection()
+  requestHandlers := new Map<string, any>
+  notificationHandlers := new Map<string, any>
+  diagnostics: any[] := []
+
+  base: any :=
+    console: nullLogger
+    client:
+      register: async =>
+    workspace:
+      onDidChangeWorkspaceFolders: =>
+    listen: =>
+    sendDiagnostics: (params: any) =>
+      diagnostics.push params
+    onRequest: (method: any, handler: any) =>
+      requestHandlers.set method.method ?? method, handler
+
+  connection := new Proxy base,
+    get: (target, prop) =>
+      return target[prop] if prop in target
+      if prop <? 'string' and prop.startsWith 'on'
+        return (handler: any) =>
+          notificationHandlers.set prop, handler
+      return undefined
+
+  { connection, requestHandlers, notificationHandlers, diagnostics }
+
+function createMockTsSys()
+  fileExists: => false
+  readFile: => '{}'
+  watchFile: =>
+    close: =>
+  watchDirectory: =>
+    close: =>
+
+function createMockTsServiceFactory(services: any[])
+  return async (projPath: string, logger: any) =>
+    service: any := {
+      projPath
+      logger
+      host: {
+        addOrUpdateDocument: => {}
+        closeDocument: => {}
+      }
+      loadPlugins: async => {}
+      dispose: => {}
+      getProgram: =>
+        getSourceFiles: => []
+      getSyntacticDiagnostics: => []
+      getSemanticDiagnostics: => []
+      getSuggestionDiagnostics: => []
+    }
+    services.push service
+    service
+
+describe "server core", ->
+  it "reports unsupported browser lib configuration outside browser wiring", async ->
+    mock := createMockConnection()
+    services: any[] := []
+    startServer mock.connection as any,
+      TSService: createMockTsServiceFactory(services) as any
+      tsSys: createMockTsSys() as any
+
+    setLibs := mock.requestHandlers.get 'civet/setLibs'
+    assert.equal await setLibs({ lib: ['ES2025', 'DOM'] }), false
+
+  it "updates browser libs and reloads existing projects", async ->
+    mock := createMockConnection()
+    services: any[] := []
+    configured: string[][] := []
+    startServer mock.connection as any,
+      TSService: createMockTsServiceFactory(services) as any
+      tsSys: createMockTsSys() as any
+      configureBrowserLibs: async (lib: string[]) =>
+        configured.push lib
+
+    initialize := mock.notificationHandlers.get 'onInitialize'
+    initialize
+      capabilities: {}
+      workspaceFolders: [
+        uri: 'file:///workspace'
+      ]
+
+    open := mock.notificationHandlers.get 'onDidOpenTextDocument'
+    open
+      textDocument:
+        uri: 'file:///workspace/index.ts'
+        languageId: 'typescript'
+        version: 1
+        text: 'const x = 1'
+
+    await new Promise (resolve) => setTimeout resolve, 50
+    assert.equal services#, 1
+
+    setLibs := mock.requestHandlers.get 'civet/setLibs'
+    assert.equal await setLibs({ lib: ['ES2025', 'DOM'] }), true
+    assert.deepEqual configured, [['ES2025', 'DOM']]
+    assert.equal services#, 2
+    assert mock.diagnostics.some (params) =>
+      params.uri is 'file:///workspace/index.ts'
