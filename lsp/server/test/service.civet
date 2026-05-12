@@ -33,6 +33,11 @@ loadFile := (service: Awaited<ReturnType<typeof TSService>>, path: string) ->
   document := TextDocument.create(pathToFileURL(path).href, "civet", 0, fs.readFileSync(path, "utf8"))
   service.host.addOrUpdateDocument(document)
 
+hasScriptFileName := (service: Awaited<ReturnType<typeof TSService>>, fileName: string): boolean =>
+  canonical := getCanonicalFileName fileName
+  service.host.getScriptFileNames().some (scriptFileName) =>
+    getCanonicalFileName(scriptFileName) is canonical
+
 projectURL := pathToFileURL("./integration/project-test/").href
 aPath := "./integration/project-test/a.civet"
 bPath := "./integration/project-test/b.civet"
@@ -230,7 +235,7 @@ describe "ts service document lifecycle", ->
 
     assert.equal service.host.getScriptVersion(civetPath), "0",
       "source editor doc should be forgotten after close"
-    assert service.host.getScriptFileNames().includes(getCanonicalFileName transpiledPath),
+    assert hasScriptFileName(service, transpiledPath),
       "transpiled path should remain in scriptFileNames after close (file may still be imported)"
 
   it "removeDocument should fully drop civet doc from project", ->
@@ -250,7 +255,7 @@ describe "ts service document lifecycle", ->
       "source path should be forgotten after removeDocument"
     assert.equal service.host.getScriptVersion(transpiledPath), "0",
       "transpiled path should be forgotten after removeDocument"
-    assert not service.host.getScriptFileNames().includes(getCanonicalFileName transpiledPath),
+    assert not hasScriptFileName(service, transpiledPath),
       "transpiled path should be removed from scriptFileNames"
 
   it "closeDocument should keep plain ts file in scriptFileNames", ->
@@ -263,7 +268,7 @@ describe "ts service document lifecycle", ->
 
     service.host.closeDocument(tsPath)
 
-    assert service.host.getScriptFileNames().includes(getCanonicalFileName tsPath),
+    assert hasScriptFileName(service, tsPath),
       "plain ts file should remain in scriptFileNames after close"
     assert.equal service.host.getScriptVersion(tsPath), "0",
       "editor doc for plain ts should be forgotten after close"
@@ -276,12 +281,12 @@ describe "ts service document lifecycle", ->
     doc := TextDocument.create(pathToFileURL(tsPath).href, "typescript", 0, "const x = 1")
     service.host.addOrUpdateDocument(doc)
 
-    assert service.host.getScriptFileNames().includes(getCanonicalFileName tsPath),
+    assert hasScriptFileName(service, tsPath),
       "precondition: plain ts should be in scriptFileNames"
 
     service.host.removeDocument(tsPath)
 
-    assert not service.host.getScriptFileNames().includes(getCanonicalFileName tsPath),
+    assert not hasScriptFileName(service, tsPath),
       "plain ts should be removed from scriptFileNames"
     assert.equal service.host.getScriptVersion(tsPath), "0",
       "plain ts path should be forgotten after removeDocument"
@@ -712,6 +717,53 @@ describe "ts-service direct factory usage", ->
     messages := diagnostics.map (d) => String d.messageText
     assert !messages.some((message) => /Cannot find module/.test message),
       `expected open imported Civet doc to resolve, got: ${messages.join(' | ')}`
+    assert.equal diagnostics.length, 0,
+      `expected no diagnostics, got: ${messages.join(' | ')}`
+
+  it "preserves mixed-case script filenames on case-insensitive systems", ->
+    rootDir := virtualRoot 'civet-virtual-mixed-case'
+    libDir := path.join(rootDir, 'typescript', 'lib')
+    system := {
+      ...createVirtualSystem(rootDir, libDir)
+      useCaseSensitiveFileNames: false
+    }
+    service := SharedTSService rootDir, {
+      plugins: [makeCivetPlugin()]
+      docFactory: directDocFactory
+      logger: nullLogger
+      system
+      libDir
+      discoverProjectFiles: false
+      tsConfig:
+        compilerOptions:
+          target: 'ES2020'
+          module: 'ESNext'
+          moduleResolution: 'Bundler'
+          strict: true
+          jsx: 'preserve'
+          noEmit: true
+          lib: ['ES2020']
+        include: ['**/*']
+    }
+    mixedPath := path.join rootDir, 'textRendering.civet'
+    indexPath := path.join rootDir, 'server.civet'
+    service.host.addOrUpdateDocument TextDocument.create(
+      URI.file(mixedPath).toString()
+      'civet'
+      1
+      'export value := 1\n'
+    )
+    service.host.addOrUpdateDocument TextDocument.create(
+      URI.file(indexPath).toString()
+      'civet'
+      1
+      'import { value } from "./textRendering.civet"\nx: number := value\n'
+    )
+
+    diagnostics := ts.getPreEmitDiagnostics service.getProgram()!
+    messages := diagnostics.map (d) => String d.messageText
+    assert !messages.some((message) => /differs from .* only in casing/i.test message),
+      `expected no mixed-case duplicate diagnostic, got: ${messages.join(' | ')}`
     assert.equal diagnostics.length, 0,
       `expected no diagnostics, got: ${messages.join(' | ')}`
 

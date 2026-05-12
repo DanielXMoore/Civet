@@ -78,7 +78,13 @@ export function TSHost(
   // service.civet's configSys mogrify (only `include` does), so rewrite
   // any raw transpilable extensions to their synthetic targets here —
   // otherwise `getOrCreatePathSnapshot` would parse raw `.civet` as TS.
-  scriptFileNames: Set<string> := new Set(initialFileNames.map getTranspiledPath)
+  // Canonical path key -> case-preserved script file name returned to TS.
+  // Internal lookups need canonical keys on case-insensitive systems, but TS
+  // must see the original casing to avoid duplicate-file casing diagnostics.
+  scriptFileNames: Map<string, string> := new Map
+  for fileName of initialFileNames
+    scriptFileName := getTranspiledPath fileName
+    scriptFileNames.set getCanonicalFileName(scriptFileName), scriptFileName
   fileMetaData: Map<string, FileMeta> := new Map
 
   pathMap: Map<string, TranspiledDoc> := new Map
@@ -248,7 +254,8 @@ export function TSHost(
         resolvedModule: ts.resolveModuleName(name, containingFile, compilerOptions, self, resolutionCache).resolvedModule
 
     addOrUpdateDocument(doc: TranspiledDoc): void
-      const p = getCanonicalFileName docFactory.uriToPath(doc.uri)
+      rawPath := path.normalize docFactory.uriToPath(doc.uri)
+      p := getCanonicalFileName rawPath
       snapshotMap.delete(p)
       projectVersion++
 
@@ -258,9 +265,10 @@ export function TSHost(
       if transpiler
         { target } := transpiler
         transpiledPath := p + target
+        displayTranspiledPath := rawPath + target
 
         transpiledDoc .= pathMap.get(transpiledPath)
-        initTranspiledDoc(transpiledPath) unless transpiledDoc
+        initTranspiledDoc(displayTranspiledPath) unless transpiledDoc
         snapshotMap.delete(transpiledPath)
 
         // Source doc lives in pathMap (not scriptFileNames) so the
@@ -268,19 +276,20 @@ export function TSHost(
         pathMap.set(p, doc)
         return
 
-      scriptFileNames.add(p)
+      scriptFileNames.set p, rawPath
       pathMap.set(p, doc)
 
     addScriptFileName(p: string): void
       target := getTranspiledPath p
-      return if scriptFileNames.has target
+      canonical := getCanonicalFileName target
+      return if scriptFileNames.has canonical
 
-      scriptFileNames.add target
+      scriptFileNames.set canonical, target
       projectVersion++
 
     closeDocument(rawPath: string): void
       canonical := getCanonicalFileName rawPath
-      transpiledPath := getTranspiledPath(canonical)
+      transpiledPath := getCanonicalTranspiledPath(rawPath)
 
       pathMap.delete(canonical)
       snapshotMap.delete(canonical)
@@ -294,7 +303,7 @@ export function TSHost(
 
     removeDocument(rawPath: string): void
       canonical := getCanonicalFileName rawPath
-      transpiledPath := getTranspiledPath(canonical)
+      transpiledPath := getCanonicalTranspiledPath(rawPath)
 
       pathMap.delete(canonical)
       snapshotMap.delete(canonical)
@@ -311,7 +320,7 @@ export function TSHost(
     getMeta(p: string)
       p = getCanonicalFileName p
       // Force snapshot creation so meta is populated before lookup.
-      getOrCreatePathSnapshot(getTranspiledPath(p))
+      getOrCreatePathSnapshot(getCanonicalTranspiledPath(p))
       fileMetaData.get(p)
 
     getProjectVersion()
@@ -328,7 +337,7 @@ export function TSHost(
       pathMap.get(getCanonicalFileName p)?.version.toString() || "0"
 
     getScriptFileNames()
-      Array.from(scriptFileNames)
+      Array.from(scriptFileNames.values())
 
     // CompilerHost requires writeFile, but our consumers always pass an
     // explicit writeFile to program.emit() / builder.emit(), so this is
@@ -363,13 +372,17 @@ export function TSHost(
     return baseReadFile p if baseFileExists p
     return undefined // no such file
 
-  /** Returns the synthetic-target path for a transpilable source, or `p` unchanged. */
+  /** Returns the synthetic-target path while preserving the caller's path casing. */
   function getTranspiledPath(p: string)
-    p = getCanonicalFileName p
+    p = path.normalize p
     extension := getExtensionFromPath(p)
     transpiler := transpilers.get(extension)
     return p + transpiler.target if transpiler
     p
+
+  /** Returns the synthetic-target path canonicalized for internal map keys. */
+  function getCanonicalTranspiledPath(p: string)
+    getCanonicalFileName getTranspiledPath(p)
 
   /**
    * Memoized snapshot factory.  For transpilable targets, re-runs the
@@ -377,7 +390,8 @@ export function TSHost(
    * and falls back to the previous transpiled text on compile errors.
    */
   function getOrCreatePathSnapshot(p: string)
-    p = getCanonicalFileName p
+    rawPath := path.normalize p
+    p = getCanonicalFileName rawPath
     snapshot .= snapshotMap.get(p)
     return snapshot if snapshot
 
@@ -391,7 +405,7 @@ export function TSHost(
       sourcePath := removeExtension(p)
       sourceDoc := pathMap.get(sourcePath)
       transpiledDoc .= pathMap.get(p)
-      transpiledDoc = initTranspiledDoc(p) unless transpiledDoc
+      transpiledDoc = initTranspiledDoc(rawPath) unless transpiledDoc
 
       let source
       sourceDocVersion .= 0
@@ -471,9 +485,10 @@ export function TSHost(
 
   /** Empty placeholder; `getOrCreatePathSnapshot` fills it on first request. */
   function initTranspiledDoc(p: string)
-    p = getCanonicalFileName p
-    uri := docFactory.pathToUri(p)
+    scriptPath := path.normalize p
+    p = getCanonicalFileName scriptPath
+    uri := docFactory.pathToUri(scriptPath)
     transpiledDoc := docFactory.create(uri, "none", -1, "")
     pathMap.set(p, transpiledDoc)
-    scriptFileNames.add(p)
+    scriptFileNames.set(p, scriptPath)
     transpiledDoc
