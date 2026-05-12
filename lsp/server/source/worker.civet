@@ -1,0 +1,204 @@
+// Browser-side helpers for creating the Civet LSP worker and talking to it
+// directly over the small JSON-RPC subset used by Monaco and the playground.
+
+import type {
+  CompletionItem
+  CompletionList
+  CompletionParams
+  Hover
+  Location
+  LocationLink
+  Position
+  PublishDiagnosticsParams
+  SemanticTokens
+} from vscode-languageserver
+
+export type {
+  CompletionItem
+  CompletionList
+  CompletionParams
+  Diagnostic
+  Hover
+  Location
+  LocationLink
+  Position
+  PublishDiagnosticsParams
+  SemanticTokens
+} from vscode-languageserver
+
+export interface CivetLspWorkerOptions
+  /** URL for the browser bundle produced by `@danielx/civet-language-server/browser`. */
+  serverUrl: string | URL
+  /** URL for `@danielx/civet/browser.min`, or another script that installs `globalThis.Civet` in the worker. */
+  civetUrl: string | URL
+  name?: string
+
+export interface CivetLspWorkerClientOptions
+  worker: Worker
+  uri: string
+  languageId?: string
+  rootUri?: string
+  workspaceName?: string
+  capabilities?: Record<string, ???>
+  terminateOnDispose?: boolean
+
+export interface CivetLspWorkerClient
+  start(text: string): Promise<void>
+  change(text: string): void
+  semanticTokensFull(): Promise<SemanticTokens?>
+  hover(position: Position): Promise<Hover?>
+  definition(position: Position): Promise<(Location | LocationLink | (Location | LocationLink)[])?>
+  completion(params: Pick<CompletionParams, 'position' | 'context'>): Promise<(CompletionItem[] | CompletionList)?>
+  completionResolve(item: CompletionItem): Promise<CompletionItem>
+  request<T = ???>(method: string, params?: ???): Promise<T>
+  notify(method: string, params?: ???): void
+  onDiagnostics(listener: (params: PublishDiagnosticsParams) => void): { dispose(): void }
+  dispose(): void
+
+export function createCivetLspWorker(options: CivetLspWorkerOptions): Worker
+  serverUrl := JSON.stringify String options.serverUrl
+  civetUrl := JSON.stringify String options.civetUrl
+  source := ```
+    const pendingMessages = [];
+    const queueMessage = (event) => pendingMessages.push(event.data);
+    self.addEventListener('message', queueMessage);
+    importScripts(${civetUrl});
+    import(${serverUrl}).then(
+      () => {
+        self.removeEventListener('message', queueMessage);
+        for (const data of pendingMessages) {
+          self.dispatchEvent(new MessageEvent('message', { data }));
+        }
+      },
+      (error) => {
+        setTimeout(() => { throw error; });
+      }
+    );
+  ```
+  blobUrl := URL.createObjectURL new Blob [source], type: 'text/javascript'
+  worker := new Worker blobUrl, name: options.name ?? 'civet-lsp'
+  revoke := => URL.revokeObjectURL blobUrl
+  worker.addEventListener 'error', revoke, { once: true }
+  return worker
+
+export function createCivetLspWorkerClient(
+  options: CivetLspWorkerClientOptions
+): CivetLspWorkerClient
+  { worker, uri } := options
+  rootUri := options.rootUri ?? 'file:///workspace'
+  languageId := options.languageId ?? 'civet'
+  workspaceName := options.workspaceName ?? 'Civet'
+  terminateOnDispose := options.terminateOnDispose ?? true
+
+  requestId .= 0
+  version .= 1
+  ready .= false
+  disposed .= false
+  let queuedText: string?
+  pending := new Map<number, { resolve: (value: ???) =>, reject: (error: ???) => }>
+  diagnosticsListeners := new Set<(params: PublishDiagnosticsParams) => >
+
+  rejectPending := (error: ???): void =>
+    for { reject } of pending.values()
+      reject error
+    pending.clear()
+
+  worker.onerror = (error) =>
+    rejectPending error
+
+  worker.onmessage = ({ data }): void =>
+    if data?.id? and pending.has data.id
+      callbacks := pending.get(data.id)!
+      pending.delete data.id
+      if data.error
+        callbacks.reject data.error
+      else
+        callbacks.resolve data.result
+      return
+    if data?.method is 'textDocument/publishDiagnostics' and data.params?.uri is uri
+      for listener of diagnosticsListeners
+        listener data.params
+
+  notify := (method: string, params?: ???): void =>
+    return if disposed
+    worker.postMessage { jsonrpc: '2.0', method, params }
+
+  request := <T = ???>(method: string, params?: ???): Promise<T> =>
+    if disposed
+      return Promise.reject new Error 'Civet LSP worker has been disposed'
+    id := ++requestId
+    worker.postMessage { jsonrpc: '2.0', id, method, params }
+    new Promise<T> (resolve, reject) =>
+      pending.set id, {}
+        resolve: (value: ???) => resolve value as T
+        reject
+
+  sendChange := (text: string): void =>
+    notify 'textDocument/didChange',
+      textDocument: { uri, version: ++version }
+      contentChanges: [{ text }]
+
+  return {}
+    async start(text: string): Promise<void>
+      await request 'initialize', {}
+        processId: null
+        rootUri
+        workspaceFolders: [{ uri: rootUri, name: workspaceName }]
+        capabilities: options.capabilities ?? {}
+      notify 'initialized', {}
+      notify 'textDocument/didOpen',
+        textDocument: { uri, languageId, version, text }
+      ready = true
+      if queuedText? is not text
+        sendChange queuedText
+      queuedText = undefined
+
+    change(text: string): void
+      unless ready
+        queuedText = text
+        return
+      sendChange text
+
+    async semanticTokensFull(): Promise<SemanticTokens?>
+      return data: [] unless ready
+      return await request<SemanticTokens> 'textDocument/semanticTokens/full',
+        textDocument: { uri }
+
+    async hover(position: Position): Promise<Hover?>
+      return undefined unless ready
+      return await request<Hover?> 'textDocument/hover', {}
+        textDocument: { uri }
+        position
+
+    async definition(position: Position): Promise<(Location | LocationLink | (Location | LocationLink)[])?>
+      return undefined unless ready
+      return await request<(Location | LocationLink | (Location | LocationLink)[])?> 'textDocument/definition', {}
+        textDocument: { uri }
+        position
+
+    async completion(
+      params: Pick<CompletionParams, 'position' | 'context'>
+    ): Promise<(CompletionItem[] | CompletionList)?>
+      return [] unless ready
+      return await request<(CompletionItem[] | CompletionList)?> 'textDocument/completion', {}
+        textDocument: { uri }
+        ...params
+
+    async completionResolve(item: CompletionItem): Promise<CompletionItem>
+      return item unless ready
+      return await request<CompletionItem> 'completionItem/resolve', item
+
+    request
+    notify
+
+    onDiagnostics(listener: (params: PublishDiagnosticsParams) => void)
+      diagnosticsListeners.add listener
+      return {}
+        dispose()
+          diagnosticsListeners.delete listener
+
+    dispose(): void
+      disposed = true
+      diagnosticsListeners.clear()
+      worker.terminate() if terminateOnDispose
+      rejectPending new Error 'Civet LSP worker has been disposed'

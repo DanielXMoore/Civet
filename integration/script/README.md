@@ -5,7 +5,7 @@ using `<script type="text/civet">` tags.
 First, run the browser build of Civet, for example, from CDN:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/@danielx/civet/dist/browser.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@danielx/civet/dist/browser.min.js"></script>
 ```
 
 Then you can run inline Civet scripts like so:
@@ -45,7 +45,7 @@ You can turn off all automatic `<script type="text/civet">` execution
 by adding a `no-scripts` attribute to the `<script>` tag that loads Civet:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/@danielx/civet/dist/browser.js" no-scripts></script>
+<script src="https://cdn.jsdelivr.net/npm/@danielx/civet/dist/browser.min.js" no-scripts></script>
 ```
 
 You can turn off automatic execution of dynamically added scripts
@@ -53,7 +53,7 @@ You can turn off automatic execution of dynamically added scripts
 attribute:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/@danielx/civet/dist/browser.js" no-auto-scripts></script>
+<script src="https://cdn.jsdelivr.net/npm/@danielx/civet/dist/browser.min.js" no-auto-scripts></script>
 ```
 
 You can turn off just the initial loading of scripts (but keep automatic
@@ -61,7 +61,7 @@ execution of dynamically added scripts) by adding a `no-start-scripts`
 attribute:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/@danielx/civet/dist/browser.js" no-start-scripts></script>
+<script src="https://cdn.jsdelivr.net/npm/@danielx/civet/dist/browser.min.js" no-start-scripts></script>
 ```
 
 If you want to manually trigger running all `<script type="text/civet">`

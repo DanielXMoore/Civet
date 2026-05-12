@@ -3,7 +3,8 @@ let playgroundWorker: Worker;
 interface WorkerResult {
   inputHtml: string;
   outputHtml?: string;
-  error?: string;
+  errors?: unknown[];
+  fatal: boolean;
   jsCode?: string;
 }
 
@@ -12,10 +13,23 @@ const msgMap: Record<string, {
   restart: boolean
 }> = {};
 
+const civetGrammarUrl = new URL('../../../lsp/vscode/syntaxes/civet.json', import.meta.url)
+
 // @ts-ignore
 if (!import.meta.env.SSR) {
   function startWorker() {
-    playgroundWorker = new Worker('/playground.worker.js')
+    const civetUrl = new URL('@danielx/civet/browser.min', import.meta.url)
+    const playgroundUrl = new URL('/playground.worker.js', window.location.href)
+    const workerSource = `
+self.civetGrammarUrl = ${JSON.stringify(String(civetGrammarUrl))};
+importScripts(${JSON.stringify(String(civetUrl))});
+importScripts(${JSON.stringify(String(playgroundUrl))});
+`
+    const workerUrl = URL.createObjectURL(
+      new Blob([workerSource], { type: 'text/javascript' })
+    )
+    playgroundWorker = new Worker(workerUrl)
+    setTimeout(() => URL.revokeObjectURL(workerUrl))
 
     playgroundWorker.onmessage = ({ data }) => {
       const { resolve, restart } = msgMap[data.uid]

@@ -1,10 +1,13 @@
 import TSService from "../source/lib/typescript-service.civet"
+{ createBrowserTSService } from "../source/lib/typescript-service-browser.civet"
 import { pathToFileURL } from "url"
 import { TextDocument } from "vscode-languageserver-textdocument"
 import fs from "fs"
 import { mkdtempSync, writeFileSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import path from "path"
+import ts from "typescript"
+{ createDefaultMapFromNodeModules, createSystem } from "@typescript/vfs"
 
 {
   makeCivetPlugin
@@ -563,6 +566,41 @@ describe "ts-service direct factory usage", ->
     pathToUri: (p: string) => URI.file(p).toString()
   }
 
+  createVirtualSystem := (rootDir: string, libDir = path.join(rootDir, 'typescript', 'lib')) ->
+    fsMap := createDefaultMapFromNodeModules({ target: ts.ScriptTarget.ES2020 }, ts)
+    for [filePath, text] of Array.from fsMap
+      fsMap.set path.join(libDir, filePath.slice(1)), text
+    system := createSystem(fsMap)
+    pathVariants := (p: string) =>
+      normalized := path.normalize p
+      variants := [normalized]
+      if /^[A-Za-z]:/.test normalized
+        variants.push normalized.replace /^[A-Za-z]:/, (drive) => drive.toLowerCase()
+        variants.push normalized.replace /^[A-Za-z]:/, (drive) => drive.toUpperCase()
+      Array.from new Set variants
+    readFile := (p: string): string? =>
+      for candidate of pathVariants p
+        return system.readFile candidate if system.fileExists candidate
+      return undefined
+    {
+      ...system
+      getCurrentDirectory: => rootDir
+      getExecutingFilePath: => path.join(rootDir, 'typescript.js')
+      resolvePath: (p: string) => path.resolve(p)
+      fileExists: (p: string) => pathVariants(p).some system.fileExists
+      readFile
+      directoryExists: (p: string) => pathVariants(p).some system.directoryExists
+      readDirectory: (p: string, extensions?: readonly string[], excludes?: readonly string[], includes?: readonly string[], depth?: number) =>
+        for candidate of pathVariants p
+          if system.directoryExists candidate
+            return system.readDirectory candidate, extensions, excludes, includes, depth
+        []
+      createHash: (data: string) => data
+    }
+
+  virtualRoot := (name: string) =>
+    directDocFactory.uriToPath URI.file(path.join(path.parse(process.cwd()).root, name)).toString()
+
   // Trailing slash matters: TSService builds tsConfigPath as
   // `${projectPath}tsconfig.json`.
   projectPath := path.resolve("./integration/project-test/") + path.sep
@@ -596,6 +634,101 @@ describe "ts-service direct factory usage", ->
     service.host.addOrUpdateDocument doc
     meta := service.host.getMeta civetPath
     assert meta?.transpiledDoc, "expected the freshly-registered Civet plugin to compile snap-test.civet"
+
+  it "keeps standard Array methods available with a virtual system", ->
+    rootDir := virtualRoot 'civet-virtual-array'
+    libDir := path.join(rootDir, 'typescript', 'lib')
+    system := createVirtualSystem rootDir, libDir
+    service := SharedTSService rootDir, {
+      plugins: [makeCivetPlugin()]
+      docFactory: directDocFactory
+      logger: nullLogger
+      system
+      libDir
+      discoverProjectFiles: false
+      tsConfig:
+        compilerOptions:
+          target: 'ES2020'
+          module: 'ESNext'
+          moduleResolution: 'Bundler'
+          strict: true
+          jsx: 'preserve'
+          noEmit: true
+          lib: ['ES2020']
+        include: ['**/*']
+    }
+    source := 'z := (...xs for xs of [[1,2,3], [], [4,5]])\n'
+    sourcePath := path.join rootDir, 'index.civet'
+    doc := TextDocument.create URI.file(sourcePath).toString(), 'civet', 1, source
+    service.host.addOrUpdateDocument doc
+    diagnostics := service.getSemanticDiagnostics directDocFactory.uriToPath(doc.uri) + '.tsx'
+    messages := diagnostics.map (d) => String d.messageText
+    assert !messages.some((message) => message.includes("Property 'push' does not exist")),
+      `expected no missing Array.push diagnostic, got: ${messages.join(' | ')}`
+    assert.equal diagnostics.length, 0,
+      `expected no diagnostics, got: ${messages.join(' | ')}`
+
+  it "resolves imported Civet files from open documents before the virtual system", ->
+    rootDir := virtualRoot 'civet-virtual-open-docs'
+    libDir := path.join(rootDir, 'typescript', 'lib')
+    system := createVirtualSystem rootDir, libDir
+    service := SharedTSService rootDir, {
+      plugins: [makeCivetPlugin()]
+      docFactory: directDocFactory
+      logger: nullLogger
+      system
+      libDir
+      discoverProjectFiles: false
+      tsConfig:
+        compilerOptions:
+          target: 'ES2020'
+          module: 'ESNext'
+          moduleResolution: 'Bundler'
+          strict: true
+          jsx: 'preserve'
+          noEmit: true
+          lib: ['ES2020']
+        include: ['**/*']
+    }
+    otherPath := path.join rootDir, 'other.civet'
+    indexPath := path.join rootDir, 'index.civet'
+    assert.equal system.fileExists(otherPath), false
+
+    service.host.addOrUpdateDocument TextDocument.create(
+      URI.file(otherPath).toString()
+      'civet'
+      1
+      'export value := 1\n'
+    )
+    indexDoc := TextDocument.create(
+      URI.file(indexPath).toString()
+      'civet'
+      1
+      'import { value } from "./other.civet"\nx: number := value\n'
+    )
+    service.host.addOrUpdateDocument indexDoc
+
+    diagnostics := service.getSemanticDiagnostics directDocFactory.uriToPath(indexDoc.uri) + '.tsx'
+    messages := diagnostics.map (d) => String d.messageText
+    assert !messages.some((message) => /Cannot find module/.test message),
+      `expected open imported Civet doc to resolve, got: ${messages.join(' | ')}`
+    assert.equal diagnostics.length, 0,
+      `expected no diagnostics, got: ${messages.join(' | ')}`
+
+  it "browser wrapper requires Civet on globalThis", async ->
+    originalCivet := (globalThis as any).Civet
+    try
+      delete (globalThis as any).Civet
+      BrowserTSService := createBrowserTSService createVirtualSystem(virtualRoot 'civet-browser-wrapper')
+      await assert.rejects(
+        BrowserTSService 'file:///workspace/', nullLogger
+        /requires globalThis\.Civet/
+      )
+    finally
+      if originalCivet?
+        (globalThis as any).Civet = originalCivet
+      else
+        delete (globalThis as any).Civet
 
   it "addScriptFileName widens program scope without a TranspiledDoc", ->
     tmpDir := mkdtempSync path.join tmpdir(), 'civet-add-script-file-'
@@ -703,7 +836,7 @@ describe "ts-service direct factory usage", ->
   it "makeHeraPlugin honors options.Hera override", ->
     callLog: { source: string, filename: string }[] := []
     fakeHera := {
-      compile: (source, options) =>
+      compile: (source: string, options: { filename: string }) =>
         callLog.push { source, filename: options.filename }
         { code: "// fake hera output\n", sourceMap: { lines: [] } }
     }

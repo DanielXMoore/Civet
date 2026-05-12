@@ -1,0 +1,207 @@
+// Tests for the browser worker helper and its lightweight JSON-RPC client.
+
+import assert from assert
+{ readFileSync } from node:fs
+import WebWorker from web-worker
+{
+  createCivetLspWorker
+  createCivetLspWorkerClient
+  type PublishDiagnosticsParams
+} from ../source/worker.civet
+
+class TestBlob
+  parts: string[]
+  type: string
+
+  constructor(parts: ???[], options?: { type?: string })
+    @parts = parts.map String
+    @type = options?.type ?? ''
+
+interface RecordedMessage
+  method: string
+  params:
+    textDocument?: { text?: string }
+    contentChanges?: { text?: string }[]
+
+function toDataUrl(source: string): string
+  'data:text/javascript,' + encodeURIComponent source
+
+function createTestWorker(): Worker
+  source := ```
+    const messages = [];
+
+    self.addEventListener('message', (event) => {
+      const message = event.data;
+      messages.push(message);
+
+      if (message.method === 'textDocument/didOpen') {
+        self.postMessage({
+          jsonrpc: '2.0',
+          method: 'textDocument/publishDiagnostics',
+          params: {
+            uri: message.params.textDocument.uri,
+            diagnostics: [{ message: 'opened' }],
+          },
+        });
+      }
+
+      if (message.id) {
+        let result = {};
+        if (message.method === 'textDocument/hover') {
+          result = { contents: 'hover text' };
+        } else if (message.method === 'textDocument/semanticTokens/full') {
+          result = { data: [0, 0, 1, 10, 0] };
+        } else if (message.method === 'test/messages') {
+          result = messages.map(({ method, params }) => ({ method, params }));
+        }
+        self.postMessage({ jsonrpc: '2.0', id: message.id, result });
+      }
+    });
+  ```
+  url := toDataUrl source
+  return new WebWorker(url) as! Worker
+
+describe "worker helper", ->
+  it "creates a worker and reports type diagnostics for queued source", ->
+    originalWorker := (globalThis as any).Worker
+    originalBlob := globalThis.Blob
+    originalCreateObjectURL := URL.createObjectURL
+    originalRevokeObjectURL := URL.revokeObjectURL
+    let worker: Worker?
+
+    civetSource := readFileSync '../../dist/browser.min.js', 'utf8'
+    serverSource := readFileSync 'dist/browser.js', 'utf8'
+    civetUrl := toDataUrl civetSource
+    serverUrl := 'test://civet-lsp-browser.js'
+
+    try
+      (globalThis as any).Worker = WebWorker
+      (globalThis as any).Blob = TestBlob
+      URL.createObjectURL = (blob: Blob | MediaSource) =>
+        testBlob := blob as! TestBlob
+        source .= testBlob.parts.join ''
+        // web-worker's classic VM path supports importScripts but not dynamic
+        // import(), so inline the test server module while preserving the
+        // production worker source shape around it.
+        source = source.replace(
+          `import(${JSON.stringify serverUrl}).then(`
+          => `Promise.resolve().then(() => {\nconst process = undefined;\nconst require = undefined;\n${serverSource}\n}).then(`
+        )
+        toDataUrl source
+
+      URL.revokeObjectURL = (() =>) as typeof URL.revokeObjectURL
+
+      worker = createCivetLspWorker
+        civetUrl: civetUrl
+        serverUrl: serverUrl
+        name: 'test-civet-lsp'
+
+      uri := 'file:///workspace/created-worker.civet'
+      client := createCivetLspWorkerClient
+        worker: worker
+        uri: uri
+        terminateOnDispose: false
+      diagnosticsPromise := new Promise<PublishDiagnosticsParams> (resolve) =>
+        client.onDiagnostics (params) =>
+          resolve params if params.diagnostics.some (diagnostic) =>
+            diagnostic.source is 'typescript' and /not assignable/.test diagnostic.message
+
+      client.change 'x: number := "oops"'
+      await client.start 'initial := 1'
+
+      diagnostics := await diagnosticsPromise
+      assert.equal diagnostics.uri, uri
+      typeDiagnostic := diagnostics.diagnostics.find (diagnostic) =>
+        diagnostic.source is 'typescript' and /not assignable/.test diagnostic.message
+      assert typeDiagnostic
+      assert.match typeDiagnostic.message, /Type 'string' is not assignable to type 'number'/
+
+      client.dispose()
+    finally
+      worker?.terminate()
+      if originalWorker
+        (globalThis as any).Worker = originalWorker
+      else
+        delete (globalThis as any).Worker
+      globalThis.Blob = originalBlob
+      URL.createObjectURL = originalCreateObjectURL
+      URL.revokeObjectURL = originalRevokeObjectURL
+
+  it "talks to a Web Worker over JSON-RPC", ->
+    uri := 'file:///workspace/test.civet'
+    worker := createTestWorker()
+    client := createCivetLspWorkerClient
+      worker: worker
+      uri: uri
+
+    diagnosticPromise := new Promise<PublishDiagnosticsParams> (resolve) =>
+      client.onDiagnostics resolve
+
+    client.change 'queued'
+    await client.start 'initial'
+
+    diagnostics := await diagnosticPromise
+    assert.equal diagnostics.uri, uri
+    assert.equal diagnostics.diagnostics[0].message, 'opened'
+
+    hover := await client.hover line: 0, character: 1
+    assert hover
+    assert.equal hover.contents, 'hover text'
+
+    semanticTokens := await client.semanticTokensFull()
+    assert semanticTokens
+    assert.deepEqual semanticTokens.data, [0, 0, 1, 10, 0]
+
+    messages := await client.request<RecordedMessage[]> 'test/messages', {}
+    assert.deepEqual messages.map(.method), [
+      'initialize'
+      'initialized'
+      'textDocument/didOpen'
+      'textDocument/didChange'
+      'textDocument/hover'
+      'textDocument/semanticTokens/full'
+      'test/messages'
+    ]
+    openParams := messages[2].params
+    assert openParams.textDocument
+    assert.equal openParams.textDocument.text, 'initial'
+    changeParams := messages[3].params
+    assert changeParams.contentChanges
+    assert.equal changeParams.contentChanges[0].text, 'queued'
+
+    client.dispose()
+    await assert.rejects(
+      client.request 'anything', {}
+      /disposed/
+    )
+
+  it "can keep the worker alive when disposing the client", ->
+    uri := 'file:///workspace/test.civet'
+    worker := createTestWorker()
+    client := createCivetLspWorkerClient
+      worker: worker
+      uri: uri
+      terminateOnDispose: false
+
+    opened := new Promise<PublishDiagnosticsParams> (resolve) =>
+      client.onDiagnostics resolve
+    await client.start 'source'
+    await opened
+    client.dispose()
+
+    response := new Promise<???> (resolve, reject) =>
+      worker.onmessage = (event) => resolve event.data
+      worker.onerror = (event) => reject event
+    worker.postMessage
+      jsonrpc: '2.0'
+      id: 1
+      method: 'textDocument/hover'
+      params: {}
+
+    assert.deepEqual await response,
+      jsonrpc: '2.0'
+      id: 1
+      result:
+        contents: 'hover text'
+
+    worker.terminate()

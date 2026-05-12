@@ -1,8 +1,17 @@
 <script lang="ts" setup>
-import { onMounted, ref, watch, nextTick, computed } from 'vue';
+import { onMounted, onUnmounted, ref, watch, nextTick, computed } from 'vue';
 import { compileCivetToHtml } from '../utils/compileCivetToHtml';
 import { b64 } from '../utils/b64';
 import { ligatures } from '../store/ligatures.store';
+import {
+  registerCivetLanguage,
+  registerCivetLspProviders,
+} from '../../../lsp/monaco/dist/monaco.js';
+import {
+  createCivetLspWorker,
+  createCivetLspWorkerClient,
+  type CivetLspDiagnostic,
+} from '../../../lsp/server/dist/worker.js';
 
 const emit = defineEmits(['input']);
 const props = defineProps<{
@@ -16,19 +25,40 @@ const props = defineProps<{
   raw?: boolean;
   showComptime?: boolean;
   comptime?: boolean;
+  useMonaco?: boolean;
 }>();
 
+type PlaygroundLspClient = ReturnType<typeof createCivetLspWorkerClient> & {
+  updateMarkers(): void;
+};
+
 const userCode = ref(b64.decode(props.b64Code));
-const compileError = ref<string | undefined>('');
+const compileError = ref<unknown>();
 const inputHtml = ref('');
 const outputHtml = ref('');
 const inputHtmlEl = ref<HTMLDivElement>();
 const outputHtmlEl = ref<HTMLDivElement>();
 const textareaEl = ref<HTMLTextAreaElement>();
+const monacoEl = ref<HTMLDivElement>();
+const monacoReady = ref(false);
+const monacoHorizontalPadding = 18;
+let monacoEditor: any;
+let monacoModel: any;
+let lspClient: PlaygroundLspClient | undefined;
+let lspProviders: { dispose(): void } | undefined;
 
 // Compile on input
 onMounted(fixTextareaSize);
-watch(userCode, codeChanged);
+watch(userCode, async (code) => {
+  if (monacoEditor && monacoEditor.getValue() !== code) {
+    monacoEditor.setValue(code);
+  }
+  await codeChanged();
+});
+
+watch(ligatures, (enabled) => {
+  monacoEditor?.updateOptions({ fontLigatures: enabled });
+});
 
 // Clear
 watch(
@@ -45,6 +75,20 @@ onMounted(async () => {
     await nextTick();
     fixTextareaSize();
   }
+
+  if (props.useMonaco) {
+    // Kick off Monaco loading while the textarea fallback remains active.
+    void initMonaco().catch((error) => {
+      console.error('Monaco failed to initialize', error);
+    });
+  }
+});
+
+onUnmounted(() => {
+  lspClient?.dispose();
+  lspProviders?.dispose();
+  monacoEditor?.dispose();
+  monacoModel?.dispose();
 });
 
 // Prettier toggle for full Playground
@@ -56,6 +100,12 @@ watch(prettier, compile);
 const showTypescript = props.showTypescript;
 const typescript = ref(true);
 watch(typescript, compile);
+
+const showTypeDiagnostics = ref(true);
+const compileFatal = ref(false);
+watch(showTypeDiagnostics, () => {
+  lspClient?.updateMarkers();
+});
 
 const showComptime = props.showComptime;
 const comptime = ref(false);
@@ -85,8 +135,10 @@ async function compile() {
 
   emit('input', userCode.value, snippet.jsCode);
 
-  compileError.value = snippet.error;
+  compileError.value = snippet.errors?.[0];
+  compileFatal.value = snippet.fatal;
   inputHtml.value = snippet.inputHtml;
+  lspClient?.updateMarkers();
 
   if (snippet.outputHtml) {
     outputHtml.value = snippet.outputHtml;
@@ -94,6 +146,215 @@ async function compile() {
 
   await nextTick();
   fixTextareaSize();
+}
+
+async function initMonaco() {
+  if (!monacoEl.value || monacoEditor) return;
+
+  const [{ default: EditorWorker }, monaco] = await Promise.all([
+    import('monaco-editor/esm/vs/editor/editor.worker?worker'),
+    import('monaco-editor/esm/vs/editor/edcore.main.js'),
+  ]);
+
+  (globalThis as any).MonacoEnvironment ??= {
+    getWorker: () => new EditorWorker(),
+  };
+
+  registerCivetLanguage(monaco);
+  await registerCivetTextMateSyntax(monaco);
+
+  const uri = monaco.Uri.parse('file:///workspace/index.civet');
+  monacoModel = monaco.editor.getModel(uri) ??
+    monaco.editor.createModel(userCode.value, 'civet', uri);
+  if (monacoModel.getValue() !== userCode.value) {
+    monacoModel.setValue(userCode.value);
+  }
+
+  monacoEditor = monaco.editor.create(monacoEl.value, {
+    model: monacoModel,
+    theme: 'civet-playground-dark',
+    automaticLayout: true,
+    folding: false,
+    glyphMargin: false,
+    minimap: { enabled: false },
+    fontFamily: 'Fira Code, var(--vp-font-family-mono)',
+    fontLigatures: ligatures.value,
+    fontSize: 14,
+    fixedOverflowWidgets: true,
+    lineDecorationsWidth: monacoHorizontalPadding,
+    lineHeight: 21,
+    lineNumbers: 'off',
+    lineNumbersMinChars: 0,
+    hideCursorInOverviewRuler: true,
+    overviewRulerLanes: 0,
+    tabSize: 2,
+    insertSpaces: true,
+    scrollBeyondLastLine: false,
+    scrollbar: {
+      vertical: 'hidden',
+      handleMouseWheel: false,
+      alwaysConsumeMouseWheel: false,
+    },
+    padding: { top: 16, bottom: 16 },
+  });
+  resizeMonacoEditor();
+  monacoEditor.onDidContentSizeChange(resizeMonacoEditor);
+
+  lspClient = createPlaygroundLspClient(monaco, uri.toString());
+  lspClient.start(monacoModel.getValue()).then(() => {
+    lspProviders?.dispose();
+    lspProviders = registerCivetLspProviders(monaco, {
+      uri: uri.toString(),
+      client: lspClient!,
+      model: monacoModel,
+    });
+  }).catch((error) => {
+    console.error('Civet LSP failed to start', error);
+  });
+
+  monacoEditor.onDidChangeModelContent(() => {
+    const code = monacoEditor.getValue();
+    if (code !== userCode.value) {
+      userCode.value = code;
+    }
+    lspClient?.change(code);
+  });
+  monacoReady.value = true;
+}
+
+async function registerCivetTextMateSyntax(monaco: any) {
+  const languages = monaco.languages as any;
+  if (languages.__civetTextMateSyntaxRegistered) {
+    return languages.__civetTextMateSyntaxRegistered;
+  }
+
+  languages.__civetTextMateSyntaxRegistered = (async () => {
+    const [
+      { createHighlighterCore },
+      { createOnigurumaEngine },
+      { shikiToMonaco, textmateThemeToMonacoTheme },
+      wasm,
+      { default: oneDarkPro },
+      { default: civetGrammar },
+    ] = await Promise.all([
+      import('shiki/core'),
+      import('shiki/engine/oniguruma'),
+      import('@shikijs/monaco'),
+      import('shiki/wasm'),
+      import('shiki/themes/one-dark-pro.mjs'),
+      import('../../../lsp/vscode/syntaxes/civet.json'),
+    ]);
+
+    const themeName = 'civet-playground-dark';
+    const transparentEditorColors = {
+      'editor.background': '#00000000',
+      'editorGutter.background': '#00000000',
+      'editorOverviewRuler.border': '#00000000',
+    };
+    const semanticTokenColors = {
+      class: '#e5c07b',
+      enum: '#e5c07b',
+      enumMember: '#d19a66',
+      function: '#61afef',
+      interface: '#e5c07b',
+      member: '#61afef',
+      namespace: '#e5c07b',
+      parameter: '#d19a66',
+      property: '#e06c75',
+      type: '#e5c07b',
+      typeParameter: '#e5c07b',
+      variable: '#e5c07b',
+      'variable.local': '#abb2bf',
+      comment: { foreground: '#7f848e', fontStyle: 'italic' },
+    };
+    const theme = {
+      ...oneDarkPro,
+      name: themeName,
+      colors: {
+        ...oneDarkPro.colors,
+        ...transparentEditorColors,
+      },
+    };
+    const highlighter = await createHighlighterCore({
+      themes: [theme],
+      langs: [{ ...civetGrammar, name: 'civet' }],
+      engine: await createOnigurumaEngine(wasm),
+    });
+
+    shikiToMonaco(highlighter, monaco);
+    const monacoTheme = textmateThemeToMonacoTheme(theme);
+    monaco.editor.defineTheme(themeName, {
+      ...monacoTheme,
+      semanticHighlighting: true,
+      colors: {
+        ...monacoTheme.colors,
+        ...transparentEditorColors,
+      },
+      semanticTokenColors,
+    });
+  })();
+
+  return languages.__civetTextMateSyntaxRegistered;
+}
+
+function resizeMonacoEditor() {
+  if (!monacoEl.value || !monacoEditor) return;
+
+  const height = Math.max(monacoEditor.getContentHeight(), 84);
+  monacoEl.value.style.height = `${height}px`;
+  monacoEditor.layout({
+    width: Math.max(monacoEl.value.clientWidth - monacoHorizontalPadding, 0),
+    height,
+  });
+}
+
+function createPlaygroundLspClient(monaco: any, uri: string) {
+  const worker = createCivetLspWorker({
+    civetUrl: new URL('@danielx/civet/browser.min', import.meta.url),
+    serverUrl: new URL('../../../lsp/server/dist/browser.js', import.meta.url),
+  });
+  const client = createCivetLspWorkerClient({
+    worker,
+    uri,
+    workspaceName: 'Playground',
+  }) as PlaygroundLspClient;
+  let diagnosticsCache: CivetLspDiagnostic[] = [];
+
+  const updateMarkers = () => {
+    const showTypes = showTypeDiagnostics.value && !compileFatal.value;
+    const diagnostics = showTypes
+      ? diagnosticsCache
+      : diagnosticsCache.filter((diagnostic) => diagnostic.source !== 'typescript');
+    monaco.editor.setModelMarkers(monacoModel, 'civet-lsp', diagnostics.map(toMarker));
+  };
+
+  client.onDiagnostics(({ diagnostics }) => {
+    diagnosticsCache = diagnostics;
+    updateMarkers();
+  });
+
+  const dispose = client.dispose;
+  client.dispose = () => {
+    monaco.editor.setModelMarkers(monacoModel, 'civet-lsp', []);
+    dispose();
+  };
+  client.updateMarkers = updateMarkers;
+  return client;
+
+  function toMarker(diagnostic: CivetLspDiagnostic) {
+    return {
+      severity: diagnostic.severity === 1 ? monaco.MarkerSeverity.Error :
+        diagnostic.severity === 2 ? monaco.MarkerSeverity.Warning :
+        diagnostic.severity === 3 ? monaco.MarkerSeverity.Info :
+        monaco.MarkerSeverity.Hint,
+      message: diagnostic.message,
+      source: diagnostic.source ?? 'civet',
+      startLineNumber: diagnostic.range.start.line + 1,
+      startColumn: diagnostic.range.start.character + 1,
+      endLineNumber: diagnostic.range.end.line + 1,
+      endColumn: diagnostic.range.end.character + 1,
+    };
+  }
 }
 
 function updateTextarea(
@@ -173,20 +434,18 @@ function handleTextareaKeydown(event: KeyboardEvent) {
 }
 
 function fixTextareaSize() {
-  if (textareaEl.value && inputHtmlEl.value) {
-    textareaEl.value.style.height = `${inputHtmlEl.value.clientHeight}px`;
-    textareaEl.value.style.width = `${
-      inputHtmlEl.value.querySelector('code')!.scrollWidth + 20
-    }px`;
-  }
+  if (!textareaEl.value || !inputHtmlEl.value) return;
+  textareaEl.value.style.height = `${inputHtmlEl.value.clientHeight}px`;
+  textareaEl.value.style.width = `${
+    inputHtmlEl.value.querySelector('code')!.scrollWidth + 20
+  }px`;
 }
 
 let feedbackTimeout;
-async function copyToClipboard(textarea, pointerEvent) {
+async function copyToClipboard(text: string, pointerEvent) {
   let success = false;
   try {
-    const { textContent } = textarea.value!;
-    await navigator.clipboard.writeText(textContent as string);
+    await navigator.clipboard.writeText(text);
     success = true;
   } catch (err) {
     console.error(err);
@@ -203,10 +462,14 @@ async function copyToClipboard(textarea, pointerEvent) {
   }, 2_000);
 }
 function copyInputToClipboard(pointerEvent) {
-  copyToClipboard(inputHtmlEl, pointerEvent);
+  if (monacoReady.value) {
+    copyToClipboard(monacoEditor?.getValue() ?? userCode.value, pointerEvent);
+  } else {
+    copyToClipboard(inputHtmlEl.value?.textContent ?? '', pointerEvent);
+  }
 }
 function copyOutputToClipboard(pointerEvent) {
-  copyToClipboard(outputHtmlEl, pointerEvent);
+  copyToClipboard(outputHtmlEl.value?.textContent ?? '', pointerEvent);
 }
 
 const playgroundUrl = computed(() => {
@@ -217,8 +480,19 @@ const playgroundUrl = computed(() => {
 <template>
   <div v-if="props.compileAtStart && loading">Loading playground...</div>
   <div v-else :class="{ wrapper: true,  ligatures: ligatures}">
-    <div class="col scroll" @click="textareaEl?.focus()" style="tab-size: 4">
-      <div class="code code--user">
+    <div
+      :class="{ col: true, scroll: !monacoReady, 'col--monaco': monacoReady }"
+      @click="monacoReady ? monacoEditor?.focus() : textareaEl?.focus()"
+      style="tab-size: 4"
+    >
+      <div
+        v-if="props.useMonaco"
+        :class="{ code: true, 'code--monaco': true, 'code--monaco-loading': !monacoReady }"
+        ref="monacoEl"
+      >
+      </div>
+
+      <div v-if="!monacoReady" class="code code--user">
         <textarea
           :value="userCode"
           :onInput="(e: any) => (userCode = e.target.value)"
@@ -230,12 +504,26 @@ const playgroundUrl = computed(() => {
         />
       </div>
 
-      <div class="code code--input" ref="inputHtmlEl">
+      <div v-if="!monacoReady" class="code code--input" ref="inputHtmlEl">
         <div v-if="inputHtml" v-html="inputHtml" />
         <slot v-else name="input" />
       </div>
 
       <div class="compilation-info">
+        <span
+          v-if="props.useMonaco && !monacoReady"
+          class="monaco-loading"
+          aria-label="Loading Monaco"
+          title="Loading Monaco editor and diagnostics"
+        />
+        <label
+          v-if="monacoReady"
+          class="diagnostics-toggle"
+          title="Show TypeScript type diagnostics"
+        >
+          <input type="checkbox" v-model="showTypeDiagnostics"/>
+          Diagnostics
+        </label>
         <span v-if="!hideLink">
           Edit inline or
           <a
@@ -309,6 +597,11 @@ const playgroundUrl = computed(() => {
   overflow-y: hidden;
 }
 
+.col--monaco {
+  overflow: visible;
+  z-index: 5;
+}
+
 @media (max-width: 767px) {
   .col {
     width: 100%;
@@ -332,6 +625,45 @@ const playgroundUrl = computed(() => {
 
 .code--input {
   z-index: 2;
+}
+
+.code--monaco {
+  box-sizing: border-box;
+  min-height: 84px;
+  margin-bottom: 28px;
+  padding-right: 18px;
+  overflow: visible;
+}
+
+.code--monaco-loading {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.code--monaco :deep(.monaco-editor),
+.code--monaco :deep(.monaco-editor-background),
+.code--monaco :deep(.margin) {
+  background: transparent !important;
+}
+
+.monaco-loading {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 8px;
+  vertical-align: -2px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: monaco-loading-spin 0.8s linear infinite;
+}
+
+@keyframes monaco-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .textarea {
@@ -364,6 +696,10 @@ const playgroundUrl = computed(() => {
   padding: 10px 0;
 }
 
+.diagnostics-toggle {
+  margin-right: 8px;
+}
+
 .code:deep(code) {
   display: block;
   padding: 0 18px;
@@ -391,6 +727,12 @@ const playgroundUrl = computed(() => {
 
 .code--input:deep(pre) {
   overflow: visible;
+}
+
+.code--output:deep(.playground-output-separator) {
+  border: 0;
+  border-top: 1px solid var(--vp-c-divider);
+  margin: 0 18px;
 }
 
 input {

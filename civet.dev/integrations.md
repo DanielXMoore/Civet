@@ -4,11 +4,14 @@ title: Integrations
 
 # {{ $frontmatter.title }}
 
-## VSCode
+## Text Editors
+
+### VSCode
 
 - [Civet VSCode extension](https://marketplace.visualstudio.com/items?itemName=DanielX.civet)
+- [Monaco / VS Code for the Web](https://github.com/DanielXMoore/Civet/tree/main/lsp/monaco) via `@danielx/civet-monaco`; see the [Playground](/playground) for a working example.
 
-## Zed
+### Zed
 
 Install the Civet extension from the Zed extension marketplace, or install it as a dev extension from the `lsp/zed/` directory of the Civet repo.
 
@@ -32,7 +35,7 @@ To enable semantic token highlighting (context-aware colors for variables, funct
 
 `"combined"` overlays LSP semantic tokens on top of tree-sitter highlighting.
 
-## Neovim
+### Neovim
 
 Neovim 0.10+ supports LSP natively. Add this to your `init.lua`:
 
@@ -44,7 +47,7 @@ vim.api.nvim_create_autocmd("FileType", {
   callback = function(args)
     vim.lsp.start({
       name = "civet_lsp",
-      cmd = { "node", "/path/to/civet/lsp/server/dist/server.js", "--stdio" },
+      cmd = { "node", "/path/to/civet/lsp/server/dist/node.js", "--stdio" },
       root_dir = vim.fs.root(args.file, { "tsconfig.json", "package.json", ".git" }) or vim.fn.getcwd(),
     })
   end,
@@ -80,7 +83,7 @@ parser_config.civet = {
 
 Then run `:TSInstall civet`.
 
-## Helix
+### Helix
 
 Clone the Civet repo and edit your `languages.toml` [config for helix](https://docs.helix-editor.com/languages.html)
 

@@ -33,6 +33,11 @@ sed 's#//NOCONFIG//##g' register.js >register-noconfig.js
 # normal files
 "$civet_bin" --no-config build/esbuild.civet "$@"
 
+# browser script
+if [ "${CIVET_NO_BROWSER:-}" != "1" ]; then
+  ./node_modules/.bin/terser "$out"/browser.js --compress --mangle --ecma 2015 --output "$out"/browser.min.js
+fi
+
 # built types
 for name in astro esbuild farm rolldown rollup rspack unplugin vite webpack; do
   sed 's/\.civet"/\.js"/' "$out"/unplugin/source/unplugin/$name.d.ts >"$out"/unplugin/$name.d.ts
@@ -49,8 +54,3 @@ out_bin="$out/civet"
 echo "cli()" >> "$out_bin"
 chmod +x "$out_bin"
 rm "$out"/cli.js
-
-# create browser build for docs
-if [ "${CIVET_SELF_BUILD:-}" != "1" ] && [ "${CIVET_NO_BROWSER:-}" != "1" ]; then
-  ./node_modules/.bin/terser "$out"/browser.js --compress --mangle --ecma 2015 --output civet.dev/public/__civet.js
-fi
