@@ -116,7 +116,49 @@ describe "worker helper", ->
       URL.createObjectURL = originalCreateObjectURL
       URL.revokeObjectURL = originalRevokeObjectURL
 
+  it "ignores stale diagnostics", async ->
+    uri := 'file:///workspace/stale.civet'
+    fakeWorker: any :=
+      postMessage: (message: any) =>
+        if message.id?
+          queueMicrotask =>
+            fakeWorker.onmessage data:
+              jsonrpc: '2.0'
+              id: message.id
+              result: {}
+      terminate: =>
+
+    client := createCivetLspWorkerClient
+      worker: fakeWorker as! Worker
+      uri: uri
+    diagnostics: PublishDiagnosticsParams[] := []
+    client.onDiagnostics (params) =>
+      diagnostics.push params
+
+    await client.start 'x := 1'
+    client.change 'x := 2'
+    fakeWorker.onmessage data:
+      jsonrpc: '2.0'
+      method: 'textDocument/publishDiagnostics'
+      params:
+        uri: uri
+        version: 1
+        diagnostics: []
+    assert.equal diagnostics#, 0
+
+    fakeWorker.onmessage data:
+      jsonrpc: '2.0'
+      method: 'textDocument/publishDiagnostics'
+      params:
+        uri: uri
+        version: 2
+        diagnostics: []
+    assert.equal diagnostics#, 1
+
+    client.dispose()
+
   it "creates a worker and reports type diagnostics for queued source", ->
+    @timeout 30000
     originalWorker := (globalThis as any).Worker
     originalBlob := globalThis.Blob
     originalCreateObjectURL := URL.createObjectURL
@@ -148,6 +190,9 @@ describe "worker helper", ->
       worker = createCivetLspWorker
         civetUrl: civetUrl
         serverUrl: serverUrl
+        libUrls:
+          dom: toDataUrl readFileSync('dist/lib/lib.dom.d.ts', 'utf8')
+          'dom.iterable': toDataUrl readFileSync('dist/lib/lib.dom.iterable.d.ts', 'utf8')
         name: 'test-civet-lsp'
       defaultNamedWorker := createCivetLspWorker
         civetUrl: civetUrl
@@ -173,6 +218,26 @@ describe "worker helper", ->
         diagnostic.source is 'typescript' and /not assignable/.test diagnostic.message
       assert typeDiagnostic
       assert.match typeDiagnostic.message, /Type 'string' is not assignable to type 'number'/
+
+      domMissingPromise := new Promise<PublishDiagnosticsParams> (resolve) =>
+        client.onDiagnostics (params) =>
+          resolve params if params.diagnostics.some (diagnostic) =>
+            /Cannot find name 'document'/.test diagnostic.message
+      client.change 'element := document.createElement("div")'
+      domMissing := await domMissingPromise
+      assert domMissing.diagnostics.some (diagnostic) =>
+        /Cannot find name 'document'/.test diagnostic.message
+
+      domLoadedPromise := new Promise<PublishDiagnosticsParams> (resolve) =>
+        client.onDiagnostics (params) =>
+          resolve params unless params.diagnostics.some (diagnostic) =>
+            /Cannot find name 'document'/.test diagnostic.message
+      domEnabled := await client.request 'civet/setLibs', lib: ['ES2025', 'DOM', 'DOM.Iterable']
+      assert.equal domEnabled, true
+      domLoaded := await domLoadedPromise
+      assert !domLoaded.diagnostics.some (diagnostic) =>
+        /Cannot find name 'document'/.test diagnostic.message
+      await client.hover line: 0, character: 12
 
       client.dispose()
     finally

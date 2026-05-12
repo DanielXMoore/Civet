@@ -61,6 +61,7 @@ let monacoEditor: any;
 let monacoModel: any;
 let lspClient: PlaygroundLspClient | undefined;
 let lspProviders: { dispose(): void } | undefined;
+let lspStartPromise: Promise<void> | undefined;
 
 // Compile on input
 onMounted(fixTextareaSize);
@@ -118,9 +119,28 @@ watch(typescript, compile);
 
 const showTypeDiagnostics = ref(true);
 const compileFatal = ref(false);
+const useDomLib = ref(false);
 watch(showTypeDiagnostics, () => {
   lspClient?.updateMarkers();
 });
+watch(useDomLib, async () => {
+  await updateLspLibs();
+});
+
+async function updateLspLibs() {
+  if (!lspClient || !lspStartPromise) return;
+  try {
+    await lspStartPromise;
+    await lspClient.request('civet/setLibs', {
+      lib: useDomLib.value ? ['ES2025', 'DOM', 'DOM.Iterable'] : ['ES2025'],
+    });
+    if (monacoEditor) {
+      lspClient.change(monacoEditor.getValue());
+    }
+  } catch (error) {
+    console.error('Failed to update TypeScript lib setting', error);
+  }
+}
 
 const showComptime = props.showComptime;
 const comptime = ref(false);
@@ -222,7 +242,11 @@ async function initMonaco() {
   monacoEditor.onDidContentSizeChange(resizeMonacoEditor);
 
   lspClient = createPlaygroundLspClient(monaco, uri.toString());
-  lspClient.start(monacoModel.getValue()).then(() => {
+  lspStartPromise = lspClient.start(monacoModel.getValue());
+  lspStartPromise.then(async () => {
+    if (useDomLib.value) {
+      await updateLspLibs();
+    }
     lspProviders?.dispose();
     lspProviders = registerCivetLspProviders(monaco, {
       uri: uri.toString(),
@@ -230,6 +254,7 @@ async function initMonaco() {
       model: monacoModel,
     });
   }).catch((error) => {
+    lspStartPromise = undefined;
     console.error('Civet LSP failed to start', error);
   });
 
@@ -343,9 +368,14 @@ function resizeMonacoEditor() {
 }
 
 function createPlaygroundLspClient(monaco: any, uri: string) {
+  const lspLibBaseUrl = new URL(`${import.meta.env.BASE_URL}civet-lsp-lib/`, location.origin);
   const worker = createCivetLspWorker({
     civetUrl: new URL('@danielx/civet/browser.min', import.meta.url),
     serverUrl: new URL('../../../lsp/server/dist/browser.js', import.meta.url),
+    libUrls: {
+      dom: new URL('lib.dom.d.ts', lspLibBaseUrl),
+      'dom.iterable': new URL('lib.dom.iterable.d.ts', lspLibBaseUrl),
+    },
   });
   const client = createCivetLspWorkerClient({
     worker,
@@ -757,6 +787,14 @@ const playgroundUrl = computed(() => {
         >
           <input type="checkbox" v-model="showTypeDiagnostics"/>
           Diagnostics
+        </label>
+        <label
+          v-if="monacoReady"
+          class="diagnostics-toggle"
+          title="Load browser DOM types for diagnostics"
+        >
+          <input type="checkbox" v-model="useDomLib"/>
+          DOM lib
         </label>
         <span v-if="!hideLink">
           Edit inline or
