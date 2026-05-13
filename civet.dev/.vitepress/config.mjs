@@ -99,7 +99,7 @@ export default async function vitePressConfig() {
             const { tsCode } = compileCivet(code, civet, raw ? null : prettier,
               { comptime });
             const inputHtml = highlighter.codeToHtml(code, {
-              lang: 'coffee',
+              lang: 'civet',
               theme: 'one-dark-pro',
             });
             const outputHtml = highlighter.codeToHtml(tsCode, {
