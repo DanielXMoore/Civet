@@ -2003,11 +2003,15 @@ PropertyAccess
       optional: modifier?.token === "?",
     }
     if id
+      // `x::😊` → `x.prototype["😊"]`: unicode names need bracket access.
+      access := id.unicode
+        ? [ "prototype[", propertyKey(id), "]" ]
+        : [ "prototype.", id ]
       return {
         type: "PropertyAccess",
         name: id.name,
         dot: start,
-        children: [ start, "prototype.", id ],
+        children: [ start, ...access ],
       }
     else
       return {
@@ -2035,20 +2039,30 @@ PropertyBind
   # NOTE: foo@.bar and foo@bar shorthand for foo.bar.bind(foo)
   # foo@bar(baz) shorthand for foo.bar.bind(foo, baz)
   PropertyAccessModifier?:modifier At OptionalDot:dot ( IdentifierName / PrivateIdentifier ):id Arguments?:args ->
+    // `x@😊` → `x["😊"].bind(x)`: dot-access requires a JS identifier, so
+    // unicode names use bracket access with the user-visible name. Only the
+    // optional-chain `?` modifier keeps its dot (`x?.["😊"]`); plain `x@😊`
+    // and non-null `x!@😊` drop it since `.[` only pairs with `?.`.
+    children := id.unicode
+      ? [modifier, modifier?.token is "?" ? dot : null, "[", propertyKey(id), "]"]
+      : [modifier, dot, id]
     return {
       type: "PropertyBind",
       name: id.name,
-      children: [modifier, dot, id],  // omit `@` from children
+      children,  // omit `@` from children
       args: args?.children.slice(1, -1) ?? [], // remove the parens from the arg list, or give an empty list
     }
 
 # Variation on PropertyBind that forbids implicit arguments (for JSX)
 PropertyBindExplicitArguments
   PropertyAccessModifier?:modifier At OptionalDot:dot ( IdentifierName / PrivateIdentifier ):id ExplicitArguments?:args ->
+    children := id.unicode
+      ? [modifier, modifier?.token is "?" ? dot : null, "[", propertyKey(id), "]"]
+      : [modifier, dot, id]
     return {
       type: "PropertyBind",
       name: id.name,
-      children: [modifier, dot, id],  // omit `@` from children
+      children,  // omit `@` from children
       args: args?.children.slice(1, -1) ?? [], // remove the parens from the arg list, or give an empty list
     }
 
@@ -3277,9 +3291,18 @@ CoffeeScriptBooleanLiteral
 # NOTE: Added :symbol shorthand for Symbol.symbol or Symbol.for("symbol")
 SymbolLiteral
   Colon:colon ( IdentifierName / StringLiteral ):id ->
-    let name, token
+    let name, token, quoted
     if id.type is "Identifier"
-      { name, children: [ token ] } = id
+      if id.unicode
+        // `:🍊` → `Symbol.for("🍊")`: route unicode through the quoted
+        // path so the registry key matches the user-visible name, not
+        // the mangled `u$1F34A$` binding form.
+        name = id.unicode
+        token = { $loc: id.children?.[0]?.$loc, token: `"${id.unicode}"` }
+        quoted = true
+      else
+        { name, children: [ token ] } = id
+        quoted = false
     else
       name = literalValue({
         type: "Literal",
@@ -3288,17 +3311,18 @@ SymbolLiteral
         children: [id],
       })
       token = id
+      quoted = true
     if config.symbols.includes(name) // well-known symbol
       return {
         type: "SymbolLiteral",
         children:
-          id.type is "Identifier" ? [
-            { ...colon, token: "Symbol." },
-            token,
-          ] : [
+          quoted ? [
             { ...colon, token: "Symbol[" },
             token,
             "]",
+          ] : [
+            { ...colon, token: "Symbol." },
+            token,
           ],
         name,
       }
@@ -3307,7 +3331,7 @@ SymbolLiteral
         type: "SymbolLiteral",
         children: [
           { ...colon, token: 'Symbol.for(' },
-          id.type is "Identifier" ? [ '"', token, '"' ] : token,
+          quoted ? token : [ '"', token, '"' ],
           ')'
         ],
         name,
