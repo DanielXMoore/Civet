@@ -1,0 +1,390 @@
+// Tests for the browser worker helper and its lightweight JSON-RPC client.
+
+import assert from assert
+{ readFileSync } from node:fs
+import WebWorker from web-worker
+{
+  createCivetLspWorker
+  createCivetLspWorkerClient
+  type PublishDiagnosticsParams
+} from ../source/worker.civet
+
+class TestBlob
+  parts: string[]
+  type: string
+
+  constructor(parts: ???[], options?: { type?: string })
+    @parts = parts.map String
+    @type = options?.type ?? ''
+
+interface RecordedMessage
+  method: string
+  params:
+    textDocument?: { text?: string }
+    contentChanges?: { text?: string }[]
+
+function toDataUrl(source: string): string
+  'data:text/javascript,' + encodeURIComponent source
+
+function createTestWorker(): Worker
+  source := ```
+    const messages = [];
+
+    self.addEventListener('message', (event) => {
+      const message = event.data;
+      messages.push(message);
+
+      if (message.method === 'textDocument/didOpen') {
+        self.postMessage({
+          jsonrpc: '2.0',
+          method: 'textDocument/publishDiagnostics',
+          params: {
+            uri: message.params.textDocument.uri,
+            diagnostics: [{ message: 'opened' }],
+          },
+        });
+      }
+
+      if (message.id) {
+        let result = {};
+        if (message.method === 'textDocument/hover') {
+          result = { contents: 'hover text' };
+        } else if (message.method === 'textDocument/semanticTokens/full') {
+          result = { data: [0, 0, 1, 10, 0] };
+        } else if (message.method === 'textDocument/definition') {
+          result = {
+            uri: 'file:///workspace/definition.civet',
+            range: {
+              start: { line: 0, character: 0 },
+              end: { line: 0, character: 1 },
+            },
+          };
+        } else if (message.method === 'textDocument/completion') {
+          result = [{ label: 'completion' }];
+        } else if (message.method === 'completionItem/resolve') {
+          result = { ...message.params, detail: 'resolved' };
+        } else if (message.method === 'test/messages') {
+          result = messages.map(({ method, params }) => ({ method, params }));
+        } else if (message.method === 'test/error') {
+          self.postMessage({ jsonrpc: '2.0', id: message.id, error: { message: 'bad request' } });
+          return;
+        }
+        self.postMessage({ jsonrpc: '2.0', id: message.id, result });
+      }
+    });
+  ```
+  url := toDataUrl source
+  return new WebWorker(url) as! Worker
+
+describe "worker helper", ->
+  it "revokes the generated worker URL after startup", ->
+    originalWorker := (globalThis as any).Worker
+    originalBlob := globalThis.Blob
+    originalCreateObjectURL := URL.createObjectURL
+    originalRevokeObjectURL := URL.revokeObjectURL
+    revoked: string[] := []
+
+    class FakeWorker
+      name: string
+      constructor(public url: string, options: { name: string })
+        @name = options.name
+      terminate() {}
+
+    try
+      (globalThis as any).Worker = FakeWorker
+      (globalThis as any).Blob = TestBlob
+      URL.createObjectURL = (() => 'blob:test-worker') as typeof URL.createObjectURL
+      URL.revokeObjectURL = ((url: string) =>
+        revoked.push url
+      ) as typeof URL.revokeObjectURL
+
+      worker := createCivetLspWorker
+        civetUrl: 'test://civet.js'
+        serverUrl: 'test://server.js'
+      assert.equal (worker as any).name, 'civet-lsp'
+      assert.deepEqual revoked, ['blob:test-worker']
+    finally
+      if originalWorker
+        (globalThis as any).Worker = originalWorker
+      else
+        delete (globalThis as any).Worker
+      globalThis.Blob = originalBlob
+      URL.createObjectURL = originalCreateObjectURL
+      URL.revokeObjectURL = originalRevokeObjectURL
+
+  it "ignores stale diagnostics", async ->
+    uri := 'file:///workspace/stale.civet'
+    fakeWorker: any :=
+      postMessage: (message: any) =>
+        if message.id?
+          queueMicrotask =>
+            fakeWorker.onmessage data:
+              jsonrpc: '2.0'
+              id: message.id
+              result: {}
+      terminate: =>
+
+    client := createCivetLspWorkerClient
+      worker: fakeWorker as! Worker
+      uri: uri
+    diagnostics: PublishDiagnosticsParams[] := []
+    client.onDiagnostics (params) =>
+      diagnostics.push params
+
+    await client.start 'x := 1'
+    client.change 'x := 2'
+    fakeWorker.onmessage data:
+      jsonrpc: '2.0'
+      method: 'textDocument/publishDiagnostics'
+      params:
+        uri: uri
+        version: 1
+        diagnostics: []
+    assert.equal diagnostics#, 0
+
+    fakeWorker.onmessage data:
+      jsonrpc: '2.0'
+      method: 'textDocument/publishDiagnostics'
+      params:
+        uri: uri
+        version: 2
+        diagnostics: []
+    assert.equal diagnostics#, 1
+
+    client.dispose()
+
+  it "creates a worker and reports type diagnostics for queued source", ->
+    @timeout 30000
+    originalWorker := (globalThis as any).Worker
+    originalBlob := globalThis.Blob
+    originalCreateObjectURL := URL.createObjectURL
+    originalRevokeObjectURL := URL.revokeObjectURL
+    let worker: Worker?
+
+    civetSource := readFileSync '../../dist/browser.min.js', 'utf8'
+    serverSource := readFileSync 'dist/browser.js', 'utf8'
+    civetUrl := toDataUrl civetSource
+    serverUrl := 'test://civet-lsp-browser.js'
+
+    try
+      (globalThis as any).Worker = WebWorker
+      (globalThis as any).Blob = TestBlob
+      URL.createObjectURL = (blob: Blob | MediaSource) =>
+        testBlob := blob as! TestBlob
+        source .= testBlob.parts.join ''
+        // web-worker's classic VM path supports importScripts but not dynamic
+        // import(), so inline the test server module while preserving the
+        // production worker source shape around it.
+        source = source.replace(
+          `import(${JSON.stringify serverUrl}).then(`
+          => `Promise.resolve().then(() => {\nconst process = undefined;\nconst require = undefined;\n${serverSource}\n}).then(`
+        )
+        toDataUrl source
+
+      URL.revokeObjectURL = (() =>) as typeof URL.revokeObjectURL
+
+      worker = createCivetLspWorker
+        civetUrl: civetUrl
+        serverUrl: serverUrl
+        libUrls:
+          dom: toDataUrl readFileSync('dist/lib/lib.dom.d.ts', 'utf8')
+          'dom.iterable': toDataUrl readFileSync('dist/lib/lib.dom.iterable.d.ts', 'utf8')
+        name: 'test-civet-lsp'
+      defaultNamedWorker := createCivetLspWorker
+        civetUrl: civetUrl
+        serverUrl: serverUrl
+      defaultNamedWorker.terminate()
+
+      uri := 'file:///workspace/created-worker.civet'
+      client := createCivetLspWorkerClient
+        worker: worker
+        uri: uri
+        terminateOnDispose: false
+      diagnosticsPromise := new Promise<PublishDiagnosticsParams> (resolve) =>
+        client.onDiagnostics (params) =>
+          resolve params if params.diagnostics.some (diagnostic) =>
+            diagnostic.source is 'typescript' and /not assignable/.test diagnostic.message
+
+      client.change 'x: number := "oops"'
+      await client.start 'initial := 1'
+
+      diagnostics := await diagnosticsPromise
+      assert.equal diagnostics.uri, uri
+      typeDiagnostic := diagnostics.diagnostics.find (diagnostic) =>
+        diagnostic.source is 'typescript' and /not assignable/.test diagnostic.message
+      assert typeDiagnostic
+      assert.match typeDiagnostic.message, /Type 'string' is not assignable to type 'number'/
+
+      domMissingPromise := new Promise<PublishDiagnosticsParams> (resolve) =>
+        client.onDiagnostics (params) =>
+          resolve params if params.diagnostics.some (diagnostic) =>
+            /Cannot find name 'document'/.test diagnostic.message
+      client.change 'element := document.createElement("div")'
+      domMissing := await domMissingPromise
+      assert domMissing.diagnostics.some (diagnostic) =>
+        /Cannot find name 'document'/.test diagnostic.message
+
+      domLoadedPromise := new Promise<PublishDiagnosticsParams> (resolve) =>
+        client.onDiagnostics (params) =>
+          resolve params unless params.diagnostics.some (diagnostic) =>
+            /Cannot find name 'document'/.test diagnostic.message
+      domEnabled := await client.request 'civet/setLibs', lib: ['ES2025', 'DOM', 'DOM.Iterable']
+      assert.equal domEnabled, true
+      domLoaded := await domLoadedPromise
+      assert !domLoaded.diagnostics.some (diagnostic) =>
+        /Cannot find name 'document'/.test diagnostic.message
+      await client.hover line: 0, character: 12
+
+      client.dispose()
+    finally
+      worker?.terminate()
+      if originalWorker
+        (globalThis as any).Worker = originalWorker
+      else
+        delete (globalThis as any).Worker
+      globalThis.Blob = originalBlob
+      URL.createObjectURL = originalCreateObjectURL
+      URL.revokeObjectURL = originalRevokeObjectURL
+
+  it "talks to a Web Worker over JSON-RPC", ->
+    uri := 'file:///workspace/test.civet'
+    worker := createTestWorker()
+    client := createCivetLspWorkerClient
+      worker: worker
+      uri: uri
+
+    assert.deepEqual await client.semanticTokensFull(), data: []
+    assert.equal await client.hover(line: 0, character: 1), undefined
+    assert.equal await client.definition(line: 0, character: 1), undefined
+    assert.deepEqual await client.completion({
+      position: { line: 0, character: 1 }
+      context: { triggerKind: 1 }
+    }), []
+    unresolved :=
+      label: 'unresolved'
+    assert.equal await client.completionResolve(unresolved), unresolved
+
+    ignoredDiagnostics .= 0
+    ignoredDisposable := client.onDiagnostics => ignoredDiagnostics++
+    ignoredDisposable.dispose()
+    diagnosticPromise := new Promise<PublishDiagnosticsParams> (resolve) =>
+      client.onDiagnostics resolve
+
+    client.change 'queued'
+    await client.start 'initial'
+
+    diagnostics := await diagnosticPromise
+    assert.equal diagnostics.uri, uri
+    assert.equal diagnostics.diagnostics[0].message, 'opened'
+
+    hover := await client.hover line: 0, character: 1
+    assert hover
+    assert.equal hover.contents, 'hover text'
+
+    semanticTokens := await client.semanticTokensFull()
+    assert semanticTokens
+    assert.deepEqual semanticTokens.data, [0, 0, 1, 10, 0]
+
+    definition := await client.definition line: 0, character: 1
+    assert definition
+    assert.equal (definition as any).uri, 'file:///workspace/definition.civet'
+
+    completions := await client.completion
+      position: { line: 0, character: 1 }
+      context: { triggerKind: 1 }
+    assert Array.isArray completions
+    assert.equal completions[0].label, 'completion'
+    resolved := await client.completionResolve completions[0]
+    assert.equal resolved.detail, 'resolved'
+
+    client.change 'after-ready'
+
+    try
+      await client.request 'test/error', {}
+      assert.fail 'expected request to reject'
+    catch error
+      assert.deepEqual error, message: 'bad request'
+
+    messages := await client.request<RecordedMessage[]> 'test/messages', {}
+    assert.deepEqual messages.map(.method), [
+      'initialize'
+      'initialized'
+      'textDocument/didOpen'
+      'textDocument/didChange'
+      'textDocument/hover'
+      'textDocument/semanticTokens/full'
+      'textDocument/definition'
+      'textDocument/completion'
+      'completionItem/resolve'
+      'textDocument/didChange'
+      'test/error'
+      'test/messages'
+    ]
+    assert.equal ignoredDiagnostics, 0
+    openParams := messages[2].params
+    assert openParams.textDocument
+    assert.equal openParams.textDocument.text, 'initial'
+    changeParams := messages[3].params
+    assert changeParams.contentChanges
+    assert.equal changeParams.contentChanges[0].text, 'queued'
+
+    client.dispose()
+    await assert.rejects(
+      client.request 'anything', {}
+      /disposed/
+    )
+
+  it "can keep the worker alive when disposing the client", ->
+    uri := 'file:///workspace/test.civet'
+    worker := createTestWorker()
+    client := createCivetLspWorkerClient
+      worker: worker
+      uri: uri
+      terminateOnDispose: false
+
+    opened := new Promise<PublishDiagnosticsParams> (resolve) =>
+      client.onDiagnostics resolve
+    await client.start 'source'
+    await opened
+    client.dispose()
+
+    response := new Promise<???> (resolve, reject) =>
+      worker.onmessage = (event) => resolve event.data
+      worker.onerror = (event) => reject event
+    worker.postMessage
+      jsonrpc: '2.0'
+      id: 1
+      method: 'textDocument/hover'
+      params: {}
+
+    assert.deepEqual await response,
+      jsonrpc: '2.0'
+      id: 1
+      result:
+        contents: 'hover text'
+
+    worker.terminate()
+
+  it "rejects pending requests on worker error and dispose", async ->
+    makeFakeWorker := =>
+      worker: any :=
+        postMessage: (_message: ???) =>
+        terminate: =>
+      worker as Worker
+
+    errorWorker := makeFakeWorker()
+    errorClient := createCivetLspWorkerClient
+      worker: errorWorker
+      uri: 'file:///workspace/error.civet'
+    errorRequest := errorClient.request 'test/pending', {}
+    (errorWorker as any).onerror new Error 'worker failed'
+    await assert.rejects errorRequest, /worker failed/
+
+    disposeWorker := makeFakeWorker()
+    disposeClient := createCivetLspWorkerClient
+      worker: disposeWorker
+      uri: 'file:///workspace/dispose.civet'
+    disposeRequest := disposeClient.request 'test/pending', {}
+    disposeClient.dispose()
+    disposeClient.notify 'test/ignored'
+    await assert.rejects disposeRequest, /disposed/

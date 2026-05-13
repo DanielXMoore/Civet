@@ -6,14 +6,13 @@
  * and handles project-Civet detection before calling in.
  */
 
-path from path
+path from node:path
 
 ts from typescript
 { type LanguageService } from typescript
 {
   createCompilerHost
   createLanguageService
-  sys
 } := ts
 
 {
@@ -64,6 +63,8 @@ export interface TSServiceOptions
    * consumers pass an inline tsConfig without writing it down first.
    */
   tsConfig?: any
+  /** Filesystem implementation; defaults to `ts.sys` in Node. */
+  system?: ts.System
 
 export interface ResolvedService extends LanguageService
   host: Host
@@ -80,6 +81,7 @@ export interface ResolvedService extends LanguageService
 
 export function TSService(projectPath: string, options: TSServiceOptions): ResolvedService
   { plugins = [], docFactory, libDir, discoverProjectFiles = true, extraCompilerOptions } := options
+  system := options.system ?? ts.sys
   /* c8 ignore next -- console default fires for ad-hoc consumers; tests always supply a logger */
   logger: Logger := options.logger ?? console
 
@@ -97,6 +99,7 @@ export function TSService(projectPath: string, options: TSServiceOptions): Resol
   parsedConfig := parseTsConfigForCivet projectPath, transpilers, {
     tsConfig: options.tsConfig
     widenIncludeFilter: discoverProjectFiles
+    system
   }
 
   hostOptions := if extraCompilerOptions
@@ -104,8 +107,7 @@ export function TSService(projectPath: string, options: TSServiceOptions): Resol
   else
     parsedConfig.options
 
-  //@ts-expect-error
-  baseHost := createCompilerHost(parsedConfig)
+  baseHost := createBaseHost(hostOptions, system)
 
   host := TSHost(hostOptions, parsedConfig.fileNames, baseHost, transpilers, docFactory, logger, libDir)
   service := createLanguageService(host)
@@ -117,7 +119,7 @@ export function TSService(projectPath: string, options: TSServiceOptions): Resol
     // throwing ENOENT shouldn't take the service down.
     let civetFiles: string[]
     try
-      civetFiles = sys.readDirectory(civetFolder)
+      civetFiles = system.readDirectory(civetFolder)
     /* c8 ignore start -- ts.sys.readDirectory returns [] for missing dirs in
        tested versions; this catch is forward-compat insurance */
     catch e
@@ -132,7 +134,7 @@ export function TSService(projectPath: string, options: TSServiceOptions): Resol
       pluginUri := docFactory.pathToUri(filePath)
       logger.info("Loading plugin " + pluginUri)
       try
-        { default: plugin }: { default: Plugin } := await import(pluginUri)
+        { default: plugin }: { default: Plugin } := await import(/* @vite-ignore */ pluginUri)
         logger.info("Loaded plugin " + plugin)
         registerPlugin plugin
       catch e
@@ -146,4 +148,41 @@ export function TSService(projectPath: string, options: TSServiceOptions): Resol
       getCanonicalFileName remapFileName(fileName, transpilers)
     registerPlugin
     loadPlugins
+  }
+
+export function createBaseHost(options: ts.CompilerOptions, system: ts.System): ts.CompilerHost
+  if system is ts.sys
+    return createCompilerHost(options)
+
+  getCanonicalFileName := (fileName: string) =>
+    if system.useCaseSensitiveFileNames then fileName else fileName.toLowerCase()
+
+  {
+    getSourceFile(fileName: string, languageVersion: ts.ScriptTarget)
+      sourceText := system.readFile(fileName)
+      return unless sourceText?
+      ts.createSourceFile(fileName, sourceText, languageVersion)
+    getDefaultLibFileName(options: ts.CompilerOptions)
+      path.join('/typescript/lib', ts.getDefaultLibFileName(options))
+    writeFile(fileName: string, content: string)
+      system.writeFile?(fileName, content)
+    getCurrentDirectory()
+      system.getCurrentDirectory()
+    getDirectories(path: string)
+      system.getDirectories?(path) ?? []
+    fileExists(fileName: string)
+      system.fileExists(fileName)
+    readFile(fileName: string)
+      system.readFile(fileName)
+    useCaseSensitiveFileNames()
+      system.useCaseSensitiveFileNames
+    getCanonicalFileName
+    getNewLine()
+      system.newLine
+    directoryExists(path: string)
+      system.directoryExists?(path) ?? false
+    readDirectory(path: string, extensions?: readonly string[], excludes?: readonly string[], includes?: readonly string[], depth?: number)
+      system.readDirectory(path, extensions, excludes, includes, depth)
+    realpath(path: string)
+      system.realpath ? system.realpath(path) : path
   }

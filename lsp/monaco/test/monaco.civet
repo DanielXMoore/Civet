@@ -1,0 +1,476 @@
+// Unit tests for the Monaco adapters using a small mock Monaco API.
+
+import assert from assert
+{
+  registerCivetLanguage
+  registerCivetMonarchTokens
+  registerCivetLspProviders
+  registerCivetSemanticTokens
+  registerCivetHoverProvider
+  registerCivetDefinitionProvider
+  registerCivetCompletionProvider
+} from ../source/monaco.civet
+
+class MockRange
+  constructor(
+    public startLineNumber: number
+    public startColumn: number
+    public endLineNumber: number
+    public endColumn: number
+  )
+
+function makeDisposable()
+  disposable: any := { disposed: false }
+  disposable.dispose = => disposable.disposed = true
+  return disposable
+
+function createMockMonaco()
+  languagesList: any[] := []
+  registeredLanguages: any[] := []
+  monarchProviders: any[] := []
+  semanticProviders: any[] := []
+  hoverProviders: any[] := []
+  definitionProviders: any[] := []
+  completionProviders: any[] := []
+
+  api: any :=
+    Range: MockRange
+    languages:
+      CompletionTriggerKind:
+        Invoke: 0
+        TriggerCharacter: 1
+        TriggerForIncompleteCompletions: 2
+      CompletionItemKind:
+        Text: 'Text'
+        Method: 'Method'
+        Function: 'Function'
+        Constructor: 'Constructor'
+        Field: 'Field'
+        Variable: 'Variable'
+        Class: 'Class'
+        Interface: 'Interface'
+        Module: 'Module'
+        Property: 'Property'
+        Unit: 'Unit'
+        Value: 'Value'
+        Enum: 'Enum'
+        Keyword: 'Keyword'
+        Snippet: 'Snippet'
+        Color: 'Color'
+        File: 'File'
+        Reference: 'Reference'
+        Folder: 'Folder'
+        EnumMember: 'EnumMember'
+        Constant: 'Constant'
+        Struct: 'Struct'
+        Event: 'Event'
+        Operator: 'Operator'
+        TypeParameter: 'TypeParameter'
+      CompletionItemTag:
+        Deprecated: 'Deprecated'
+      CompletionItemInsertTextRule:
+        InsertAsSnippet: 'InsertAsSnippet'
+      getLanguages: => languagesList
+      register: (language: any) =>
+        languagesList.push language
+        registeredLanguages.push language
+      setMonarchTokensProvider: (id: string, provider: any) =>
+        monarchProviders.push { id, provider }
+        makeDisposable()
+      registerDocumentSemanticTokensProvider: (id: string, provider: any) =>
+        disposable := makeDisposable()
+        semanticProviders.push { id, provider, disposable }
+        disposable
+      registerHoverProvider: (id: string, provider: any) =>
+        disposable := makeDisposable()
+        hoverProviders.push { id, provider, disposable }
+        disposable
+      registerDefinitionProvider: (id: string, provider: any) =>
+        disposable := makeDisposable()
+        definitionProviders.push { id, provider, disposable }
+        disposable
+      registerCompletionItemProvider: (id: string, provider: any) =>
+        disposable := makeDisposable()
+        completionProviders.push { id, provider, disposable }
+        disposable
+
+  {
+    api
+    languagesList
+    registeredLanguages
+    monarchProviders
+    semanticProviders
+    hoverProviders
+    definitionProviders
+    completionProviders
+  }
+
+function createModel(uri: string, wordStart = 1, wordEnd = 1)
+  listeners: any[] := []
+  listenerDisposable := makeDisposable()
+  model: any :=
+    uri:
+      toString: => uri
+    getWordUntilPosition: =>
+      startColumn: wordStart
+      endColumn: wordEnd
+    onDidChangeContent: (listener: any) =>
+      listeners.push listener
+      listenerDisposable
+  model.fireChange = =>
+    for listener of listeners
+      listener()
+  model.listenerDisposable = listenerDisposable
+  return model
+
+function rangeTuple(range: any)
+  [
+    range.startLineNumber
+    range.startColumn
+    range.endLineNumber
+    range.endColumn
+  ]
+
+uri := 'file:///workspace/index.civet'
+
+describe "monaco helpers", ->
+  it "registers the Civet language once", ->
+    mock := createMockMonaco()
+    registerCivetLanguage mock.api
+    registerCivetLanguage mock.api
+    assert.equal mock.registeredLanguages#, 1
+    assert.deepEqual mock.registeredLanguages[0],
+      id: 'civet'
+      extensions: ['.civet']
+      aliases: ['Civet', 'civet']
+      mimetypes: ['text/x-civet']
+
+    registerCivetLanguage mock.api,
+      id: 'civet-alt'
+      extensions: ['.cv']
+    assert.equal mock.registeredLanguages#, 2
+    assert.equal mock.registeredLanguages[1].id, 'civet-alt'
+
+  it "registers Monarch tokens", ->
+    mock := createMockMonaco()
+    disposable := registerCivetMonarchTokens mock.api
+    assert.equal mock.monarchProviders[0].id, 'civet'
+    provider := mock.monarchProviders[0].provider
+    assert provider.keywords.includes 'unless'
+    assert provider.operators.includes ':='
+    assert provider.tokenizer.tripleBacktickString
+    disposable.dispose()
+    assert disposable.disposed
+
+  it "registers and disposes all LSP providers", ->
+    mock := createMockMonaco()
+    model := createModel uri
+    client: any :=
+      semanticTokensFull: async => data: []
+      hover: async => undefined
+      definition: async => undefined
+      completion: async => []
+      completionResolve: async (item: any) => item
+    disposable := registerCivetLspProviders mock.api, { uri, model, client }
+    assert.equal mock.semanticProviders#, 1
+    assert.equal mock.hoverProviders#, 1
+    assert.equal mock.completionProviders#, 1
+    assert.equal mock.definitionProviders#, 1
+    disposable.dispose()
+    assert mock.semanticProviders[0].disposable.disposed
+    assert mock.hoverProviders[0].disposable.disposed
+    assert mock.completionProviders[0].disposable.disposed
+    assert mock.definitionProviders[0].disposable.disposed
+
+  it "adapts semantic tokens and change notifications", async ->
+    mock := createMockMonaco()
+    model := createModel uri
+    calls .= 0
+    client: any :=
+      semanticTokensFull: async =>
+        calls++
+        data: [0, 0, 1, 10, 0]
+    disposable := registerCivetSemanticTokens mock.api, { uri, model, client }
+    provider := mock.semanticProviders[0].provider
+
+    legend := provider.getLegend()
+    assert legend.tokenTypes.includes 'class'
+    changes .= 0
+    changeDisposable := provider.onDidChange => changes++
+    model.fireChange()
+    assert.equal changes, 1
+    changeDisposable.dispose()
+    model.fireChange()
+    assert.equal changes, 1
+
+    tokens := await provider.provideDocumentSemanticTokens model
+    assert.deepEqual Array.from(tokens.data), [0, 0, 1, 10, 0]
+    assert.equal calls, 1
+
+    wrongTokens := await provider.provideDocumentSemanticTokens createModel 'file:///workspace/other.civet'
+    assert.deepEqual Array.from(wrongTokens.data), []
+
+    client.semanticTokensFull = async => undefined
+    missingTokens := await provider.provideDocumentSemanticTokens model
+    assert.deepEqual Array.from(missingTokens.data), []
+
+    client.semanticTokensFull = async => throw new Error 'tokens failed'
+    failedTokens := await provider.provideDocumentSemanticTokens model
+    assert.deepEqual Array.from(failedTokens.data), []
+    provider.releaseDocumentSemanticTokens()
+
+    disposable.dispose()
+    assert model.listenerDisposable.disposed
+    assert mock.semanticProviders[0].disposable.disposed
+
+  it "adapts hover contents and ranges", async ->
+    mock := createMockMonaco()
+    model := createModel uri
+    client: any :=
+      hover: async (position: any) =>
+        assert.deepEqual position, line: 1, character: 2
+        contents: [
+          'plain'
+          ''
+          { language: 'ts', value: 'let x: number' }
+          { kind: 'markdown', value: '**markdown**' }
+          [{ language: 1, value: 'fallback' }]
+        ]
+        range:
+          start: line: 0, character: 1
+          end: line: 0, character: 4
+    registerCivetHoverProvider mock.api, { uri, client }
+    provider := mock.hoverProviders[0].provider
+    hover := await provider.provideHover model, { lineNumber: 2, column: 3 }
+    assert.deepEqual hover.contents.map(.value), [
+      'plain'
+      '```ts\nlet x: number\n```'
+      '**markdown**'
+      'fallback'
+    ]
+    assert.deepEqual rangeTuple(hover.range), [1, 2, 1, 5]
+
+    client.hover = async => contents: 'solo'
+    stringHover := await provider.provideHover model, { lineNumber: 1, column: 1 }
+    assert.deepEqual stringHover.contents, [value: 'solo']
+
+    wrong := await provider.provideHover createModel('file:///workspace/other.civet'), { lineNumber: 1, column: 1 }
+    assert.equal wrong, undefined
+    client.hover = async => {}
+    missingContents := await provider.provideHover model, { lineNumber: 1, column: 1 }
+    assert.equal missingContents, undefined
+    client.hover = async => contents: ''
+    empty := await provider.provideHover model, { lineNumber: 1, column: 1 }
+    assert.equal empty, undefined
+    client.hover = async =>
+      contents: [
+        { language: 'ts', value: '' }
+        { value: '' }
+      ]
+    emptyObjects := await provider.provideHover model, { lineNumber: 1, column: 1 }
+    assert.equal emptyObjects, undefined
+    client.hover = async => throw new Error 'hover failed'
+    failed := await provider.provideHover model, { lineNumber: 1, column: 1 }
+    assert.equal failed, undefined
+
+  it "adapts definitions and location links", async ->
+    mock := createMockMonaco()
+    model := createModel uri
+    client: any :=
+      definition: async (position: any) =>
+        assert.deepEqual position, line: 0, character: 0
+        . uri: uri
+          range:
+            start: line: 0, character: 1
+            end: line: 0, character: 3
+        . targetUri: uri
+          targetRange:
+            start: line: 1, character: 0
+            end: line: 1, character: 3
+          targetSelectionRange:
+            start: line: 1, character: 1
+            end: line: 1, character: 2
+        . targetUri: uri
+        . uri: 'file:///workspace/other.civet'
+          range:
+            start: line: 2, character: 0
+            end: line: 2, character: 1
+    registerCivetDefinitionProvider mock.api, { uri, client }
+    provider := mock.definitionProviders[0].provider
+    definitions := await provider.provideDefinition model, { lineNumber: 1, column: 1 }
+    assert.equal definitions#, 2
+    assert.deepEqual definitions.map((definition: any) => rangeTuple definition.range), [
+      [1, 2, 1, 4]
+      [2, 2, 2, 3]
+    ]
+
+    client.definition = async => {}
+      uri
+      range:
+        start: line: 2, character: 1
+        end: line: 2, character: 4
+    single := await provider.provideDefinition model, { lineNumber: 1, column: 1 }
+    assert.equal single#, 1
+
+    client.definition = async => []
+    none := await provider.provideDefinition model, { lineNumber: 1, column: 1 }
+    assert.equal none, undefined
+    client.definition = async => undefined
+    missing := await provider.provideDefinition model, { lineNumber: 1, column: 1 }
+    assert.equal missing, undefined
+    wrong := await provider.provideDefinition createModel('file:///workspace/other.civet'), { lineNumber: 1, column: 1 }
+    assert.equal wrong, undefined
+    client.definition = async => throw new Error 'definition failed'
+    failed := await provider.provideDefinition model, { lineNumber: 1, column: 1 }
+    assert.equal failed, undefined
+
+  it "adapts completions, trigger kinds, and resolve", async ->
+    mock := createMockMonaco()
+    model := createModel uri, 2, 5
+    contexts: any[] := []
+    items := [
+      {
+        label: 'snippet'
+        detail: 'detail'
+        sortText: '1'
+        filterText: 'snip'
+        data: { id: 1 }
+        insertText: 'snippet($1)'
+        kind: 15
+        tags: [1]
+        documentation: 'docs'
+        insertTextFormat: 2
+        textEdit:
+          range:
+            start: line: 0, character: 1
+            end: line: 0, character: 4
+          newText: 'snippet()'
+        additionalTextEdits: [
+          range:
+            start: line: 1, character: 0
+            end: line: 1, character: 0
+          newText: 'import x\n'
+        ]
+        command:
+          title: 'Run'
+          command: 'run.command'
+          arguments: [1]
+      }
+      ...[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 999].map (kind) =>
+        label: `kind-${kind}`
+        kind: kind
+        documentation:
+          value: `doc-${kind}`
+    ]
+    client: any :=
+      completion: async (params: any) =>
+        contexts.push params.context
+        return { isIncomplete: true, items }
+      completionResolve: async (item: any) =>
+        assert.equal item.label, 'snippet'
+        detail: 'resolved detail'
+        documentation:
+          value: 'resolved docs'
+        additionalTextEdits: [
+          range:
+            start: line: 2, character: 0
+            end: line: 2, character: 1
+          newText: '!'
+        ]
+    registerCivetCompletionProvider mock.api, { uri, client }
+    provider := mock.completionProviders[0].provider
+
+    result := await provider.provideCompletionItems model,
+      { lineNumber: 1, column: 6 }
+      triggerKind: mock.api.languages.CompletionTriggerKind.Invoke
+    assert.equal result.incomplete, true
+    assert.equal result.suggestions#, items#
+    suggestion := result.suggestions[0]
+    assert.equal suggestion.label, 'snippet'
+    assert.equal suggestion.kind, 'Snippet'
+    assert.deepEqual suggestion.tags, ['Deprecated']
+    assert.equal suggestion.insertTextRules, 'InsertAsSnippet'
+    assert.equal suggestion.insertText, 'snippet()'
+    assert.deepEqual rangeTuple(suggestion.range), [1, 2, 1, 5]
+    assert.deepEqual rangeTuple(suggestion.additionalTextEdits[0].range), [2, 1, 2, 1]
+    assert.deepEqual suggestion.command,
+      id: 'run.command'
+      title: 'Run'
+      arguments: [1]
+
+    resolvedSuggestion := await provider.resolveCompletionItem suggestion
+    assert.equal resolvedSuggestion, suggestion
+    assert.equal suggestion.detail, 'resolved detail'
+    assert.deepEqual suggestion.documentation, value: 'resolved docs'
+    assert.deepEqual rangeTuple(suggestion.additionalTextEdits[0].range), [3, 1, 3, 2]
+
+    assert.deepEqual result.suggestions.map(.kind), [
+      'Snippet'
+      'Method'
+      'Function'
+      'Constructor'
+      'Field'
+      'Variable'
+      'Class'
+      'Interface'
+      'Module'
+      'Property'
+      'Unit'
+      'Value'
+      'Enum'
+      'Keyword'
+      'Color'
+      'File'
+      'Reference'
+      'Folder'
+      'EnumMember'
+      'Constant'
+      'Struct'
+      'Event'
+      'Operator'
+      'TypeParameter'
+      'Text'
+    ]
+    assert.deepEqual contexts[0], triggerKind: 1
+
+    await provider.provideCompletionItems model, { lineNumber: 1, column: 6 },
+      triggerKind: mock.api.languages.CompletionTriggerKind.TriggerCharacter
+      triggerCharacter: '.'
+    await provider.provideCompletionItems model, { lineNumber: 1, column: 6 },
+      triggerKind: mock.api.languages.CompletionTriggerKind.TriggerForIncompleteCompletions
+    await provider.provideCompletionItems model, { lineNumber: 1, column: 6 },
+      triggerKind: 99
+    assert.deepEqual contexts.map(.triggerKind), [1, 2, 3, 1]
+    assert.equal contexts[1].triggerCharacter, '.'
+
+    client.completion = async =>
+      . label: 'array-result'
+        detail: 'kept detail'
+        documentation: 'kept docs'
+    client.completionResolve = async => undefined
+    arrayResult := await provider.provideCompletionItems model, { lineNumber: 1, column: 6 },
+      triggerKind: 0
+    assert.equal arrayResult.incomplete, false
+    assert.equal arrayResult.suggestions[0].range.startColumn, 2
+    await provider.resolveCompletionItem arrayResult.suggestions[0]
+    assert.equal arrayResult.suggestions[0].detail, 'kept detail'
+    assert.deepEqual arrayResult.suggestions[0].documentation, value: 'kept docs'
+
+    client.completionResolve = async => throw new Error 'resolve failed'
+    failedResolve := provider.resolveCompletionItem arrayResult.suggestions[0]
+    await assert.rejects failedResolve, /resolve failed/
+    assert.deepEqual await provider.resolveCompletionItem({ label: 'external' }), { label: 'external' }
+
+    client.completion = async => undefined
+    missingResult := await provider.provideCompletionItems model, { lineNumber: 1, column: 6 },
+      triggerKind: 0
+    assert.equal missingResult.incomplete, false
+    assert.deepEqual missingResult.suggestions, []
+
+    wrong := await provider.provideCompletionItems createModel('file:///workspace/other.civet'), { lineNumber: 1, column: 1 },
+      triggerKind: 0
+    assert.deepEqual wrong, suggestions: []
+    client.completion = async => throw new Error 'completion failed'
+    failed := await provider.provideCompletionItems model, { lineNumber: 1, column: 1 },
+      triggerKind: 0
+    assert.deepEqual failed, suggestions: []

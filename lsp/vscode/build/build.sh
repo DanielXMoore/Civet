@@ -15,5 +15,5 @@ ${CIVET_BIN:-../../dist/civet} build/build.civet
 
 # Copy server output from lsp/server
 mkdir -p dist/lib
-cp ../server/dist/server.js dist/server.js
+cp ../server/dist/node.js dist/node.js
 cp -r ../server/dist/lib/. dist/lib/

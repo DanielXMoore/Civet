@@ -2,39 +2,39 @@ importScripts('https://cdn.jsdelivr.net/npm/prettier@3.2.5/standalone.js');
 importScripts('https://cdn.jsdelivr.net/npm/prettier@3.2.5/plugins/estree.js');
 importScripts('https://cdn.jsdelivr.net/npm/prettier@3.2.5/plugins/typescript.js');
 importScripts('https://cdn.jsdelivr.net/npm/shiki@0.14.7');
-importScripts('/__civet.js');
 
 onmessage = async (e) => {
   const { uid, code, prettierOutput, jsOutput, tsOutput, parseOptions } = e.data;
   const highlighter = await getHighlighter();
-  const inputHtml = highlighter.codeToHtml(code, { lang: 'coffee' });
+  const inputHtml = highlighter.codeToHtml(code, { lang: 'civet' });
 
-  let tsCode, ast, error
+  let tsCode, ast, sourceMap
+  let errors = []
   try {
-    let errors = []
     ast = await Civet.compile(code, { ast: true, parseOptions });
-    tsCode = Civet.generate(ast, { js: !tsOutput, errors });
+    sourceMap = new Civet.SourceMap(code);
+    tsCode = Civet.generate(ast, { js: !tsOutput, errors, sourceMap });
     if (errors.length) {
       // Rerun with SourceMap to get error location
       errors = []
-      tsCode = Civet.generate(ast, { errors, sourceMap: new Civet.SourceMap(code) });
-      error = errors[0]
+      sourceMap = new Civet.SourceMap(code);
+      tsCode = Civet.generate(ast, { errors, sourceMap });
     }
   } catch (e) {
-    error = e
+    return postError([e], true)
   }
-  if (error) return postError(error)
 
-  function postError(error) {
+  function postError(errors, fatal) {
+    const error = errors[0]
     if (Civet.isCompileError(error)) {
       console.info('Snippet compilation error!', error);
 
       const linesUntilError = code.split('\n').slice(0, error.line).join('\n');
       const errorLine = `${' '.repeat(error.column - 1)}^ ${error.header}`;
       const errorCode = `${linesUntilError}\n${errorLine}`;
-      const outputHtml = highlighter.codeToHtml(errorCode, { lang: 'coffee' });
+      const outputHtml = highlighter.codeToHtml(errorCode, { lang: 'civet' });
 
-      postMessage({ uid, inputHtml, outputHtml, error });
+      postMessage({ uid, inputHtml, outputHtml, errors, fatal });
     } else {
       console.error(error)
       let outputHtml = (error.stack ?? `${error.name}: ${error.message}`)
@@ -42,8 +42,15 @@ onmessage = async (e) => {
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
       outputHtml = `<h3>Compiler crashed; please report as a compiler bug.</h3><pre class="shiki crash">${outputHtml}</pre>`;
-      postMessage({ uid, inputHtml, outputHtml, error });
+      postMessage({ uid, inputHtml, outputHtml, errors, fatal });
     }
+  }
+
+  function errorHtml(error) {
+    const linesUntilError = code.split('\n').slice(0, error.line).join('\n');
+    const errorLine = `${' '.repeat(error.column - 1)}^ ${error.header}`;
+    const errorCode = `${linesUntilError}\n${errorLine}`;
+    return highlighter.codeToHtml(errorCode, { lang: 'civet' });
   }
 
   let jsCode = '';
@@ -83,6 +90,9 @@ onmessage = async (e) => {
     }
   }
 
+  const civetOutput = tsCode;
+  const sourceMapLines = sourceMap?.lines ?? sourceMap?.data?.lines;
+  let formattedOutput;
   if (prettierOutput) {
     try {
       tsCode = await prettier.format(tsCode, {
@@ -90,6 +100,7 @@ onmessage = async (e) => {
         plugins: prettierPlugins,
         printWidth: 50,
       });
+      formattedOutput = tsCode;
     } catch (err) {
       console.info('Prettier error. Fallback to raw civet output', {
         tsCode,
@@ -98,19 +109,53 @@ onmessage = async (e) => {
     }
   }
 
-  const outputHtml = highlighter.codeToHtml(tsCode, { lang: 'tsx' });
-
-  postMessage({ uid, inputHtml, outputHtml, jsCode });
-};
-
-let highlighter;
-async function getHighlighter() {
-  if (!highlighter) {
-    highlighter = await shiki.getHighlighter({
-      theme: 'one-dark-pro',
-      langs: ['coffee', 'tsx'],
-    });
+  let outputHtml = highlighter.codeToHtml(tsCode, { lang: 'tsx' });
+  if (errors.length) {
+    outputHtml = `${errorHtml(errors[0])}<hr class="playground-output-separator">${outputHtml}`;
   }
 
-  return highlighter;
+  postMessage({
+    uid,
+    inputHtml,
+    outputHtml,
+    sourceMapLines,
+    civetOutput,
+    prettierOutput: formattedOutput,
+    jsCode,
+    errors,
+    fatal: false
+  });
+};
+
+// Load the shiki highlighter once
+let highlighterPromise;
+function getHighlighter() {
+  return highlighterPromise ??= (async () => {
+    const civetLanguage = await getCivetLanguage();
+    return shiki.getHighlighter({
+      theme: 'one-dark-pro',
+      // The Civet grammar includes `source.js.regexp`.
+      langs: [civetLanguage, 'javascript', 'tsx'],
+    });
+  })();
+}
+
+async function getCivetLanguage() {
+  const civetGrammarUrl = self.civetGrammarUrl;
+  if (!civetGrammarUrl) {
+    throw new Error('Missing Civet grammar URL');
+  }
+  const response = await fetch(civetGrammarUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to load Civet grammar: ${response.status} ${response.statusText}`);
+  }
+  const grammar = await response.json();
+  return {
+    id: 'civet',
+    scopeName: grammar.scopeName ?? 'source.civet',
+    aliases: ['civet'],
+    embeddedLangs: ['javascript'],
+    path: civetGrammarUrl,
+    grammar,
+  };
 }

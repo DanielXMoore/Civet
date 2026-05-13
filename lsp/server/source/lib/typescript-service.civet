@@ -1,4 +1,7 @@
-path from path
+// Node adapter for the shared Civet TypeScript service. Resolves the project
+// Civet package, LSP TextDocument factory, and bundled TypeScript lib path.
+
+path from node:path
 
 { type CompileOptions, lib as BundledCivetLib } from @danielx/civet
 BundledCivetModule from @danielx/civet
@@ -6,18 +9,24 @@ BundledCivetConfigModule from @danielx/civet/config
 BundledCivetPackage from @danielx/civet/package.json with type: 'json'
 {
   type DocFactory
+  type FileMeta
   type Logger
   type TranspiledDoc
+} from ../../../../source/ts-service/types.civet
+{
   makeCivetPlugin
   makeHeraPlugin
   TSService as SharedTSService
 } from @danielx/civet/ts-service
+{
+  type ResolvedService as SharedResolvedService
+} from ../../../../source/ts-service/service.civet
 
 ts from typescript
 { version: typescriptVersion } := ts
 
-{ createRequire } from module
-{ fileURLToPath } from url
+{ createRequire } from node:module
+{ fileURLToPath } from node:url
 { URI } from vscode-uri
 { TextDocument } from vscode-languageserver-textdocument
 
@@ -36,13 +45,22 @@ dir :=
 // bundled TS, not whatever is resolvable in the user's node_modules.
 libDir := path.join(dir, "lib")
 
-// Re-exported so server.civet can keep its
-// `Awaited<ReturnType<typeof TSService>>` derivation untouched.
-export type { FileMeta, ResolvedService } from @danielx/civet/ts-service
+type LspFileMeta = Omit<FileMeta, 'transpiledDoc'> & { transpiledDoc?: TextDocument }
+type LspHost = Omit<SharedResolvedService['host'], 'getMeta'> & {
+  getMeta(p: string): LspFileMeta?
+}
+
+// The LSP docFactory creates real TextDocuments, so host metadata can expose
+// offsetAt/positionAt/getText(range) to server.civet instead of the shared
+// minimal TranspiledDoc surface.
+export interface ResolvedService extends Omit<SharedResolvedService, 'host'>
+  host: LspHost
+
+export type { FileMeta }
 
 // Bridge to vscode-uri / vscode-languageserver-textdocument so the
 // shared host can stay LSP-free.
-docFactory: DocFactory<TranspiledDoc> := {
+docFactory: DocFactory<TextDocument> := {
   create: (uri, languageId, version, text) =>
     TextDocument.create(uri, languageId, version, text)
   update: (doc, text, version) =>
@@ -58,7 +76,7 @@ docFactory: DocFactory<TranspiledDoc> := {
  * plugins, and bridges vscode-uri / vscode-languageserver-textdocument
  * through DocFactory.
  */
-function TSService(projectURL = "./", logger: Logger = console)
+function TSService(projectURL = "./", logger: Logger = console): Promise<ResolvedService>
   logger.info("CIVET VSCODE PLUGIN " + version)
   logger.info("TYPESCRIPT " + typescriptVersion)
 
@@ -80,8 +98,8 @@ function TSService(projectURL = "./", logger: Logger = console)
 
   try
     Civet = projectRequire(civetPath)
-    if Civet.lib?
-      CivetLib = Civet.lib
+    if (Civet as { lib?: typeof BundledCivetLib }).lib?
+      CivetLib = (Civet as! { lib: typeof BundledCivetLib }).lib
     else
       logger.error `PROJECT CIVET ${civetPath} IS MISSING lib EXPORT; USING BUNDLED lib`
     ProjectVersion := projectRequire(`${civetPath}/package.json`).version
@@ -122,11 +140,11 @@ function TSService(projectURL = "./", logger: Logger = console)
     config: civetConfig
   }
 
-  return SharedTSService projectPath, {
+  return SharedTSService(projectPath, {
     plugins: [civetPlugin, heraPlugin]
-    docFactory
+    docFactory: docFactory as DocFactory<TranspiledDoc>
     logger
     libDir
-  }
+  }) as ResolvedService
 
 export default TSService

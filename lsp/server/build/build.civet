@@ -1,30 +1,106 @@
-{ build } from esbuild
-{ writeFileSync } from fs
+// Builds the Node server, browser worker bundle, and worker helper entrypoint.
+
+{ build, type OnResolveArgs, type PluginBuild } from esbuild
+{ renameSync, readFileSync, readdirSync, rmdirSync, writeFileSync } from fs
+{ createRequire } from module
+{ dirname, join } from path
 civetPlugin from @danielx/civet/esbuild
 
 minify := false
 sourcemap := true
 
 isDev := process.env.NODE_ENV is "development"
+require := createRequire(import.meta.url)
+tsLibDir := dirname(require.resolve('typescript'))
+civetBuildPlugin := civetPlugin ts: 'civet'
+commonOptions := {
+  outdir: 'dist'
+  tsconfig: './tsconfig.json'
+  sourcemap
+  minify
+}
+
+// The browser LSP worker runs TypeScript against an in-memory @typescript/vfs
+// system, so it cannot read TypeScript's lib.*.d.ts files from node_modules at
+// runtime. This virtual esbuild module snapshots those standard library files
+// into the browser bundle; only source/browser.civet imports it.
+typescriptLibFilesPlugin :=
+  name: 'typescript-lib-files'
+  setup: (build: PluginBuild) =>
+    build.onResolve { filter: /^typescript-lib-files$/ }, (args: OnResolveArgs) =>
+      path: args.path
+      namespace: 'typescript-lib-files'
+    build.onLoad { filter: /.*/, namespace: 'typescript-lib-files' }, =>
+      files := Object.fromEntries
+        readdirSync(tsLibDir)
+          .filter (file: string) => /^lib\.es.*\.d\.ts$/.test(file) and '.full.' is not in file
+          .sort()
+          .map (file: string) => [file, readFileSync join(tsLibDir, file), 'utf8']
+      {
+        contents: `export default ${JSON.stringify(files)}`
+        loader: 'js'
+      }
 
 build({
+  ...commonOptions
   +metafile
-  entryPoints: ['source/server.civet']
-  outdir: 'dist'
+  entryPoints: node: 'source/node.civet'
   tsconfig: "./tsconfig.json"
   format: "cjs"
   +bundle
-  sourcemap
-  minify
   platform: 'node'
   plugins: [
-    civetPlugin ts: 'civet'
+    civetBuildPlugin
   ]
   define:
     "import.meta.url": '""'
   ...(if isDev then { packages: 'external' } else {})
-}).catch ->
+}).catch (error) ->
+  console.error error
   process.exit 1
 .then ({ metafile }) ->
   if metafile
-    writeFileSync 'server.metafile', JSON.stringify(metafile)
+    writeFileSync 'node.metafile', JSON.stringify(metafile)
+
+build({
+  ...commonOptions
+  +metafile
+  entryPoints: ['source/browser.civet']
+  format: 'esm'
+  +bundle
+  platform: 'browser'
+  alias:
+    'node:assert': '../../source/assert-shim.civet'
+    'node:path': '../../source/browser-shim.civet'
+  plugins: [
+    typescriptLibFilesPlugin
+    civetBuildPlugin
+  ]
+}).catch (error) ->
+  console.error error
+  process.exit 1
+.then ({ metafile }) ->
+  if metafile
+    writeFileSync 'browser.metafile', JSON.stringify(metafile)
+
+build {}
+  ...commonOptions
+  entryPoints: ['source/worker.civet']
+  format: 'esm'
+  -bundle
+  platform: 'browser'
+  target: 'es2020'
+  plugins: [
+    civetPlugin
+      ts: 'civet'
+      emitDeclaration: true
+      declarationExtension: '.d.ts'
+  ]
+.then ->
+  renameSync 'dist/lsp/server/source/worker.d.ts', 'dist/worker.d.ts'
+  try rmdirSync 'dist/lsp/server/source'
+  try rmdirSync 'dist/lsp/server'
+  try rmdirSync 'dist/lsp'
+.catch (error) ->
+  console.error error
+  process.exit 1

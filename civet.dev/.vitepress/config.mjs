@@ -2,12 +2,47 @@ import pkg from '../../package.json';
 import { head } from './head.mjs';
 import { getContributors } from './utils/getContributors.mjs';
 import { defineConfig } from 'vitepress';
+import fs from 'node:fs';
+import path from 'node:path';
 import { compileCivet } from './utils/compileCivet';
 import { getHighlighter } from './utils/getHighlighter';
 import civet from '../../dist/main.mjs';
 import prettier from '@prettier/sync';
 import { getOpenCollectiveInfo } from './utils/getOpenCollectiveInfo';
 import { b64 } from './utils/b64';
+
+const tsLibFiles = new Set(['lib.dom.d.ts', 'lib.dom.iterable.d.ts']);
+const tsLibDir = path.resolve('lsp/server/dist/lib');
+const tsLibPrefix = '/civet-lsp-lib/';
+
+// Serve selected TypeScript lib files as raw text so the browser LSP can
+// fetch them lazily; Vite's normal .d.ts handling turns them into JS modules.
+function tsLibPlugin() {
+  return {
+    name: 'civet-ts-lib-files',
+    configureServer(server) {
+      server.middlewares.use(tsLibPrefix, (req, res, next) => {
+        const file = path.basename(req.url?.split('?')[0] ?? '');
+        if (!tsLibFiles.has(file)) {
+          next();
+          return;
+        }
+
+        res.setHeader('content-type', 'text/plain; charset=utf-8');
+        fs.createReadStream(path.join(tsLibDir, file)).pipe(res);
+      });
+    },
+    generateBundle() {
+      for (const file of tsLibFiles) {
+        this.emitFile({
+          type: 'asset',
+          fileName: `civet-lsp-lib/${file}`,
+          source: fs.readFileSync(path.join(tsLibDir, file), 'utf8'),
+        });
+      }
+    },
+  };
+}
 
 export default async function vitePressConfig() {
   const highlighter = await getHighlighter();
@@ -83,6 +118,9 @@ export default async function vitePressConfig() {
       },
     },
     head,
+    vite: {
+      plugins: [tsLibPlugin()],
+    },
     transformPageData(pageData) {
       pageData.civetVersion = pkg.version;
       return pageData;

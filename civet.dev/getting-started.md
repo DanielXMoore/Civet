@@ -159,7 +159,8 @@ To transpile within a CommonJS NodeJS app
 If you need compilation to be synchronous, pass in the `sync: true` option.
 This will disable certain features with `comptime`.
 
-To transpile in the browser, you can load the browser build `dist/browser.js`
+To transpile in the browser, you can load the browser build `dist/browser.min.js`
+(or the unminified version `dist/browser.js`)
 via a `<script>` tag, and access the global variable `Civet`, as in
 `Civet.compile`.
 Alternatively, if you're using a build system, you can import `"@danielx/civet"`

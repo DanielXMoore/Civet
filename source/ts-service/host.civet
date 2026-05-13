@@ -8,13 +8,11 @@
  * use simpler in-memory docs.
  */
 
-assert from assert
-path from path
+path from node:path
 
 ts from typescript
 { isExternalModuleNameRelative } := ts
 { type CompilerHost, type CompilerOptions, type IScriptSnapshot, type LanguageServiceHost } from typescript
-sys := ts.sys
 
 {
   type DocFactory
@@ -31,6 +29,7 @@ sys := ts.sys
   removeExtension
 } from ./path.civet
 { mogrifyPackageJsonImports } from ./config.civet
+assert from node:assert
 
 // ts doesn't have this key in the type
 interface ResolvedModuleWithFailedLookupLocations extends ts.ResolvedModuleWithFailedLookupLocations
@@ -79,7 +78,13 @@ export function TSHost(
   // service.civet's configSys mogrify (only `include` does), so rewrite
   // any raw transpilable extensions to their synthetic targets here —
   // otherwise `getOrCreatePathSnapshot` would parse raw `.civet` as TS.
-  scriptFileNames: Set<string> := new Set(initialFileNames.map getTranspiledPath)
+  // Canonical path key -> case-preserved script file name returned to TS.
+  // Internal lookups need canonical keys on case-insensitive systems, but TS
+  // must see the original casing to avoid duplicate-file casing diagnostics.
+  scriptFileNames: Map<string, string> := new Map
+  for fileName of initialFileNames
+    scriptFileName := getTranspiledPath fileName
+    scriptFileNames.set getCanonicalFileName(scriptFileName), scriptFileName
   fileMetaData: Map<string, FileMeta> := new Map
 
   pathMap: Map<string, TranspiledDoc> := new Map
@@ -89,22 +94,24 @@ export function TSHost(
 
   resolutionCache: ts.ModuleResolutionCache := ts.createModuleResolutionCache(rootDir, (fileName) => fileName, compilationSettings)
 
-  baseReadFile := baseHost.readFile.bind baseHost
-  baseFileExists := baseHost.fileExists.bind baseHost
+  baseReadFile := baseHost@readFile
+  baseFileExists := baseHost@fileExists
+  /* c8 ignore next -- modern TS hosts provide directoryExists; fallback supports older/custom hosts. */
+  baseDirectoryExists := baseHost.directoryExists?.bind(baseHost) ?? => false
 
   let self: Host
 
   return self = Object.assign({}, baseHost, {
     /** Mogrifies transpilable extensions inside `package.json#imports` on read. */
     readFile(filename: string)
-      contents := baseReadFile filename
+      contents := getPathSource filename
       if contents and path.basename(filename) is "package.json"
         return mogrifyPackageJsonImports contents, transpilers
       contents
 
     /** Treats synthetic `<src>.<target>` siblings as existing whenever the source does. */
     fileExists(filename: string)
-      baseFileExists(filename) or syntheticTargetExists(filename)
+      pathExists(filename) or syntheticTargetExists(filename)
 
     /**
      * LSP bundles its own lib copies under `<dist>/lib` (libDir set);
@@ -113,7 +120,11 @@ export function TSHost(
     getDefaultLibFileName(options: ts.CompilerOptions)
       if libDir
         return path.join(libDir, ts.getDefaultLibFileName(options))
-      ts.getDefaultLibFilePath(options)
+      baseHost.getDefaultLibFileName(options)
+    getDefaultLibLocation()
+      if libDir
+        return libDir
+      baseHost.getDefaultLibLocation?() ?? path.dirname(baseHost.getDefaultLibFileName(compilationSettings))
 
     getModuleResolutionCache()
       resolutionCache
@@ -135,23 +146,23 @@ export function TSHost(
         extension := getExtensionFromPath(name)
         transpiler .= transpilers.get(extension)
         if transpiler or !extension
-          exists := (transpiler ? sys.fileExists : sys.directoryExists).bind(sys)
+          exists := transpiler ? pathExists : baseDirectoryExists
           resolvedModule := (resolved: string) =>
             // Assumes exists(resolved) is true
             // Directories don't yet have a transpiler chosen; try to find one
             // via implicit index file.
             // TODO: Only when state.features & NodeResolutionFeatures.EsmMode
             // TODO: Read package.json as in loadNodeModuleFromDirectoryWorker
-            if !transpiler
+            unless transpiler
               for [_, t] of transpilers
                 index := path.join(resolved, "index" + t.extension)
-                if sys.fileExists(index)
+                if pathExists(index)
                   transpiler = t
                   resolved = index
                   break
 
               return unless transpiler
-            // Now sys.fileExists(resolved) should be true
+            // Now pathExists(resolved) should be true
             { target } := transpiler
             return {
               resolvedFileName: resolved + target
@@ -166,7 +177,7 @@ export function TSHost(
           // the paths base, so we mirror that behavior for legacy tsconfigs.
           { paths, pathsBasePath } := compilationSettings
           baseUrl := (compilationSettings as { baseUrl?: string }).baseUrl
-          if !isExternalModuleNameRelative(name) // absolute
+          unless isExternalModuleNameRelative(name) // absolute
             // tryLoadModuleUsingPathsIfEligible
             if paths
               // tryLoadModuleUsingPaths.  parseJsonConfigFileContent always
@@ -212,14 +223,40 @@ export function TSHost(
           // This backup resolver is really just for relative paths.
           // TODO: Implement absolute case from tryResolve
           // https://github.com/microsoft/TypeScript/blob/cf33fd0cde22905effce371bb02484a9f2009023/src/compiler/moduleNameResolver.ts#L3221
-          resolved := path.resolve(path.dirname(containingFile), name)
+          resolved := path.resolve path.dirname(containingFile), name
           return resolvedModule(resolved) if exists(resolved)
           // TODO: add to resolution cache?
 
         return undefined
 
+    resolveModuleNameLiterals(literals: readonly any[], containingFile: string, _redirectedReference: ts.ResolvedProjectReference | undefined, compilerOptions: CompilerOptions)
+      literals.map (literal) =>
+        name: string := literal.text
+        for [ext, t] of transpilers
+          if name.endsWith ext
+            resolved := path.resolve path.dirname(containingFile), name
+            if pathExists(resolved)
+              return
+                resolvedModule:
+                  resolvedFileName: resolved + t.target
+                  extension: t.target
+                  isExternalLibraryImport: false
+        unless getExtensionFromPath(name)
+          resolved := path.resolve path.dirname(containingFile), name
+          if baseDirectoryExists(resolved)
+            for [_, t] of transpilers
+              index := path.join(resolved, "index" + t.extension)
+              if pathExists(index)
+                return
+                  resolvedModule:
+                    resolvedFileName: index + t.target
+                    extension: t.target
+                    isExternalLibraryImport: false
+        resolvedModule: ts.resolveModuleName(name, containingFile, compilerOptions, self, resolutionCache).resolvedModule
+
     addOrUpdateDocument(doc: TranspiledDoc): void
-      const p = getCanonicalFileName docFactory.uriToPath(doc.uri)
+      rawPath := path.normalize docFactory.uriToPath(doc.uri)
+      p := getCanonicalFileName rawPath
       snapshotMap.delete(p)
       projectVersion++
 
@@ -229,9 +266,10 @@ export function TSHost(
       if transpiler
         { target } := transpiler
         transpiledPath := p + target
+        displayTranspiledPath := rawPath + target
 
         transpiledDoc .= pathMap.get(transpiledPath)
-        initTranspiledDoc(transpiledPath) unless transpiledDoc
+        initTranspiledDoc(displayTranspiledPath) unless transpiledDoc
         snapshotMap.delete(transpiledPath)
 
         // Source doc lives in pathMap (not scriptFileNames) so the
@@ -239,19 +277,20 @@ export function TSHost(
         pathMap.set(p, doc)
         return
 
-      scriptFileNames.add(p)
+      scriptFileNames.set p, rawPath
       pathMap.set(p, doc)
 
     addScriptFileName(p: string): void
       target := getTranspiledPath p
-      return if scriptFileNames.has target
+      canonical := getCanonicalFileName target
+      return if scriptFileNames.has canonical
 
-      scriptFileNames.add target
+      scriptFileNames.set canonical, target
       projectVersion++
 
     closeDocument(rawPath: string): void
       canonical := getCanonicalFileName rawPath
-      transpiledPath := getTranspiledPath(canonical)
+      transpiledPath := getCanonicalTranspiledPath(rawPath)
 
       pathMap.delete(canonical)
       snapshotMap.delete(canonical)
@@ -265,7 +304,7 @@ export function TSHost(
 
     removeDocument(rawPath: string): void
       canonical := getCanonicalFileName rawPath
-      transpiledPath := getTranspiledPath(canonical)
+      transpiledPath := getCanonicalTranspiledPath(rawPath)
 
       pathMap.delete(canonical)
       snapshotMap.delete(canonical)
@@ -282,7 +321,7 @@ export function TSHost(
     getMeta(p: string)
       p = getCanonicalFileName p
       // Force snapshot creation so meta is populated before lookup.
-      getOrCreatePathSnapshot(getTranspiledPath(p))
+      getOrCreatePathSnapshot(getCanonicalTranspiledPath(p))
       fileMetaData.get(p)
 
     getProjectVersion()
@@ -299,7 +338,7 @@ export function TSHost(
       pathMap.get(getCanonicalFileName p)?.version.toString() || "0"
 
     getScriptFileNames()
-      Array.from(scriptFileNames)
+      Array.from(scriptFileNames.values())
 
     // CompilerHost requires writeFile, but our consumers always pass an
     // explicit writeFile to program.emit() / builder.emit(), so this is
@@ -318,25 +357,33 @@ export function TSHost(
     for [ext, t] of transpilers
       if filename.endsWith(t.target)
         source := filename.slice(0, -t.target.length)
-        if source.endsWith(ext) and baseFileExists(source)
+        if source.endsWith(ext) and pathExists(source)
           return true
     false
 
+  /** Open editor docs count as existing even before they exist on disk. */
+  function pathExists(p: string): boolean
+    pathMap.has(getCanonicalFileName p) or baseFileExists(p)
+
   /** Open editor docs win over disk. */
-  function getPathSource(p: string)
+  function getPathSource(p: string): string?
     p = getCanonicalFileName p
     doc := pathMap.get(p)
     return doc.getText() if doc
-    return sys.readFile(p)! if sys.fileExists(p)
-    ""
+    return baseReadFile p if baseFileExists p
+    return undefined // no such file
 
-  /** Returns the synthetic-target path for a transpilable source, or `p` unchanged. */
+  /** Returns the synthetic-target path while preserving the caller's path casing. */
   function getTranspiledPath(p: string)
-    p = getCanonicalFileName p
+    p = path.normalize p
     extension := getExtensionFromPath(p)
     transpiler := transpilers.get(extension)
     return p + transpiler.target if transpiler
     p
+
+  /** Returns the synthetic-target path canonicalized for internal map keys. */
+  function getCanonicalTranspiledPath(p: string)
+    getCanonicalFileName getTranspiledPath(p)
 
   /**
    * Memoized snapshot factory.  For transpilable targets, re-runs the
@@ -344,7 +391,8 @@ export function TSHost(
    * and falls back to the previous transpiled text on compile errors.
    */
   function getOrCreatePathSnapshot(p: string)
-    p = getCanonicalFileName p
+    rawPath := path.normalize p
+    p = getCanonicalFileName rawPath
     snapshot .= snapshotMap.get(p)
     return snapshot if snapshot
 
@@ -358,12 +406,12 @@ export function TSHost(
       sourcePath := removeExtension(p)
       sourceDoc := pathMap.get(sourcePath)
       transpiledDoc .= pathMap.get(p)
-      transpiledDoc = initTranspiledDoc(p) unless transpiledDoc
+      transpiledDoc = initTranspiledDoc(rawPath) unless transpiledDoc
 
       let source
       sourceDocVersion .= 0
-      if !sourceDoc
-        source = sys.readFile(sourcePath)
+      unless sourceDoc
+        source = getPathSource(sourcePath)
       else
         source = sourceDoc.getText()
         sourceDocVersion = sourceDoc.version
@@ -378,7 +426,7 @@ export function TSHost(
       snapshotMap.set(p, snapshot)
       return snapshot
 
-    snapshot = Snap(getPathSource(p))
+    snapshot = Snap(getPathSource(p) ?? "")
     snapshotMap.set(p, snapshot)
     return snapshot
 
@@ -386,7 +434,7 @@ export function TSHost(
   function createOrUpdateMeta(p: string, update: FileMeta & { transpiledDoc: TranspiledDoc })
     p = getCanonicalFileName p
     meta .= fileMetaData.get(p)
-    if !meta
+    unless meta
       fileMetaData.set(p, update)
     else
       Object.assign(meta, update)
@@ -438,9 +486,10 @@ export function TSHost(
 
   /** Empty placeholder; `getOrCreatePathSnapshot` fills it on first request. */
   function initTranspiledDoc(p: string)
-    p = getCanonicalFileName p
-    uri := docFactory.pathToUri(p)
+    scriptPath := path.normalize p
+    p = getCanonicalFileName scriptPath
+    uri := docFactory.pathToUri(scriptPath)
     transpiledDoc := docFactory.create(uri, "none", -1, "")
     pathMap.set(p, transpiledDoc)
-    scriptFileNames.add(p)
+    scriptFileNames.set(p, scriptPath)
     transpiledDoc

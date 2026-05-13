@@ -103,6 +103,7 @@ function clear() {
     show-prettier
     show-typescript
     show-comptime
+    use-monaco
     :b64-code="b64Code"
     :clear-trigger="clearTrigger"
   />
