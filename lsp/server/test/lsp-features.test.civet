@@ -402,6 +402,58 @@ describe "LSP features (shared project server)", ->
       edits := Object.values(result.changes)[0] as any[]
       assert Array.isArray(edits) and edits.length >= 1, "expected rename edits"
 
+  it "workspace/symbol finds top-level symbols across the project", ->
+    uri := docUri path.join(projectRoot, "wssym-a.civet")
+    text := """
+      export uniqueGreet := (name: string) => `hi ${name}`
+      export class UniqueWidget
+        render(): string
+          "<div/>"
+
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    syms := await client.request "workspace/symbol", { query: "uniqueGreet" }
+    assert Array.isArray(syms), "expected workspace/symbol array, got " + JSON.stringify(syms)
+    match := syms.find (s: any) => s.name is "uniqueGreet"
+    assert match, "expected uniqueGreet in results; got " + JSON.stringify(syms.map (s: any) => s.name)
+    assert match.location, "expected location on symbol"
+    assert match.location.uri is uri, "expected location.uri to point at source file, got " + match.location.uri
+    // Civet source position: line 0, char 7 ('uniqueGreet' starts after 'export ').
+    assert match.location.range.start.line is 0,
+      `expected line 0, got ${match.location.range.start.line}`
+
+  it "workspace/symbol returns class symbols and remaps civet positions", ->
+    // Class name distinct from wssym-a.civet's UniqueWidget so a fuzzy match
+    // in the shared workspace points unambiguously at this file.
+    uri := docUri path.join(projectRoot, "wssym-b.civet")
+    text := """
+      export class WssymBetaGadget
+        render(): string
+          "<div/>"
+
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    syms := await client.request "workspace/symbol", { query: "WssymBetaGadget" }
+    assert Array.isArray(syms), "expected workspace/symbol array"
+    cls := syms.find (s: any) => s.name is "WssymBetaGadget"
+    assert cls, "expected WssymBetaGadget in results"
+    assert cls.location.uri is uri, "expected civet source uri, got " + cls.location.uri
+    // 'class WssymBetaGadget' starts at line 0 (after 'export class ').
+    assert cls.location.range.start.line is 0,
+      `expected line 0, got ${cls.location.range.start.line}`
+
+  it "workspace/symbol with empty query returns an array (not an error)", ->
+    syms := await client.request "workspace/symbol", { query: "" }
+    assert Array.isArray(syms), "expected an array even for empty query"
+
   it "completion with unresolvable path alias", ->
     // Exercises resolvePathAliasDir returning undefined → aliasDir falsy branch.
     uri := docUri path.join(projectRoot, "imp-alias.civet")
