@@ -172,6 +172,13 @@ export function parseArgs(args: string[], isTTY = process.stdin.isTTY): Promise<
 
   options.typescript = true if options.typecheck or options.emitDeclaration
 
+  // --watch routes through the lightweight per-file compile path; the unplugin
+  // pipeline (used for --typecheck / --emit-declaration) has its own watch
+  // semantics and would silently ignore -w otherwise.
+  if options.watch and options.typescript
+    console.error `--watch is not compatible with --typecheck or --emit-declaration`
+    errors++
+
   // CLI flag wins over env var so CI scripts can override per-invocation.
   if not options.maxErrors? and process.env.CIVET_TYPECHECK_MAX_ERRORS
     parsed := parseInt process.env.CIVET_TYPECHECK_MAX_ERRORS, 10
@@ -718,13 +725,15 @@ You can override this behavior via: --civet rewriteCivetImports=.ext
           process.exit 1
       /* c8 ignore stop */
 
-  if options.watch and not unplugin?
+  if options.watch
     unless filenames.length and not (filenames.length is 1 and filenames[0] is '-')
       console.error `--watch requires one or more input filenames`
       process.exit 1
     fsSync from node:fs
+    type FSWatcher = ReturnType<typeof fsSync.watch>
     console.error `Civet watching for changes... (Ctrl+C to stop)`
     debounceTimers := new Map<string, ReturnType<typeof setTimeout>>
+    watchers := new Map<string, FSWatcher>
     recompile := (filename: string): Promise<void> =>
       outputFilename := makeOutputFilename filename, options
       try
@@ -747,16 +756,37 @@ You can override this behavior via: --civet rewriteCivetImports=.ext
         debounceTimers.delete filename
         void recompile filename
       debounceTimers.set filename, setTimeout cb, 100
-    for filename of filenames
-      continue if filename is '-'  // can't watch stdin
+    startWatching := (filename: string): void =>
       try
-        fsSync.watch filename, (eventType: string) =>
+        watcher := fsSync.watch filename, (eventType: string) =>
           return unless eventType is 'change' or eventType is 'rename'
           scheduleRebuild filename
+          // On Linux, inotify watches an inode and is invalidated by a
+          // `rename` event (the default for atomic-saving editors like
+          // vim and emacs).  Tear the watcher down and re-arm on the
+          // path so subsequent edits keep firing.
+          if eventType is 'rename'
+            watchers.get(filename)?.close()
+            watchers.delete filename
+            setTimeout (=> startWatching filename), 100
+        watchers.set filename, watcher
       catch error
         console.error `Could not watch ${filename}:`
         console.error error
-    return  // Skip unplugin.buildEnd; watchers keep the process alive
+    for filename of filenames
+      continue if filename is '-'  // can't watch stdin
+      startWatching filename
+    // Returned so tests can shut watchers down deterministically; in normal
+    // usage Ctrl+C / SIGTERM terminates the process and the OS reaps them.
+    return {
+      close: =>
+        for watcher of watchers.values()
+          watcher.close()
+        watchers.clear()
+        for timer of debounceTimers.values()
+          clearTimeout timer
+        debounceTimers.clear()
+    }
 
   process.exitCode = Math.min 255, errors
   if unplugin?
