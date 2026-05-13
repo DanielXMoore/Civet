@@ -252,16 +252,37 @@ The easiest way is to join our
 [Discord server](https://discord.gg/xkrW9GebBc) and send a message to the
 relevant channel (e.g. `#compiler` for questions about the parser).
 
-## Releasing to NPM
+## Releasing
 
-1. Increment `version` in `package.json` (e.g. by running `pnpm version patch`, or `minor` / `major` as appropriate)
-2. Run `pnpm release` to update `CHANGELOG.md` and (after confirmation) create a release commit and tag it
-3. `git push --follow-tags` to push the new commit and tag
-4. CI will then release with OIDC trusted publishing
+A single push to `main` releases four artifacts (whichever ones have a new
+version):
 
-Internally, CI will run `npm publish` which does the following:
+* `@danielx/civet` (root) on npm
+* `@danielx/civet-language-server` (`lsp/server`) on npm
+* `@danielx/civet-monaco` (`lsp/monaco`) on npm
+* the VS Code extension on VS Code Marketplace and Open VSX
 
-* `pnpm build` to build for release
-* `pnpm test:coverage` to make sure nothing is broken
-* `pnpm changelog --verify` to confirm `CHANGELOG.md` is already up to date
-* Publish to NPM
+To cut a release:
+
+1. Increment `version` in `package.json` (e.g. `pnpm version patch`, or `minor`
+   / `major` as appropriate). Bump the package(s) you actually want to release —
+   unchanged packages are skipped automatically.
+2. Run `pnpm release` to regenerate `CHANGELOG.md`, prompt for a release
+   commit, and tag `vX.Y.Z`.
+3. `git push --follow-tags` to push the commit and tag.
+4. CI publishes via OIDC trusted publishing — no `NPM_TOKEN`.
+
+Internally, the [Build workflow](.github/workflows/build.yml) runs on the push
+to `main`. On success, [Publish](.github/workflows/publish.yml) fires via
+`workflow_run` and:
+
+* Runs `pnpm install --frozen-lockfile && pnpm build`.
+* Runs `bash build/autorelease.sh . lsp/server lsp/monaco`. For each directory,
+  it checks `npm view <name>@<version>` and runs `npm publish --access public`
+  only if that version isn't already on the registry. The root's
+  `prepublishOnly` hook gates the publish with
+  `pnpm build && pnpm test:coverage && pnpm changelog --verify`. Pre-release
+  versions (e.g. `0.11.7-rc.1`) publish under the `pre` dist-tag.
+* Runs `lsp/vscode/build/autorelease.sh`, which packages the `.vsix` and
+  publishes to VS Code Marketplace (via `VSCE_PAT`) and Open VSX (via
+  `OVSX_PAT`); each marketplace step is skipped if that version is already up.
