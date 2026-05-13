@@ -11,6 +11,19 @@ async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void>
   finally
     await fs.rm dir, { recursive: true, force: true }
 
+async function withStatEACCES(targetPath: string, fn: () => Promise<void>): Promise<void>
+  originalStat := fs.stat
+  error := Object.assign new Error("permission denied"),
+    code: "EACCES"
+  fs.stat = (async (p: any) =>
+    throw error if p is targetPath
+    originalStat p
+  ) as typeof fs.stat
+  try
+    await fn()
+  finally
+    fs.stat = originalStat
+
 describe "loading config", ->
   it "should load from civetconfig.json", ->
     path := await findConfig("test/infra/config/")
@@ -78,6 +91,16 @@ describe "findConfig", ->
       assert result, "should fall through after stat failure"
       assert result!.endsWith("civetconfig.json")
 
+  it "tolerates EACCES while checking .config", ->
+    await withTempDir async (dir) =>
+      configEntry := join dir, ".config"
+      await fs.writeFile configEntry, ""
+      await fs.writeFile join(dir, "civetconfig.json"), "{}"
+      await withStatEACCES configEntry, async =>
+        result := await findConfig(dir)
+        assert result, "should fall through after stat failure"
+        assert result!.endsWith("civetconfig.json")
+
   it "tolerates a dangling config-file symlink (stat failure)", ->
     // Same TOCTOU tolerance for the main configName loop.
     await withTempDir async (dir) =>
@@ -88,6 +111,24 @@ describe "findConfig", ->
         @skip() if process.platform is 'win32' and
                    (error as NodeJS.ErrnoException).code is 'EPERM'
         throw error
+      await fs.writeFile join(dir, "civet.config.yaml"), "jsOutput: true\n"
+      result := await findInDir(dir)
+      assert result, "should fall through to civet.config.yaml"
+      assert result!.endsWith("civet.config.yaml")
+
+  it "tolerates EACCES while checking a config file", ->
+    await withTempDir async (dir) =>
+      configEntry := join dir, "civetconfig.json"
+      await fs.writeFile configEntry, "{}"
+      await fs.writeFile join(dir, "civet.config.yaml"), "jsOutput: true\n"
+      await withStatEACCES configEntry, async =>
+        result := await findInDir(dir)
+        assert result, "should fall through to civet.config.yaml"
+        assert result!.endsWith("civet.config.yaml")
+
+  it "ignores a config entry that is a directory, not a file", ->
+    await withTempDir async (dir) ->
+      await fs.mkdir join(dir, "civetconfig.json")
       await fs.writeFile join(dir, "civet.config.yaml"), "jsOutput: true\n"
       result := await findInDir(dir)
       assert result, "should fall through to civet.config.yaml"
