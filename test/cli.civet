@@ -179,6 +179,34 @@ describe 'CLI parseArgs', ->
           run: false
           parseOptions: rewriteCivetImports: '.civet.jsx'
 
+  for typeFlag of [ '--typecheck', '--emit-declaration' ]
+    it `errors when -w combined with ${typeFlag}`, =>
+      origExit := process.exit
+      origStderr := process.stderr.write
+      stderr: string[] := []
+      process.stderr.write = ((chunk: any) =>
+        stderr.push String(chunk)
+        true
+      ) as any
+      exitCode: number? .= undefined
+      sentinel := {}
+      process.exit = ((code?: number) =>
+        exitCode = code
+        throw sentinel
+      ) as any
+      try
+        try
+          await parseArgs ['-w', typeFlag, 'placeholder.civet'], true
+        catch e
+          throw e unless e is sentinel
+      finally
+        process.exit = origExit
+        process.stderr.write = origStderr
+      assert exitCode? and exitCode > 0,
+        `parseArgs should exit non-zero for -w ${typeFlag}, got: ${exitCode}`
+      assert stderr.join('').includes('not compatible'),
+        `stderr should mention incompatibility, got: ${stderr.join('')}`
+
   for output of [ '-o', '--output' ]
     it `parses ${output} with -`, =>
       argsOptions `${output} -`,
@@ -1119,3 +1147,171 @@ describe "CLI --typecheck", ->
       assert declFiles.length > 0, `.d.ts emitted; got: ${JSON.stringify files}; exitCode=${exitCode}; stdErr=${stdErr}; stdOut=${stdOut}`
     finally
       process.chdir origCwd
+
+describe "CLI --watch", ->
+  let tmpDir: string
+  fileNum .= 0
+  before ->
+    tmpDir = path.join tmpdir(), "civet-cli-watch-test-" + Math.random().toString(36).substring(2, 15)
+    await mkdir tmpDir, { recursive: true }
+  after ->
+    await rm tmpDir, { recursive: true, force: true }
+
+  function makeCivetTempFile(content: string): string
+    filePath := path.join tmpDir, `watch-${fileNum++}.civet`
+    await writeFile filePath, content
+    filePath
+
+  // Poll a predicate until it returns truthy, with a timeout.  Used in place
+  // of fixed sleeps to keep tests responsive on fast machines without
+  // flaking on slow CI.
+  async function waitFor(check: => Promise<unknown>, timeout = 3000): Promise<void>
+    start := Date.now()
+    while Date.now() - start < timeout
+      return if await check()
+      await new Promise (r) => setTimeout r, 30
+    throw new Error `waitFor: condition not met within ${timeout}ms`
+
+  it "errors when --watch is given no filename", ->
+    { exitCode, stdErr } := await captureProcess =>
+      await cli ['-w', '--no-config']
+    assert exitCode? and exitCode > 0, "exitCode: " + exitCode
+    assert stdErr.includes('--watch'), stdErr
+
+  it "errors when --watch is given only stdin '-'", ->
+    { exitCode, stdErr } := await captureProcess =>
+      await cli ['-w', '--no-config', '-']
+    assert exitCode? and exitCode > 0, "exitCode: " + exitCode
+    assert stdErr.includes('--watch'), stdErr
+
+  it "errors when --watch combined with --typecheck via cli()", ->
+    inputFile := await makeCivetTempFile "x := 1\n"
+    { exitCode, stdErr } := await captureProcess =>
+      await cli ['-w', '--typecheck', '--no-config', inputFile]
+    assert exitCode? and exitCode > 0
+    assert stdErr.includes('not compatible'), stdErr
+
+  it "performs initial compile and recompiles on subsequent change", ->
+    @timeout 10000
+    inputFile := await makeCivetTempFile "aInit := 1\n"
+    let handle: any
+    await captureProcess =>
+      handle = await cli ['-w', '--no-config', inputFile]
+    try
+      outputFile := inputFile + '.tsx'
+      content1 := await readFile outputFile, 'utf8'
+      assert content1.includes('aInit'), "initial output: " + content1
+      // fs.watch can take a few ms to arm on Linux; brief pause avoids
+      // racing the modification against the watcher's setup.
+      await new Promise (r) => setTimeout r, 50
+      await writeFile inputFile, "bAfter := 2\n"
+      await waitFor =>
+        try
+          (await readFile outputFile, 'utf8').includes 'bAfter'
+        catch
+          false
+    finally
+      handle?.close()
+
+  it "logs compilation failures and keeps watching", ->
+    @timeout 10000
+    inputFile := await makeCivetTempFile "xKeep := 1\n"
+    let handle: any
+    await captureProcess =>
+      handle = await cli ['-w', '--no-config', inputFile]
+    try
+      stderrChunks: string[] := []
+      origWrite := process.stderr.write.bind(process.stderr)
+      process.stderr.write = ((chunk: any) =>
+        stderrChunks.push String(chunk)
+        true
+      ) as any
+      try
+        await new Promise (r) => setTimeout r, 50
+        await writeFile inputFile, "}\n"  // invalid Civet
+        await waitFor =>
+          stderrChunks.join('').includes 'Failed to compile'
+        // Now write valid code and confirm the watcher kept running
+        stderrChunks.length = 0
+        await writeFile inputFile, "yRevived := 9\n"
+        await waitFor =>
+          try
+            (await readFile inputFile + '.tsx', 'utf8').includes 'yRevived'
+          catch
+            false
+      finally
+        process.stderr.write = origWrite as any
+    finally
+      handle?.close()
+
+  it "writes recompiled output to stdout when -o - is set (debounced)", ->
+    @timeout 10000
+    inputFile := await makeCivetTempFile "cStart := 3\n"
+    let handle: any
+    await captureProcess =>
+      handle = await cli ['-w', '-o', '-', '--no-config', inputFile]
+    try
+      stdoutChunks: string[] := []
+      origStdout := process.stdout.write.bind(process.stdout)
+      process.stdout.write = ((chunk: any) =>
+        stdoutChunks.push String(chunk)
+        true
+      ) as any
+      try
+        await new Promise (r) => setTimeout r, 50
+        // Two quick changes — debounce coalesces to one recompile, so only
+        // the final value need be observed in stdout.
+        await writeFile inputFile, "dMid := 4\n"
+        await new Promise (r) => setTimeout r, 30
+        await writeFile inputFile, "eFinal := 5\n"
+        await waitFor =>
+          stdoutChunks.join('').includes 'eFinal'
+      finally
+        process.stdout.write = origStdout as any
+    finally
+      handle?.close()
+
+  it "re-establishes watcher after rename event (atomic-save editors)", ->
+    @timeout 10000
+    inputFile := await makeCivetTempFile "fStart := 6\n"
+    let handle: any
+    await captureProcess =>
+      handle = await cli ['-w', '--no-config', inputFile]
+    try
+      outputFile := inputFile + '.tsx'
+      // Simulate vim/emacs atomic save: write to a temp path, then rename
+      // over the watched file.  On Linux this fires `rename`, invalidating
+      // the inotify watch; the re-watch logic must recover so a later
+      // in-place edit still triggers a recompile.
+      tempPath := inputFile + '.tmp'
+      await writeFile tempPath, "gAtomic := 7\n"
+      { rename } := await import 'fs/promises'
+      await rename tempPath, inputFile
+      await waitFor =>
+        try
+          (await readFile outputFile, 'utf8').includes 'gAtomic'
+        catch
+          false
+      // Wait past the 100ms re-watch delay before mutating again.
+      await new Promise (r) => setTimeout r, 300
+      await writeFile inputFile, "hAfterRewatch := 8\n"
+      await waitFor =>
+        try
+          (await readFile outputFile, 'utf8').includes 'hAfterRewatch'
+        catch
+          false
+    finally
+      handle?.close()
+
+  it "logs and continues when fsSync.watch fails (missing file)", ->
+    missing := path.join tmpDir, "definitely-does-not-exist.civet"
+    let handle: any
+    { stdErr } := await captureProcess =>
+      handle = await cli ['-w', '--no-config', missing]
+    try
+      // readFiles reports a load error first ("failed to load") and the
+      // watch setup additionally fails with ENOENT ("Could not watch").
+      assert stdErr.includes('Could not watch') or stdErr.includes('failed to load'),
+        "stderr surfaces missing file: " + stdErr
+    finally
+      handle?.close()
