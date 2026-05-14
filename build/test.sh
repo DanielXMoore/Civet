@@ -54,8 +54,11 @@ if [ "${CIVET_COVERAGE:-0}" = "1" ] && [ "$threads" != "0" ]; then
   args="$args --worker-termination-timeout ${CIVET_WORKER_TERMINATE_TIMEOUT:-30000}"
 fi
 
+echo "[test.sh] CIVET_WORKER_TERMINATE_TIMEOUT=${CIVET_WORKER_TERMINATE_TIMEOUT:-<unset>}, args=$args"
 if [ "${CIVET_COVERAGE:-0}" = "1" ]; then
+  set -x
   c8 mocha $args "$@"
+  set +x
 else
   node_modules/.bin/mocha $args "$@"
 fi
