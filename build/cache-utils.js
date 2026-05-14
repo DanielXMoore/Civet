@@ -60,7 +60,10 @@ function compileWithCache(source, filename, module = true) {
   const compileOptions = { js: true, inlineMap: true, sync: true, module };
   const key = makeCacheKey(keyInput(source, filename, isHera, compileOptions)) + '.mjs';
   const cached = diskCache.get(key);
-  if (cached != null) return cached;
+  if (cached != null) {
+    tap('hit', filename, module, key, cached);
+    return cached;
+  }
 
   let js;
   if (isHera) {
@@ -71,7 +74,28 @@ function compileWithCache(source, filename, module = true) {
   }
 
   diskCache.set(key, js);
+  tap('miss', filename, module, key, js);
   return js;
+}
+
+/**
+ * Diagnostic tap: log compile invocations so CI can correlate which
+ * filename/module/key produced which output.  Enabled by CIVET_COMPILE_TAP
+ * env var (path to log file).  Each line: `<pid> <event> <md5> <len> <module> <keyTail> <filename>`.
+ */
+let _tapPath;
+let _tapResolved = false;
+function tap(event, filename, module, key, js) {
+  if (!_tapResolved) {
+    _tapPath = process.env.CIVET_COMPILE_TAP || null;
+    _tapResolved = true;
+  }
+  if (!_tapPath) return;
+  try {
+    const md5 = require('crypto').createHash('md5').update(js).digest('hex').slice(0, 12);
+    const keyTail = key.slice(0, 12);
+    fs.appendFileSync(_tapPath, `${process.pid} ${event} ${md5} ${js.length} module=${module} key=${keyTail} ${filename}\n`);
+  } catch {}
 }
 
 /**
