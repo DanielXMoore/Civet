@@ -70,7 +70,7 @@ extern "C" {
   do { \
     if ((count) == 0) break; \
     _array__grow((Array *)(self), count, array_elem_size(self)); \
-    memset((self)->contents + (self)->size, 0, (count) * array_elem_size(self)); \
+    memset((self)->contents + (self)->size, 0, (size_t)(count) * array_elem_size(self)); \
     (self)->size += (count); \
   } while (0)
 
@@ -174,8 +174,8 @@ static inline void _array__erase(Array *self, size_t element_size,
                                 uint32_t index) {
   assert(index < self->size);
   char *contents = (char *)self->contents;
-  memmove(contents + index * element_size, contents + (index + 1) * element_size,
-          (self->size - index - 1) * element_size);
+  memmove(contents + (size_t)index * element_size, contents + ((size_t)index + 1) * element_size,
+          (size_t)(self->size - index - 1) * element_size);
   self->size--;
 }
 
@@ -183,9 +183,9 @@ static inline void _array__erase(Array *self, size_t element_size,
 static inline void _array__reserve(Array *self, size_t element_size, uint32_t new_capacity) {
   if (new_capacity > self->capacity) {
     if (self->contents) {
-      self->contents = ts_realloc(self->contents, new_capacity * element_size);
+      self->contents = ts_realloc(self->contents, (size_t)new_capacity * element_size);
     } else {
-      self->contents = ts_malloc(new_capacity * element_size);
+      self->contents = ts_malloc((size_t)new_capacity * element_size);
     }
     self->capacity = new_capacity;
   }
@@ -195,7 +195,7 @@ static inline void _array__reserve(Array *self, size_t element_size, uint32_t ne
 static inline void _array__assign(Array *self, const Array *other, size_t element_size) {
   _array__reserve(self, element_size, other->size);
   self->size = other->size;
-  memcpy(self->contents, other->contents, self->size * element_size);
+  memcpy(self->contents, other->contents, (size_t)self->size * element_size);
 }
 
 /// This is not what you're looking for, see `array_swap`.
@@ -230,23 +230,23 @@ static inline void _array__splice(Array *self, size_t element_size,
   char *contents = (char *)self->contents;
   if (self->size > old_end) {
     memmove(
-      contents + new_end * element_size,
-      contents + old_end * element_size,
-      (self->size - old_end) * element_size
+      contents + (size_t)new_end * element_size,
+      contents + (size_t)old_end * element_size,
+      (size_t)(self->size - old_end) * element_size
     );
   }
   if (new_count > 0) {
     if (elements) {
       memcpy(
-        (contents + index * element_size),
+        (contents + (size_t)index * element_size),
         elements,
-        new_count * element_size
+        (size_t)new_count * element_size
       );
     } else {
       memset(
-        (contents + index * element_size),
+        (contents + (size_t)index * element_size),
         0,
-        new_count * element_size
+        (size_t)new_count * element_size
       );
     }
   }
