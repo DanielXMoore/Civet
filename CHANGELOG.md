@@ -4,6 +4,17 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.9 (2026-05-14, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.8...v0.11.9), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.9))
+* Browser LSP: fix `console` types in non-DOM mode [[#2047](https://github.com/DanielXMoore/Civet/pull/2047)]
+* LSP e2e: fix Linux test reliability (Wayland headless + flaky import-completion) [[#2050](https://github.com/DanielXMoore/Civet/pull/2050)]
+* Tests: force v8 coverage flush before mocha worker exit [[#2056](https://github.com/DanielXMoore/Civet/pull/2056)]
+* CI: rolling cache keys + prune stale entries [[#2057](https://github.com/DanielXMoore/Civet/pull/2057)]
+* Fix unicode property names in `@`-bind, `::` prototype access, `:` symbol shortand [[#2055](https://github.com/DanielXMoore/Civet/pull/2055)]
+* fix(coverage): eliminate flakiness from parallel mocha + dual-compile [[#2060](https://github.com/DanielXMoore/Civet/pull/2060)]
+* Restore leaf-glom fallback in `prepend` (fixes #2058) [[#2059](https://github.com/DanielXMoore/Civet/pull/2059)]
+* Upgrade Prettier, add `civet.dev` workspace [[#2063](https://github.com/DanielXMoore/Civet/pull/2063)]
+* fix: unwrap if/then/else assignment to ternary without ref (#2051) [[#2054](https://github.com/DanielXMoore/Civet/pull/2054)]
+
 ## 0.11.8 (2026-05-13, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.7...v0.11.8), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.8))
 * Dev: Autopublish vsce and ovsx from GitHub CI [[#1963](https://github.com/DanielXMoore/Civet/pull/1963)]
 * dev: show-uncovered script at root [[#1966](https://github.com/DanielXMoore/Civet/pull/1966)]
