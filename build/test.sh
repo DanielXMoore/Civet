@@ -33,15 +33,21 @@ export CIVET_THREADS=
 # Use sourcemaps so errors have correct line numbers.
 export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--enable-source-maps"
 
+# Each block below prepends to $args, so the LAST block listed ends up first
+# in the final arg list — and mocha's CLI parser (yargs) uses last-wins for
+# repeated --timeout flags.  Order matters: coverage's higher timeout must
+# be appended last so it wins on Windows+coverage runs.
+
 # Windows is slower; increase default mocha timeout (before $args so it's overridable).
 if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == win* ]]; then
   args="--timeout 5000 $args"
 fi
 
 # Sequential mode + c8 instrumentation slows subprocess-spawning tests
-# (comptime, cli, etc.) past the default 2s.
+# (comptime, cli, etc.) past the default 2s.  This appears AFTER the Windows
+# block so the higher timeout ends up later in the arg list and wins.
 if [ "${CIVET_COVERAGE:-0}" = "1" ]; then
-  args="--timeout 10000 $args"
+  args="$args --timeout 10000"
 fi
 
 if [ "${CIVET_COVERAGE:-0}" = "1" ]; then
