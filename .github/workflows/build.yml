@@ -65,25 +65,38 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
 
-      - name: Test (with coverage)
+      - name: Test (with coverage, forced-low worker timeout to PROVE the bug)
         if: runner.os == 'Linux'
-        # Allow coverage gate failure here — the SIGTERM-trace check runs
-        # next regardless, and is the diagnostic signal we're after.
+        # Allow coverage gate failure here — the trace check runs next.
+        # CIVET_WORKER_TERMINATE_TIMEOUT=1 means workers have 1 ms to
+        # respond to the IPC terminate before the parent SIGTERMs them.
+        # If the hypothesis is right, this run should leave SIGTERM entries
+        # in the trace log AND tank coverage.
+        env:
+          CIVET_WORKER_TERMINATE_TIMEOUT: "1"
         continue-on-error: true
         run: |
           rm -f /tmp/civet-sigterm-trace.log
           pnpm coverage
 
-      - name: SIGTERM trace (diagnostic — fails if any worker was force-killed)
+      - name: Worker exit-path trace (diagnostic — fails if any SIGTERM entries)
         if: always() && runner.os == 'Linux'
         run: |
           if [ -s /tmp/civet-sigterm-trace.log ]; then
-            count=$(wc -l < /tmp/civet-sigterm-trace.log)
-            echo "::error::Mocha parallel workers were SIGTERM'd ($count PID(s)):"
+            echo "Full trace log:"
             cat /tmp/civet-sigterm-trace.log
-            exit 1
+            echo ""
+            echo "Event counts:"
+            awk '{print $1}' /tmp/civet-sigterm-trace.log | sort | uniq -c
+            sigterm_count=$(grep -c '^SIGTERM ' /tmp/civet-sigterm-trace.log || true)
+            if [ "$sigterm_count" -gt 0 ]; then
+              echo "::error::$sigterm_count worker(s) were SIGTERM'd by the parent."
+              exit 1
+            fi
+            echo "No SIGTERM entries (other events seen but those aren't the bug)."
+          else
+            echo "No worker exit-path events detected."
           fi
-          echo "No SIGTERM'd workers detected."
 
       - name: Test (Windows, no coverage)
         if: runner.os == 'Windows'

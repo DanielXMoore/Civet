@@ -1,25 +1,38 @@
-// Diagnostic shim: log PIDs of mocha parallel workers that get SIGTERM'd
-// by the workerpool's force-kill fallback. See MOCHA-PARALLEL-COVERAGE-RACE.md
-// for context — when the parent's `workerTerminateTimeout` (default 1 s) elapses
-// before a worker exits, the parent kills it and any V8 coverage data the
-// worker had accumulated is silently dropped, producing flaky 99.x% gates.
+// Diagnostic shim: log mocha parallel worker exit paths to a trace file so
+// we can tell whether the workerpool's force-kill fallback is firing in CI
+// (see MOCHA-PARALLEL-COVERAGE-DIAGNOSIS.md).
 //
-// We only install the handler in worker processes (identified by mocha's
-// MOCHA_WORKER_ID env), so the parent's own SIGTERM behavior is unchanged.
-// The path is overridable via CIVET_SIGTERM_TRACE for ad-hoc local runs;
-// CI inspects this file after the suite and fails the job if it has PIDs.
+// Each log line is `<event> <pid>` so the post-run check can distinguish:
+//   SIGTERM <pid>   — parent's workerTerminateTimeout elapsed; force-killed
+//   SIGINT  <pid>   — Ctrl-C path
+//   disconnect <pid> — IPC channel closed before clean exit (workerpool's
+//                       internal handler calls process.exit(1) on this)
+// Only installed in worker processes (MOCHA_WORKER_ID env set by mocha's
+// BufferedWorkerPool); parent's own behavior is unchanged.  Overridable
+// via CIVET_SIGTERM_TRACE.
 //
-// We deliberately SIGKILL ourselves after logging instead of running normal
-// exit cleanup — we want to preserve the coverage-loss symptom so we can
-// correlate "SIGTERM log has PIDs" with "coverage gate failed".
+// For SIGTERM we deliberately SIGKILL ourselves after logging — we want
+// to preserve the coverage-loss symptom so we can correlate "trace log
+// has SIGTERM entries" with "coverage gate failed".  The other events
+// just log and let normal handling proceed.
 
 if (process.env.MOCHA_WORKER_ID !== undefined) {
   const fs = require("fs");
   const path = process.env.CIVET_SIGTERM_TRACE || "/tmp/civet-sigterm-trace.log";
-  process.on("SIGTERM", () => {
+  const log = (event) => {
     try {
-      fs.appendFileSync(path, `${process.pid}\n`);
+      fs.appendFileSync(path, `${event} ${process.pid}\n`);
     } catch {}
+  };
+  process.on("SIGTERM", () => {
+    log("SIGTERM");
     process.kill(process.pid, "SIGKILL");
   });
+  process.on("SIGINT", () => {
+    log("SIGINT");
+    process.kill(process.pid, "SIGKILL");
+  });
+  // workerpool registers its own 'disconnect' listener that calls
+  // process.exit(1); use prependListener so ours logs first.
+  process.prependListener("disconnect", () => log("disconnect"));
 }
