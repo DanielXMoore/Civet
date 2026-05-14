@@ -16,16 +16,23 @@ const path = require('path');
 const { compile: heraCompile } = require('@danielx/hera/dist/main.js');
 const heraVersion = require('@danielx/hera/package.json').version;
 
-// Default to the package self-reference so the build-time loader sees the
-// SAME civet bytes as `import from '@danielx/civet'` does at runtime.  The
-// workspace's package.json points at our locally-built `dist/main.js`, while
-// `./node_modules/@danielx/civet` is the *installed* version (pinned in the
-// lockfile and lagging behind workspace HEAD).  Compiling the same .civet
-// source through both produces JS with slightly different fnMap byte ranges
-// (e.g., if/then/else assignment ⇒ ternary in 0.11.9 vs let-ref in 0.11.6),
-// and c8's merge can't reconcile two records mapped to the same source URL,
-// producing phantom uncovered functions and flaky 99.x% gate failures.
-const civetSourceRaw = process.env.CIVET_SOURCE ?? '@danielx/civet';
+// Pick the civet source.  Preference order:
+//   1. CIVET_SOURCE env var (explicit override).
+//   2. The workspace's locally-built ./dist/main.js if it exists — keeps
+//      compileWithCache aligned with `import from '@danielx/civet'`, which
+//      resolves via the workspace package self-reference to the same file.
+//      Aligning the two avoids c8 merge ambiguity: when the installed
+//      package and the workspace differ on codegen (e.g., if/then/else
+//      assignment ⇒ ternary in 0.11.9 vs let-ref in 0.11.6), compiling the
+//      same .civet source via both paths produces JS with slightly different
+//      fnMap byte ranges.  Both end up attributed to the same source URL via
+//      source maps, but c8's merge can't reconcile two records under one URL
+//      with different fnMaps — phantom uncovered functions, flaky 99.x% gate.
+//   3. ./node_modules/@danielx/civet — the installed package, used during
+//      first-time bootstrap before dist/main.js exists.
+const distMainJs = path.resolve(__dirname, '../dist/main.js');
+const civetSourceRaw = process.env.CIVET_SOURCE
+  ?? (fs.existsSync(distMainJs) ? distMainJs : './node_modules/@danielx/civet');
 const civetIsPath = civetSourceRaw.startsWith('.') || path.isAbsolute(civetSourceRaw);
 const civetSourceResolved = require.resolve(civetIsPath ? path.resolve(civetSourceRaw) : civetSourceRaw);
 const civetSourceMtime = fs.statSync(civetSourceResolved).mtime.getTime().toString();
