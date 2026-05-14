@@ -16,8 +16,18 @@ const path = require('path');
 const { compile: heraCompile } = require('@danielx/hera/dist/main.js');
 const heraVersion = require('@danielx/hera/package.json').version;
 
-const civetSourceRaw = process.env.CIVET_SOURCE ?? './node_modules/@danielx/civet';
-const civetSourceResolved = require.resolve(path.resolve(civetSourceRaw));
+// Default to the package self-reference so the build-time loader sees the
+// SAME civet bytes as `import from '@danielx/civet'` does at runtime.  The
+// workspace's package.json points at our locally-built `dist/main.js`, while
+// `./node_modules/@danielx/civet` is the *installed* version (pinned in the
+// lockfile and lagging behind workspace HEAD).  Compiling the same .civet
+// source through both produces JS with slightly different fnMap byte ranges
+// (e.g., if/then/else assignment ⇒ ternary in 0.11.9 vs let-ref in 0.11.6),
+// and c8's merge can't reconcile two records mapped to the same source URL,
+// producing phantom uncovered functions and flaky 99.x% gate failures.
+const civetSourceRaw = process.env.CIVET_SOURCE ?? '@danielx/civet';
+const civetIsPath = civetSourceRaw.startsWith('.') || path.isAbsolute(civetSourceRaw);
+const civetSourceResolved = require.resolve(civetIsPath ? path.resolve(civetSourceRaw) : civetSourceRaw);
 const civetSourceMtime = fs.statSync(civetSourceResolved).mtime.getTime().toString();
 const { compile: civetCompile } = require(civetSourceResolved);
 
