@@ -4,6 +4,7 @@ import { getContributors } from './utils/getContributors.mjs';
 import { defineConfig } from 'vitepress';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { compileCivet } from './utils/compileCivet';
 import { getHighlighter } from './utils/getHighlighter';
 import civet from '../../dist/main.mjs';
@@ -12,7 +13,8 @@ import { getOpenCollectiveInfo } from './utils/getOpenCollectiveInfo';
 import { b64 } from './utils/b64';
 
 const tsLibFiles = new Set(['lib.dom.d.ts', 'lib.dom.iterable.d.ts']);
-const tsLibDir = path.resolve('lsp/server/dist/lib');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const tsLibDir = path.join(repoRoot, 'lsp/server/dist/lib');
 const tsLibPrefix = '/civet-lsp-lib/';
 
 // Serve selected TypeScript lib files as raw text so the browser LSP can

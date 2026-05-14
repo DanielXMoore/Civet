@@ -1,6 +1,6 @@
-importScripts('https://cdn.jsdelivr.net/npm/prettier@3.2.5/standalone.js');
-importScripts('https://cdn.jsdelivr.net/npm/prettier@3.2.5/plugins/estree.js');
-importScripts('https://cdn.jsdelivr.net/npm/prettier@3.2.5/plugins/typescript.js');
+importScripts('https://cdn.jsdelivr.net/npm/prettier@3.8.3/standalone.js');
+importScripts('https://cdn.jsdelivr.net/npm/prettier@3.8.3/plugins/estree.js');
+importScripts('https://cdn.jsdelivr.net/npm/prettier@3.8.3/plugins/typescript.js');
 importScripts('https://cdn.jsdelivr.net/npm/shiki@0.14.7');
 
 onmessage = async (e) => {
