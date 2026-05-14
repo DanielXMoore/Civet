@@ -65,15 +65,13 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm build
 
-      - name: Test (with coverage, forced-low worker timeout to PROVE the bug)
+      - name: Test (with coverage, parallel control)
         if: runner.os == 'Linux'
-        # Allow coverage gate failure here — the trace check runs next.
-        # CIVET_WORKER_TERMINATE_TIMEOUT=1 means workers have 1 ms to
-        # respond to the IPC terminate before the parent SIGTERMs them.
-        # If the hypothesis is right, this run should leave SIGTERM entries
-        # in the trace log AND tank coverage.
-        env:
-          CIVET_WORKER_TERMINATE_TIMEOUT: "1"
+        # 1 ms-timeout proof run (commit 616b85ff) disproved the SIGTERM
+        # hypothesis.  Now run the parallel-control configuration: default
+        # workerpool timeout, parallel coverage re-enabled, trace shim wired.
+        # If 5+ reruns of this all pass at 100 %, the dual-compile fix from
+        # PR #2060 was sufficient and --no-parallel can be reverted.
         continue-on-error: true
         run: |
           rm -f /tmp/civet-sigterm-trace.log
@@ -83,19 +81,21 @@ jobs:
         if: always() && runner.os == 'Linux'
         run: |
           if [ -s /tmp/civet-sigterm-trace.log ]; then
-            echo "Full trace log:"
-            cat /tmp/civet-sigterm-trace.log
-            echo ""
-            echo "Event counts:"
+            echo "Event counts (column 1 is event, count is occurrences):"
             awk '{print $1}' /tmp/civet-sigterm-trace.log | sort | uniq -c
+            echo ""
+            installs=$(grep -c '^install' /tmp/civet-sigterm-trace.log || true)
+            echo "Distinct worker processes that loaded the shim: $installs"
             sigterm_count=$(grep -c '^SIGTERM ' /tmp/civet-sigterm-trace.log || true)
             if [ "$sigterm_count" -gt 0 ]; then
               echo "::error::$sigterm_count worker(s) were SIGTERM'd by the parent."
+              grep '^SIGTERM ' /tmp/civet-sigterm-trace.log
               exit 1
             fi
-            echo "No SIGTERM entries (other events seen but those aren't the bug)."
+            echo "No SIGTERM entries."
           else
-            echo "No worker exit-path events detected."
+            echo "::error::No worker exit-path events detected — workers may not have run."
+            exit 1
           fi
 
       - name: Test (Windows, no coverage)

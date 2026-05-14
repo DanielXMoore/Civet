@@ -24,6 +24,9 @@ if (process.env.MOCHA_WORKER_ID !== undefined) {
       fs.appendFileSync(path, `${event} ${process.pid}\n`);
     } catch {}
   };
+  // Direct evidence that this worker process exists.  Counting `install`
+  // entries in CI gives us actual worker count per coverage run.
+  log(`install/worker${process.env.MOCHA_WORKER_ID}`);
   process.on("SIGTERM", () => {
     log("SIGTERM");
     process.kill(process.pid, "SIGKILL");
