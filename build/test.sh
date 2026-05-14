@@ -46,6 +46,14 @@ if [ "${CIVET_COVERAGE:-0}" = "1" ]; then
   args="$args --timeout 10000"
 fi
 
+# Bump workerpool's worker-terminate timeout for coverage runs (requires the
+# STRd6/mocha#worker-termination-timeout fork — pinned via pnpm.overrides).
+# Default is 1 s, which lets workers serializing the final V8 coverage data
+# get SIGTERM'd and silently lose hits.  30 s gives them ample headroom.
+if [ "${CIVET_COVERAGE:-0}" = "1" ] && [ "$threads" != "0" ]; then
+  args="$args --worker-termination-timeout 30000"
+fi
+
 if [ "${CIVET_COVERAGE:-0}" = "1" ]; then
   c8 mocha $args "$@"
 else
