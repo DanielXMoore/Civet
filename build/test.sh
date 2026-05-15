@@ -15,15 +15,6 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" && ( "$OSTYPE" == msys* || "$OSTYPE" == cy
   cap=2
 fi
 threads="${CIVET_THREADS:-$(node -e "const cpus = require('os').cpus().length; process.stdout.write(String(Math.min(cpus, $cap)))")}"
-# Parallel mocha workers race v8's NODE_V8_COVERAGE profile writer: hits
-# generated during mocha's IPC-disconnect teardown are lost, producing
-# flaky 99.x% gate failures with different files missing each run.
-# `afterAll` + `v8.takeCoverage()` only flushes what's accumulated up to
-# that point.  Serializing under coverage is the only known reliable fix
-# (see vitest #2591, mochista's design rationale).
-if [ "${CIVET_COVERAGE:-0}" = "1" ]; then
-  threads=0
-fi
 args=""
 if [ "$threads" != "0" ]; then
   args="--parallel -j $threads"
