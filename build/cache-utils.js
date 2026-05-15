@@ -16,25 +16,8 @@ const path = require('path');
 const { compile: heraCompile } = require('@danielx/hera/dist/main.js');
 const heraVersion = require('@danielx/hera/package.json').version;
 
-// Pick the civet source.  Preference order:
-//   1. CIVET_SOURCE env var (explicit override).
-//   2. The workspace's locally-built ./dist/main.js if it exists — keeps
-//      compileWithCache aligned with `import from '@danielx/civet'`, which
-//      resolves via the workspace package self-reference to the same file.
-//      Aligning the two avoids c8 merge ambiguity: when the installed
-//      package and the workspace differ on codegen (e.g., if/then/else
-//      assignment ⇒ ternary in 0.11.9 vs let-ref in 0.11.6), compiling the
-//      same .civet source via both paths produces JS with slightly different
-//      fnMap byte ranges.  Both end up attributed to the same source URL via
-//      source maps, but c8's merge can't reconcile two records under one URL
-//      with different fnMaps — phantom uncovered functions, flaky 99.x% gate.
-//   3. ./node_modules/@danielx/civet — the installed package, used during
-//      first-time bootstrap before dist/main.js exists.
-const distMainJs = path.resolve(__dirname, '../dist/main.js');
-const civetSourceRaw = process.env.CIVET_SOURCE
-  ?? (fs.existsSync(distMainJs) ? distMainJs : './node_modules/@danielx/civet');
-const civetIsPath = civetSourceRaw.startsWith('.') || path.isAbsolute(civetSourceRaw);
-const civetSourceResolved = require.resolve(civetIsPath ? path.resolve(civetSourceRaw) : civetSourceRaw);
+const civetSourceRaw = process.env.CIVET_SOURCE ?? './node_modules/@danielx/civet';
+const civetSourceResolved = require.resolve(path.resolve(civetSourceRaw));
 const civetSourceMtime = fs.statSync(civetSourceResolved).mtime.getTime().toString();
 const { compile: civetCompile } = require(civetSourceResolved);
 
@@ -77,10 +60,7 @@ function compileWithCache(source, filename, module = true) {
   const compileOptions = { js: true, inlineMap: true, sync: true, module };
   const key = makeCacheKey(keyInput(source, filename, isHera, compileOptions)) + '.mjs';
   const cached = diskCache.get(key);
-  if (cached != null) {
-    tap('hit', filename, module, key, cached);
-    return cached;
-  }
+  if (cached != null) return cached;
 
   let js;
   if (isHera) {
@@ -91,28 +71,7 @@ function compileWithCache(source, filename, module = true) {
   }
 
   diskCache.set(key, js);
-  tap('miss', filename, module, key, js);
   return js;
-}
-
-/**
- * Diagnostic tap: log compile invocations so CI can correlate which
- * filename/module/key produced which output.  Enabled by CIVET_COMPILE_TAP
- * env var (path to log file).  Each line: `<pid> <event> <md5> <len> <module> <keyTail> <filename>`.
- */
-let _tapPath;
-let _tapResolved = false;
-function tap(event, filename, module, key, js) {
-  if (!_tapResolved) {
-    _tapPath = process.env.CIVET_COMPILE_TAP || null;
-    _tapResolved = true;
-  }
-  if (!_tapPath) return;
-  try {
-    const md5 = require('crypto').createHash('md5').update(js).digest('hex').slice(0, 12);
-    const keyTail = key.slice(0, 12);
-    fs.appendFileSync(_tapPath, `${process.pid} ${event} ${md5} ${js.length} module=${module} key=${keyTail} ${filename}\n`);
-  } catch {}
 }
 
 /**
