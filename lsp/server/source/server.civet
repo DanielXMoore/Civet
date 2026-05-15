@@ -15,6 +15,7 @@
   CompletionList
   type Location
   DiagnosticSeverity
+  type SymbolInformation
   TextEdit
   SemanticTokensRequest
   FileChangeType
@@ -26,7 +27,7 @@
   type Position
 } from vscode-languageserver-textdocument
 * as Previewer from ./lib/previewer.civet
-{ collectCommentTokens, convertNavTree, forwardMap, getCanonicalFileName, convertDiagnostic, remapPosition, logTiming, type WithResolvers, withResolvers, type SourcemapLines } from ./lib/util.civet
+{ collectCommentTokens, convertNavTree, forwardMap, getCanonicalFileName, convertDiagnostic, getSymbolKind, remapPosition, logTiming, type WithResolvers, withResolvers, type SourcemapLines } from ./lib/util.civet
 { asPlainTextWithLinks, tagsToMarkdown } from ./lib/textRendering.civet
 {
   adjustCursorForEmptyQuotes
@@ -203,6 +204,7 @@ export function startServer(connection: Connection, dependencies: ServerDependen
         //   resolveProvider: true
         // }
         documentSymbolProvider: true
+        workspaceSymbolProvider: true
         definitionProvider: true
         hoverProvider: true
         referencesProvider: true
@@ -736,6 +738,43 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     if navTree.childItems
       for child of navTree.childItems
         convertNavTree(child, items, document, sourcemapLines)
+
+    return items
+
+  // workspace/symbol — fuzzy match via TS's getNavigateToItems across every
+  // loaded project; remap to .civet source space for transpiled files.
+  WORKSPACE_SYMBOL_LIMIT := 256
+  connection.onWorkspaceSymbol ({ query }) =>
+    items: SymbolInformation[] := []
+    for service of projectPathToServiceMap.values()
+      program := service.getProgram()
+      continue unless program
+      // excludeDtsFiles=true keeps node_modules/@types/... declarations out
+      // of results so clients see user code, not library noise.
+      navItems := service.getNavigateToItems(query, WORKSPACE_SYMBOL_LIMIT, undefined, true)
+
+      for navItem of navItems
+        sourceFile := program.getSourceFile(navItem.fileName)
+        continue unless sourceFile
+
+        start .= sourceFile.getLineAndCharacterOfPosition(navItem.textSpan.start)
+        end .= sourceFile.getLineAndCharacterOfPosition(navItem.textSpan.start + navItem.textSpan.length)
+        rawSourceName := service.getSourceFileName(navItem.fileName)
+
+        // Reverse map to .civet source space for transpiled files.
+        meta := service.host.getMeta(rawSourceName)
+        if meta?.sourcemapLines
+          start = remapPosition(start, meta.sourcemapLines)
+          end = remapPosition(end, meta.sourcemapLines)
+
+        items.push {
+          name: navItem.name
+          kind: getSymbolKind(navItem.kind)
+          location:
+            uri: URI.file(rawSourceName).toString()
+            range: { start, end }
+          containerName: navItem.containerName
+        }
 
     return items
 
