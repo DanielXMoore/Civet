@@ -190,6 +190,56 @@ describe "LSP features (shared project server)", ->
         token.line is lineIndex and token.character is expected.character and token.tokenType is commentIndex
       assert token, `expected a comment token for '${expected.text}' at ${lineIndex}:${expected.character}`
 
+  it "semantic tokens don't emit phantom type tokens on Civet bareword imports", ->
+    // Regression test for #2067: TS semantic classifications on a
+    // compiler-inserted prelude line (`type AutoPromise<T> = ...`, emitted
+    // when an async function needs Promise-wrapping) used to be remapped
+    // through `remapPosition`'s identity fallback and land on the trailing
+    // letter of bareword-import identifiers (Civet line 0) as single-char
+    // `type` / `typeParameter` tokens.  The bug only surfaces against a
+    // sufficiently complex file, so we load the real test/cli.civet rather
+    // than a synthetic fixture.
+    testDir := path.dirname new URL(import.meta.url).pathname
+    cliPath := path.resolve testDir, "../../../test/cli.civet"
+    fs2 := await import "node:fs/promises"
+    text := await fs2.readFile cliPath, "utf8"
+
+    uri := docUri path.join(projectRoot, "semtok-bareword-import.civet")
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    tokens := await client.request "textDocument/semanticTokens/full", {
+      textDocument: { uri }
+    }
+    assert tokens, "expected semantic tokens response"
+
+    legend := init.capabilities.semanticTokensProvider.legend.tokenTypes
+    typeIdx := legend.indexOf "type"
+    typeParamIdx := legend.indexOf "typeParameter"
+
+    decoded: { line: number, character: number, length: number, tokenType: number }[] := []
+    line .= 0
+    char .= 0
+    for i of [0...tokens.data.length] by 5
+      deltaLine := tokens.data[i]
+      deltaChar := tokens.data[i + 1]
+      length := tokens.data[i + 2]
+      tokenType := tokens.data[i + 3]
+      if deltaLine > 0
+        line += deltaLine
+        char = deltaChar
+      else
+        char += deltaChar
+      decoded.push { line, character: char, length, tokenType }
+
+    // `assert from assert` is a Civet bareword import — pure value, no types.
+    phantom := decoded.find (t) =>
+      t.line is 0 and (t.tokenType is typeIdx or t.tokenType is typeParamIdx)
+    assert.equal phantom, undefined,
+      `expected no type/typeParameter tokens on bareword import line; got ${JSON.stringify phantom}`
+
   it "completion resolve returns details for a symbol", ->
     uri := docUri path.join(projectRoot, "complete-resolve.civet")
     text := """
