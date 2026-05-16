@@ -21,7 +21,16 @@ export type SourcemapLines = SourceMap['lines']
  * Take a position in generated code and map it into a position in source code.
  * Reverse mapping.
  *
- * Return position as-is if no sourcemap is available.
+ * When the queried line has no usable 4-tuple mapping, walks back through
+ * preceding lines until one is found — matching the standard sourcemap
+ * "nearest preceding mapping wins" behavior (e.g. source-map's
+ * `originalPositionFor`).  Required for chained / sparse maps like the
+ * Hera→Civet→TS pipeline, where only ~18% of generated TS lines have a
+ * direct source mapping; without walk-back, the other 82% return raw TS
+ * line numbers and land far past EOF in the .hera source.
+ *
+ * Return position as-is if no sourcemap is available or no mapping exists
+ * anywhere at or before the queried position.
  */
 export function remapPosition(
   position: Position,
@@ -32,41 +41,55 @@ export function remapPosition(
   { line, character } := position
 
   textLine := sourcemapLines[line]
-  // Return original position if no mapping at this line
-  if !textLine?.length return position
+  if textLine?.length
+    let i = 0,
+      p = 0,
+      l = textLine.length,
+      lastMapping,
+      lastMappingPosition = 0
 
-  let i = 0,
-    p = 0,
-    l = textLine.length,
-    lastMapping,
-    lastMappingPosition = 0
+    while i < l
+      mapping := textLine[i]!
+      p += mapping[0]!
 
-  while i < l
-    mapping := textLine[i]!
-    p += mapping[0]!
+      if mapping.length === 4
+        lastMapping = mapping
+        lastMappingPosition = p
 
-    if mapping.length === 4
-      lastMapping = mapping
-      lastMappingPosition = p
+      if p >= character
+        break
 
-    if p >= character
-      break
+      i++
 
-    i++
+    if lastMapping
+      srcLine := lastMapping[2]
+      srcChar := lastMapping[3]
+      newChar := srcChar + character - lastMappingPosition
 
-  if lastMapping
-    srcLine := lastMapping[2]
-    srcChar := lastMapping[3]
-    newChar := srcChar + character - lastMappingPosition
+      // Clamp to non-negative: generated code prepended before source
+      // (e.g. `import` keyword) can produce negative interpolation
+      return
+        line: srcLine
+        character: Math.max(0, newChar)
 
-    // Clamp to non-negative: generated code prepended before source
-    // (e.g. `import` keyword) can produce negative interpolation
-    return
-      line: srcLine
-      character: Math.max(0, newChar)
-  else
-    // console.error("no mapping for ", position)
-    return position
+  // No usable mapping on the queried line — walk back through preceding
+  // lines for the nearest 4-tuple.  Character offset does not interpolate
+  // across line boundaries; the source column is the mapping's anchor.
+  let l = line - 1
+  while l >= 0
+    prevLine := sourcemapLines[l]
+    if prevLine?.length
+      lastMapping .= undefined
+      for mapping of prevLine
+        if mapping.length === 4
+          lastMapping = mapping
+      if lastMapping
+        return
+          line: lastMapping[2]!
+          character: Math.max(0, lastMapping[3]!)
+    l--
+
+  return position
 
 /**
  * Use sourcemap lines to remap the start and end position of a range.
