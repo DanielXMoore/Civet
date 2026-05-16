@@ -244,6 +244,67 @@ describe "LSP features (shared project server)", ->
     assert importBindingToken,
       `expected a semantic token covering \`ParsedPath\` in the import; decoded=${JSON.stringify decoded}`
 
+  it "semantic tokens classify imported bindings by symbol kind", ->
+    // Exercises every branch of `pickImportBindingTokenType`: a class,
+    // enum, interface, type alias, function, namespace, and a plain
+    // const (variable fallback), plus the namespace-import (`* as`)
+    // path of `addImportBindingTokens`.
+    uri := docUri path.join(projectRoot, "semtok-import-kinds.civet")
+    text := """
+      { FixtureClass, FixtureEnum, FixtureInterface, FixtureType, fixtureFn, fixtureConst, FixtureNs } from ./import-fixture
+      * as fixtureMod from ./import-fixture
+      FixtureClass; FixtureEnum; FixtureInterface; FixtureType; fixtureFn; fixtureConst; FixtureNs; fixtureMod
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    tokens := await client.request "textDocument/semanticTokens/full", {
+      textDocument: { uri }
+    }
+    assert tokens, "expected semantic tokens response"
+
+    legend := init.capabilities.semanticTokensProvider.legend
+    typeIdx := (name: string) => legend.tokenTypes.indexOf(name)
+
+    decoded: { line: number, character: number, length: number, tokenType: number }[] := []
+    line .= 0
+    char .= 0
+    for i of [0...tokens.data.length] by 5
+      deltaLine := tokens.data[i]
+      deltaChar := tokens.data[i + 1]
+      length := tokens.data[i + 2]
+      tokenType := tokens.data[i + 3]
+      if deltaLine > 0
+        line += deltaLine
+        char = deltaChar
+      else
+        char += deltaChar
+      decoded.push { line, character: char, length, tokenType }
+
+    // Helper finds the token covering an identifier on a given line by name.
+    findToken := (lineNo: number, name: string) =>
+      col := text.split("\n")[lineNo].indexOf(name)
+      assert col >= 0, `\`${name}\` not found on line ${lineNo} of test source`
+      decoded.find (t) =>
+        t.line is lineNo and t.character is col and t.length is name.length
+
+    expectKind := (lineNo: number, name: string, kind: string) =>
+      tok := findToken(lineNo, name)
+      assert tok, `expected import-binding token for \`${name}\`; decoded=${JSON.stringify decoded}`
+      assert.equal tok.tokenType, typeIdx(kind),
+        `\`${name}\` classified as ${legend.tokenTypes[tok.tokenType]}, expected ${kind}`
+
+    expectKind 0, "FixtureClass",     "class"
+    expectKind 0, "FixtureEnum",      "enum"
+    expectKind 0, "FixtureInterface", "interface"
+    expectKind 0, "FixtureType",      "type"
+    expectKind 0, "fixtureFn",        "function"
+    expectKind 0, "fixtureConst",     "variable"
+    expectKind 0, "FixtureNs",        "namespace"
+    expectKind 1, "fixtureMod",       "namespace"
+
   it "semantic tokens marks civet comments as comments", ->
     uri := docUri path.join(projectRoot, "semtok-coffee-comment.civet")
     text := '''

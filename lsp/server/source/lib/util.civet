@@ -379,15 +379,28 @@ pickImportBindingTokenType := (
   checker: ts.TypeChecker
   tokenTypes: readonly string[]
 ): number ->
+  // Clamp to 0 so an unconfigured tokenTypes list cannot leak a -1 token
+  // type into the delta-encoded response (the main classifier path guards
+  // with `continue if tokenType < 0`; tokens we push here go straight to
+  // the encoder which only checks length).
   resolveTokenIndex := (name: string): number =>
     idx := tokenTypes.indexOf(name)
-    if idx >= 0 then idx else tokenTypes.indexOf("variable")
+    return idx if idx >= 0
+    /* c8 ignore start — defensive: every name we ever pass lives in
+       semanticTokenTypes, so these fallbacks are unreachable under the
+       server's own legend. */
+    fallback := tokenTypes.indexOf("variable")
+    if fallback >= 0 then fallback else 0
+    /* c8 ignore stop */
 
   if isTypeOnly
     return resolveTokenIndex("type")
 
   symbol .= checker.getSymbolAtLocation(identifier)
+  /* c8 ignore start — defensive: TS hands back undefined only for broken
+     imports; treat as a plain variable in that case. */
   return resolveTokenIndex("variable") unless symbol
+  /* c8 ignore stop */
 
   // Import binding identifiers are alias symbols; resolve to the actual
   // declaration to decide whether it's a function/class/etc.
@@ -431,9 +444,12 @@ export function addImportBindingTokens(
   civetText: string?
   sourcemapLines: SourcemapLines?
   tokenTypes: readonly string[]
+  tokenModifiers: readonly string[]
   out: { line: number, character: number, length: number, tokenType: number, tokenModifiers: number }[]
 ): void
-  declarationModifier := 1 << 0  // matches semanticTokenModifiers "declaration" position
+  // Look up "declaration" by name so reordering semanticTokenModifiers in
+  // server.civet stays in sync.
+  declarationModifier := 1 << tokenModifiers.indexOf("declaration")
 
   emit := (identifier: ts.Identifier, isTypeOnly: boolean): void =>
     tokenType := pickImportBindingTokenType identifier, isTypeOnly, checker, tokenTypes
