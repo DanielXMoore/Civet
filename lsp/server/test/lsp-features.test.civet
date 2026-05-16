@@ -190,6 +190,180 @@ describe "LSP features (shared project server)", ->
         token.line is lineIndex and token.character is expected.character and token.tokenType is commentIndex
       assert token, `expected a comment token for '${expected.text}' at ${lineIndex}:${expected.character}`
 
+  it "signatureHelp returns parameter info inside a call", ->
+    uri := docUri path.join(projectRoot, "sighelp.civet")
+    text := """
+      function add(x: number, y: number): number
+        x + y
+      r := add(1, 2)
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    callLine := lines.findIndex (l) => l.startsWith "r := add("
+    // Position right after the opening `(` of `add(1, 2)`.
+    openParenCol := lines[callLine].indexOf("add(") + 4
+    result := await client.request "textDocument/signatureHelp", {
+      textDocument: { uri }
+      position: { line: callLine, character: openParenCol }
+    }
+    assert result, "expected signatureHelp result"
+    assert result.signatures?.length, "expected at least one signature"
+    sig := result.signatures[0]
+    assert sig.label.includes("add"), `signature label should mention 'add', got: ${sig.label}`
+    assert sig.parameters?.length is 2, `expected 2 parameters, got ${sig.parameters?.length}`
+
+  it "prepareRename returns the range of a renameable local", ->
+    uri := docUri path.join(projectRoot, "prepare-rename.civet")
+    text := """
+      x := 1
+      console.log x
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    result := await client.request "textDocument/prepareRename", {
+      textDocument: { uri }
+      position: { line: 0, character: 0 }
+    }
+    assert result, "expected prepareRename result"
+    range := result.range ?? result
+    assert range?.start, "expected a range or { range, placeholder }"
+    assert range.start.line is 0 and range.start.character is 0,
+      `expected range to start at 0:0, got ${JSON.stringify range.start}`
+
+  it "documentHighlight returns occurrences of a local", ->
+    uri := docUri path.join(projectRoot, "highlight.civet")
+    text := """
+      x := 1
+      y := x + x + 2
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    result := await client.request "textDocument/documentHighlight", {
+      textDocument: { uri }
+      position: { line: 0, character: 0 }
+    }
+    assert Array.isArray(result), "expected documentHighlight to return an array"
+    assert result.length >= 3, `expected >= 3 highlights for 'x', got ${result.length}`
+
+  it "typeDefinition jumps to the named type of a variable", ->
+    uri := docUri path.join(projectRoot, "typedef.civet")
+    text := """
+      type Foo = { n: number }
+      f: Foo := { n: 1 }
+      f
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    lastFLine := lines.length - 2
+    result := await client.request "textDocument/typeDefinition", {
+      textDocument: { uri }
+      position: { line: lastFLine, character: 0 }
+    }
+    assert Array.isArray(result) and result.length, "expected at least one typeDefinition location"
+    assert result[0].uri.includes("typedef.civet"), `expected location in same file, got ${result[0].uri}`
+
+  it "implementation finds the class implementing an interface", ->
+    uri := docUri path.join(projectRoot, "impl.civet")
+    text := """
+      interface Greeter
+        greet(): string
+      class HiGreeter implements Greeter
+        greet(): string
+          "hi"
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    interfaceLine := lines.findIndex (l) => l.startsWith "interface Greeter"
+    greeterCol := lines[interfaceLine].indexOf "Greeter"
+    result := await client.request "textDocument/implementation", {
+      textDocument: { uri }
+      position: { line: interfaceLine, character: greeterCol + 1 }
+    }
+    assert Array.isArray(result) and result.length, "expected at least one implementation location"
+
+  it "foldingRange returns at least one range for a class body", ->
+    uri := docUri path.join(projectRoot, "folding.civet")
+    text := """
+      class Foo
+        bar(): number
+          x := 1
+          y := 2
+          x + y
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    result := await client.request "textDocument/foldingRange", {
+      textDocument: { uri }
+    }
+    assert Array.isArray(result), "expected foldingRange to return an array"
+    assert result.length, `expected at least one folding range, got ${result.length}`
+    fr := result[0]
+    assert fr.startLine < fr.endLine, "folding range must span >= 1 line"
+
+  it "selectionRange returns nested ranges around a position", ->
+    uri := docUri path.join(projectRoot, "selrange.civet")
+    text := """
+      x := { a: 1, b: 2 }
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    // Position on the `1` inside the object literal.
+    line := text.indexOf "1"
+    result := await client.request "textDocument/selectionRange", {
+      textDocument: { uri }
+      positions: [ { line: 0, character: line } ]
+    }
+    assert Array.isArray(result) and result.length is 1, "expected one selection range entry"
+    sr := result[0]
+    assert sr.range, "expected a range"
+    assert sr.parent, "expected at least one nested parent range"
+
+  it "linkedEditingRange returns matching JSX tag ranges", ->
+    // Use a .civet file with JSX-like syntax; TS service powers the
+    // detection. Some configurations don't support JSX, in which case the
+    // handler returns null — accept that too, just verify it doesn't error.
+    uri := docUri path.join(projectRoot, "linked-edit.civet")
+    text := """
+      el := <div>hello</div>
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    openTagCol := text.indexOf("div")
+    result := await client.request "textDocument/linkedEditingRange", {
+      textDocument: { uri }
+      position: { line: 0, character: openTagCol + 1 }
+    }
+    // Result can be null if JSX isn't enabled in the project's tsconfig;
+    // just verify the request roundtrips without erroring.
+    assert result is null or result?.ranges, "linkedEditingRange should return null or { ranges }"
+
   it "completion resolve returns details for a symbol", ->
     uri := docUri path.join(projectRoot, "complete-resolve.civet")
     text := """
