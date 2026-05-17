@@ -124,6 +124,30 @@ export function startServer(connection: Connection, dependencies: ServerDependen
   // Set of project paths that need another rebuild after the current one completes
   rebuildQueued := new Set<string>()
 
+  // Project paths we've already warned the user about (missing tsconfig.json).
+  // Dedupes the warning so the popup fires once per project per session, not on
+  // every TSService reload (#240).
+  missingConfigWarned := new Set<string>()
+
+  warnIfConfigMissing := (projPath: string, service: ResolvedService): void =>
+    return if service.configFound or missingConfigWarned.has projPath
+    missingConfigWarned.add projPath
+    message := `No tsconfig.json found at ${projPath} — Civet LSP fell back to a Civet/Hera-only project scope.  Add a tsconfig.json to enable cross-file types and analysis of .ts/.js files.`
+    // window/logMessage (output channel) + window/showMessage (toast).  The
+    // vscode-languageserver `showWarningMessage` helper uses showMessageRequest
+    // even with no actions, which not every client renders as a passive toast,
+    // so send the plain ShowMessageNotification directly.
+    logger.warn? message
+    /* c8 ignore start -- defensive: connection.sendNotification is always
+       present on createConnection's return, but a custom Connection stub in
+       a test harness might not have it; better to swallow than crash the
+       reload path. */
+    try
+      connection.sendNotification 'window/showMessage', { type: 2, message }
+    catch e
+      logger.error `Failed to surface missing-tsconfig warning: ${e}`
+    /* c8 ignore stop */
+
   let rootUri: string | undefined, rootDir: string | undefined
 
   getProjectPathFromSourcePath := (sourcePath: string): string =>
@@ -172,6 +196,7 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     await service.loadPlugins()
     projectPathToServiceMap.set(projPath, service)
     projectPathToPendingPromiseMap.delete(projPath)
+    warnIfConfigMissing(projPath, service)
     resolveInit!()
 
     return service
@@ -1162,6 +1187,7 @@ export function startServer(connection: Connection, dependencies: ServerDependen
       // Atomically swap: incoming requests continue using the old service until this point
       oldService := projectPathToServiceMap.get(projPath)
       projectPathToServiceMap.set(projPath, newService)
+      warnIfConfigMissing(projPath, newService)
 
       // Dispose old service after a short grace period so in-flight requests finish
       if oldService
