@@ -28,7 +28,8 @@
   type FoldingRange
   type SelectionRange
   type LinkedEditingRanges
-  type DefinitionLink
+  type SignatureHelpContext
+  SignatureHelpTriggerKind
   type Range
 } from vscode-languageserver
 
@@ -93,6 +94,24 @@ semanticTokenModifiers := [
   "defaultLibrary" // 4
   "local"          // 5
 ] as const
+
+// Map LSP SignatureHelpContext → TS SignatureHelpItemsOptions so that
+// retriggers and character-typed invocations preserve activeSignature
+// instead of resetting to 0 on every overload cycle / cursor move.
+function toTsSignatureHelpOptions(
+  context: SignatureHelpContext | undefined
+): ts.SignatureHelpItemsOptions | undefined
+  return undefined unless context
+  if context.isRetrigger
+    triggerReason:
+      kind: 'retrigger'
+      triggerCharacter: context.triggerCharacter as ts.SignatureHelpRetriggerCharacter | undefined
+  else if context.triggerKind is SignatureHelpTriggerKind.TriggerCharacter and context.triggerCharacter
+    triggerReason:
+      kind: 'characterTyped'
+      triggerCharacter: context.triggerCharacter as ts.SignatureHelpTriggerCharacter
+  else
+    triggerReason: { kind: 'invoked' }
 
 export interface ServerDependencies
   TSService: typeof import("./lib/typescript-service.civet").default
@@ -1004,16 +1023,16 @@ export function startServer(connection: Connection, dependencies: ServerDependen
         if meta?.sourcemapLines
           start = remapPosition(start, meta.sourcemapLines)
           end = remapPosition(end, meta.sourcemapLines)
-        kind := if hl.kind is 'writtenReference'
+        // TS's HighlightSpanKind: 'reference' → Read, 'writtenReference' and
+        // 'definition' (function/class/type/interface name sites) → Write,
+        // 'none' → Text fallback (rare; e.g. string-literal highlights).
+        kind := if hl.kind is 'writtenReference' or hl.kind is 'definition'
           DocumentHighlightKind.Write
         else if hl.kind is 'reference'
           DocumentHighlightKind.Read
-        /* c8 ignore start — defensive: TS's HighlightSpanKind also has
-           'none' and 'definition' but they're not reachable from realistic
-           user fixtures; existing references/writes cover normal use. */
+        /* c8 ignore next 2 -- 'none' only fires for non-identifier spans (string contents); no fixture exercises it */
         else
           DocumentHighlightKind.Text
-        /* c8 ignore stop */
         out.push { range: { start, end }, kind }
     out
 
@@ -1108,7 +1127,8 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     mapped := getRenameSourceDetails(service, textDocument, sourcePath, position)
     return null unless mapped
 
-    items := service.getSignatureHelpItems(mapped.sourcePath, mapped.offset, undefined)
+    options := toTsSignatureHelpOptions context
+    items := service.getSignatureHelpItems(mapped.sourcePath, mapped.offset, options)
     return null unless items?.items?#
 
     signatures: SignatureInformation[] := items.items.map((item) =>

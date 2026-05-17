@@ -216,6 +216,21 @@ describe "LSP features (shared project server)", ->
     assert sig.label.includes("add"), `signature label should mention 'add', got: ${sig.label}`
     assert sig.parameters?.length is 2, `expected 2 parameters, got ${sig.parameters?.length}`
 
+    // Exercise the three SignatureHelpContext → TS triggerReason mappings.
+    // SignatureHelpTriggerKind: 1=Invoked, 2=TriggerCharacter, 3=ContentChange.
+    contexts := [
+      { triggerKind: 2, triggerCharacter: '(', isRetrigger: false }
+      { triggerKind: 2, triggerCharacter: ',', isRetrigger: true }
+      { triggerKind: 1, isRetrigger: false }
+    ]
+    for ctx of contexts
+      r := await client.request "textDocument/signatureHelp", {
+        textDocument: { uri }
+        position: { line: callLine, character: openParenCol }
+        context: ctx
+      }
+      assert r?.signatures?.length, `expected signatures for ctx ${JSON.stringify ctx}`
+
   it "prepareRename returns the range of a renameable local", ->
     uri := docUri path.join(projectRoot, "prepare-rename.civet")
     text := """
@@ -254,6 +269,31 @@ describe "LSP features (shared project server)", ->
     }
     assert Array.isArray(result), "expected documentHighlight to return an array"
     assert result.length >= 3, `expected >= 3 highlights for 'x', got ${result.length}`
+
+  it "documentHighlight classifies a function declaration name as Write", ->
+    // TS reports HighlightSpanKind.definition for function/class/type/interface
+    // declaration names; we map those to LSP DocumentHighlightKind.Write (3).
+    uri := docUri path.join(projectRoot, "highlight-fn.civet")
+    text := """
+      function greet(name: string): string
+        "hi " + name
+      greet "world"
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    // Cursor on the `g` of `function greet` — the declaration site.
+    result := await client.request "textDocument/documentHighlight", {
+      textDocument: { uri }
+      position: { line: 0, character: 9 }
+    }
+    assert Array.isArray(result), "expected documentHighlight to return an array"
+    declSite := result.find (h) => h.range.start.line is 0
+    assert declSite, "expected a highlight at the function declaration"
+    assert declSite.kind is 3,
+      `expected Write (3) for the declaration site, got ${declSite.kind}`
 
   it "typeDefinition jumps to the named type of a variable", ->
     uri := docUri path.join(projectRoot, "typedef.civet")
