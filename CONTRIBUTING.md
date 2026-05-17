@@ -49,6 +49,17 @@ To use multiple cores while building:
 CIVET_THREADS=4 pnpm build
 ```
 
+### Two Civet binaries
+
+Civet is bootstrapped: the previously-released compiler builds the current
+source. So the repo has two binaries with different roles:
+
+* `./dist/civet` — the locally-built compiler. Reflects your changes after
+  `pnpm build`. Use this to test source/parser edits.
+* `./node_modules/.bin/civet` — the previously-released `@danielx/civet` from
+  npm. Used to compile `source/` into `dist/` during the build, so it does
+  *not* reflect your changes. Useful for perf comparisons (see below).
+
 ## Testing
 
 You can run all tests via
@@ -79,6 +90,12 @@ to add a broken test, and temporarily add `.only`, so that you can repeatedly
 run the test via `pnpm test`. (You do not need to `pnpm build` in between.)
 With only one test running, you can reasonably add `console.log` and other
 debugging statements to figure out what's going on.
+
+For a one-off run from the CLI without editing the test file:
+
+```sh
+pnpm test:grep "name of test"
+```
 
 ## Coverage
 
