@@ -1,0 +1,44 @@
+{ spawn, spawnSync } from node:child_process
+{ readFileSync } from node:fs
+{ fileURLToPath } from node:url
+path from node:path
+assert from assert
+
+testDir := path.dirname fileURLToPath(import.meta.url)
+binPath := path.resolve testDir, '..', 'bin', 'civet-lsp.js'
+pkg := JSON.parse readFileSync(path.resolve(testDir, '..', 'package.json'), 'utf8')
+
+describe "civet-lsp CLI", ->
+  for flag of ['--version', '-v']
+    it `prints the version and exits 0 with ${flag}`, ->
+      result := spawnSync 'node', [binPath, flag], encoding: 'utf8'
+      assert.equal result.status, 0
+      assert.equal result.stdout.trim(), pkg.version
+
+  for flag of ['--help', '-h']
+    it `prints a usage blurb and exits 0 with ${flag}`, ->
+      result := spawnSync 'node', [binPath, flag], encoding: 'utf8'
+      assert.equal result.status, 0
+      assert.match result.stdout, /Usage: civet-lsp/
+      assert.ok result.stdout.includes(pkg.version),
+        `expected ${flag} output to mention version ${pkg.version}`
+
+  it "defaults to --stdio when no connection-mode flag is passed", ->
+    // Regression: vscode-languageserver throws "Connection input stream is
+    // not set" if none of --stdio / --node-ipc / --socket / --pipe is given.
+    // bin/civet-lsp.js injects --stdio in that case.
+    proc := spawn 'node', [binPath], stdio: ['pipe', 'pipe', 'pipe']
+    let stderr = ''
+    proc.stderr!.on 'data', (chunk: Buffer) => stderr += chunk.toString()
+    earlyExit := new Promise<number?> (resolve) =>
+      proc.once 'exit', (code) => resolve code
+    timeout := new Promise<number?> (resolve) =>
+      setTimeout (=> resolve null), 500
+    try
+      result := await Promise.race [earlyExit, timeout]
+      assert.equal result, null,
+        `server exited early with code ${result}; stderr: ${stderr}`
+      assert.ok not stderr.includes('Connection input stream is not set'),
+        `unexpected stderr: ${stderr}`
+    finally
+      proc.kill 'SIGTERM'
