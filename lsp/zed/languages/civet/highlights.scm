@@ -11,6 +11,10 @@
 (escape_sequence) @string.escape
 (template_substitution ["${" "}"] @punctuation.special)
 
+; ── Regex ──────────────────────────────────────────────────────────────────────
+
+(regex) @string.regex
+
 ; ── Numbers ────────────────────────────────────────────────────────────────────
 
 (number) @number
