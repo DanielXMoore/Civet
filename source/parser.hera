@@ -87,6 +87,7 @@ import type {
   ArrayBindingPattern,
   ASTNode,
   BlockStatement,
+  Index,
   ObjectBindingPattern,
 } from "./parser/types.civet"
 
@@ -1922,24 +1923,12 @@ PropertyAccess
   # NOTE: Added shorthand x."string" -> x["string"]
   # NOTE: Added shorthand x.3 -> x[3]
   # NOTE: Added shorthand x.:symbol -> x[Symbol.for("symbol")]
-  AccessStart:dot ( TemplateLiteral / StringLiteral / IntegerLiteral / SymbolLiteral ):literal ->
-    // Wrap simple literals so consumers (e.g. PropertyDefinition shorthand, postfix
-    // update extraction) that read `expression` and feed it through `needsRef` see
-    // a Literal — matching the bracket-form `{a[1]}`/`{a["b"]}` no-ref behavior.
-    // TemplateLiteral/SymbolLiteral keep their own types so refs are introduced.
-    expression .= literal as ASTNode
-    if literal.type is "StringLiteral" or not literal.type
-      expression = {
-        type: "Literal",
-        subtype: literal.type ?? "NumericLiteral",
-        children: [literal],
-        raw: literal.token,
-      }
+  AccessStart:dot ( TemplateLiteral / AccessLiteral / SymbolLiteral ):expression ::Index ->
+    // children layout mirrors the bracket-form Index `[open, expression, ws, close]`
+    // so `last.children.slice(-2)` still yields `[ws, close]`.
     return {
       type: "Index",
       expression,
-      // children layout mirrors the bracket-form Index `[open, expression, ws, close]`
-      // so `last.children.slice(-2)` still yields `[ws, close]`.
       children: [
         adjustIndexAccess(dot),
         expression,
@@ -2045,6 +2034,23 @@ PropertyAccess
         dot: start,
         children: [ start, "prototype" ],
       }
+
+# Wrap simple literals in a `Literal` node so consumers reading `expression`
+# (e.g. PropertyDefinition shorthand, postfix update extraction) feed it
+# through `needsRef` and treat it as a no-ref value, matching the bracket-form
+# `{a[1]}`/`{a["b"]}` behavior. TemplateLiteral and SymbolLiteral are
+# deliberately not wrapped so refs are still introduced for their
+# side-effecting evaluation.
+# NOTE: We can't reuse the `Literal` rule here — it would match
+# `NumericLiteral` (e.g. `0.0`) and break `x.0.0 → x[0][0]`.
+AccessLiteral
+  ( StringLiteral / IntegerLiteral ):literal ->
+    return {
+      type: "Literal",
+      subtype: literal.type,
+      children: [literal],
+      raw: literal.token,
+    }
 
 # Property glob that starts with "." or "?.", not a brace
 ExplicitPropertyGlob
@@ -6674,7 +6680,7 @@ HexIntegerLiteral
 IntegerLiteral
   # perf: short circuit if no possibility of being an integer
   /(?=[0-9])/ IntegerLiteralKind:token ->
-    return { $loc, token }
+    return { type: "NumericLiteral", $loc, token }
 
 IntegerLiteralKind
   DecimalBigIntegerLiteral
