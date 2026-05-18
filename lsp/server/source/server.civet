@@ -98,18 +98,29 @@ semanticTokenModifiers := [
 // Map LSP SignatureHelpContext → TS SignatureHelpItemsOptions so that
 // retriggers and character-typed invocations preserve activeSignature
 // instead of resetting to 0 on every overload cycle / cursor move.
+//
+// TS only accepts a fixed set of trigger characters (`(`, `,`, `<`, plus
+// `)` for retriggers).  LSP registrations may include other characters
+// — notably space, which Civet uses for whitespace-call form `greet "x"`
+// — so anything outside the TS set falls through to `invoked` rather
+// than being cast through an invalid value.
 function toTsSignatureHelpOptions(
   context: SignatureHelpContext | undefined
 ): ts.SignatureHelpItemsOptions | undefined
   return undefined unless context
-  if context.isRetrigger
+  { triggerCharacter, triggerKind, isRetrigger } := context
+  validTrigger := triggerCharacter is '(' or triggerCharacter is ',' or triggerCharacter is '<'
+  validRetrigger := validTrigger or triggerCharacter is ')'
+  if isRetrigger
     triggerReason:
       kind: 'retrigger'
-      triggerCharacter: context.triggerCharacter as ts.SignatureHelpRetriggerCharacter | undefined
-  else if context.triggerKind is SignatureHelpTriggerKind.TriggerCharacter and context.triggerCharacter
+      triggerCharacter: validRetrigger
+        ? triggerCharacter as ts.SignatureHelpRetriggerCharacter
+        : undefined
+  else if triggerKind is SignatureHelpTriggerKind.TriggerCharacter and validTrigger
     triggerReason:
       kind: 'characterTyped'
-      triggerCharacter: context.triggerCharacter as ts.SignatureHelpTriggerCharacter
+      triggerCharacter: triggerCharacter as ts.SignatureHelpTriggerCharacter
   else
     triggerReason: { kind: 'invoked' }
 
@@ -246,7 +257,10 @@ export function startServer(connection: Connection, dependencies: ServerDependen
         selectionRangeProvider: true
         linkedEditingRangeProvider: true
         signatureHelpProvider:
-          triggerCharacters: ['(', ',', '<']
+          // Space supports Civet's whitespace-call form (`greet "x"`).
+          // It is not a valid TS trigger character; `toTsSignatureHelpOptions`
+          // sanitizes it to `invoked` before calling into TS.
+          triggerCharacters: ['(', ',', '<', ' ']
           retriggerCharacters: [')']
         semanticTokensProvider:
           legend:
@@ -1113,9 +1127,10 @@ export function startServer(connection: Connection, dependencies: ServerDependen
       try
         node := service.getSmartSelectionRange(transpiledPath, tsOffset)
         out.push convertSelectionRange(node)
-      /* c8 ignore next 2 -- TS throws if position is out of range; benign. */
+      /* c8 ignore next 3 -- TS clamps offsets; reaching here from real editors is rare. Fallback exists for LSP spec compliance: response array must be 1:1 with `positions`. */
       catch e
         logger.error("Selection range error: " + e)
+        out.push { range: { start: pos, end: pos } }
     out
 
   connection.onSignatureHelp ({ textDocument, position, context }) =>
