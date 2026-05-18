@@ -594,6 +594,132 @@ describe "LSP features (shared project server)", ->
     assert spaceTriggered?.signatures?.length,
       `expected signatures for space-triggered request at whitespace-call position; got ${JSON.stringify spaceTriggered}`
 
+  it "signatureHelp returns constructor parameter info", ->
+    uri := docUri path.join(projectRoot, "sighelp-ctor.civet")
+    text := """
+      class Container<T>
+        @(public value: T, public label: string)
+      c := new Container<string>("v", "name")
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    callLine := lines.findIndex (l) => l.includes "new Container"
+    // Position right after the value-args opening paren.
+    openParenCol := lines[callLine].indexOf("\"v\"")
+    result := await client.request "textDocument/signatureHelp", {
+      textDocument: { uri }
+      position: { line: callLine, character: openParenCol }
+      context: { triggerKind: 2, triggerCharacter: '(', isRetrigger: false }
+    }
+    assert result?.signatures?.length,
+      `expected signatures for constructor call; got ${JSON.stringify result}`
+    sig := result.signatures[0]
+    assert sig.parameters?.length is 2,
+      `expected 2 constructor parameters, got ${sig.parameters?.length}`
+
+  it "signatureHelp handles '<' trigger inside a generic type-argument list", ->
+    uri := docUri path.join(projectRoot, "sighelp-generic.civet")
+    text := """
+      function pick<T, U>(t: T, u: U): T
+        t
+      r := pick<string, number>("hi", 1)
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    callLine := lines.findIndex (l) => l.startsWith "r := pick<"
+    // Position immediately after the `<` opening the type-argument list.
+    afterAngle := lines[callLine].indexOf("pick<") + "pick<".length
+    result := await client.request "textDocument/signatureHelp", {
+      textDocument: { uri }
+      position: { line: callLine, character: afterAngle }
+      context: { triggerKind: 2, triggerCharacter: '<', isRetrigger: false }
+    }
+    assert result?.signatures?.length,
+      `expected signatures for '<' trigger inside generic args; got ${JSON.stringify result}`
+    sig := result.signatures[0]
+    // Inside the type-argument list TS reports the type parameters as the
+    // active parameters (T, U), not the value parameters.
+    assert sig.parameters?.length is 2,
+      `expected 2 type parameters at '<' position, got ${sig.parameters?.length}`
+    assert sig.label.includes("T") and sig.label.includes("U"),
+      `expected type-parameter signature to mention T and U; got: ${sig.label}`
+
+  it "signatureHelp retriggers on ')' for an outer call when inner closes", ->
+    // Real retrigger scenario: when typing `)` closes an inner call, the
+    // editor retriggers to surface the outer call's signature again.
+    uri := docUri path.join(projectRoot, "sighelp-retrigger-close.civet")
+    text := """
+      function add(x: number, y: number): number
+        x + y
+      r := add(add(1, 2), 3)
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    callLine := lines.findIndex (l) => l.startsWith "r := add(add"
+    // Position right after the inner call's closing `)` — still inside
+    // the outer `add(..., 3)` call.
+    afterInnerClose := lines[callLine].indexOf("add(1, 2)") + "add(1, 2)".length
+    result := await client.request "textDocument/signatureHelp", {
+      textDocument: { uri }
+      position: { line: callLine, character: afterInnerClose }
+      context: { triggerKind: 2, triggerCharacter: ')', isRetrigger: true }
+    }
+    assert result?.signatures?.length,
+      `expected outer-call signatures after ')' retrigger; got ${JSON.stringify result}`
+    sig := result.signatures[0]
+    assert sig.label.includes("add"), `expected 'add' signature; got: ${sig.label}`
+    assert result.activeParameter is 0,
+      `expected activeParameter 0 (just closed first arg of outer add), got ${result.activeParameter}`
+
+  it "signatureHelp documentation is wrapped in MarkupContent", ->
+    uri := docUri path.join(projectRoot, "sighelp-doc.civet")
+    text := """
+      /**
+       * Adds two numbers together.
+       * @param x first addend
+       * @param y second addend
+       */
+      function add(x: number, y: number): number
+        x + y
+      r := add(1, 2)
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    callLine := lines.findIndex (l) => l.startsWith "r := add("
+    openParenCol := lines[callLine].indexOf("add(") + 4
+    result := await client.request "textDocument/signatureHelp", {
+      textDocument: { uri }
+      position: { line: callLine, character: openParenCol }
+    }
+    assert result?.signatures?.length, "expected signatures for documented function"
+    sig := result.signatures[0]
+    // Documentation, when present, must be a MarkupContent object with
+    // kind: 'markdown' rather than a plain string.
+    assert sig.documentation is undefined or
+      (sig.documentation.kind is "markdown" and typeof sig.documentation.value is "string"),
+      `signature documentation should be MarkupContent or undefined; got ${JSON.stringify sig.documentation}`
+    paramWithDoc := sig.parameters?.find (p) => p.documentation
+    if paramWithDoc
+      assert paramWithDoc.documentation.kind is "markdown" and
+        typeof paramWithDoc.documentation.value is "string",
+        `parameter documentation should be MarkupContent; got ${JSON.stringify paramWithDoc.documentation}`
+
   it "prepareRename returns the range of a renameable local", ->
     uri := docUri path.join(projectRoot, "prepare-rename.civet")
     text := """
