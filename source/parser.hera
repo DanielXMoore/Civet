@@ -85,8 +85,10 @@ import {
 } from "./parser/lib.civet"
 import type {
   ArrayBindingPattern,
+  AssignmentExpression,
   ASTNode,
   BlockStatement,
+  Index,
   ObjectBindingPattern,
 } from "./parser/types.civet"
 
@@ -890,7 +892,7 @@ ActualAssignment
   # NOTE: Consolidated assignment ops
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
-  ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedExpression ::ASTNode ->
+  ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedExpression ::AssignmentExpression ->
     $1 = $1.map((x) => [x[0], x[1], ...x[2]])
     $0 = [$1, $2]
     return {
@@ -1394,6 +1396,10 @@ ClassElement
   # CoffeeScript public static class variable: @identifier = Expression
   # CoffeeScript private static class variable: identifier = Expression
   CoffeeClassesEnabled Decorators?:decorators DeclareModifier?:declare AccessModifier?:access StaticModifier?:static_ OverrideModifier?:override ActualAssignment:assignment ->
+    // Fall through to the standard class field rule when the LHS is a
+    // :symbol literal; that rule wraps it as a computed `[Symbol.x]`
+    // name, whereas this one would emit invalid `static Symbol.x = ...`.
+    if(assignment.assigned?.type === "SymbolLiteral") return $skip
     return {
       type: static_ ? "CoffeeClassPublic" : "CoffeeClassPrivate",
       children: [decorators, declare, access, static_, override, assignment],
@@ -1922,12 +1928,16 @@ PropertyAccess
   # NOTE: Added shorthand x."string" -> x["string"]
   # NOTE: Added shorthand x.3 -> x[3]
   # NOTE: Added shorthand x.:symbol -> x[Symbol.for("symbol")]
-  AccessStart:dot ( TemplateLiteral / StringLiteral / IntegerLiteral / SymbolLiteral ):literal ->
+  AccessStart:dot ( TemplateLiteral / AccessLiteral / SymbolLiteral ):expression ::Index ->
+    // children layout mirrors the bracket-form Index `[open, expression, ws, close]`
+    // so `last.children.slice(-2)` still yields `[ws, close]`.
     return {
       type: "Index",
+      expression,
       children: [
         adjustIndexAccess(dot),
-        literal,
+        expression,
+        "",
         "]",
       ]
     }
@@ -1954,12 +1964,21 @@ PropertyAccess
   AccessStart:dot InlineComment*:comments ( IdentifierName / PrivateIdentifier / LengthShorthand ):id ->
     // `data.😊` → `data["😊"]` since `u$1F60A$` isn't the real property.
     if id.unicode
+      key := propertyKey(id)
+      expression := {
+        type: "Literal",
+        subtype: "StringLiteral",
+        children: [key],
+        raw: key.token,
+      }
       return {
         type: "Index",
+        expression,
         children: [
           adjustIndexAccess(dot),
           ...comments,
-          propertyKey(id),
+          expression,
+          "",
           "]",
         ],
       }
@@ -2020,6 +2039,23 @@ PropertyAccess
         dot: start,
         children: [ start, "prototype" ],
       }
+
+# Wrap simple literals in a `Literal` node so consumers reading `expression`
+# (e.g. PropertyDefinition shorthand, postfix update extraction) feed it
+# through `needsRef` and treat it as a no-ref value, matching the bracket-form
+# `{a[1]}`/`{a["b"]}` behavior. TemplateLiteral and SymbolLiteral are
+# deliberately not wrapped so refs are still introduced for their
+# side-effecting evaluation.
+# NOTE: We can't reuse the `Literal` rule here — it would match
+# `NumericLiteral` (e.g. `0.0`) and break `x.0.0 → x[0][0]`.
+AccessLiteral
+  ( StringLiteral / IntegerLiteral ):literal ->
+    return {
+      type: "Literal",
+      subtype: literal.type,
+      children: [literal],
+      raw: literal.token,
+    }
 
 # Property glob that starts with "." or "?.", not a brace
 ExplicitPropertyGlob
@@ -6649,7 +6685,7 @@ HexIntegerLiteral
 IntegerLiteral
   # perf: short circuit if no possibility of being an integer
   /(?=[0-9])/ IntegerLiteralKind:token ->
-    return { $loc, token }
+    return { type: "NumericLiteral", $loc, token }
 
 IntegerLiteralKind
   DecimalBigIntegerLiteral
@@ -6905,11 +6941,12 @@ TemplateBlockCharacters
 # before `in`) match the longest match first; boundary check via NonIdContinue.
 # `let` added since Civet assumes strict mode.
 ReservedWord
-  /(?:off|yes|on|no)/ NonIdContinue CoffeeBooleansEnabled -> $1
-  /isnt/ NonIdContinue CoffeeIsntEnabled -> $1
-  /by/ NonIdContinue CoffeeForLoopsEnabled -> $1
-  /of/ NonIdContinue CoffeeOfEnabled -> $1
-  /(?:instanceof|interface|protected|continue|debugger|function|default|extends|finally|private|delete|export|import|public|return|static|switch|typeof|unless|await|break|catch|class|const|false|super|throw|until|while|yield|case|else|enum|loop|null|this|true|void|with|and|for|let|new|not|try|var|do|if|in|is|or)/ NonIdContinue -> $1
+  # `$` returns matched text; bare regex terminals return the full match array.
+  $/(?:off|yes|on|no)/ NonIdContinue CoffeeBooleansEnabled -> $1
+  $/isnt/ NonIdContinue CoffeeIsntEnabled -> $1
+  $/by/ NonIdContinue CoffeeForLoopsEnabled -> $1
+  $/of/ NonIdContinue CoffeeOfEnabled -> $1
+  $/(?:instanceof|interface|protected|continue|debugger|function|default|extends|finally|private|delete|export|import|public|return|static|switch|typeof|unless|await|break|catch|class|const|false|super|throw|until|while|yield|case|else|enum|loop|null|this|true|void|with|and|for|let|new|not|try|var|do|if|in|is|or)/ NonIdContinue -> $1
 # https://262.ecma-international.org/#sec-comments
 Comment
   # perf: assertion to exit early
