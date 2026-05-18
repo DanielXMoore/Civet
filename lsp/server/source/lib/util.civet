@@ -17,6 +17,8 @@ vs, {
 { TextDocument } from vscode-languageserver-textdocument
 {
   flattenDiagnosticMessageText
+  remapPosition
+  remapPositionStrict
   remapRange
   type SourcemapLines
 } from ../../../../source/ts-diagnostic.civet
@@ -366,6 +368,148 @@ export function collectCommentTokens(
         start = tokenEnd + 1
 
   tokens
+
+// Pick a semantic token type for an imported binding identifier. TS's
+// `getEncodedSemanticClassifications` does not classify the binding side of
+// imports, and the Civet TextMate grammar scopes the module specifier of
+// these forms but not the imported binding names, so we emit those tokens
+// here. `tokenTypes` is the server's ordered token-type list and lookups
+// are by name; unknown shapes fall back to "variable".
+pickImportBindingTokenType := (
+  identifier: ts.Identifier
+  isTypeOnly: boolean
+  checker: ts.TypeChecker
+  tokenTypes: readonly string[]
+): number ->
+  // Clamp to 0 so an unconfigured tokenTypes list cannot leak a -1 token
+  // type into the delta-encoded response (the main classifier path guards
+  // with `continue if tokenType < 0`; tokens we push here go straight to
+  // the encoder which only checks length).  Every name we ever pass lives
+  // in semanticTokenTypes, so the negative-idx fallback is unreachable
+  // under the server's own legend.
+  resolveTokenIndex := (name: string): number =>
+    idx := tokenTypes.indexOf(name)
+    /* c8 ignore next 2 — defensive fallback for an unconfigured legend */
+    return idx unless idx < 0
+    Math.max 0, tokenTypes.indexOf "variable"
+
+  if isTypeOnly
+    return resolveTokenIndex("type")
+
+  symbol .= checker.getSymbolAtLocation(identifier)
+  /* c8 ignore start — defensive: TS hands back undefined only for broken
+     imports; treat as a plain variable in that case. */
+  return resolveTokenIndex("variable") unless symbol
+  /* c8 ignore stop */
+
+  // Import binding identifiers are alias symbols; resolve to the actual
+  // declaration to decide whether it's a function/class/etc.
+  if symbol.flags & ts.SymbolFlags.Alias
+    try
+      symbol = checker.getAliasedSymbol(symbol)
+    /* c8 ignore start — defensive: resolving an unresolvable alias can
+       throw; treat as a plain variable in that case. */
+    catch
+      return resolveTokenIndex("variable")
+    /* c8 ignore stop */
+
+  flags := symbol.flags
+  if flags & ts.SymbolFlags.Class
+    return resolveTokenIndex("class")
+  if flags & ts.SymbolFlags.Enum
+    return resolveTokenIndex("enum")
+  if flags & ts.SymbolFlags.Interface
+    return resolveTokenIndex("interface")
+  if flags & ts.SymbolFlags.TypeAlias
+    return resolveTokenIndex("type")
+  if flags & ts.SymbolFlags.Function
+    return resolveTokenIndex("function")
+  if flags & (ts.SymbolFlags.Namespace | ts.SymbolFlags.Module)
+    return resolveTokenIndex("namespace")
+  return resolveTokenIndex("variable")
+
+/**
+ * Walk the transpiled TS source for `ImportDeclaration` nodes and append
+ * semantic tokens for each imported binding identifier to `out`. Positions
+ * are remapped through `sourcemapLines` (when present) so they land in the
+ * Civet source; tokens whose remapped position lies outside the source
+ * (start of line) are dropped. Token lengths are measured against the
+ * Civet text when available, mirroring the main classifier path.
+ */
+export function addImportBindingTokens(
+  tsSourceFile: ts.SourceFile
+  checker: ts.TypeChecker
+  tsDoc: TextDocument
+  doc: TextDocument
+  civetText: string?
+  sourcemapLines: SourcemapLines?
+  tokenTypes: readonly string[]
+  tokenModifiers: readonly string[]
+  out: { line: number, character: number, length: number, tokenType: number, tokenModifiers: number }[]
+): void
+  // Look up "declaration" by name so reordering semanticTokenModifiers in
+  // server.civet stays in sync.
+  declarationModifier := 1 << tokenModifiers.indexOf("declaration")
+
+  emit := (identifier: ts.Identifier, isTypeOnly: boolean): void =>
+    tokenType := pickImportBindingTokenType identifier, isTypeOnly, checker, tokenTypes
+    tsStart := identifier.getStart(tsSourceFile)
+    tsLen := identifier.getEnd() - tsStart
+    return unless tsLen > 0
+    tsPos := tsDoc.positionAt(tsStart)
+    // Strict remap so a synthesized import (no source mapping) drops its
+    // binding tokens instead of identity-collapsing them onto source
+    // line 0, matching the main classifier path in server.civet.
+    pos := if sourcemapLines
+      remapPositionStrict(tsPos, sourcemapLines)
+    else
+      tsPos
+    return unless pos
+    return if pos.line < 0 or pos.character < 0
+
+    // Measure how many word characters live at the remapped Civet offset so
+    // that a rename-on-import (e.g. `{ a as b }`) lights up the source-side
+    // name rather than emitting the TS-side length blindly.
+    length .= tsLen
+    if civetText
+      offset := doc.offsetAt(pos)
+      return if offset >= civetText.length
+      lineEnd := civetText.indexOf('\n', offset)
+      remaining := (if lineEnd < 0 then civetText.length else lineEnd) - offset
+      match := civetText.slice(offset, offset + remaining).match(/^\w+/)
+      // Defensive fallback to tsLen if the sourcemap anchors the binding on
+      // a non-word char (whitespace/punctuation); in normal operation the
+      // remap always lands on the identifier.
+      /* c8 ignore next */
+      length = if match then match[0].length else tsLen
+      return if length <= 0 or length > remaining
+
+    out.push {
+      line: pos.line
+      character: pos.character
+      length
+      tokenType
+      tokenModifiers: declarationModifier
+    }
+
+  visit := (node: ts.Node): void =>
+    if ts.isImportDeclaration(node) and node.importClause
+      { importClause } := node
+      clauseTypeOnly := !!importClause.isTypeOnly
+      // Default import: `import name from "mod"`
+      if importClause.name
+        emit importClause.name, clauseTypeOnly
+      // Named or namespace bindings
+      if importClause.namedBindings
+        nb := importClause.namedBindings
+        if ts.isNamespaceImport(nb)
+          emit nb.name, clauseTypeOnly
+        else
+          for element of nb.elements
+            emit element.name, clauseTypeOnly or !!element.isTypeOnly
+    ts.forEachChild(node, visit)
+
+  visit(tsSourceFile)
 
 export function withResolvers<T>() {
   let resolve: (value: T) => void
