@@ -21,6 +21,7 @@ path from node:path
   likelyImportContext
   measureTokenLength
   parseErrorRange
+  parseErrorsToDiagnostics
   resolvePathAliasDir
 } from ../source/lib/completions.civet
 
@@ -328,6 +329,67 @@ describe "completions helpers", ->
       { start, end } := parseErrorRange(err)
       assert.deepEqual start, { line: 0, character: 0 }
       assert.deepEqual end, { line: 0, character: 4 }
+
+  describe "parseErrorsToDiagnostics", ->
+    it "produces a diagnostic at the ParseError's line/column", ->
+      // Regression for #2072: bare ParseError must map to its line/column,
+      // not the (0,0)–(0,10) fallback.
+      err := {
+        name: "ParseError"
+        message: "file.civet:4:1 Failed to parse"
+        line: 4
+        column: 1
+      } as any
+      diags := parseErrorsToDiagnostics [err]
+      assert.equal diags.length, 1
+      assert.equal diags[0].range.start.line, 3
+      assert.equal diags[0].range.start.character, 0
+      assert.equal diags[0].source, 'civet'
+      assert.equal diags[0].message, "Failed to parse"
+
+    it "unwraps ParseErrors (plural) wrappers to their inner errors", ->
+      // Regression for #2072: when civet's compile throws a ParseErrors
+      // wrapper (instead of populating an `errors` array), the LSP host
+      // stores the wrapper in parseErrors.  The wrapper has no line/column
+      // of its own; the inner errors do.  Without unwrapping, every
+      // diagnostic snapped to line 0 char 0.
+      inner1 := {
+        name: "ParseError"
+        message: "file.civet:4:1 Failed to parse"
+        line: 4
+        column: 1
+      } as any
+      inner2 := {
+        name: "ParseError"
+        message: "file.civet:7:3 Unexpected token"
+        line: 7
+        column: 3
+      } as any
+      wrapper := {
+        name: "ParseErrors"
+        message: "wrapper message"
+        errors: [inner1, inner2]
+      } as any
+      diags := parseErrorsToDiagnostics [wrapper]
+      assert.equal diags.length, 2
+      assert.equal diags[0].range.start.line, 3
+      assert.equal diags[0].range.start.character, 0
+      assert.equal diags[0].message, "Failed to parse"
+      assert.equal diags[1].range.start.line, 6
+      assert.equal diags[1].range.start.character, 2
+      assert.equal diags[1].message, "Unexpected token"
+
+    it "falls back to (0,0)–(0,10) for shapes without line/column", ->
+      err := {
+        name: "Error"
+        message: "something else"
+      } as any
+      diags := parseErrorsToDiagnostics [err]
+      assert.equal diags.length, 1
+      assert.deepEqual diags[0].range,
+        start: { line: 0, character: 0 }
+        end:   { line: 0, character: 10 }
+      assert.equal diags[0].message, "something else"
 
   describe "convertCompletions", ->
     doc := TextDocument.create("file:///a.ts", "typescript", 0, "const x = 1")
