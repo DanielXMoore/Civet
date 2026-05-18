@@ -437,6 +437,58 @@ describe "LSP features (shared project server)", ->
         token.line is lineIndex and token.character is expected.character and token.tokenType is commentIndex
       assert token, `expected a comment token for '${expected.text}' at ${lineIndex}:${expected.character}`
 
+  it "semantic tokens don't emit phantom type tokens on Civet bareword imports", ->
+    // Regression test for #2067: TS semantic classifications on a
+    // compiler-inserted prelude line (`type AutoPromise<T> = ...`, emitted
+    // when an async function needs Promise-wrapping) used to be remapped
+    // through `remapPosition`'s identity fallback and land on the trailing
+    // letter of bareword-import identifiers (Civet line 0) as single-char
+    // `type` / `typeParameter` tokens.  The fixture below is minimal: a
+    // bareword import on line 0 (target for the phantom token) plus an
+    // async function with an explicit non-Promise return type (forces
+    // the AutoPromise prelude to be emitted).
+    text := """
+      assert from assert
+      async function f(): void
+        await null
+    """
+
+    uri := docUri path.join(projectRoot, "semtok-bareword-import.civet")
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    tokens := await client.request "textDocument/semanticTokens/full", {
+      textDocument: { uri }
+    }
+    assert tokens, "expected semantic tokens response"
+
+    legend := init.capabilities.semanticTokensProvider.legend.tokenTypes
+    typeIdx := legend.indexOf "type"
+    typeParamIdx := legend.indexOf "typeParameter"
+
+    decoded: { line: number, character: number, length: number, tokenType: number }[] := []
+    line .= 0
+    char .= 0
+    for i of [0...tokens.data.length] by 5
+      deltaLine := tokens.data[i]
+      deltaChar := tokens.data[i + 1]
+      length := tokens.data[i + 2]
+      tokenType := tokens.data[i + 3]
+      if deltaLine > 0
+        line += deltaLine
+        char = deltaChar
+      else
+        char += deltaChar
+      decoded.push { line, character: char, length, tokenType }
+
+    // `assert from assert` is a Civet bareword import — pure value, no types.
+    phantom := decoded.find (t) =>
+      t.line is 0 and (t.tokenType is typeIdx or t.tokenType is typeParamIdx)
+    assert.equal phantom, undefined,
+      `expected no type/typeParameter tokens on bareword import line; got ${JSON.stringify phantom}`
+
   it "completion resolve returns details for a symbol", ->
     uri := docUri path.join(projectRoot, "complete-resolve.civet")
     text := """
@@ -559,6 +611,24 @@ describe "LSP features (shared project server)", ->
     }
     diagnostics := await waitForDiag(client, (p) => p.uri is uri and p.diagnostics.length > 0)
     assert diagnostics.diagnostics.length > 0, "expected at least one parse diagnostic"
+
+  it "parse diagnostic range points at the failing line, not line 0 (#2072)", ->
+    // The error in this source is on line 3 (1-based); helix users in
+    // #2072 saw every parse diagnostic snap to line 0 because the LSP
+    // failed to unwrap civet's ParseErrors wrapper.
+    uri := docUri path.join(projectRoot, "parse-error-line.civet")
+    client.notify "textDocument/didOpen", {
+      textDocument: {
+        uri, languageId: "civet", version: 1
+        text: "some := 0\nother := 10\nlater := \n"
+      }
+    }
+    diagnostics := await waitForDiag(client, (p) => p.uri is uri and p.diagnostics.length > 0)
+    parseDiag := diagnostics.diagnostics.find (d: any) =>
+      d.source is 'civet' and d.severity is 1
+    assert parseDiag, "expected a civet parse diagnostic"
+    assert parseDiag!.range.start.line > 0,
+      `expected parse diagnostic past line 0, got ${JSON.stringify parseDiag!.range}`
 
   it "handles workspace folder change notifications", ->
     // Before hook opted into workspace.workspaceFolders capability, so the
