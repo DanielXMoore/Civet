@@ -591,31 +591,72 @@ You can override this behavior via: --civet rewriteCivetImports=.ext
         process.exit 1
 
   errors .= 0
-  for await let {filename, error, content, stdin} of readFiles filenames, options.eval
-    if error
-      console.error `${filename} failed to load:`
-      console.error error
-      errors++
-      continue
 
+  // Read + transpile each file inside await.all so reads, worker IPC,
+  // and worker compiles all overlap.  libuv throttles fs.readFile to
+  // its threadpool size, so we never hold more than ~(reads + workers)
+  // file contents in flight — even on huge projects.  run-mode is
+  // single-file, so we don't worry about dropping `content` afterwards.
+  // Stdin/eval can't go through fs.readFile, so route them through the
+  // existing readFiles generator and parallelize the transpile only.
+  type Compiled =
+    filename: string
+    stdin: boolean
+    content: string | undefined
+    outputFilename: string
+    output?: string
+    loadError?: unknown
+    transpileError?: unknown
+
+  transpileOne := (filename: string, stdin: boolean, content: string?, loadError: unknown?): Promise<Compiled> => async do
     outputFilename := makeOutputFilename filename, options
-
-    // Transpile
-    let output: string
+    result: Compiled := {filename, stdin, content, outputFilename}
+    if loadError
+      result.loadError = loadError
+      return result
     try
       if unplugin?
-        output = unplugin.load.call {
+        result.output = unplugin.load.call {
           addWatchFile();
         }, `${filename}.tsx`
         |> await
         |> .code
       else
-        output = await compile content!, {...options, filename, outputFilename}
+        result.output = await compile content!, {...options, filename, outputFilename}
     catch error
-      //console.error `${filename} failed to transpile:`
-      console.error error
+      result.transpileError = error
+    result
+
+  jobs: Promise<Compiled>[] .= []
+  if options.eval? or filenames.includes '-'
+    // Mixed inputs: read sequentially (stdin), kick off transpiles immediately.
+    for await let {filename, error, content, stdin} of readFiles filenames, options.eval
+      jobs.push transpileOne filename, stdin, content, error
+  else
+    // Common case: read and transpile each file fully in parallel.
+    jobs = filenames.map (filename: string): Promise<Compiled> => async do
+      let content: string
+      try
+        content = await fs.readFile filename, {encoding}
+      catch loadError
+        return transpileOne(filename, false, undefined, loadError) |> await
+      transpileOne(filename, false, content, undefined) |> await
+
+  compiled := await.all jobs
+
+  for let {filename, stdin, content, outputFilename, loadError, transpileError, output: maybeOutput} of compiled
+    if loadError
+      console.error `${filename} failed to load:`
+      console.error loadError
       errors++
       continue
+    if transpileError
+      //console.error `${filename} failed to transpile:`
+      console.error transpileError
+      errors++
+      continue
+    // After the error checks above, transpile succeeded so output is set.
+    output := maybeOutput!
 
     if options.ast
       process.stdout.write JSON.stringify(output, null, 2)
