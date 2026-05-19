@@ -14,6 +14,9 @@ jobs:
   build:
     name: Build and Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      checks: write
     strategy:
       fail-fast: false
       matrix:
@@ -86,6 +89,7 @@ jobs:
           pnpm typecheck --max-errors "$CI_TYPECHECK_MAX_ERRORS"
 
       - name: Typecheck diff
+        id: typecheck-diff
         if: runner.os == 'Linux' && github.event_name == 'pull_request'
         run: |
           set -euo pipefail
@@ -108,7 +112,41 @@ jobs:
           )
 
           pnpm typecheck --max-errors 99999 >"$head_log" 2>&1 || true
+          set +e
           pnpm typecheck:diff --fail-on-regressions --max-errors "$CI_TYPECHECK_MAX_ERRORS" "$base_log" "$head_log"
+          diff_status=$?
+          set -e
+
+          summary_file="$RUNNER_TEMP/typecheck-diff-summary.md"
+          cp "$GITHUB_STEP_SUMMARY" "$summary_file"
+
+          conclusion=success
+          if [ "$diff_status" -ne 0 ]; then
+            conclusion=failure
+          fi
+
+          {
+            echo "status=$diff_status"
+            echo "conclusion=$conclusion"
+            echo "check_output<<TYPECHECK_DIFF_JSON"
+            jq -Rs --arg title "Typecheck diff" '{title: $title, summary: .}' "$summary_file"
+            echo "TYPECHECK_DIFF_JSON"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish typecheck diff check
+        if: always() && runner.os == 'Linux' && github.event_name == 'pull_request' && steps.typecheck-diff.outputs.check_output != ''
+        continue-on-error: true
+        uses: LouisBrunner/checks-action@v3.1.0
+        with:
+          token: ${{ github.token }}
+          name: Typecheck diff
+          conclusion: ${{ steps.typecheck-diff.outputs.conclusion }}
+          details_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          output: ${{ steps.typecheck-diff.outputs.check_output }}
+
+      - name: Fail typecheck diff
+        if: runner.os == 'Linux' && github.event_name == 'pull_request' && steps.typecheck-diff.outputs.status != '' && steps.typecheck-diff.outputs.status != '0'
+        run: exit "${{ steps.typecheck-diff.outputs.status }}"
 
       - name: Prune stale cache entries
         run: pnpm clean:cache:prune
