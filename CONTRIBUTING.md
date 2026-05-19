@@ -133,7 +133,7 @@ matches CI's, the failure reproduces locally and you can fix it properly.
 
 ## Typecheck
 
-CI gates type errors against a baseline (`pnpm typecheck --max-errors N` in
+CI gates type errors against a baseline (`CIVET_TYPECHECK_MAX_ERRORS=N` in
 [`.github/workflows/build.yml`](.github/workflows/build.yml)).  A PR must not
 introduce new errors — fix them at the source rather than bumping the
 baseline.  Identifying what's new can be tricky because adding code shifts
@@ -143,10 +143,10 @@ line numbers, so a naive `diff` flags every shifted preexisting error as
 ```sh
 git stash && git checkout origin/main -- '*.civet' '*.hera'
 pnpm build
-CIVET_TYPECHECK_MAX_ERRORS=99999 pnpm typecheck &>/tmp/before.log
+pnpm typecheck --max-errors 99999 &>/tmp/before.log
 git checkout HEAD -- '*.civet' '*.hera' && git stash pop
 pnpm build
-CIVET_TYPECHECK_MAX_ERRORS=99999 pnpm typecheck &>/tmp/after.log
+pnpm typecheck --max-errors 99999 &>/tmp/after.log
 civet scripts/typecheck-diff.civet /tmp/before.log /tmp/after.log
 ```
 
@@ -154,6 +154,8 @@ civet scripts/typecheck-diff.civet /tmp/before.log /tmp/after.log
 shifted-but-otherwise-identical errors don't show as drift — only genuinely
 new diagnostics appear under "Regressions".  Once those are at zero, no
 baseline bump is needed.
+CI also does this diff for you, so you can check its output for regressions
+(and fixes).
 
 For a one-off summary of where errors live, `bash scripts/typecheck-summary.sh`
 prints per-file and per-error-code counts.

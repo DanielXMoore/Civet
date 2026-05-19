@@ -8,6 +8,7 @@ name: Build
 
 env:
   API_TOKEN: ${{ secrets.API_TOKEN }}
+  CIVET_TYPECHECK_MAX_ERRORS: 888
 
 jobs:
   build:
@@ -80,9 +81,34 @@ jobs:
           pnpm -C lsp/vscode test:e2e
 
       - name: Typecheck
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
         run: |
-          pnpm typecheck --max-errors 888
+          pnpm typecheck
+
+      - name: Typecheck diff
+        if: runner.os == 'Linux' && github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+
+          base_dir="$RUNNER_TEMP/typecheck-base"
+          base_log="$RUNNER_TEMP/typecheck-before.log"
+          head_log="$RUNNER_TEMP/typecheck-after.log"
+
+          trap 'git worktree remove --force "$base_dir" >/dev/null 2>&1 || true' EXIT
+          rm -rf "$base_dir"
+          git worktree prune
+          git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+          git worktree add --detach "$base_dir" FETCH_HEAD
+
+          (
+            cd "$base_dir"
+            pnpm install --frozen-lockfile
+            pnpm build
+            pnpm typecheck --max-errors 99999 >"$base_log" 2>&1 || true
+          )
+
+          pnpm typecheck --max-errors 99999 >"$head_log" 2>&1 || true
+          pnpm typecheck:diff --fail-on-regressions "$base_log" "$head_log"
 
       - name: Prune stale cache entries
         run: pnpm clean:cache:prune
