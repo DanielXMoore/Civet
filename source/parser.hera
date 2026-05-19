@@ -87,20 +87,27 @@ import type {
   ArrayBindingPattern,
   AssignmentExpression,
   ASTNode,
+  BindingRestElement,
   BlockStatement,
+  CaseBlock,
+  Condition,
   Declaration,
   DebuggerStatement,
   ElseClause,
   ExpressionNode,
   ForStatement,
+  FunctionRestParameter,
   Identifier,
   IfStatement,
   ImportDeclaration,
-  IterationFamily,
   Index,
   IterationExpression,
+  IterationFamily,
   IterationStatement,
+  LabelledStatement,
+  NamedBindingPattern,
   ObjectBindingPattern,
+  ParenthesizedExpression,
   PinPattern,
   Property,
   SpreadProperty,
@@ -112,7 +119,6 @@ import type {
   Yield,
   YieldExpression,
 } from "./parser/types.civet"
-
 /**
  * Globals
  */
@@ -1175,8 +1181,8 @@ OptimizedParenthesizedExpression
 # https://262.ecma-international.org/#prod-ParenthesizedExpression
 ParenthesizedExpression
   # NOTE: Currently ignoring early error checking in https://262.ecma-international.org/#prod-CoverParenthesizedExpressionAndArrowParameterList
-  OpenParen:open AllowAll ( PostfixedCommaExpression __ CloseParen )? RestoreAll ->
-    return $skip unless $3
+  OpenParen:open AllowAll ( PostfixedCommaExpression __ CloseParen )? RestoreAll ::ParenthesizedExpression ->
+    return $skip as never unless $3
     [expression, ws, close] := $3
     if expression.type is "ParenthesizedExpression" and expression.implicit
       return {
@@ -2256,7 +2262,7 @@ Parameter
 FunctionRestParameter
   # BindingRestElement has a leading _?
   # but also sometimes invokes __ via BindingIdentifier
-  !EOS BindingRestElement:rest TypeSuffix?:typeSuffix ParameterElementDelimiter ->
+  !EOS BindingRestElement:rest TypeSuffix?:typeSuffix ParameterElementDelimiter ::FunctionRestParameter ->
     return {
       type: "FunctionRestParameter",
       children: $0.slice(1),
@@ -2373,7 +2379,7 @@ PinPattern
 # `name^ pattern` means bind the whole thing to `name`,
 # but also destructure/match `pattern`
 NamedBindingPattern
-  BindingIdentifier:binding Caret _?:ws BindingPattern:pattern ->
+  BindingIdentifier:binding Caret _?:ws BindingPattern:pattern ::NamedBindingPattern ->
     pattern = prepend(ws, pattern)
     return {
       type: "NamedBindingPattern",
@@ -2646,7 +2652,7 @@ BindingElement
 
 # https://262.ecma-international.org/#prod-BindingRestElement
 BindingRestElement
-  _?:ws DotDotDot:dots ( BindingPattern / BindingIdentifier / EmptyBindingPattern ):binding BindingTypeSuffix?:typeSuffix ->
+  _?:ws DotDotDot:dots ( BindingPattern / BindingIdentifier / EmptyBindingPattern ):binding BindingTypeSuffix?:typeSuffix ::BindingRestElement ->
     return {
       type: "BindingRestElement",
       children: [ws, dots, binding],
@@ -2658,7 +2664,7 @@ BindingRestElement
       rest: true,
     }
 
-  _?:ws ( BindingPattern / BindingIdentifier ):binding DotDotDot:dots ->
+  _?:ws ( BindingPattern / BindingIdentifier ):binding DotDotDot:dots ::BindingRestElement ->
     return {
       type: "BindingRestElement",
       children: [...(ws || []), dots, binding],
@@ -4928,7 +4934,7 @@ BlockStatement
 
 # https://262.ecma-international.org/#prod-LabelledStatement
 LabelledStatement
-  Label:label LabelledItem:statement ->
+  Label:label LabelledItem:statement ::LabelledStatement ->
     return {
       type: "LabelledStatement",
       label,
@@ -5485,7 +5491,7 @@ EmptyCondition
 
 # https://262.ecma-international.org/#prod-CaseBlock
 CaseBlock
-  ( Nested / _ )? OpenBrace NestedCaseClauses:clauses __ CloseBrace ->
+  ( Nested / _ )? OpenBrace NestedCaseClauses:clauses __ CloseBrace ::CaseBlock ->
     return {
       type: "CaseBlock",
       clauses: clauses,
@@ -5493,7 +5499,7 @@ CaseBlock
     }
 
   # NOTE: Added optional braces with nesting
-  InsertOpenBrace NestedCaseClauses:clauses InsertNewline InsertIndent InsertCloseBrace ->
+  InsertOpenBrace NestedCaseClauses:clauses InsertNewline InsertIndent InsertCloseBrace ::CaseBlock ->
     return {
       type: "CaseBlock",
       clauses: clauses,
@@ -5674,16 +5680,14 @@ CatchParameter
 
 # An expression with explicit or implied parentheses, for use in if/while/switch
 Condition
-  # NOTE: DeclarationCondition must come before the ExpressionCondition because we need to look ahead to potentially match `:=` or `.=`
-  OpenParen:open _?:ws DeclarationCondition:expression CloseParen:close ->
+  OpenParen:open _?:ws DeclarationCondition:expression CloseParen:close ::Condition ->
     return {
       type: "ParenthesizedExpression",
       children: [open, ws, expression, close],
       expression,
     }
-  ParenthesizedExpression !TrailingOperator -> $1
-  # NOTE: DeclarationCondition must come before the ExpressionCondition because we need to look ahead to potentially match `:=` or `.=`
-  InsertOpenParen:open DeclarationCondition:expression InsertCloseParen:close ->
+  ParenthesizedExpression !TrailingOperator ::Condition -> $1
+  InsertOpenParen:open DeclarationCondition:expression InsertCloseParen:close ::Condition ->
     return {
       type: "ParenthesizedExpression",
       children: [open, expression, close],
@@ -5691,7 +5695,7 @@ Condition
     }
 
   # NOTE: Indented condition allows for further nested function application
-  PushIndent InsertOpenParen:open ( Nested PostfixedExpression )?:expression InsertCloseParen:close PopIndent ->
+  PushIndent InsertOpenParen:open ( Nested PostfixedExpression )?:expression InsertCloseParen:close PopIndent ::Condition ->
     return $skip unless expression
     return {
       type: "ParenthesizedExpression",
@@ -5701,7 +5705,7 @@ Condition
   # NOTE: Added paren-less condition
   # NOTE: Unindented condition forbids nested function application
   # to avoid ambiguity with 'then' clause
-  InsertOpenParen:open ExpressionWithObjectApplicationForbidden:expression InsertCloseParen:close ->
+  InsertOpenParen:open ExpressionWithObjectApplicationForbidden:expression InsertCloseParen:close ::Condition ->
     // Don't double wrap parenthesized expressions
     return expression if expression.type is "ParenthesizedExpression"
     expression = trimFirstSpace(expression)
