@@ -90,9 +90,13 @@ import type {
   BlockStatement,
   Declaration,
   DebuggerStatement,
+  ElseClause,
+  ExpressionNode,
   ForStatement,
   Identifier,
   IfStatement,
+  ImportDeclaration,
+  IterationFamily,
   Index,
   IterationExpression,
   IterationStatement,
@@ -100,6 +104,7 @@ import type {
   PinPattern,
   Property,
   SpreadProperty,
+  StatementNode,
   SwitchStatement,
   ThrowStatement,
   TryStatement,
@@ -334,13 +339,13 @@ TopLevelStatement
 
 # Expressions with If and Switch, but no comma operator
 Expression
-  AssignmentExpression
+  AssignmentExpression ::ExpressionNode
 
 SingleLineExpression
   SingleLineAssignmentExpression
 
 NonPipelineExpression
-  NonPipelineAssignmentExpression
+  NonPipelineAssignmentExpression ::ExpressionNode
 
 NestedExpressionizedStatement
   # Allow trailing call expressions at two levels:
@@ -4975,7 +4980,7 @@ LabelledItem
 # https://262.ecma-international.org/#prod-IfStatement
 IfStatement
   # NOTE: Allow indentation in condition when there's an explicit `then` clause
-  ( If / Unless ):kind _?:ws BoundedCondition:condition ThenClause:block ElseClause?:e ->
+  ( If / Unless ):kind _?:ws BoundedCondition:condition ThenClause:block ElseClause?:e ::IfStatement ->
     if kind.negated
       kind = { ...kind, token: "if" }
       condition = negateCondition(condition, kind.$loc)
@@ -4991,7 +4996,7 @@ IfStatement
       else: e,
     }
   # NOTE: Block isn't Statement so we can handle implied braces by nesting
-  IfClause:clause BlockOrEmpty:block ElseClause?:e ->
+  IfClause:clause BlockOrEmpty:block ElseClause?:e ::IfStatement ->
     // Ensure semicolon separating single line from `else`
     if block.bare and e
       block = bracedBlock(block)
@@ -5005,7 +5010,7 @@ IfStatement
     }
 
 ElseClause
-  ( Nested / _? ) Else BlockOrEmpty:block -> {
+  ( Nested / _? ) Else BlockOrEmpty:block ::ElseClause -> {
     type: "ElseClause",
     children: $0,
     block,
@@ -5026,7 +5031,7 @@ IfClause
 
 # https://262.ecma-international.org/#prod-IterationStatement
 IterationStatement
-  /(?=loop|comptime|do|for|until|while)/ _IterationStatement -> $2
+  /(?=loop|comptime|do|for|until|while)/ _IterationStatement ::IterationFamily -> $2
 
 _IterationStatement
   # NOTE: Added `loop` from CoffeeScript
@@ -5444,9 +5449,9 @@ ForBinding
 
 # https://262.ecma-international.org/#prod-SwitchStatement
 SwitchStatement
-  Switch:s ForbidNewlineBinaryOp ( EmptyCondition / Condition )?:condition RestoreNewlineBinaryOp CaseBlock:caseBlock ->
+  Switch:s ForbidNewlineBinaryOp ( EmptyCondition / Condition )?:condition RestoreNewlineBinaryOp CaseBlock:caseBlock ::SwitchStatement ->
     /* c8 ignore next -- $skip backtrack: condition is `?` in the rule but earlier alternatives capture switches without a condition first; tests never reach this fallback */
-    return $skip unless condition
+    return $skip as never unless condition
     if condition.type is "EmptyCondition"
       // Negate all case condition expressions. This converts them to booleans
       // and is slightly smaller than switch(true) {case: !!exp ... }
@@ -5990,7 +5995,7 @@ KeywordStatement
 
 # https://262.ecma-international.org/#sec-debugger-statement
 DebuggerStatement
-  Debugger -> {
+  Debugger ::DebuggerStatement -> {
     type: "DebuggerStatement",
     children: $0,
   }
@@ -6102,7 +6107,7 @@ MaybeParenNestedExpression
 ImportDeclaration
   # NOTE: TypeScript's CommonJS import syntax
   # https://www.typescriptlang.org/docs/handbook/modules/reference.html#export--and-import--require
-  Import _ Identifier _? Equals __ "require" NonIdContinue Arguments ->
+  Import _ Identifier _? Equals __ "require" NonIdContinue Arguments ::ImportDeclaration ->
     // Replace `import` with `const` in JS output
     imp := [
       { ...$1, ts: true },
@@ -6112,7 +6117,7 @@ ImportDeclaration
       type: "ImportDeclaration",
       children: [imp, $0.slice(1)],
     }
-  ( ( Import SameLineOrIndentedFurther ) / ImpliedImport ):i Operator OperatorBehavior?:behavior SameLineOrIndentedFurther:ws1 OperatorNamedImports:imports SameLineOrIndentedFurther:ws2 FromClause:from ->
+  ( ( Import SameLineOrIndentedFurther ) / ImpliedImport ):i Operator OperatorBehavior?:behavior SameLineOrIndentedFurther:ws1 OperatorNamedImports:imports SameLineOrIndentedFurther:ws2 FromClause:from ::ImportDeclaration ->
     errors := []
     errors.push(behavior.error) if behavior?.error
     imports.specifiers.forEach (spec) =>
@@ -6126,7 +6131,7 @@ ImportDeclaration
       imports,
       from,
     }
-  Import SameLineOrIndentedFurther ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports __ FromClause:from ->
+  Import SameLineOrIndentedFurther ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports __ FromClause:from ::ImportDeclaration ->
     return {
       type: "ImportDeclaration",
       children: $0,
@@ -6137,9 +6142,9 @@ ImportDeclaration
   # &/\s/ assertion: ModuleSpecifier's UnquotedSpecifier can otherwise eat
   # the `(` of `import("foo")` or the `.` of `import.meta` as a one-char
   # specifier, masking the dynamic-import / member-access parse paths.
-  Import:i &/\s/ SameLineOrIndentedFurther:ws ModuleSpecifier:module -> { type: "ImportDeclaration", children: [i, ws, module], module }
+  Import:i &/\s/ SameLineOrIndentedFurther:ws ModuleSpecifier:module ::ImportDeclaration -> { type: "ImportDeclaration", children: [i, ws, module], module }
   # NOTE: Robust parsing for better LSP completions
-  Import:i _?:ws UnclosedSingleLineStringLiteral?:unclosed &EOS ->
+  Import:i _?:ws UnclosedSingleLineStringLiteral?:unclosed &EOS ::ImportDeclaration ->
     return {
       type: "ImportDeclaration",
       children: [
@@ -6156,7 +6161,7 @@ ImportDeclaration
   # NOTE: Added import shorthand
   # NOTE: Not adding $loc to source map here yet because it will point to the start of the identifier
   # the proper place may be to use the From location
-  ImpliedImport:i ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports SameLineOrIndentedFurther:w FromClause:from ->
+  ImpliedImport:i ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports SameLineOrIndentedFurther:w FromClause:from ::ImportDeclaration ->
     // Map implied import location to `from`
     // The pos and length adjustment better match how tsc outputs to include the space before `from` with the `from` token
     i.$loc = {
@@ -6166,7 +6171,7 @@ ImportDeclaration
     children := [i, t, imports, w, from]
     return { type: "ImportDeclaration", ts: !!t, children, imports, from }
   # NOTE: from ... import ... reverse syntax
-  FromClause:from SameLineOrIndentedFurther:fws Import:i SameLineOrIndentedFurther:iws Operator OperatorBehavior?:behavior SameLineOrIndentedFurther:ows OperatorNamedImports:imports ->
+  FromClause:from SameLineOrIndentedFurther:fws Import:i SameLineOrIndentedFurther:iws Operator OperatorBehavior?:behavior SameLineOrIndentedFurther:ows OperatorNamedImports:imports ::ImportDeclaration ->
     errors := []
     errors.push(behavior.error) if behavior?.error
     imports.specifiers.forEach (spec) =>
@@ -6180,7 +6185,7 @@ ImportDeclaration
       imports,
       from,
     }
-  FromClause:from SameLineOrIndentedFurther:fws Import:i SameLineOrIndentedFurther:iws ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports ->
+  FromClause:from SameLineOrIndentedFurther:fws Import:i SameLineOrIndentedFurther:iws ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports ::ImportDeclaration ->
     return {
       type: "ImportDeclaration",
       children: [ i, iws, t, imports, fws, from ],
