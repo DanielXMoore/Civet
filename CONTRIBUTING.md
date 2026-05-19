@@ -133,7 +133,7 @@ matches CI's, the failure reproduces locally and you can fix it properly.
 
 ## Typecheck
 
-CI gates type errors against a baseline (`CIVET_TYPECHECK_MAX_ERRORS=N` in
+CI gates type errors against a baseline (`CI_TYPECHECK_MAX_ERRORS=N` in
 [`.github/workflows/build.yml`](.github/workflows/build.yml)).  A PR must not
 introduce new errors — fix them at the source rather than bumping the
 baseline.  Identifying what's new can be tricky because adding code shifts
