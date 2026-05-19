@@ -14,21 +14,46 @@
  * Typical workflow (full version in CONTRIBUTING.md "Typecheck"):
  *   git stash && git checkout origin/main -- '*.civet' '*.hera'
  *   pnpm build
- *   CIVET_TYPECHECK_MAX_ERRORS=99999 pnpm typecheck &>/tmp/before.log
+ *   pnpm typecheck --max-errors 99999 &>/tmp/before.log
  *   git checkout HEAD -- '*.civet' '*.hera' && git stash pop
  *   pnpm build
- *   CIVET_TYPECHECK_MAX_ERRORS=99999 pnpm typecheck &>/tmp/after.log
+ *   pnpm typecheck --max-errors 99999 &>/tmp/after.log
  *   civet scripts/typecheck-diff.civet /tmp/before.log /tmp/after.log
  *
  * (`&>` captures both stdout and stderr — diagnostics go to stderr.)
+ *
+ * Options:
+ *   --fail-on-regressions  Exit nonzero if <new> has unmatched diagnostics.
+ *   --max-errors N         Exit nonzero if <new> has more than N diagnostics.
+ *       Also settable via `CIVET_TYPECHECK_MAX_ERRORS` environment variable.
+ *       (Command-line option wins over environment variable.)
  */
 
-{ readFileSync } from "node:fs"
+{ appendFileSync, readFileSync } from "node:fs"
 
-[oldPath, newPath] := process.argv.slice 2
-unless oldPath and newPath
-  console.error "usage: typecheck-diff <old.log> <new.log>"
+args := process.argv.slice 2
+failOnRegressions .= false
+maxErrorsArg .= process.env.CIVET_TYPECHECK_MAX_ERRORS
+paths: string[] := []
+i .= 0
+while i < args.length
+  arg := args[i]
+  switch arg
+    when "--fail-on-regressions"
+      failOnRegressions = true
+    when "--max-errors"
+      maxErrorsArg = args[++i]
+    else
+      paths.push arg
+  i++
+unless paths# is 2
+  console.error "usage: typecheck-diff [--fail-on-regressions] [--max-errors N] <old.log> <new.log>"
   process.exit 1
+maxErrors := if maxErrorsArg then parseInt maxErrorsArg, 10
+if maxErrors? and (Number.isNaN(maxErrors) or maxErrors < 0)
+  console.error "max errors must be a non-negative number"
+  process.exit 1
+[oldPath, newPath] := paths
 
 type Diag =
   file: string
@@ -107,24 +132,77 @@ function diff(left: Diag[], right: Diag[]): Diag[]
 
 regressions := diff newDiags, oldDiags
 fixed := diff oldDiags, newDiags
+net := newDiags# - oldDiags#
 
 function summarize(label: string, diags: Diag[])
-  return if diags.length is 0
-  console.log `${label} (${diags.length}):`
-  // Group by file for readability.
+  return unless diags#
+  console.log `${label} (${diags#}):`
+  for line of groupedLines diags
+    console.log line
+
+// Group by file for readability.
+function groupedLines(diags: Diag[], maxDiags?: number): string[]
+  lines: string[] := []
   byFile := new Map<string, Diag[]>
   for d of diags
     bucket := byFile.get(d.file) ?? []
     bucket.push d
     byFile.set d.file, bucket
-  for [file, list] of byFile
-    console.log `  ${file}`
+  shown .= 0
+  :fileLoop for [file, list] of byFile
+    lines.push `  ${file}`
     for d of list
-      console.log `    ${d.line}:${d.column} ${d.code} ${d.message}`
+      lines.push `    ${d.line}:${d.column} ${d.code} ${d.message}`
+      shown++
+      break :fileLoop if shown >= maxDiags?
+  lines.push `  ... ${diags# - shown} more` if shown < diags#
+  lines
 
-console.log `Old: ${oldDiags.length} diagnostics  →  New: ${newDiags.length} diagnostics`
-console.log `Net: ${newDiags.length - oldDiags.length >= 0 ? "+" : ""}${newDiags.length - oldDiags.length}`
+function appendDetails(summary: string[], label: string, diags: Diag[])
+  return unless diags#
+  summary.push `<details><summary>${label} (${diags#})</summary>`
+  summary.push ""
+  summary.push "```text"
+  for line of groupedLines diags, 100
+    summary.push line
+  summary.push "```"
+  summary.push ""
+  summary.push "</details>"
+  summary.push ""
+
+console.log `Old: ${oldDiags#} diagnostics  →  New: ${newDiags#} diagnostics`
+netText := `${net >= 0 ? "+" : ""}${net}`
+console.log `Net: ${netText}`
+console.log `Regressions: ${regressions#}`
+console.log `Fixed: ${fixed#}`
+if process.env.GITHUB_ACTIONS
+  console.log `::notice title=Typecheck diff::Net ${netText}, Broke ${regressions#}, Fixed ${fixed#}`
 console.log ""
 summarize "Regressions", regressions
-console.log "" if regressions.length and fixed.length
+console.log "" if regressions# and fixed#
 summarize "Fixed", fixed
+
+if process.env.GITHUB_STEP_SUMMARY
+  summary := [
+    "## Typecheck diff",
+    "",
+    `| Old | New | Net | Regressions | Fixed |`,
+    `| ---: | ---: | ---: | ---: | ---: |`,
+    `| ${oldDiags#} | ${newDiags#} | ${netText} | ${regressions#} | ${fixed#} |`,
+    ""
+  ]
+  appendDetails summary, "Regressions", regressions
+  appendDetails summary, "Fixed", fixed
+  appendFileSync process.env.GITHUB_STEP_SUMMARY, summary.join("\n") + "\n"
+
+failed .= false
+if failOnRegressions and regressions#
+  console.error `Typecheck diff failed: ${regressions#} regression${regressions# is 1 ? "" : "s"} found.`
+  failed = true
+
+if maxErrors? and newDiags# > maxErrors
+  console.error `Typecheck error limit exceeded: ${newDiags#} diagnostics found, max is ${maxErrors}.`
+  failed = true
+
+if failed
+  process.exit 1
