@@ -29,10 +29,7 @@ onmessage = async (e) => {
     if (Civet.isCompileError(error)) {
       console.info('Snippet compilation error!', error);
 
-      const linesUntilError = code.split('\n').slice(0, error.line).join('\n');
-      const errorLine = `${' '.repeat(error.column - 1)}^ ${error.header}`;
-      const errorCode = `${linesUntilError}\n${errorLine}`;
-      const outputHtml = highlighter.codeToHtml(errorCode, { lang: 'civet' });
+      const outputHtml = errorHtml(error);
 
       postMessage({ uid, inputHtml, outputHtml, errors, fatal });
     } else {
@@ -47,10 +44,20 @@ onmessage = async (e) => {
   }
 
   function errorHtml(error) {
-    const linesUntilError = code.split('\n').slice(0, error.line).join('\n');
-    const errorLine = `${' '.repeat(error.column - 1)}^ ${error.header}`;
+    const { line, column } = errorPosition(error);
+    const linesUntilError = code.split('\n').slice(0, line).join('\n');
+    const errorLine = `${' '.repeat(column - 1)}^ ${error.header}`;
     const errorCode = `${linesUntilError}\n${errorLine}`;
     return highlighter.codeToHtml(errorCode, { lang: 'civet' });
+  }
+
+  function errorPosition(error) {
+    const line = parseInt(error.line, 10);
+    const column = parseInt(error.column, 10);
+    return {
+      line: Number.isFinite(line) && line > 0 ? line : 1,
+      column: Number.isFinite(column) && column > 0 ? column : 1,
+    };
   }
 
   let jsCode = '';
