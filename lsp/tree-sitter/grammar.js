@@ -70,6 +70,12 @@ module.exports = grammar({
     // non-quote, plus 0-2 trailing quotes. Tree-sitter's regex engine has no
     // lookahead, so we can't port parser.hera's `(?:"(?!"")|\\.|[^"])+` exactly
     // — the NFA picks the longest valid arrangement instead.
+    //
+    // Known limitation: two triple-quoted strings written directly adjacent
+    // with no separator (e.g. `"""a""""""b"""`) merge into one because the
+    // trailing `"{0,2}` greedily absorbs the next opener's quotes.  Real
+    // Civet code separates them, and a proper fix would require lookahead
+    // (unsupported here) or an external scanner.
     string: _ => token(choice(
       seq('"""', /(?:[^"]|"[^"]|""[^"])*"{0,2}/, '"""'),
       seq("'''", /(?:[^']|'[^']|''[^'])*'{0,2}/, "'''"),
