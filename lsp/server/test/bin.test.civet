@@ -27,18 +27,36 @@ describe "civet-lsp CLI", ->
     // Regression: vscode-languageserver throws "Connection input stream is
     // not set" if none of --stdio / --node-ipc / --socket / --pipe is given.
     // bin/civet-lsp.js injects --stdio in that case.
+    //
+    // Prove the injection worked by completing an LSP initialize handshake
+    // over stdio — only possible when the connection is wired up.  If the
+    // server crashes instead, the `exit` listener rejects the promise with
+    // the captured stderr so we get a useful failure (and don't depend on a
+    // wall-clock window that could be too tight on a loaded runner).
     proc := spawn 'node', [binPath], stdio: ['pipe', 'pipe', 'pipe']
     let stderr = ''
     proc.stderr!.on 'data', (chunk: Buffer) => stderr += chunk.toString()
-    earlyExit := new Promise<number?> (resolve) =>
-      proc.once 'exit', (code) => resolve code
-    timeout := new Promise<number?> (resolve) =>
-      setTimeout (=> resolve null), 500
+    // Swallow EPIPE if the server has already exited when we write.
+    proc.stdin!.on 'error', => {}
+
+    gotFramedReply := new Promise<void> (resolve, reject) =>
+      let buf = ''
+      proc.stdout!.on 'data', (chunk: Buffer) =>
+        buf += chunk.toString 'utf8'
+        if /^Content-Length: \d+\r\n/.test buf
+          resolve()
+      proc.once 'exit', (code) =>
+        reject new Error
+          `civet-lsp exited (code=${code}) before responding to initialize; stderr: ${stderr}`
+
+    body := JSON.stringify
+      jsonrpc: '2.0'
+      id: 1
+      method: 'initialize'
+      params: { processId: process.pid, rootUri: null, capabilities: {} }
+    proc.stdin!.write `Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`
+
     try
-      result := await Promise.race [earlyExit, timeout]
-      assert.equal result, null,
-        `server exited early with code ${result}; stderr: ${stderr}`
-      assert.ok not stderr.includes('Connection input stream is not set'),
-        `unexpected stderr: ${stderr}`
+      await gotFramedReply
     finally
       proc.kill 'SIGTERM'
