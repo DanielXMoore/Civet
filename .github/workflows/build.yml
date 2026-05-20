@@ -172,7 +172,6 @@ jobs:
           base_dir="$RUNNER_TEMP/typecheck-base"
           base_log="$RUNNER_TEMP/typecheck-before.log"
           head_log="$RUNNER_TEMP/typecheck-after.log"
-          typecheck_bin="$PWD/dist/civet"
 
           trap 'git worktree remove --force "$base_dir" >/dev/null 2>&1 || true' EXIT
           rm -rf "$base_dir"
@@ -180,13 +179,27 @@ jobs:
           git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
           git worktree add --detach "$base_dir" FETCH_HEAD
 
+          # Install and build inside the base worktree so the base typecheck
+          # runs main's compiler against main's source.  Symlinking HEAD's
+          # node_modules/dist into the base produced a version skew (e.g. a
+          # Hera bump on HEAD) that could crash TS on main's source and yield
+          # an empty base log — making every HEAD error look like a regression.
           (
             cd "$base_dir"
-            ln -s "$GITHUB_WORKSPACE/node_modules" node_modules
-            ln -s "$GITHUB_WORKSPACE/dist" dist
+            echo "Installing base dependencies"
+            pnpm install --frozen-lockfile
+            echo "Building base"
+            pnpm build
             echo "Running base typecheck"
-            "$typecheck_bin" --typecheck --max-errors 99999 >"$base_log" 2>&1 || true
+            ./dist/civet --typecheck --max-errors 99999 >"$base_log" 2>&1 || true
           )
+
+          if ! sed -E 's/\x1b\[[0-9;]*m//g' "$base_log" | grep -qE 'error TS[0-9]+'; then
+            echo "::error title=Typecheck diff::Base typecheck produced no TS diagnostics — likely crashed."
+            echo "--- base log (tail) ---"
+            tail -n 50 "$base_log"
+            exit 1
+          fi
 
           echo "Running head typecheck"
           pnpm typecheck --max-errors 99999 >"$head_log" 2>&1 || true
