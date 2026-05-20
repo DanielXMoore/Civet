@@ -224,45 +224,56 @@ type ReadFile = (
   error?: unknown
 ) & ((content: string) | (error: unknown))
 
-function readFiles(filenames: string[], evalString?: string): AsyncGenerator<ReadFile>
+function readFiles(filenames: string[], evalString?: string): Promise<ReadFile>[]
+  if (for count filename of filenames when filename is '-') > 1
+    return [
+      Promise.resolve
+        filename: '<stdin>'
+        error: new Error "Cannot read from stdin more than once."
+        stdin: true
+    ]
+
+  reads: Promise<ReadFile>[] .= []
   if evalString?
-    yield
+    reads.push Promise.resolve
       filename: '<eval>'
       content: evalString + '\n'
       stdin: true
 
   for each let filename of filenames
-    stdin := filename is '-'
-    try
-      let content: string
-      if stdin
-        process.stdin.setEncoding encoding
+    reads.push async do
+      stdin := filename is '-'
+      try
+        let content: string
+        if stdin
+          process.stdin.setEncoding encoding
 
-        // Try to guess filename for stdin, such as /dev/fd/filename
-        filename = "<stdin>"
-        try
-          filename = await fs.realpath '/dev/stdin'
+          // Try to guess filename for stdin, such as /dev/fd/filename
+          filename = "<stdin>"
+          try
+            filename = await fs.realpath '/dev/stdin'
 
-        /* c8 ignore start — interactive TTY stdin: unreachable in CI */
-        if process.stdin.isTTY
-          // In interactive stdin, `readline` lets user end the file via ^D.
-          lines: string[] := []
-          rl := import('node:readline') |> await |> .createInterface process.stdin, process.stdout
-          rl.on 'line', (buffer: string) => lines.push buffer + '\n'
-          content = await new Promise (resolve, reject) =>
-            rl.on 'SIGINT', =>
-              reject '^C'
-            rl.on 'close', =>
-              resolve lines.join ''
-        /* c8 ignore stop */
+          /* c8 ignore start — interactive TTY stdin: unreachable in CI */
+          if process.stdin.isTTY
+            // In interactive stdin, `readline` lets user end the file via ^D.
+            lines: string[] := []
+            rl := import('node:readline') |> await |> .createInterface process.stdin, process.stdout
+            rl.on 'line', (buffer: string) => lines.push buffer + '\n'
+            content = await new Promise (resolve, reject) =>
+              rl.on 'SIGINT', =>
+                reject '^C'
+              rl.on 'close', =>
+                resolve lines.join ''
+          /* c8 ignore stop */
+          else
+            // For piped stdin, read stdin directly to avoid potential echo.
+            content = (chunk for await chunk of process.stdin).join ''
         else
-          // For piped stdin, read stdin directly to avoid potential echo.
-          content = (chunk for await chunk of process.stdin).join ''
-      else
-        content = await fs.readFile filename
-      yield {filename, content, stdin}
-    catch error
-      yield {filename, error, stdin}
+          content = await fs.readFile filename, {encoding}
+        {filename, content, stdin}
+      catch error
+        {filename, error, stdin}
+  reads
 
 export function makeOutputFilename(filename: string, options: Options): string
   outputPath: path.FormatInputPathObject := options.outputPath ??
@@ -590,140 +601,148 @@ You can override this behavior via: --civet rewriteCivetImports=.ext
         console.error e
         process.exit 1
 
-  errors .= 0
-  for await let {filename, error, content, stdin} of readFiles filenames, options.eval
-    if error
-      console.error `${filename} failed to load:`
-      console.error error
-      errors++
-      continue
+  errorCount .= 0
 
+  // Start each read + transpile job in parallel so reads, worker IPC, worker compiles,
+  // and output writes all overlap. run-mode is single-file, so we don't worry
+  // about dropping `content` afterwards.
+  readFiles(filenames, options.eval)
+  |> .map (readFile: Promise<ReadFile>) => async do
+    {filename, error: loadError, content, stdin} .= await readFile
     outputFilename := makeOutputFilename filename, options
-
-    // Transpile
-    let output: string
-    try
-      if unplugin?
-        output = unplugin.load.call {
-          addWatchFile();
-        }, `${filename}.tsx`
-        |> await
-        |> .code
-      else
-        output = await compile content!, {...options, filename, outputFilename}
-    catch error
-      //console.error `${filename} failed to transpile:`
-      console.error error
-      errors++
-      continue
-
-    if options.ast
-      process.stdout.write JSON.stringify(output, null, 2)
-    else if options.compile
-      if (stdin and not options.output) or options.output is '-'
-        process.stdout.write output
-      else
-        // Make output directory in case it doesn't already exist
-        outputDir := path.dirname outputFilename
-        await fs.mkdir outputDir, recursive: true unless outputDir is '.'
-        try
-          await fs.writeFile outputFilename, output
-        catch error
-          console.error `${outputFilename} failed to write:`
-          console.error error
-          errors++
-    /* c8 ignore start — run-mode is hard to test in-process: line 700's
-       `await import '../register.js'` installs a second .civet ESM loader
-       in the host process (the workspace register.js), which then
-       short-circuits the test loader for any subsequent .civet import
-       on the same mocha worker — producing two divergent compiles of
-       the same source and breaking c8's coverage merge.  Earlier
-       attempts to exercise this branch in-process via captureProcess
-       caused flaky 87-91% gate failures on `source/unplugin/unplugin.civet`
-       under --parallel.  Cover lib.hasAwait / hasImportDeclaration /
-       hasExportDeclaration directly, or end-to-end via the bundled
-       dist/civet, rather than driving cli() from a mocha test.  Also:
-       run-mode uses CJS `module._compile` / __dirname / fork with
-       __dirname paths, which are unbound when cli is loaded as ESM. */
-    else if options.run
-      esm := do
-        if output is like /\b(await|import|export)\b/  // potentially ESM
-          ast := await compile content!, {...options, ast: true, filename}
-          (or)
-            lib.hasAwait ast
-            lib.hasImportDeclaration ast
-            lib.hasExportDeclaration ast
-      if esm
-        // Run ESM code via `node --import @danielx/civet/register` subprocess
-        if stdin
-          // If code was read on stdin via command-line argument "-", try to
-          // save it in a temporary file in same directory so paths are correct.
-          filename = `.stdin-${process.pid}.civet`
-          try
-            await fs.writeFile filename, content!, {encoding}
-          catch e
-            console.error `Could not write ${filename} for Civet ESM mode:`
-            console.error e
-            process.exit 1
-        { fork } from node:child_process
-
-        { register } from node:module
-        let execArgv
-        if register
-          // On Node 20.6.0+, module.register does the work for us;
-          // we just need to `--import` ESM/CJS registration.
-          { join } from path
-          { pathToFileURL } from node:url
-          execArgv = [
-            '--import'
-            pathToFileURL(join __dirname, '../register.js').href
-          ]
+    errors: unknown[] := []
+    let stdout: string?
+    let output: string?
+    if loadError
+      errors.push `${filename} failed to load:`, loadError
+    else
+      try
+        if unplugin?
+          output = unplugin.load.call {
+            addWatchFile();
+          }, `${filename}.tsx`
+          |> await
+          |> .code
         else
-          // On Node <20.6.0, we need to use `--loader` for the ESM loader.
-          execArgv = [
-            '--loader', '@danielx/civet/esm' // ESM
-            '--require', '@danielx/civet/register' // CJS
-          ]
-
-        debugRe := /--debug|--inspect/
-        isDebug := v8debug <? "object" or debugRe.test(process.execArgv.join(' ')) or debugRe.test(process.env.NODE_OPTIONS ?? '')
-        if isDebug
-          execArgv.push "--inspect=" + (process.debugPort + 1)
-        child := fork filename, [
-          ...scriptArgs
-        ], {
-          execArgv
-          stdio: 'inherit'
-        }
-        child.on 'exit', (code) =>
+          output = await compile content!, {...options, filename, outputFilename}
+      catch error
+        errors.push error
+    unless errors#
+      // After the error checks above, transpile succeeded so output is set.
+      output = output!
+      if options.ast
+        stdout = JSON.stringify(output, null, 2)
+      else if options.compile
+        if (stdin and not options.output) or options.output is '-'
+          stdout = output
+        else
+          // Make output directory in case it doesn't already exist
+          outputDir := path.dirname outputFilename
+          await fs.mkdir outputDir, recursive: true unless outputDir is '.'
+          try
+            await fs.writeFile outputFilename, output
+          catch error
+            errors.push `${outputFilename} failed to write:`, error
+      /* c8 ignore start — run-mode is hard to test in-process: line 700's
+         `await import '../register.js'` installs a second .civet ESM loader
+         in the host process (the workspace register.js), which then
+         short-circuits the test loader for any subsequent .civet import
+         on the same mocha worker — producing two divergent compiles of
+         the same source and breaking c8's coverage merge.  Earlier
+         attempts to exercise this branch in-process via captureProcess
+         caused flaky 87-91% gate failures on `source/unplugin/unplugin.civet`
+         under --parallel.  Cover lib.hasAwait / hasImportDeclaration /
+         hasExportDeclaration directly, or end-to-end via the bundled
+         dist/civet, rather than driving cli() from a mocha test.  Also:
+         run-mode uses CJS `module._compile` / __dirname / fork with
+         __dirname paths, which are unbound when cli is loaded as ESM. */
+      else if options.run
+        esm := do
+          if output is like /\b(await|import|export)\b/  // potentially ESM
+            ast := await compile content!, {...options, ast: true, filename}
+            (or)
+              lib.hasAwait ast
+              lib.hasImportDeclaration ast
+              lib.hasExportDeclaration ast
+        if esm
+          // Run ESM code via `node --import @danielx/civet/register` subprocess
           if stdin
-            // Delete temporary file
-            await fs.unlink filename
+            // If code was read on stdin via command-line argument "-", try to
+            // save it in a temporary file in same directory so paths are correct.
+            filename = `.stdin-${process.pid}.civet`
+            try
+              await fs.writeFile filename, content!, {encoding}
+            catch e
+              console.error `Could not write ${filename} for Civet ESM mode:`
+              console.error e
+              process.exit 1
+          { fork } from node:child_process
 
-          process.exit code ?? 1
-        // Instead of default behavior of exiting, pass on signals to
-        // child process and let it decide whether to exit
-        for signal of ['SIGINT', 'SIGTERM', 'SIGHUP']
-          process.on signal, => child.kill signal
+          { register } from node:module
+          let execArgv
+          if register
+            // On Node 20.6.0+, module.register does the work for us;
+            // we just need to `--import` ESM/CJS registration.
+            { join } from path
+            { pathToFileURL } from node:url
+            execArgv = [
+              '--import'
+              pathToFileURL(join __dirname, '../register.js').href
+            ]
+          else
+            // On Node <20.6.0, we need to use `--loader` for the ESM loader.
+            execArgv = [
+              '--loader', '@danielx/civet/esm' // ESM
+              '--require', '@danielx/civet/register' // CJS
+            ]
 
-      else
-        await import '../register.js'
-        try
-          module.filename = await fs.realpath filename
-        catch
-          module.filename = filename
-        process.argv = ["civet", module.filename, ...scriptArgs]
-        module.paths =
-          import 'node:module' |> await |> ._nodeModulePaths path.dirname module.filename
-        try
-          module._compile output, module.filename
-        catch error
-          console.error `${filename} crashed while running in CJS mode:`
-          console.error error
-          process.exit 1
-      /* c8 ignore stop */
+          debugRe := /--debug|--inspect/
+          isDebug := v8debug <? "object" or debugRe.test(process.execArgv.join(' ')) or debugRe.test(process.env.NODE_OPTIONS ?? '')
+          if isDebug
+            execArgv.push "--inspect=" + (process.debugPort + 1)
+          child := fork filename, [
+            ...scriptArgs
+          ], {
+            execArgv
+            stdio: 'inherit'
+          }
+          child.on 'exit', (code) =>
+            if stdin
+              // Delete temporary file
+              await fs.unlink filename
 
-  process.exitCode = Math.min 255, errors
+            process.exit code ?? 1
+          // Instead of default behavior of exiting, pass on signals to
+          // child process and let it decide whether to exit
+          for signal of ['SIGINT', 'SIGTERM', 'SIGHUP']
+            process.on signal, => child.kill signal
+
+        else
+          await import '../register.js'
+          try
+            module.filename = await fs.realpath filename
+          catch
+            module.filename = filename
+          process.argv = ["civet", module.filename, ...scriptArgs]
+          module.paths =
+            import 'node:module' |> await |> ._nodeModulePaths path.dirname module.filename
+          try
+            module._compile output, module.filename
+          catch error
+            console.error `${filename} crashed while running in CJS mode:`
+            console.error error
+            process.exit 1
+        /* c8 ignore stop */
+    {errors, stdout}
+  // Await each result in filename order before writing to stdout/stderr.
+  |> for result of &
+    {errors, stdout} := await result
+    // Each result has either stdout or errors, not both.
+    process.stdout.write stdout if stdout?
+    console.error error for error of errors
+    errorCount++ if errors#
+
+  process.exitCode = Math.min 255, errorCount
   if unplugin?
     try
       pending: Promise<void>[] := []
@@ -738,7 +757,7 @@ You can override this behavior via: --civet rewriteCivetImports=.ext
       await Promise.all pending
     catch error
       if match := (error as Error).message.match /Aborting build because of (\d+) TypeScript diagnostic/
-        process.exitCode = Math.min 255, errors + +match[1]
+        process.exitCode = Math.min 255, errorCount + +match[1]
       /* c8 ignore next 3 -- defensive; unplugin.buildEnd only throws the TS-diagnostic message above */
       else
         process.exitCode = 1
