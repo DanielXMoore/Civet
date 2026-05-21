@@ -500,7 +500,14 @@ describe 'CLI makeOutputFilename', ->
     assert.equal path.dirname(result), 'build'
     assert.doesNotMatch result, /\.civet/
 
-function captureProcess(fn: => unknown | Promise<unknown>): Promise<{exitCode: number?, stdOut: string, stdErr: string}>
+// Captures stdout/stderr/exit for the duration of fn().  The live chunks
+// arrays are also passed in so tests for long-running flows (e.g. --watch)
+// can poll the captured output mid-flight without restoring streams.
+interface CaptureLive
+  stdOutChunks: string[]
+  stdErrChunks: string[]
+
+function captureProcess(fn: (live: CaptureLive) => unknown | Promise<unknown>): Promise<{exitCode: number?, stdOut: string, stdErr: string}>
   orig := {
     stdout: process.stdout.write
     stderr: process.stderr.write
@@ -524,7 +531,7 @@ function captureProcess(fn: => unknown | Promise<unknown>): Promise<{exitCode: n
     throw exit
 
   try
-    await fn()
+    await fn {stdOutChunks, stdErrChunks}
   catch err: any
     throw err unless err is exit
   finally
@@ -1200,41 +1207,34 @@ describe "CLI --watch", ->
     let handle: any
     await captureProcess =>
       handle = await cli ['-w', '--no-config', inputFile]
-    try
-      outputFile := inputFile + '.tsx'
-      content1 := await readFile outputFile, 'utf8'
-      assert content1.includes('aInit'), "initial output: " + content1
-      // fs.watch can take a few ms to arm on Linux; brief pause avoids
-      // racing the modification against the watcher's setup.
-      await new Promise (r) => setTimeout r, 50
-      await writeFile inputFile, "bAfter := 2\n"
-      await waitFor =>
-        try
-          (await readFile outputFile, 'utf8').includes 'bAfter'
-        catch
-          false
-    finally
-      handle?.close()
+      try
+        outputFile := inputFile + '.tsx'
+        content1 := await readFile outputFile, 'utf8'
+        assert content1.includes('aInit'), "initial output: " + content1
+        // fs.watch can take a few ms to arm on Linux; brief pause avoids
+        // racing the modification against the watcher's setup.
+        await new Promise (r) => setTimeout r, 50
+        await writeFile inputFile, "bAfter := 2\n"
+        await waitFor =>
+          try
+            (await readFile outputFile, 'utf8').includes 'bAfter'
+          catch
+            false
+      finally
+        handle?.close()
 
   it "logs compilation failures and keeps watching", ->
     inputFile := await makeCivetTempFile "xKeep := 1\n"
     let handle: any
-    await captureProcess =>
+    await captureProcess ({stdErrChunks}) =>
       handle = await cli ['-w', '--no-config', inputFile]
-    try
-      stderrChunks: string[] := []
-      origWrite := process.stderr.write.bind(process.stderr)
-      process.stderr.write = ((chunk: any) =>
-        stderrChunks.push String(chunk)
-        true
-      ) as any
       try
         await new Promise (r) => setTimeout r, 50
+        setupErrLen := stdErrChunks.join('').length
         await writeFile inputFile, "}\n"  // invalid Civet
         await waitFor =>
-          stderrChunks.join('').includes 'Failed to compile'
+          stdErrChunks.join('').slice(setupErrLen).includes 'Failed to compile'
         // Now write valid code and confirm the watcher kept running
-        stderrChunks.length = 0
         await writeFile inputFile, "yRevived := 9\n"
         await waitFor =>
           try
@@ -1242,22 +1242,13 @@ describe "CLI --watch", ->
           catch
             false
       finally
-        process.stderr.write = origWrite as any
-    finally
-      handle?.close()
+        handle?.close()
 
   it "writes recompiled output to stdout when -o - is set (debounced)", ->
     inputFile := await makeCivetTempFile "cStart := 3\n"
     let handle: any
-    await captureProcess =>
+    await captureProcess ({stdOutChunks}) =>
       handle = await cli ['-w', '-o', '-', '--no-config', inputFile]
-    try
-      stdoutChunks: string[] := []
-      origStdout := process.stdout.write.bind(process.stdout)
-      process.stdout.write = ((chunk: any) =>
-        stdoutChunks.push String(chunk)
-        true
-      ) as any
       try
         await new Promise (r) => setTimeout r, 50
         // Two quick changes — debounce coalesces to one recompile, so only
@@ -1266,42 +1257,40 @@ describe "CLI --watch", ->
         await new Promise (r) => setTimeout r, 30
         await writeFile inputFile, "eFinal := 5\n"
         await waitFor =>
-          stdoutChunks.join('').includes 'eFinal'
+          stdOutChunks.join('').includes 'eFinal'
       finally
-        process.stdout.write = origStdout as any
-    finally
-      handle?.close()
+        handle?.close()
 
   it "re-establishes watcher after rename event (atomic-save editors)", ->
     inputFile := await makeCivetTempFile "fStart := 6\n"
     let handle: any
     await captureProcess =>
       handle = await cli ['-w', '--no-config', inputFile]
-    try
-      outputFile := inputFile + '.tsx'
-      // Simulate vim/emacs atomic save: write to a temp path, then rename
-      // over the watched file.  On Linux this fires `rename`, invalidating
-      // the inotify watch; the re-watch logic must recover so a later
-      // in-place edit still triggers a recompile.
-      tempPath := inputFile + '.tmp'
-      await writeFile tempPath, "gAtomic := 7\n"
-      { rename } := await import 'fs/promises'
-      await rename tempPath, inputFile
-      await waitFor =>
-        try
-          (await readFile outputFile, 'utf8').includes 'gAtomic'
-        catch
-          false
-      // Wait past the 100ms re-watch delay before mutating again.
-      await new Promise (r) => setTimeout r, 300
-      await writeFile inputFile, "hAfterRewatch := 8\n"
-      await waitFor =>
-        try
-          (await readFile outputFile, 'utf8').includes 'hAfterRewatch'
-        catch
-          false
-    finally
-      handle?.close()
+      try
+        outputFile := inputFile + '.tsx'
+        // Simulate vim/emacs atomic save: write to a temp path, then rename
+        // over the watched file.  On Linux this fires `rename`, invalidating
+        // the inotify watch; the re-watch logic must recover so a later
+        // in-place edit still triggers a recompile.
+        tempPath := inputFile + '.tmp'
+        await writeFile tempPath, "gAtomic := 7\n"
+        { rename } := await import 'fs/promises'
+        await rename tempPath, inputFile
+        await waitFor =>
+          try
+            (await readFile outputFile, 'utf8').includes 'gAtomic'
+          catch
+            false
+        // Wait past the 100ms re-watch delay before mutating again.
+        await new Promise (r) => setTimeout r, 300
+        await writeFile inputFile, "hAfterRewatch := 8\n"
+        await waitFor =>
+          try
+            (await readFile outputFile, 'utf8').includes 'hAfterRewatch'
+          catch
+            false
+      finally
+        handle?.close()
 
   it "logs and continues when fsSync.watch fails (missing file)", ->
     missing := path.join tmpDir, "definitely-does-not-exist.civet"
