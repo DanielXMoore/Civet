@@ -114,7 +114,7 @@ SQL
 
 ## Related references
 
-- [`AST-CLEANUP.md`](AST-CLEANUP.md) — overall plan, per-node tightening recipe, and long-term deferred refactors (per-node tuple children, JSX-attributes-as-nodes, etc.).
+- [`ast-cleanup.md`](ast-cleanup.md) — overall plan, per-node tightening recipe, and long-term deferred refactors (per-node tuple children, JSX-attributes-as-nodes, etc.).
 - [`mcp-lsp-type-fix-workflow.md`](mcp-lsp-type-fix-workflow.md) — using the MCP LSP for iteration on `.civet` files (not `.hera`).
 - [`source/parser/types.civet`](../source/parser/types.civet) — canonical AST type definitions.
 - `scripts/typecheck-diff.civet` — the fuzz-matching diff tool.
