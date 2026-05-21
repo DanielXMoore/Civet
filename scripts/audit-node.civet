@@ -126,8 +126,71 @@ type Producer =
   line: number
   context: string
   children: string?
+  // Construction style: inline `{type: "X"}` literal, or wrapped in
+  // `makeNode { type: "X" }`, or `makeNode({type: "X"})`.
+  viaMakeNode: boolean
+  // Cast/widening signals near the producer body (within ~12 lines of
+  // the type literal).  Each entry is the verbatim source line.
+  // Tracked separately so cleanup can target what's in scope:
+  //   - asAny:        `as any`, `as any[]`
+  //   - asNodeBrand:  `as Children`, `as ASTNode[]`, `as ASTNodeObject` — the
+  //                   branded-array workarounds
+  //   - nonNullBang:  `x!` (postfix non-null assertion)
+  drift:
+    asAny: string[]
+    asNodeBrand: string[]
+    nonNullBang: string[]
 
 producers: Producer[] := []
+
+/**
+ * Scan forward from a type-literal line through the surrounding producer
+ * body for cast / non-null patterns.  Body extent is approximated as:
+ *   - until indent drops below the surrounding rule/function body
+ *   - or 30 lines, whichever comes first
+ * The script doesn't try to parse the literal — these are heuristics for
+ * a human to inspect, not type-system facts.
+ */
+function gatherDrift(lines: string[], typeIdx: number)
+  asAny: string[] := []
+  asNodeBrand: string[] := []
+  nonNullBang: string[] := []
+
+  // Anchor: indent of the producer's enclosing block.  We look at the
+  // nearest non-blank line above the type literal that's less indented
+  // than the type line — that's the rule/function header.
+  base := indentOf lines[typeIdx]
+  let bodyEndIdx = typeIdx
+  for let j = typeIdx + 1; j < Math.min(lines#, typeIdx + 31); j++
+    line := lines[j]
+    continue unless line.trim()
+    // Stop if we dedent past the literal's own indent (out of the body).
+    break if indentOf(line) < base - 2
+    bodyEndIdx = j
+
+  // Also look ~6 lines back for variable-prep that feeds the literal.
+  startIdx := Math.max 0, typeIdx - 6
+  for let j = startIdx; j <= bodyEndIdx; j++
+    line := lines[j]
+    continue unless line.trim()
+    trimmed := line.trim()
+    asAny.push trimmed if /\bas\s+any\b/.test line
+    asNodeBrand.push trimmed if /\bas\s+(Children|ASTNode\[\]|ASTNodeObject)\b/.test line
+    nonNullBang.push trimmed if /[A-Za-z_$0-9\]\)]\s*!(?:\.|#|\[|\s)/.test line
+
+  { asAny, asNodeBrand, nonNullBang }
+
+function detectMakeNode(lines: string[], typeIdx: number): boolean
+  base := indentOf lines[typeIdx]
+  // Walk up at indent >= base; stop at a less-indented non-blank line.
+  // First non-blank line above whose head includes `makeNode` flags this
+  // producer.  Captures both `makeNode {` (Civet-style) and `makeNode({`.
+  for let j = typeIdx - 1; j >= Math.max(0, typeIdx - 8); j--
+    line := lines[j]
+    continue unless line.trim()
+    return true if /\bmakeNode\s*[({]/.test line
+    break if indentOf(line) < base
+  false
 
 for file of allFiles
   // Skip the type-definition file itself — its `type: "X"` appears in the
@@ -142,6 +205,8 @@ for file of allFiles
       line: i + 1
       context: lines[i].trim()
       children: findChildren lines, i
+      viaMakeNode: detectMakeNode lines, i
+      drift: gatherDrift lines, i
     }
 
 // --- Type definition (from types.civet) -------------------------------------
@@ -179,15 +244,53 @@ else
   console.log `(no type definition found for ${nodeName} in source/parser/types.civet)`
   console.log ""
 
-console.log `Producers (${producers#}):`
-for p of producers
+inlineProducers := producers.filter (p) => not p.viaMakeNode
+makeNodeProducers := producers.filter (p) => p.viaMakeNode
+
+function printProducer(p: Producer): void
   console.log `  ${p.file}:${p.line}`
   console.log `    ${p.context}`
   if p.children
     console.log `    children: ${p.children}`
   else
     console.log `    (no children: slot in surrounding literal)`
-console.log "" if producers#
+
+console.log `Inline producers (${inlineProducers#}):`
+for p of inlineProducers
+  printProducer p
+console.log "" if inlineProducers#
+
+if makeNodeProducers#
+  console.log `makeNode producers (${makeNodeProducers#}):`
+  for p of makeNodeProducers
+    printProducer p
+  console.log ""
+
+// Drift signals: casts / non-null assertions in the producer bodies that
+// the cleanup wants to retire.  Aggregate across producers so the human
+// can decide whether the type def needs to widen / narrow, or whether
+// the producer should converge on a make-helper.
+allAsAny: { file: string, line: number, src: string }[] := []
+allAsBrand: { file: string, line: number, src: string }[] := []
+allBangs: { file: string, line: number, src: string }[] := []
+for p of producers
+  for s of p.drift.asAny
+    allAsAny.push { file: p.file, line: p.line, src: s }
+  for s of p.drift.asNodeBrand
+    allAsBrand.push { file: p.file, line: p.line, src: s }
+  for s of p.drift.nonNullBang
+    allBangs.push { file: p.file, line: p.line, src: s }
+
+function reportDrift(label: string, hits: { file: string, line: number, src: string }[]): void
+  return unless hits#
+  console.log `${label} (${hits#}):`
+  for h of hits
+    console.log `  ${h.file}:${h.line}  ${h.src}`
+  console.log ""
+
+reportDrift "Drift — `as any`", allAsAny
+reportDrift "Drift — `as Children` / `as ASTNode[]`", allAsBrand
+reportDrift "Drift — `!` non-null assertions near producers", allBangs
 
 console.log "Consumer search hints:"
 console.log `  rg -n '\\b${varName}\\b\\??\\.[a-zA-Z]' source/ test/ -g '*.civet' -g '*.hera'`
