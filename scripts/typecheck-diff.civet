@@ -8,8 +8,20 @@
  *
  * This is the right tool for "did my PR add type errors?" — naive line-by-line
  * diffs flag every shifted preexisting error as new.  Diagnostics here are
- * matched by (file, code, message), ignoring line/column, so a moved-but-
- * otherwise-identical error doesn't show as drift.
+ * matched in two passes:
+ *
+ *   1. strict: (file, code, normalized message)
+ *   2. message-only: (file, normalized message)
+ *
+ * Pass 2 catches errors where the code changed but the underlying message
+ * didn't — e.g. when adding a function overload reclassifies many TS2345
+ * "Argument not assignable" calls as TS2769 "No overload matches" with the
+ * same embedded reason.  We deliberately do NOT match by (file, line, col)
+ * alone — that paired genuinely-different errors at the same site.
+ *
+ * Normalization also alphabetizes union members within short quoted type
+ * literals so that `'"let" | "const" | "var"'` and `'"const" | "let" | "var"'`
+ * match — TS reorders these freely when a type is touched.
  *
  * Typical workflow (full version in CONTRIBUTING.md "Typecheck"):
  *   git stash && git checkout origin/main -- '*.civet' '*.hera'
@@ -66,12 +78,16 @@ function stripAnsi(s: string): string
   s.replace /\x1b\[[0-9;]*m/g, ""
 
 // Each diagnostic block starts with `path:line:col - error TSnnnn: message`
-// and may be followed by indented continuation lines.  We treat the whole
-// block as the diagnostic for fingerprinting.
+// and may be followed by indented continuation lines (TS sub-notes).  For
+// TS2769 (overload-resolution failures) we fold the FIRST "Argument of
+// type …" sub-line into the message so it can match a same-cause TS2345
+// from before an overload was added.  We deliberately skip subsequent
+// "Overload N of M …" repetitions to avoid double-counting.
 function parse(logPath: string): Diag[]
   raw := stripAnsi readFileSync(logPath, "utf8")
   out: Diag[] := []
   current: Diag? .= undefined
+  needsFirstReason .= false
   for line of raw.split /\r?\n/
     headMatch := line.match /^([^:\s][^:]*):(\d+):(\d+) - error (TS\d+): (.*)$/
     if headMatch
@@ -83,25 +99,40 @@ function parse(logPath: string): Diag[]
         code: headMatch[4]
         message: headMatch[5]
       }
-    // (continuation lines are folded into message implicitly via the head
-    // already capturing the first line; sub-notes are rare and noisy)
+      // Capture continuation only for TS2769; one indented `Argument …`
+      // / `Type …` line is enough to mirror the TS2345 form.
+      needsFirstReason = current.code is "TS2769"
+      continue
+    if needsFirstReason and current and /^\s+(Argument|Type) /.test line
+      current.message = line.trim()
+      needsFirstReason = false
   out.push current if current
   out
 
-function fuzzyKey(d: Diag): string
-  // Drop line/col so a moved-but-otherwise-identical error matches.  Also
-  // scrub message details that depend on AST-type shape (when a type gains
-  // an optional field, every error that prints the type changes verbatim).
-  scrubbed := d.message
-    // Quoted type literals.
+// Sort union members within short quoted literals so that
+// reorderings don't masquerade as new errors.  Skip literals with `<`
+// (generic type parameters) where naive splitting on ` | ` would corrupt.
+function sortQuotedUnions(s: string): string
+  s.replace /'([^']+)'/g, (full, inner) =>
+    return full unless inner.includes " | "
+    return full if inner.includes "<"
+    parts := inner.split(" | ").sort()
+    `'${parts.join " | "}'`
+
+function normalizeMessage(s: string): string
+  scrubbed := s
+    // Scrub long type-shape printouts that flip when a type gains a field.
     .replace /'[^']{40,}'/g, "'…'"
-    // TS's inline type expansions ("... N more ..." mid-type).
     .replace /\.\.\. \d+ more \.\.\./g, "…"
-    // The same shape printed bare (no quotes) — strip braces/parens body
-    // longer than 40 chars.
     .replace /\{[^{}]{40,}\}/g, "{…}"
     .replace /\([^()]{40,}\)/g, "(…)"
-  `${d.file}:${d.code}:${scrubbed}`
+  sortQuotedUnions scrubbed
+
+function strictKey(d: Diag): string
+  `${d.file}:${d.code}:${normalizeMessage d.message}`
+
+function messageKey(d: Diag): string
+  `${d.file}:${normalizeMessage d.message}`
 
 function indexBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]>
   m := new Map<string, T[]>
@@ -117,18 +148,38 @@ function indexBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]>
 oldDiags := parse oldPath
 newDiags := parse newPath
 
-function diff(left: Diag[], right: Diag[]): Diag[]
-  // Items present in `left` but not consumable from `right` (matched by
-  // fuzzyKey ignoring line/col, so simple line shifts don't show as drift).
-  rightFuzzy := indexBy right, fuzzyKey
-  out: Diag[] := []
+type DiffResult =
+  unmatched: Diag[]
+  // How many `left` items matched a `right` only via the loose (message-
+  // without-code) pass.  Non-zero means the dedup is catching code-class
+  // shuffles (TS2345 ↔ TS2769 from added overloads, etc.).
+  loosePairs: number
+
+function diff(left: Diag[], right: Diag[]): DiffResult
+  // Two-pass match: strict (file+code+msg), then message-only (file+msg).
+  // Each match consumes a `right` item so it's never used twice.
+  byStrict := indexBy right, strictKey
+  byMessage := indexBy right, messageKey
+  consumed := new Set<Diag>
+
+  function findMatch(buckets: Map<string, Diag[]>, key: string): boolean
+    bucket := buckets.get key
+    return false unless bucket
+    for r of bucket
+      if not consumed.has r
+        consumed.add r
+        return true
+    false
+
+  unmatched: Diag[] := []
+  loose .= 0
   for d of left
-    bucket := rightFuzzy.get fuzzyKey(d)
-    if bucket and bucket.length > 0
-      bucket.shift()
+    continue if findMatch byStrict, strictKey d
+    if findMatch byMessage, messageKey d
+      loose++
       continue
-    out.push d
-  out
+    unmatched.push d
+  { unmatched, loosePairs: loose }
 
 regressions := diff newDiags, oldDiags
 fixed := diff oldDiags, newDiags
@@ -136,9 +187,14 @@ net := newDiags# - oldDiags#
 
 function summarize(label: string, diags: Diag[])
   return unless diags#
-  console.log `${label} (${diags#}):`
+  header := `${label} (${diags#})`
+  if process.env.GITHUB_ACTIONS
+    console.log `::group::${header}`
+  else
+    console.log `${header}:`
   for line of groupedLines diags
     console.log line
+  console.log `::endgroup::` if process.env.GITHUB_ACTIONS
 
 // Group by file for readability.
 function groupedLines(diags: Diag[], maxDiags?: number): string[]
@@ -173,14 +229,16 @@ function appendDetails(summary: string[], label: string, diags: Diag[])
 console.log `Old: ${oldDiags#} diagnostics  →  New: ${newDiags#} diagnostics`
 netText := `${net >= 0 ? "+" : ""}${net}`
 console.log `Net: ${netText}`
-console.log `Regressions: ${regressions#}`
-console.log `Fixed: ${fixed#}`
+loose := regressions.loosePairs + fixed.loosePairs
+console.log `Deduped ${loose} noise pair${loose is 1 ? '' : 's'} (code-class reshuffles, union reordering).` if loose > 0
+console.log `Regressions: ${regressions.unmatched#}`
+console.log `Fixed: ${fixed.unmatched#}`
 if process.env.GITHUB_ACTIONS
-  console.log `::notice title=Typecheck diff::Net ${netText}, Broke ${regressions#}, Fixed ${fixed#}`
+  console.log `::notice title=Typecheck diff::Net ${netText}, Broke ${regressions.unmatched#}, Fixed ${fixed.unmatched#}`
 console.log ""
-summarize "Regressions", regressions
-console.log "" if regressions# and fixed#
-summarize "Fixed", fixed
+summarize "Regressions", regressions.unmatched
+console.log "" if regressions.unmatched# and fixed.unmatched#
+summarize "Fixed", fixed.unmatched
 
 if process.env.GITHUB_STEP_SUMMARY
   summary := [
@@ -188,16 +246,16 @@ if process.env.GITHUB_STEP_SUMMARY
     "",
     `| Old | New | Net | Regressions | Fixed |`,
     `| ---: | ---: | ---: | ---: | ---: |`,
-    `| ${oldDiags#} | ${newDiags#} | ${netText} | ${regressions#} | ${fixed#} |`,
+    `| ${oldDiags#} | ${newDiags#} | ${netText} | ${regressions.unmatched#} | ${fixed.unmatched#} |`,
     ""
   ]
-  appendDetails summary, "Regressions", regressions
-  appendDetails summary, "Fixed", fixed
+  appendDetails summary, "Regressions", regressions.unmatched
+  appendDetails summary, "Fixed", fixed.unmatched
   appendFileSync process.env.GITHUB_STEP_SUMMARY, summary.join("\n") + "\n"
 
 failed .= false
-if failOnRegressions and regressions#
-  console.error `Typecheck diff failed: ${regressions#} regression${regressions# is 1 ? "" : "s"} found.`
+if failOnRegressions and regressions.unmatched#
+  console.error `Typecheck diff failed: ${regressions.unmatched#} regression${regressions.unmatched# is 1 ? "" : "s"} found.`
   failed = true
 
 if maxErrors? and newDiags# > maxErrors
