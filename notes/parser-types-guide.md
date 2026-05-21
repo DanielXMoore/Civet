@@ -1,14 +1,14 @@
 # Parser Type-Annotation Guide
 
-How to add `::Type` annotations to `source/parser.hera` rules without making the codebase worse. Distilled from the work that tightened types after the Hera 0.9.6 bump exposed mutual-recursion cycles.
+How to add `::Type` annotations to `source/parser.hera` rules. The goal: **accurate** types that match what the rule emits, **narrow enough to catch consumer mistakes**, and **simple enough not to obscure the rule**. Distilled from the work tightening types after the Hera 0.9.6+ bump exposed mutual-recursion cycles.
 
 ## Why this exists
 
-Hera 0.9.6 emits real TypeScript types for each grammar rule's return value. Long mutual-recursion chains (e.g. `Expression → AssignmentExpression → … → Expression`) defeat TS inference and produce TS7022/7023/2502 cycle errors. Adding `::Type` annotations on cycle-breaker rules pins the return type and clears the cluster.
+Hera 0.9.6+ emits real TypeScript types for each grammar rule's return value. Long mutual-recursion chains (e.g. `Expression → AssignmentExpression → … → Expression`) defeat TS inference and produce TS7022/7023/2502 cycle errors. Adding `::Type` annotations on cycle-breaker rules pins the return type and clears the cluster.
 
 ## Core principles
 
-1. **Only annotate to break cycles.** If a rule isn't in a cycle and TS infers its return correctly, leave it alone. Adding annotations everywhere is noise; subtraction is silent.
+1. **Annotate where it helps; leave good inference alone.** Add `::Type` to break a cycle, pin a misinferred return, or document a non-obvious shape. Skip rules where TS already infers the right type — extra annotations are noise.
 
 2. **Type matches what the producer actually returns.** Not `::ASTNode`, not a convenient superset — exactly what the action's `return` expression yields. We control both `parser.hera` and `source/parser/types.civet`; if no existing type fits, **add a new one** to types.civet.
 
@@ -37,21 +37,13 @@ Hera 0.9.6 emits real TypeScript types for each grammar rule's return value. Lon
 
 7. **Synthetic nodes constructed in `.civet` code must match the same shapes the parser emits.** When both the parser action and a transform in `source/parser/*.civet` produce e.g. an `AssignmentExpression`, the shapes must match. Reuse shared constructor helpers (e.g. `makeNode`) so the producer set converges on one canonical shape. Add a helper when you find a synth-node literal that's structurally repeated.
 
-8. **A discriminant-union type doesn't guarantee shape compatibility.** Existing types like `FunctionSignature = ASTParent & {type: "MethodSignature" | "FunctionSignature"; ...}` look like one type covers both kinds, but if the producers under each discriminant emit *different* field sets (e.g. `MethodSignature` includes `async`/`generator`/`optional`, `FunctionSignature` doesn't), then annotating the rule with the union exposes the missing fields as TS errors. Before annotating, verify the rule's actual emission matches *all* fields the union type requires. If not, the type needs to be split (one type per discriminant) or extended.
-
 ## Workarounds for Hera/TS quirks
 
-- **`return $skip as never`** — Hera's `$skip` sentinel (parser-rule backtrack signal) doesn't currently fit `::ConcreteType` annotations. Cast with `as never` until Hera handles it natively. Don't replace `$skip` with `assert`/`throw` — it's a parser-control mechanism, not a defensive check.
+- **`as const` to pin literal types.** Append `as const` so TS infers the discriminant (`type: "Foo"`) as a literal instead of widening to `string`. Two options:
+  - **Whole-object** (`{...} as const`) — stricter; freezes every field. Default to this when the node isn't mutated downstream. Always appropriate for tuple intermediates: `return [$1, condition] as const` produces a fixed-arity tuple instead of a wide union array.
+  - **Discriminant-only** (`type: "Foo" as const`) — when later passes mutate other fields and need them writable.
 
-- **`as const` on literal returns** — for object literals and tuples in actions, append `as const` so TS infers the discriminant (`type: "Foo"`) as the literal type, not the wide `string`. Applies to both:
-  - Object literals: `return {type: "Argument", expression, spread} as const`
-  - Tuple intermediates: `return [$1, condition] as const` (becomes a fixed-arity tuple instead of a wide union array)
-
-- **`-> $N` action style is fragile for `::Type` annotations.** Hera's wrapping (`ParseResult` / `MaybeResult`) confuses the type assertion. If a cycle-breaker rule uses `-> $N`, either annotate the *delegate* rule instead, or use a captured variable: `RuleA RuleB:b ::Type -> b`.
-
-- **`!` non-null after grammar guards.** PEG `?`-quantifiers produce optional captures even when the surrounding rule provably matched (`return $skip unless x` doesn't carry through to TS narrowing).  Cheapest fix is a `!` at the use site (`x!.type`, `arg!.children`, `async!#`).  Don't reach for `as any` — the grammar already told us it's present.
-
-- **`Children` (`ASTNode[] & ...branding...`) loses Array methods in unions.**  When `children` is part of a union (`Children | Foo | undefined`), TS won't expose `.push`/`.slice`/`.indexOf`.  Cast to `ASTNode[]` at the call site (not `any[]` — the brand is the only thing in the way).
+- **Vague array types in unions are a refactoring signal.** When `children` is part of a union (`Children | Foo | undefined`), TS won't expose `.push`/`.slice`/`.indexOf` because the brand on `Children` doesn't lift through union members. A cast to `ASTNode[]` at the call site unblocks immediate work, but the better long-term move is replacing the vague `ASTNode[]`/`Children` arm with a fixed-arity tuple of known types. Treat each cast as a marker for a follow-up refactor.
 
 ## Workflow
 
@@ -76,19 +68,7 @@ It fuzz-matches diagnostics by `(file, code, normalized message)` so only genuin
 
 ### Switching branches
 
-Hera version differs between branches (0.9.2 on main, 0.9.6 on `update-hera-types`). After `git checkout <other-branch>`, run `pnpm i` before `pnpm build` — otherwise the wrong Hera version is used and the parser may fail to compile.
-
-### Querying error patterns
-
-For broad analysis (categorizing by file, by code, by rule), load the typecheck log into sqlite:
-
-```sh
-sqlite3 /tmp/tc.db <<'SQL'
-CREATE TABLE diag (branch TEXT, file TEXT, line INT, col INT, code TEXT, message TEXT);
--- … bulk INSERT from a parser script …
-SELECT code, COUNT(*) FROM diag GROUP BY code ORDER BY 2 DESC;
-SQL
-```
+Hera version may differ between branches. After `git checkout <other-branch>`, run `pnpm i` before `pnpm build` — otherwise the wrong Hera version is used and the parser may fail to compile.
 
 ### Verifying changes
 
@@ -103,8 +83,6 @@ SQL
 - **MCP LSP diagnostics can mislead.** The language server may run TypeScript directly on `.hera` content and report bogus parse errors (`Expression expected` at unrelated positions). Trust `pnpm typecheck` output over MCP diagnostics for `.hera` files.
 
 - **Renaming a `type:` discriminant breaks downstream code.** ~16 sites in `source/parser/*.civet` match on `node.type === "IfStatement"` etc. Changing what a rule emits (e.g. from `"IfStatement"` to `"IfClause"`) requires updating every consumer. Usually not worth it for parse-time intermediates (see principle 5).
-
-- **`-> $N` action with `::Type`.** Wrapping issue (see Workarounds). The annotation may report `ParseResult<…> is not assignable to MaybeResult<Type>`. Annotate the inner rule instead.
 
 - **Hera grammar action body uses Civet indentation.** Action bodies are embedded Civet code inside a JS function wrapper hera generates. Civet's compiler then parses the embedded body. If you write something Civet can't parse cleanly, the error surfaces deep in the build with a runtime stack trace rather than a clean grammar error.
 
