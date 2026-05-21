@@ -1,0 +1,298 @@
+#!/usr/bin/env civet
+/**
+ * audit-node.civet
+ *
+ * Print producer + consumer sites for a given AST node type, with the
+ * `children: [...]` literal extracted at every producer so children-layout
+ * drift across the tree is visible at a glance.
+ *
+ * Designed for the per-node tightening loop in notes/ast-cleanup.md.  See the
+ * Existence commit (02014101) as the reference end state for what one
+ * round of tightening looks like.
+ *
+ * Usage:
+ *   civet scripts/audit-node.civet <NodeName>
+ *   civet scripts/audit-node.civet <NodeName> --var <variable-name>
+ *
+ * The `--var` form overrides the default lowercase-first-letter heuristic
+ * (e.g. `Initializer` → `initializer`) used to pick the consumer-side grep
+ * pattern.  Useful when the codebase uses an irregular variable name.
+ */
+
+{ readFileSync, readdirSync, statSync } from "node:fs"
+{ dirname, join, relative, resolve } from "node:path"
+{ fileURLToPath } from "node:url"
+
+__dirname := dirname fileURLToPath import.meta.url
+
+argv := process.argv.slice 2
+[nodeName, ...flags] := argv
+
+unless nodeName
+  console.error "usage: civet scripts/audit-node.civet <NodeName> [--var <name>]"
+  process.exit 1
+
+let varOverride: string? = undefined
+i .= 0
+while i < flags#
+  switch flags[i]
+    when "--var"
+      varOverride = flags[++i]
+    else
+      console.error `unknown flag: ${flags[i]}`
+      process.exit 1
+  i++
+
+varName := varOverride ?? nodeName[0].toLowerCase() + nodeName[1..]
+
+ROOT := resolve __dirname, ".."
+SEARCH_DIRS := ["source", "test"]
+
+function walk(dir: string): string[]
+  out: string[] := []
+  for entry of readdirSync dir
+    continue if entry.startsWith "."
+    full := join dir, entry
+    st := statSync full
+    if st.isDirectory()
+      out.push ...walk full
+    else if entry.endsWith(".civet") or entry.endsWith(".hera")
+      out.push full
+  out
+
+allFiles: string[] := []
+for d of SEARCH_DIRS
+  full := join ROOT, d
+  try
+    allFiles.push ...walk full
+
+function indentOf(line: string): number
+  line.match(/^[ \t]*/)![0].length
+
+/**
+ * Given the lines of a file and the index of a `type: "X"` line, scan the
+ * surrounding object-literal block for the `children:` field.  Walks
+ * forward at indent >= the type line's indent, stopping at the first less-
+ * indented non-blank line.  Returns the children expression as a string
+ * (joined onto a single line if it spans), or undefined if none found.
+ */
+function cleanChildren(s: string): string
+  // Strip trailing object-literal/grammar-action closers.
+  s.replace(/[,\s}]+$/, "")
+
+function findChildren(lines: string[], typeIdx: number): string?
+  base := indentOf lines[typeIdx]
+
+  function captureAt(idx: number): string?
+    line := lines[idx]
+    match := line.match /children\s*:\s*(.*)$/
+    return undefined unless match
+    head := match[1].trim()
+    opens := (head.match(/\[/g) ?? [])#
+    closes := (head.match(/\]/g) ?? [])#
+    if opens > closes
+      // Brackets unbalanced — gather continuation lines until balanced.
+      parts: string[] := [head]
+      depth .= opens - closes
+      for let j = idx + 1; j < lines#; j++
+        l := lines[j].trim()
+        parts.push l
+        depth += (l.match(/\[/g) ?? [])# - (l.match(/\]/g) ?? [])#
+        break if depth <= 0
+      return cleanChildren parts.join " "
+    cleanChildren head
+
+  // Same line first — inline object literals (`{type: "X", children: [...]}`).
+  if result := captureAt typeIdx
+    return result
+  // After the type line.
+  for let i = typeIdx + 1; i < lines#; i++
+    continue unless lines[i].trim()
+    break if indentOf(lines[i]) < base
+    if result := captureAt i
+      return result
+  // Before, in case `type:` wasn't the first field of the literal.
+  for let i = typeIdx - 1; i >= 0; i--
+    continue unless lines[i].trim()
+    break if indentOf(lines[i]) < base
+    if result := captureAt i
+      return result
+  undefined
+
+typeLiteralRe := new RegExp `type\\s*:\\s*[\"']${nodeName}[\"']`
+
+type Producer =
+  file: string
+  line: number
+  context: string
+  children: string?
+  // Construction style: inline `{type: "X"}` literal, or wrapped in
+  // `makeNode { type: "X" }`, or `makeNode({type: "X"})`.
+  viaMakeNode: boolean
+  // Cast/widening signals near the producer body (within ~12 lines of
+  // the type literal).  Each entry is the verbatim source line.
+  // Tracked separately so cleanup can target what's in scope:
+  //   - asAny:        `as any`, `as any[]`
+  //   - asNodeBrand:  `as Children`, `as ASTNode[]`, `as ASTNodeObject` — the
+  //                   branded-array workarounds
+  //   - nonNullBang:  `x!` (postfix non-null assertion)
+  drift:
+    asAny: string[]
+    asNodeBrand: string[]
+    nonNullBang: string[]
+
+producers: Producer[] := []
+
+/**
+ * Scan forward from a type-literal line through the surrounding producer
+ * body for cast / non-null patterns.  Body extent is approximated as:
+ *   - until indent drops below the surrounding rule/function body
+ *   - or 30 lines, whichever comes first
+ * The script doesn't try to parse the literal — these are heuristics for
+ * a human to inspect, not type-system facts.
+ */
+function gatherDrift(lines: string[], typeIdx: number)
+  asAny: string[] := []
+  asNodeBrand: string[] := []
+  nonNullBang: string[] := []
+
+  // Anchor: indent of the producer's enclosing block.  We look at the
+  // nearest non-blank line above the type literal that's less indented
+  // than the type line — that's the rule/function header.
+  base := indentOf lines[typeIdx]
+  let bodyEndIdx = typeIdx
+  for let j = typeIdx + 1; j < Math.min(lines#, typeIdx + 31); j++
+    line := lines[j]
+    continue unless line.trim()
+    // Stop if we dedent past the literal's own indent (out of the body).
+    break if indentOf(line) < base - 2
+    bodyEndIdx = j
+
+  // Also look ~6 lines back for variable-prep that feeds the literal.
+  startIdx := Math.max 0, typeIdx - 6
+  for let j = startIdx; j <= bodyEndIdx; j++
+    line := lines[j]
+    continue unless line.trim()
+    trimmed := line.trim()
+    asAny.push trimmed if /\bas\s+any\b/.test line
+    asNodeBrand.push trimmed if /\bas\s+(Children|ASTNode\[\]|ASTNodeObject)\b/.test line
+    nonNullBang.push trimmed if /[A-Za-z_$0-9\]\)]\s*!(?:\.|#|\[|\s)/.test line
+
+  { asAny, asNodeBrand, nonNullBang }
+
+function detectMakeNode(lines: string[], typeIdx: number): boolean
+  base := indentOf lines[typeIdx]
+  // Walk up at indent >= base; stop at a less-indented non-blank line.
+  // First non-blank line above whose head includes `makeNode` flags this
+  // producer.  Captures both `makeNode {` (Civet-style) and `makeNode({`.
+  for let j = typeIdx - 1; j >= Math.max(0, typeIdx - 8); j--
+    line := lines[j]
+    continue unless line.trim()
+    return true if /\bmakeNode\s*[({]/.test line
+    break if indentOf(line) < base
+  false
+
+for file of allFiles
+  // Skip the type-definition file itself — its `type: "X"` appears in the
+  // type literal, not a producer.  The def is reported separately below.
+  continue if file.endsWith "source/parser/types.civet"
+  content := readFileSync file, "utf8"
+  lines := content.split /\r?\n/
+  for let i = 0; i < lines#; i++
+    continue unless typeLiteralRe.test lines[i]
+    producers.push {
+      file: relative ROOT, file
+      line: i + 1
+      context: lines[i].trim()
+      children: findChildren lines, i
+      viaMakeNode: detectMakeNode lines, i
+      drift: gatherDrift lines, i
+    }
+
+// --- Type definition (from types.civet) -------------------------------------
+
+typesPath := join ROOT, "source/parser/types.civet"
+typeDef: string? .= undefined
+try
+  tlines := readFileSync(typesPath, "utf8").split /\r?\n/
+  typeRe := new RegExp `^(export\\s+)?type\\s+${nodeName}\\b`
+  for let i = 0; i < tlines#; i++
+    if typeRe.test tlines[i]
+      out: string[] := [tlines[i]]
+      // Capture indented continuation lines (Civet type literals are
+      // indent-based after the head line).
+      for let j = i + 1; j < tlines#; j++
+        l := tlines[j]
+        break if l and not /^\s/.test l
+        out.push l
+        // Stop at the next blank-then-non-indented or export line.
+        break if not l.trim() and j + 1 < tlines# and tlines[j+1] and not /^\s/.test tlines[j+1]
+      typeDef = out.join "\n"
+      break
+
+// --- Output ------------------------------------------------------------------
+
+console.log `=== ${nodeName} ===`
+console.log ""
+
+if typeDef
+  console.log "Type definition (source/parser/types.civet):"
+  for line of typeDef.split "\n"
+    console.log `  ${line}` if line.trim()
+  console.log ""
+else
+  console.log `(no type definition found for ${nodeName} in source/parser/types.civet)`
+  console.log ""
+
+inlineProducers := producers.filter (p) => not p.viaMakeNode
+makeNodeProducers := producers.filter (p) => p.viaMakeNode
+
+function printProducer(p: Producer): void
+  console.log `  ${p.file}:${p.line}`
+  console.log `    ${p.context}`
+  if p.children
+    console.log `    children: ${p.children}`
+  else
+    console.log `    (no children: slot in surrounding literal)`
+
+console.log `Inline producers (${inlineProducers#}):`
+for p of inlineProducers
+  printProducer p
+console.log "" if inlineProducers#
+
+if makeNodeProducers#
+  console.log `makeNode producers (${makeNodeProducers#}):`
+  for p of makeNodeProducers
+    printProducer p
+  console.log ""
+
+// Drift signals: casts / non-null assertions in the producer bodies that
+// the cleanup wants to retire.  Aggregate across producers so the human
+// can decide whether the type def needs to widen / narrow, or whether
+// the producer should converge on a make-helper.
+allAsAny: { file: string, line: number, src: string }[] := []
+allAsBrand: { file: string, line: number, src: string }[] := []
+allBangs: { file: string, line: number, src: string }[] := []
+for p of producers
+  for s of p.drift.asAny
+    allAsAny.push { file: p.file, line: p.line, src: s }
+  for s of p.drift.asNodeBrand
+    allAsBrand.push { file: p.file, line: p.line, src: s }
+  for s of p.drift.nonNullBang
+    allBangs.push { file: p.file, line: p.line, src: s }
+
+function reportDrift(label: string, hits: { file: string, line: number, src: string }[]): void
+  return unless hits#
+  console.log `${label} (${hits#}):`
+  for h of hits
+    console.log `  ${h.file}:${h.line}  ${h.src}`
+  console.log ""
+
+reportDrift "Drift — `as any`", allAsAny
+reportDrift "Drift — `as Children` / `as ASTNode[]`", allAsBrand
+reportDrift "Drift — `!` non-null assertions near producers", allBangs
+
+console.log "Consumer search hints:"
+console.log `  rg -n '\\b${varName}\\b\\??\\.[a-zA-Z]' source/ test/ -g '*.civet' -g '*.hera'`
+console.log `  rg -n ':\\s*${nodeName}\\b|\\bas\\s+${nodeName}\\b' source/ test/ -g '*.civet' -g '*.hera'`
+console.log `  rg -n '\\{\\s*${varName}\\b' source/ test/ -g '*.civet' -g '*.hera'`

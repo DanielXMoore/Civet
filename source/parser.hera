@@ -13,12 +13,10 @@ import {
   attachPostfixStatementAsExpression,
   append,
   blockWithPrefix,
-  braceBlock,
   bracedBlock,
   buildExportSplitClause,
   convertArrowFunctionToMethod,
   convertFunctionToMethod,
-  convertNamedImportsToObject,
   convertObjectToJSXAttributes,
   convertWithClause,
   dedentBlockString,
@@ -36,16 +34,12 @@ import {
   getIndentLevel,
   getPrecedence,
   getTrimmingSpace,
-  hasAwait,
   hasTrailingComment,
-  hasYield,
-  insertTrimmingSpace,
   isComma,
   isWhitespaceOrEmpty,
   lastAccessInCallExpression,
   literalValue,
   makeAmpersandFunction,
-  makeEmptyBlock,
   makeExpressionStatement,
   makeGetterMethod,
   makeLeftHandSideExpression,
@@ -84,14 +78,70 @@ import {
   wrapTypeInPromise,
 } from "./parser/lib.civet"
 import type {
+  AccessStart,
+  Argument,
   ArrayBindingPattern,
+  ArrowFunction,
   AssignmentExpression,
   ASTNode,
+  ASTRef,
+  BindingRestElement,
   BlockStatement,
+  CaseBlock,
+  CaseClause,
+  Children,
+  CommentNode,
+  ComptimeStatement,
+  Condition,
+  Declaration,
+  DebuggerStatement,
+  DefaultClause,
+  DoStatement,
+  ElseClause,
+  EmptyCondition,
+  EmptyStatement,
+  ExpressionNode,
+  ForStatement,
+  FunctionExpression,
+  FunctionParameter,
+  FunctionRestParameter,
+  Identifier,
+  IfStatement,
+  ImportDeclaration,
   Index,
+  IterationExpression,
+  IterationFamily,
+  IterationStatement,
+  Label,
+  LabelledStatement,
+  NamedBindingPattern,
+  NamespaceDeclaration,
+  NonNullAssertion,
   ObjectBindingPattern,
+  Parameter,
+  ParenthesizedExpression,
+  PatternClause,
+  PinPattern,
+  Property,
+  RangeEnd,
+  ReturnTypeAnnotation,
+  ReturnValue,
+  SpreadProperty,
+  StatementExpression,
+  StatementNode,
+  StatementTuple,
+  SwitchStatement,
+  ThisType,
+  ThrowStatement,
+  TryStatement,
+  TypeArgument,
+  TypeFunction,
+  TypeNode,
+  WhenClause,
+  WithClause,
+  Yield,
+  YieldExpression,
 } from "./parser/types.civet"
-
 /**
  * Globals
  */
@@ -318,13 +368,13 @@ TopLevelStatement
 
 # Expressions with If and Switch, but no comma operator
 Expression
-  AssignmentExpression
+  AssignmentExpression ::ExpressionNode
 
 SingleLineExpression
   SingleLineAssignmentExpression
 
 NonPipelineExpression
-  NonPipelineAssignmentExpression
+  NonPipelineAssignmentExpression ::ExpressionNode
 
 NestedExpressionizedStatement
   # Allow trailing call expressions at two levels:
@@ -352,7 +402,7 @@ ExpressionizedStatementWithTrailingCallExpressions
 
 ExpressionizedStatement
   # perf: assertion to exit early
-  /(?=async|debugger|if|unless|comptime|do|for|loop|until|while|switch|throw|try)/ StatementExpression:statement ->
+  /(?=async|debugger|if|unless|comptime|do|for|loop|until|while|switch|throw|try)/ StatementExpression:statement ::StatementExpression ->
     return {
       type: "StatementExpression",
       statement,
@@ -360,12 +410,12 @@ ExpressionizedStatement
     }
 
 StatementExpression
-  DebuggerStatement
-  IfStatement
-  IterationExpression
-  SwitchStatement
-  ThrowStatement
-  TryStatement
+  DebuggerStatement ::DebuggerStatement
+  IfStatement ::IfStatement
+  IterationExpression ::IterationExpression
+  SwitchStatement ::SwitchStatement
+  ThrowStatement ::ThrowStatement
+  TryStatement ::TryStatement
 
 # https://262.ecma-international.org/#prod-Expression
 CommaExpression
@@ -396,7 +446,7 @@ AssignmentExpressionSpread
       type: "SpreadElement",
       children: $0,
       expression,
-      names: expression.names,
+      names: expression!.names,
     }
   AssignmentExpression:expression ( _? DotDotDot )? ->
     return $1 unless $2
@@ -404,14 +454,14 @@ AssignmentExpressionSpread
       type: "SpreadElement",
       children: [ ...$2, $1 ],
       expression,
-      names: expression.names,
+      names: expression!.names,
     }
   _? DotDotDot AssignmentExpression:expression ->
     return {
       type: "SpreadElement",
       children: $0,
       expression,
-      names: expression.names,
+      names: expression!.names,
     }
   AssignmentExpression:expression ( _? DotDotDot )? ->
     return $1 unless $2
@@ -419,7 +469,7 @@ AssignmentExpressionSpread
       type: "SpreadElement",
       children: [ ...$2, $1 ],
       expression,
-      names: expression.names,
+      names: expression!.names,
     }
 
 # https://262.ecma-international.org/#prod-Arguments
@@ -504,11 +554,11 @@ ArgumentsWithTrailingCallExpressions
 # Does not match in the empty case
 TrailingCallExpressions
   # NOTE: Forbid nested implicit calls because trailing calls are dedented
-  ExplicitCallExpressionRest* IndentedTrailingCallExpressions? ->
-    $1 = $1.flat()
-    return $skip unless $1.length or $2
-    return $1 unless $2
-    return [...$1, ...$2]
+  ExplicitCallExpressionRest* IndentedTrailingCallExpressions? ::ASTNode[] ->
+    flat := $1.flat() as ASTNode[]
+    return $skip unless flat.length or $2
+    return flat unless $2
+    return [...flat, ...$2]
 
 # Does not match in the empty case
 IndentedTrailingCallExpressions
@@ -521,7 +571,7 @@ IndentedTrailingCallExpressions
     return $1.flat()
 
 NestedTrailingCallExpression
-  Nested:ws &( "?"? "." ![0-9] ) CallExpressionRest+:rests ->
+  Nested:ws &( "?"? "." ![0-9] ) CallExpressionRest+:rests ::ASTNode[] ->
     [ first, ...rest ] := rests.flat()
     return [ prepend(ws, first), ...rest ]
 
@@ -545,7 +595,7 @@ ArgumentList
   !EOS ArgumentPart ( CommaDelimiter !EOS _? ArgumentPart )* ( CommaDelimiter NestedArguments ) ( OptionalCommaDelimiter NestedArguments )* ->
     return [
       $2,
-      ...$3.flatMap(([comma, eos, ws, arg]) => [comma, prepend(ws, arg)]),
+      ...$3.flatMap(([comma, _eos, ws, arg]) => [comma, prepend(ws, arg)]),
       ...(Array.isArray($4[1]) ? [$4[0], ...$4[1]] : $4),
       ...$5.flatMap(([comma, args]) =>
         Array.isArray(args) ? [comma, ...args] : [comma, args]
@@ -555,8 +605,8 @@ ArgumentList
   NestedArguments ( OptionalCommaDelimiter NestedArguments )* ->
     $1 = [$1] unless Array.isArray $1
     return [
-      ...trimFirstSpace($1),
-      ...$2.flatMap(([comma, args]) =>
+      ...trimFirstSpace($1) as any,
+      ...$2.flatMap(([comma, args]: [any, any]) =>
         Array.isArray(args) ? [comma, ...args] : [comma, args]
       ),
     ]
@@ -572,7 +622,7 @@ PostfixedArgumentList
   !EOS PostfixedArgumentPart ( CommaDelimiter !EOS _? PostfixedArgumentPart )* ( CommaDelimiter NestedArguments ) ( OptionalCommaDelimiter NestedArguments )* ->
     return [
       $2,
-      ...$3.flatMap(([comma, eos, ws, arg]) => [comma, prepend(ws, arg)]),
+      ...$3.flatMap(([comma, _eos, ws, arg]) => [comma, prepend(ws, arg)]),
       /* c8 ignore next -- non-array $4[1] arm: tests reach this only via the ArgumentList variant above */
       ...(Array.isArray($4[1]) ? [$4[0], ...$4[1]] : $4),
       ...$5.flatMap(([comma, args]) =>
@@ -584,8 +634,8 @@ PostfixedArgumentList
   NestedArguments ( OptionalCommaDelimiter NestedArguments )* ->
     $1 = [$1] unless Array.isArray $1
     return [
-      ...trimFirstSpace($1),
-      ...$2.flatMap(([comma, args]) =>
+      ...trimFirstSpace($1) as any,
+      ...$2.flatMap(([comma, args]: [any, any]) =>
         /* c8 ignore next -- non-array args arm: tests reach this only via the ArgumentList variant above */
         Array.isArray(args) ? [comma, ...args] : [comma, args]
       ),
@@ -634,14 +684,14 @@ WPostfixedArgumentPart
 
 ArgumentPart
   # NOTE: Allow leading or trailing dots for argument splats like CoffeeScript
-  DotDotDot:spread Expression:expression ->
+  DotDotDot:spread Expression:expression ::Argument ->
     return {
       type: "Argument",
       children: $0,
       expression,
       spread,
     }
-  Expression:expression DotDotDot?:spread ->
+  Expression:expression DotDotDot?:spread ::Argument ->
     return {
       type: "Argument",
       children: spread ? [ spread, expression ] : [ expression ],
@@ -651,14 +701,14 @@ ArgumentPart
 
 PostfixedArgumentPart
   # NOTE: Allow leading or trailing dots for argument splats like CoffeeScript
-  DotDotDot:spread PostfixedExpression:expression ->
+  DotDotDot:spread PostfixedExpression:expression ::Argument ->
     return {
       type: "Argument",
       children: $0,
       expression,
       spread,
     }
-  PostfixedExpression:expression DotDotDot?:spread ->
+  PostfixedExpression:expression DotDotDot?:spread ::Argument ->
     return {
       type: "Argument",
       children: spread ? [ spread, expression ] : [ expression ],
@@ -783,7 +833,7 @@ UnaryPostfix
 TypePostfix
   _:ws NWTypePostfix:postfix ->
     return prepend(ws, postfix)
-  &EOS BinaryOpNotDedented:indent _?:ws NWTypePostfix:postfix ->
+  &EOS BinaryOpNotDedented:_indent _?:ws NWTypePostfix:postfix ->
     // TODO: Preserve comments in indent
     return prepend(ws || " ", postfix)
 
@@ -927,7 +977,7 @@ NonPipelineActualAssignment
 
 # https://262.ecma-international.org/#prod-YieldExpression
 YieldExpression
-  Yield ( ( _? Star )? MaybeParenNestedExpression )? ->
+  Yield ( ( _? Star )? MaybeParenNestedExpression )? ::YieldExpression ->
     if $2
       [ star, expression ] := $2
       return {
@@ -943,15 +993,15 @@ YieldExpression
 
 # https://262.ecma-international.org/#prod-ArrowFunction
 ArrowFunction
-  ThinArrowFunction
-  ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:returnType FatArrow:arrow FatArrowBody:expOrBlock ->
+  ThinArrowFunction ::FunctionExpression
+  ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:returnType FatArrow:arrow FatArrowBody:expOrBlock ::ArrowFunction ->
     async = [] unless async
 
     return {
       type: "ArrowFunction",
       signature: {
         modifier: {
-          async: !!async#,
+          async: !!async!#,
         },
         parameters,
         returnType,
@@ -1079,24 +1129,26 @@ PipelineExpressionBodySameLine
 
 PipelineHeadItem
   # Needed to avoid left recursion
-  NonPipelineExpression
+  NonPipelineExpression ::ASTNode
   # Allow a pipeline to be part of first step if within parenthesis
-  OptimizedParenthesizedExpression
+  OptimizedParenthesizedExpression ::ASTNode
 
 PipelineTailItem
-  ( AwaitOp / Return / Throw ) !AccessStart !MaybeParenNestedExpression -> $1
-  $( Yield ( _? Star )? ) !AccessStart !MaybeParenNestedExpression ->
-    return { $loc, token: $1, type: "Yield" }
-  Import !AccessStart ->
+  ( AwaitOp / Return / Throw ) !AccessStart !MaybeParenNestedExpression ::ASTNode -> $1
+  $( Yield ( _? Star )? ) !AccessStart !MaybeParenNestedExpression ::Yield ->
+    return { type: "Yield", $loc, token: $1 } as const
+  Import !AccessStart ::Identifier ->
     return {
       type: "Identifier",
+      name: "import",
+      names: ["import"],
       children: [ $1 ],
     }
-  NWTypePostfix TypePostfix* ->
+  NWTypePostfix TypePostfix* ::ASTNode ->
     return makeAmpersandFunction({
       body: [" ", $1, ...$2],
     })
-  ForbidNewlineBinaryOp PipelineHeadItem? RestoreNewlineBinaryOp ->
+  ForbidNewlineBinaryOp PipelineHeadItem? RestoreNewlineBinaryOp ::ASTNode ->
     return $skip unless $2
     return $2
 
@@ -1152,13 +1204,13 @@ OptimizedParenthesizedExpression
 # https://262.ecma-international.org/#prod-ParenthesizedExpression
 ParenthesizedExpression
   # NOTE: Currently ignoring early error checking in https://262.ecma-international.org/#prod-CoverParenthesizedExpressionAndArrowParameterList
-  OpenParen:open AllowAll ( PostfixedCommaExpression __ CloseParen )? RestoreAll ->
+  OpenParen:open AllowAll ( PostfixedCommaExpression __ CloseParen )? RestoreAll ::ParenthesizedExpression ->
     return $skip unless $3
     [expression, ws, close] := $3
-    if expression.type is "ParenthesizedExpression" and expression.implicit
+    if expression!.type is "ParenthesizedExpression" and (expression as any).implicit
       return {
         ...expression,
-        children: [open, expression.expression, ws, close],
+        children: [open, (expression as any).expression, ws, close],
         implicit: false,
       }
     return {
@@ -1223,7 +1275,7 @@ ClassExpression
       abstract,
       binding,
       id: binding?.[0],
-      name: binding?.[0].name,
+      name: binding?.[0]?.name,
       heritage,
       body,
       children: [decorators, abstract, class_, binding, heritage, body],
@@ -1252,7 +1304,7 @@ ExtendsClause
 WithClause
   # Nested form where C, D appear on separate lines, indented
   # Also allows for arbitrary expressions
-  NotDedented With PushIndent ( Nested Expression _? Comma? )*:targets PopIndent ->
+  NotDedented With PushIndent ( Nested Expression _? Comma? )*:targets PopIndent ::WithClause ->
     return $skip unless targets#
     targets = targets.map(($) => $.slice(0, -1)) // strip Comma?
     return {
@@ -1260,11 +1312,11 @@ WithClause
       children: $0,
       targets,
     }
-  NotDedented With NotDedented:ws ExtendsTarget:t ( _? Comma NotDedented ExtendsTarget )*:rest ->
+  NotDedented With NotDedented:ws ExtendsTarget:t ( _? Comma NotDedented ExtendsTarget )*:rest ::WithClause ->
     return {
       type: "WithClause",
       children: $0,
-      targets: [[ws, t], ...rest.map(([ws1, _comma, ws2, target]) => [prepend(ws1, ws2), target])],
+      targets: [[ws, t], ...rest.map(([ws1, _comma, ws2, target]) => [prepend(ws1, ws2), target])] as WithClause["targets"],
     }
 
 ExtendsToken
@@ -1320,7 +1372,7 @@ ImplementsClause
   ImplementsToken:i PushIndent ( Nested TypeIdentifier ArrayBulletDelimiter )*:targets PopIndent ->
     return $skip unless targets#
     // remove final comma
-    last := targets.at(-1).slice(0, -1)
+    last := targets.at(-1)!.slice(0, -1)
     targets = targets.slice(0, -1).concat(last)
     return {
       ts: true,
@@ -1360,7 +1412,7 @@ ImplementsTarget
 ClassBody
   # NOTE: ClassBracedContent single-line alternative always succeeds with
   # (possibly empty) array, so `?:expressions` never captures undefined.
-  __:ws1 OpenBrace:open AllowAll ClassBracedContent:expressions RestoreAll __:ws2 CloseBrace:close  ->
+  __:ws1 OpenBrace:open AllowAll ClassBracedContent:expressions RestoreAll __:ws2 CloseBrace:close ->
     return {
       type: "BlockStatement",
       subtype: "ClassBody",
@@ -1413,7 +1465,7 @@ ClassElement
       return {
         ...definition,
         ts,
-        children: definition.children.map (c) =>
+        children: definition.children.map (c: any) =>
           return {
             ...c,
             children: [ decorators, declare, access, static_, override, ...c.children ],
@@ -1444,7 +1496,7 @@ ClassSignatureBody
   InsertOpenBrace NestedClassSignatureElements? InsertNewline InsertIndent InsertCloseBrace
 
 NestedClassSignatureElements
-  PushIndent NestedClassSignatureElement*:elements PopIndent ->
+  PushIndent NestedClassSignatureElement*:elements PopIndent ::ASTNode[] ->
     /* c8 ignore next -- structurally unreachable: FieldDefinition matches any identifier-like content (including reserved words), so whenever this rule runs elements#≥1. $skip kept as state-safety belt inside PushIndent/PopIndent. */
     return $skip unless elements#
     return elements
@@ -1488,7 +1540,7 @@ FieldDefinition
   # name: (param1, param2) ->
   # name: (param1, param2) => which gets wrapped in bind in constructor
   CoffeeClassesEnabled ClassElementName:id _? Colon __ AssignmentExpression:exp ->
-    switch (exp.type) {
+    switch (exp!.type) {
       case "FunctionExpression": {
         return convertFunctionToMethod(id, exp)
       }
@@ -1613,7 +1665,7 @@ HashThis
     }
 
 LengthShorthand
-  !CoffeeCommentEnabled Hash NonIdContinue ->
+  !CoffeeCommentEnabled Hash NonIdContinue ::Identifier ->
     id := "length"
     return {
       type: "Identifier",
@@ -1627,7 +1679,7 @@ LengthShorthand
 
 # NOTE: Added '@' as a 'this' shorthand from CoffeeScript
 AtThis
-  At:at ->
+  At:at ::Identifier ->
     return {
       type: "Identifier",
       name: "this",
@@ -1699,7 +1751,7 @@ CallExpressionRest
     call := argsWithTrailing[0]
     return [ {
       ...call,
-      children: [optional, ...call.children],
+      children: [optional, ...call!.children],
       optional,
     }, ...argsWithTrailing.slice(1) ]
 
@@ -1738,7 +1790,7 @@ OptionalDot
 
 NonNullAssertion
   # NOTE: Prevent shadowing !^ xnor operator, !<?, "!=", and "!=="
-  ExclamationPoint !("^" / "<?" / "=") -> { type: "NonNullAssertion", ts: true, children: [$1] }
+  ExclamationPoint !("^" / "<?" / "=") ::NonNullAssertion -> { type: "NonNullAssertion", ts: true, children: [$1] }
 
 # https://262.ecma-international.org/#prod-MemberExpression
 MemberExpression
@@ -1799,7 +1851,7 @@ MemberExpressionRestBody
 MemberBracketContent
   OpenBracket:open ( SliceParameters / PostfixedExpression ):expression __:ws CloseBracket:close ->
     // Some kind of slice
-    if expression.type is "SliceParameters"
+    if expression!.type is "SliceParameters"
       {start, end, reversed, children} := expression
 
       return {
@@ -1890,14 +1942,14 @@ SliceParameters
     }
 
 AccessStart
-  PropertyAccessModifier?:modifier Dot:dot ![.\s] ->
+  PropertyAccessModifier?:modifier Dot:dot ![.\s] ::AccessStart ->
     return {
       type: "AccessStart",
       children: modifier ? [modifier, dot] : [dot],
       optional: modifier?.token === "?",
     }
   # NOTE: ?x -> ?.x, !x -> !.x shorthand
-  PropertyAccessModifier:modifier InsertDot:dot ![.\s] ->
+  PropertyAccessModifier:modifier InsertDot:dot ![.\s] ::AccessStart ->
     return {
       type: "AccessStart",
       children: [modifier, dot],
@@ -2115,7 +2167,7 @@ MetaProperty
 # NOTE: Special `return.value` (and `return =` shorthand)
 # for changing the automatic return value of function
 ReturnValue
-  ( "return.value" NonIdContinue ) / ( Return &AfterReturnShorthand ) ->
+  ( "return.value" NonIdContinue ) / ( Return &AfterReturnShorthand ) ::ReturnValue ->
     return { type: "ReturnValue", children: [$1[0]] }
 
 AfterReturnShorthand
@@ -2131,7 +2183,7 @@ AfterReturnShorthand
 Parameters
   NonEmptyParameters
   TypeParameters?:tp Loc:p ->
-    parameters := []
+    parameters: FunctionParameter[] := []
     return {
       type: "Parameters",
       children: [tp, {$loc: p.$loc, token: "("}, parameters, ")"],
@@ -2192,7 +2244,7 @@ ThinArrowParameters
   Parameters
 
 NonEmptyParameters
-  TypeParameters?:tp OpenParen:open ParameterList:parameters ( __ CloseParen ):close ->
+  TypeParameters?:tp OpenParen:open ParameterList:parameters ( __ CloseParen ):close ::ParametersNode ->
     return {
       type: "Parameters",
       children: [ tp, open, parameters, close ],
@@ -2225,15 +2277,15 @@ NestedParameter
     return params
 
 Parameter
-  ThisType
-  ParameterElement
-  FunctionRestParameter
+  ThisType ::ThisType
+  ParameterElement ::Parameter
+  FunctionRestParameter ::FunctionRestParameter
 
 # https://262.ecma-international.org/#prod-FunctionRestParameter
 FunctionRestParameter
   # BindingRestElement has a leading _?
   # but also sometimes invokes __ via BindingIdentifier
-  !EOS BindingRestElement:rest TypeSuffix?:typeSuffix ParameterElementDelimiter ->
+  !EOS BindingRestElement:rest TypeSuffix?:typeSuffix ParameterElementDelimiter ::FunctionRestParameter ->
     return {
       type: "FunctionRestParameter",
       children: $0.slice(1),
@@ -2297,9 +2349,9 @@ NWBindingIdentifier
     return { children: [$1], names: [] }
 
 AtIdentifierRef
-  ReservedWord:r ->
+  ReservedWord:r ::ASTRef ->
     return makeRef(`_${r}`, r)
-  IdentifierName:id ->
+  IdentifierName:id ::ASTRef ->
     ref := makeRef(id.name)
     // Propagate so the binding side can emit `this["X"]` matching `@X`.
     if id.unicode then ref.unicode = id.unicode
@@ -2309,21 +2361,21 @@ PinPattern
   # Forbid ImplicitObjectLiterals such as `x: y` in pinned pattern,
   # to allow for typed arguments of the form `(^x: T) =>`
   # and because comparing to object literals isn't generally helpful
-  Caret IdentifierName:expression &Colon ->
+  Caret IdentifierName:expression &Colon ::PinPattern ->
+    return {
+      type: "PinPattern",
+      children: [expression],
+      expression: expression as Identifier,
+      typeSuffix: typeSuffixForExpression(expression),
+    }
+  Caret SingleLineExpressionWithIndentedApplicationForbidden:expression ::PinPattern ->
     return {
       type: "PinPattern",
       children: [expression],
       expression,
       typeSuffix: typeSuffixForExpression(expression),
     }
-  Caret SingleLineExpressionWithIndentedApplicationForbidden:expression ->
-    return {
-      type: "PinPattern",
-      children: [expression],
-      expression,
-      typeSuffix: typeSuffixForExpression(expression),
-    }
-  ActualMemberExpression:expression ->
+  ActualMemberExpression:expression ::PinPattern ->
     return {
       type: "PinPattern",
       children: [expression],
@@ -2331,15 +2383,15 @@ PinPattern
       typeSuffix: typeSuffixForExpression(expression),
     }
   # Handle unary numeric in switch patterns
-  ([+-] NumericLiteral):expression ->
+  ([+-] NumericLiteral):expression ::PinPattern ->
     return {
       type: "PinPattern",
       children: [expression],
-      expression,
-      typeSuffix: typeSuffixForExpression(expression),
+      expression: expression as ASTNode,
+      typeSuffix: typeSuffixForExpression(expression as ASTNode),
     }
   # Handle undefined in switch patterns
-  Undefined:expression ->
+  Undefined:expression ::PinPattern ->
     return {
       type: "PinPattern",
       children: [expression],
@@ -2350,7 +2402,7 @@ PinPattern
 # `name^ pattern` means bind the whole thing to `name`,
 # but also destructure/match `pattern`
 NamedBindingPattern
-  BindingIdentifier:binding Caret _?:ws BindingPattern:pattern ->
+  BindingIdentifier:binding Caret _?:ws BindingPattern:pattern ::NamedBindingPattern ->
     pattern = prepend(ws, pattern)
     return {
       type: "NamedBindingPattern",
@@ -2497,7 +2549,7 @@ BindingProperty
     }
 
   # NOTE: ^name is short for property `name: ^name`
-  _?:ws Caret:pin BindingIdentifier:binding BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
+  _?:ws Caret:_pin BindingIdentifier:binding BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
     // Note that this has the name but not the value.
     // This is what we want when destructuring, but not in function params.
     children := [ws, binding]
@@ -2530,7 +2582,7 @@ BindingProperty
     }
 
   # NOTE: name^ means we should bind name, but we do anyway, so allow but ignore
-  _?:ws BindingIdentifier:binding Caret?:bind BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
+  _?:ws BindingIdentifier:binding Caret?:_bind BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
     children .= [ws, binding, initializer]  // omit bind, typeSuffix
 
     if binding.type is "AtBinding"
@@ -2568,7 +2620,7 @@ BindingRestProperty
       ...id,
       type: "BindingRestProperty",
       typeSuffix,
-      children: [...(ws || []), dots, ...id.children],
+      children: [...(ws || []), dots, ...(id.children as any)],
     }
 
   _?:ws BindingIdentifier:id DotDotDot:dots ->
@@ -2576,7 +2628,7 @@ BindingRestProperty
       ...id,
       type: "BindingRestProperty",
       typeSuffix: undefined,
-      children: [...(ws || []), dots, ...id.children],
+      children: [...(ws || []), dots, ...(id.children as any)],
     }
 
 BindingTypeSuffix
@@ -2623,7 +2675,7 @@ BindingElement
 
 # https://262.ecma-international.org/#prod-BindingRestElement
 BindingRestElement
-  _?:ws DotDotDot:dots ( BindingPattern / BindingIdentifier / EmptyBindingPattern ):binding BindingTypeSuffix?:typeSuffix ->
+  _?:ws DotDotDot:dots ( BindingPattern / BindingIdentifier / EmptyBindingPattern ):binding BindingTypeSuffix?:typeSuffix ::BindingRestElement ->
     return {
       type: "BindingRestElement",
       children: [ws, dots, binding],
@@ -2635,7 +2687,7 @@ BindingRestElement
       rest: true,
     }
 
-  _?:ws ( BindingPattern / BindingIdentifier ):binding DotDotDot:dots ->
+  _?:ws ( BindingPattern / BindingIdentifier ):binding DotDotDot:dots ::BindingRestElement ->
     return {
       type: "BindingRestElement",
       children: [...(ws || []), dots, binding],
@@ -2682,8 +2734,8 @@ FunctionSignature
       async,
       generator,
       modifier: {
-        async: !!async#,
-        generator: !!generator#,
+        async: !!async!#,
+        generator: !!generator!#,
       },
       block: null,
       children: !parameters.implicit
@@ -2820,7 +2872,7 @@ FunctionExpression
 OperatorDeclaration
   # `operator {x, y} := ...` declaration while blessing
   Operator:op OperatorBehavior?:behavior _:w LexicalDeclaration:decl ->
-    decl.names.forEach((name) => setOperatorBehavior(name, behavior))
+    decl.names.forEach((name: string) => setOperatorBehavior(name, behavior))
     decl = prepend(behavior.error, decl) if behavior?.error
     decl = prepend(trimFirstSpace(w), decl)
     return decl
@@ -2852,12 +2904,12 @@ OperatorDeclaration
 # NOTE: Like FunctionSignature, but no async or star or @,
 # and parameters are required (to be useful).
 OperatorSignature
-  ( Async _ )?:async Operator:op ( _ Function )?:func ( _? Star )?:generator _:w1 Identifier:id OperatorBehavior?:behavior _?:w2 NonEmptyParameters:parameters ReturnTypeSuffix?:returnType ->
+  ( Async _ )?:async Operator:op ( _ Function )?:func ( _? Star )?:generator _:w1 Identifier:id OperatorBehavior?:behavior _?:w2 NonEmptyParameters:parameters ReturnTypeSuffix?:returnType ::FunctionSignature ->
     async = [] unless async
     generator = [] unless generator
     // Add "function" (if not already one) to replace "operator"
     unless func
-      func = { $loc: op.$loc, token: "function" }
+      func = { $loc: op.$loc, token: "function" } as any
     else
       func = [ trimFirstSpace(func[0]), func[1] ]
     return {
@@ -2869,8 +2921,8 @@ OperatorSignature
       async,
       generator,
       modifier: {
-        async: !!async#,
-        generator: !!generator#,
+        async: !!async!#,
+        generator: !!generator!#,
       },
       block: null,
       children: [ async, func, generator, w1, id, behavior?.error, w2, parameters, returnType ],
@@ -2898,7 +2950,7 @@ OperatorPrecedence
         }
 
     else
-      prec = getPrecedence(op[1])
+      prec = getPrecedence((op as any)[1])
 
     switch mod
       case "tighter":
@@ -2921,14 +2973,14 @@ OperatorAssociativity
 ThinArrowFunction
   ( Async _ )?:async ThinArrowParameters:parameters ReturnTypeSuffix?:returnType _?:ws ThinArrow:arrow ( BracedObjectSingleLineStatements / NoCommaBracedOrEmptyBlock ):block ->
     async = [] unless async
-    generator := []
+    generator: ASTNode[] := []
 
     // Assuming there's anything before the arrow, use input whitespace `ws`
     // instead of leading space from block generated by OpenBrace or braceBlock
     if (not parameters.implicit or returnType or ws) and not block.bare
       [ first, ...rest ] := block.children
-      if first is " {" or first?.[0]?.token is " "
-        block = { ...block, children: [ first.slice(1), ...rest ] }
+      if first is " {" or (first as any)?.[0]?.token is " "
+        block = { ...block, children: [ (first as any).slice(1), ...rest ] }
 
     return {
       type: "FunctionExpression",
@@ -2943,8 +2995,8 @@ ThinArrowFunction
         async,
         generator,
         modifier: {
-          async: !!async#,
-          generator: !!generator#,
+          async: !!async!#,
+          generator: !!generator!#,
         },
         returnType,
       },
@@ -2965,7 +3017,7 @@ ThinArrow
 
 ExplicitBlock
   # Allow single-line block only when the block starts on the same line
-  _?:ws1 OpenBrace:open AllowAll ( NestedBlockStatements / SingleLineStatements / EmptyBracedContent )?:block RestoreAll __:ws2 CloseBrace:close ->
+  _?:ws1 OpenBrace:open AllowAll ( NestedBlockStatements / SingleLineStatements / EmptyBracedContent )?:block RestoreAll __:ws2 CloseBrace:close ::BlockStatement ->
     /* c8 ignore next -- structurally unreachable: EmptyBracedContent catches empty/ws-only, valid content matches one of the alts, invalid content blocks CloseBrace. $skip kept as state-safety belt inside AllowAll/RestoreAll. */
     return $skip unless block
     return {
@@ -2975,7 +3027,7 @@ ExplicitBlock
     }
   # For backward compatibility with JavaScript, allow open brace to start on
   # the next line, as long as it's followed by a newline or close brace
-  IndentedAtLeast:ws1 OpenBrace:open AllowAll ( NestedBlockStatements / EmptyBracedContent )?:block RestoreAll __:ws2 CloseBrace:close ->
+  IndentedAtLeast:ws1 OpenBrace:open AllowAll ( NestedBlockStatements / EmptyBracedContent )?:block RestoreAll __:ws2 CloseBrace:close ::BlockStatement ->
     /* c8 ignore next -- structurally unreachable: same logic as the single-line alt above. $skip kept as state-safety belt inside AllowAll/RestoreAll. */
     return $skip unless block
     return {
@@ -2985,8 +3037,8 @@ ExplicitBlock
     }
 
 EmptyBracedContent
-  &( __ "}" ) ->
-    expressions := []
+  &( __ "}" ) ::BlockStatement ->
+    expressions: StatementTuple[] := []
     return {
       type: "BlockStatement",
       expressions,
@@ -2996,7 +3048,7 @@ EmptyBracedContent
 
 ImplicitNestedBlock
   # NOTE: Check &EOS needed by eventual PushIndent to skip work if not needed
-  &EOS InsertOpenBrace:open AllowAll ( NestedBlockStatements InsertNewline InsertIndent InsertCloseBrace )? RestoreAll ->
+  &EOS InsertOpenBrace:open AllowAll ( NestedBlockStatements InsertNewline InsertIndent InsertCloseBrace )? RestoreAll ::BlockStatement ->
     return $skip unless $4
     [block, ...tail] := $4
     return {
@@ -3008,15 +3060,15 @@ ImplicitNestedBlock
 # NOTE: This is the body of if/else/for/when etc.
 Block
   # NOTE: Added indentation based implied braces
-  ImplicitNestedBlock
+  ImplicitNestedBlock ::BlockStatement
   # NOTE: Explicit block after implicit block so that a properly indented `{}`
   # gets treated like an object literal, not an empty block.
-  ExplicitBlock
+  ExplicitBlock ::BlockStatement
 
-  ThenClause
+  ThenClause ::BlockStatement
   # NOTE: !EOS prevents capturing a following unindented Statement
-  _?:ws !EOS DeclarationOrStatement:s ->
-    expressions := [[ws, s]]
+  _?:ws !EOS DeclarationOrStatement:s ::BlockStatement ->
+    expressions: StatementTuple[] := [[ws, s]]
     return {
       type: "BlockStatement",
       expressions,
@@ -3034,22 +3086,22 @@ BareNestedBlock
 # Essentially `Block` but with ImplicitNestedBlock replaced by BareNestedBlock,
 # and allowing EmptyBareBlock.
 BareBlock
-  BareNestedBlock
+  BareNestedBlock ::BlockStatement
   # NOTE: Explicit block after implicit block so that a properly indented `{}`
   # gets treated like an object literal, not an empty block.
-  ExplicitBlock
+  ExplicitBlock ::BlockStatement
 
-  ThenClause
+  ThenClause ::BlockStatement
   # NOTE: !EOS prevents capturing a following unindented Statement
-  _?:ws !EOS Statement:s SemicolonDelimiter?:semi ->
-    expressions := [semi ? [ws, s, semi] : [ws, s]]
+  _?:ws !EOS Statement:s SemicolonDelimiter?:semi ::BlockStatement ->
+    expressions: StatementTuple[] := [[ws, s, semi]]
     return {
       type: "BlockStatement",
       expressions,
       children: [expressions],
       bare: true,
     }
-  EmptyBareBlock
+  EmptyBareBlock ::BlockStatement
 
 ThenClause
   Then ThenBlock -> $2
@@ -3058,12 +3110,12 @@ ThenClause
 # or same-line statements separated by `;`, or empty
 ThenBlock
   NoBlock EmptyBlock -> $2
-  ImplicitNestedBlock
-  ObjectSingleLineStatements
-  SingleLineStatements
+  ImplicitNestedBlock ::BlockStatement
+  ObjectSingleLineStatements ::BlockStatement
+  SingleLineStatements ::BlockStatement
 
 BracedThenClause
-  &Then InsertOpenBrace:open ThenClause:exp InsertCloseBrace:close ->
+  &Then InsertOpenBrace:open ThenClause:exp InsertCloseBrace:close ::BlockStatement ->
     expressions := [exp]
     return {
       type: "BlockStatement",
@@ -3074,21 +3126,21 @@ BracedThenClause
 
 # A block that must include braces (function body, try/catch/finally)
 BracedOrEmptyBlock
-  BracedBlock
-  EmptyBlock
+  BracedBlock ::BlockStatement
+  EmptyBlock ::BlockStatement
 
 NoCommaBracedOrEmptyBlock
-  NoCommaBracedBlock
-  EmptyBlock
+  NoCommaBracedBlock ::BlockStatement
+  EmptyBlock ::BlockStatement
 
 NoPostfixBracedOrEmptyBlock
-  NoPostfixBracedBlock
-  EmptyBlock
+  NoPostfixBracedBlock ::BlockStatement
+  EmptyBlock ::BlockStatement
 
 EmptyBlock
   # Implied empty block
-  InsertOpenBrace InsertCloseBrace ->
-    expressions := []
+  InsertOpenBrace InsertCloseBrace ::BlockStatement ->
+    expressions: StatementTuple[] := []
     return {
       type: "BlockStatement",
       expressions,
@@ -3100,20 +3152,20 @@ EmptyBlock
 
 # NOTE: We allow loop bodies to be empty, in which case they get a ; body
 BlockOrEmptyStatement
-  Block
+  Block ::BlockStatement
   NoBlock EmptyStatementBareBlock -> $2
 
 # NOTE: We allow if/else bodies to be empty, in which case they get a {} body
 # (`;` would also make sense, but TypeScript doesn't allow them.)
 BlockOrEmpty
-  ObjectSingleLineStatements
-  Block
+  ObjectSingleLineStatements ::BlockStatement
+  Block ::BlockStatement
   NoBlock EmptyBlock -> $2
 
 EmptyStatementBareBlock
   # Implied empty block with empty statement (;). Used for empty loop bodies.
-  InsertEmptyStatement:s ->
-    expressions := [["", s]]
+  InsertEmptyStatement:s ::BlockStatement ->
+    expressions: StatementTuple[] := [["", s]]
     return {
       type: "BlockStatement",
       expressions,
@@ -3126,8 +3178,8 @@ EmptyStatementBareBlock
 
 EmptyBareBlock
   # Implied empty block with no braces. Used in case statements.
-  "" ->
-    expressions := []
+  "" ::BlockStatement ->
+    expressions: StatementTuple[] := []
     return {
       type: "BlockStatement",
       expressions,
@@ -3147,7 +3199,7 @@ NoBlock
 BracedBlock
   NonSingleBracedBlock
   # Nonempty one liner
-  InsertOpenBrace:o !EOS PostfixedSingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ->
+  InsertOpenBrace:o !EOS PostfixedSingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ::BlockStatement ->
     return $skip unless s.children#
     return {
       type: "BlockStatement",
@@ -3160,7 +3212,7 @@ BracedBlock
 NoPostfixBracedBlock
   NonSingleBracedBlock
   # Nonempty one liner
-  InsertOpenBrace:o !EOS SingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ->
+  InsertOpenBrace:o !EOS SingleLineStatements:s InsertSpace:ws InsertCloseBrace:c ::BlockStatement ->
     return $skip unless s.expressions#
     return {
       type: "BlockStatement",
@@ -3173,7 +3225,7 @@ NoPostfixBracedBlock
 NoCommaBracedBlock
   NonSingleBracedBlock
   # Nonempty one liner
-  InsertOpenBrace:o !EOS PostfixedSingleLineNoCommaStatements:s InsertSpace:ws InsertCloseBrace:c ->
+  InsertOpenBrace:o !EOS PostfixedSingleLineNoCommaStatements:s InsertSpace:ws InsertCloseBrace:c ::BlockStatement ->
     return $skip unless s.children#
     return {
       type: "BlockStatement",
@@ -3186,10 +3238,10 @@ NonSingleBracedBlock
   !EOS ExplicitBlock !TrailingOperator -> $2
 
   # NOTE: Added indentation based implied braces
-  ImplicitNestedBlock
+  ImplicitNestedBlock ::BlockStatement
 
   # Immediate nested array/object literal
-  InsertOpenBrace:o ( NestedBulletedArray / NestedImplicitObjectLiteral ):s InsertCloseBrace:c ->
+  InsertOpenBrace:o ( NestedBulletedArray / NestedImplicitObjectLiteral ):s InsertCloseBrace:c ::BlockStatement ->
     expressions := [["", s]]
     return {
       type: "BlockStatement",
@@ -3205,7 +3257,7 @@ DeclarationOrStatement
 SingleLineStatements
   # NOTE: Statement can start with __ via AssignmentExpression.
   # Force staying on the same line via !/\n/ assertion.
-  ForbidNewlineBinaryOp ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter )*:stmts ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter? )?:last RestoreNewlineBinaryOp ->
+  ForbidNewlineBinaryOp ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter )*:stmts ( ( _? !EOS ) DeclarationOrStatement SemicolonDelimiter? )?:last RestoreNewlineBinaryOp ::BlockStatement ->
     expressions := stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
     expressions.push([last[0][0], last[1], last[2]]) if last
 
@@ -3222,12 +3274,12 @@ SingleLineStatements
 # NOTE: Special case where SingleLineStatements at least starts with an object
 # literal, which should potentially be unwrapped if not used as a value.
 ObjectSingleLineStatements
-  &( _? BracedObjectLiteral ) SingleLineStatements:block ->
+  &( _? BracedObjectLiteral ) SingleLineStatements:block ::BlockStatement ->
     if block.bare and block.expressions# is 1
-      expression := block.expressions[0][1]
-      if expression.type is "ParenthesizedExpression" and
-          expression.implicit and
-          expression.expression.type is "ObjectExpression"
+      expression := block.expressions[0]![1]
+      if expression!.type is "ParenthesizedExpression" and
+          (expression as any).implicit and
+          (expression as any).expression.type is "ObjectExpression"
         block = { ...block, unwrapObject: true }
     return block
 
@@ -3248,7 +3300,7 @@ PostfixedSingleLineStatements
     }
 
 PostfixedSingleLineNoCommaStatements
-  ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter? )?:last ->
+  ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter? )?:last ::BlockStatement ->
     children := stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
     children.push([last[0][0], last[1], last[2]]) if last
 
@@ -3289,7 +3341,7 @@ BlockStatementPart
 
 # https://262.ecma-international.org/#prod-Literal
 Literal
-  /(?=[0-9.'"tfyno])/ LiteralContent:literal ->
+  /(?=[0-9.'"tfyno])/ LiteralContent:literal ::Literal ->
     return {
       type: "Literal",
       subtype: literal.type,
@@ -3306,7 +3358,7 @@ LiteralContent
 # https://262.ecma-international.org/#prod-NullLiteral
 NullLiteral
   "null" NonIdContinue ->
-    return { type: "NullLiteral", $loc, token: $1 }
+    return { type: "NullLiteral", $loc, token: $1 } as const
 
 # https://262.ecma-international.org/#prod-BooleanLiteral
 BooleanLiteral
@@ -3316,13 +3368,13 @@ BooleanLiteral
 _BooleanLiteral
   CoffeeBooleansEnabled CoffeeScriptBooleanLiteral -> $2
   ( "true" / "false" ) NonIdContinue ->
-    return { type: "BooleanLiteral", $loc, token: $1 }
+    return { type: "BooleanLiteral", $loc, token: $1 } as const
 
 CoffeeScriptBooleanLiteral
   ( "yes" / "on" ) NonIdContinue ->
-    return { type: "BooleanLiteral", $loc, token: "true" }
+    return { type: "BooleanLiteral", $loc, token: "true" } as const
   ( "no" / "off" ) NonIdContinue ->
-    return { type: "BooleanLiteral", $loc, token: "false" }
+    return { type: "BooleanLiteral", $loc, token: "false" } as const
 
 # NOTE: Added :symbol shorthand for Symbol.symbol or Symbol.for("symbol")
 SymbolLiteral
@@ -3391,7 +3443,7 @@ Identifier
 # / `\u{X+}` escapes capped at 0x10FFFF, and non-ASCII non-id codepoints
 # not claimed by Civet operators (the long inline exclusion list).
 IdentifierName
-  /(?:\p{ID_Start}|[_$]|\\u\{0*(?:[\dA-Fa-f]{1,5}|10[\dA-Fa-f]{4})\}|\\u[\dA-Fa-f]{4}|[^\u0000-\u007F\p{ID_Continue}\s÷—‖’•‥…⁇→⇒∈∉∋∌≔≠≡≢≣≤≥≪≫⋙▷⧺⩵⩶])(?:\p{ID_Continue}|[\u200C\u200D$]|\\u\{0*(?:[\dA-Fa-f]{1,5}|10[\dA-Fa-f]{4})\}|\\u[\dA-Fa-f]{4}|[^\u0000-\u007F\p{ID_Continue}\s÷—‖’•‥…⁇→⇒∈∉∋∌≔≠≡≢≣≤≥≪≫⋙▷⧺⩵⩶])*/ ->
+  /(?:\p{ID_Start}|[_$]|\\u\{0*(?:[\dA-Fa-f]{1,5}|10[\dA-Fa-f]{4})\}|\\u[\dA-Fa-f]{4}|[^\u0000-\u007F\p{ID_Continue}\s÷—‖’•‥…⁇→⇒∈∉∋∌≔≠≡≢≣≤≥≪≫⋙▷⧺⩵⩶])(?:\p{ID_Continue}|[\u200C\u200D$]|\\u\{0*(?:[\dA-Fa-f]{1,5}|10[\dA-Fa-f]{4})\}|\\u[\dA-Fa-f]{4}|[^\u0000-\u007F\p{ID_Continue}\s÷—‖’•‥…⁇→⇒∈∉∋∌≔≠≡≢≣≤≥≪≫⋙▷⧺⩵⩶])*/ ::Identifier ->
     { name, token } := escapeIdentifier($0)
     return {
       type: "Identifier",
@@ -3409,7 +3461,7 @@ IdentifierName
 
 # https://262.ecma-international.org/#prod-IdentifierReference
 IdentifierReference
-  Identifier
+  Identifier ::Identifier
 
 UpcomingAssignment
   &( __ "=" !( "=" / ">" ) )
@@ -3432,7 +3484,7 @@ _ArrayLiteral
     // objects (ArrayElementExpression results), never bare arrays, so the
     // Array.isArray(last) arm is dead.
     last .= content[content# - 1]
-    lastArray .= last.children
+    lastArray .= last!.children
     if isComma(lastArray[lastArray# - 1])
       lastArray = lastArray.slice(0, -1)
       last = { ...last, children: lastArray }
@@ -3451,10 +3503,10 @@ _ArrayLiteral
       return prepend(ws, content)
 
     // ArrayLiteralContent always returns an array here (RangeExpression case handled above)
-    children := [open, ...content, ...ws, close]
+    children := [open, ...(content as any), ...ws, close]
 
     // Gather names when ArrayLiteral is used as a destructuring pattern
-    names := children.flatMap((c) => c?.names || [])
+    names := children.flatMap((c: any) => c?.names || [])
 
     return {
       type: "ArrayExpression",
@@ -3500,7 +3552,7 @@ OptionalRangeEnd
   "" -> { increasing: undefined, inclusive: true, raw: "" }
 
 RangeEnd
-  /([<>])(=?)|([≤≥])/ ->
+  /([<>])(=?)|([≤≥])/ ::RangeEnd ->
     dir .= $1
     equal .= $2
     unicode .= $3
@@ -3593,12 +3645,12 @@ ElementListWithIndentedApplicationForbidden
 # https://262.ecma-international.org/#prod-ElementList
 # NOTE: Modified and simplified from the spec
 ElementList
-  BulletedArray -> [$1]
-  SingleLineElementList
+  BulletedArray ::ASTNode[] -> [$1]
+  SingleLineElementList ::ASTNode[]
 
 SingleLineElementList
   # NOTE: Forbid EOS to prevent eating indentation in Expression
-  !EOS ArrayElementExpression:first ElementListRest*:rest ->
+  !EOS ArrayElementExpression:first ElementListRest*:rest ::ASTNode[] ->
     return [first] unless rest#
     return [
       append(first, rest[0][0])
@@ -3636,14 +3688,14 @@ ArrayElementExpression
           type: "ArrayElement",
           children: [exp],
           expression: exp,
-          names: exp.names,
+          names: exp!.names,
         }
       else
         return {
           type: "SpreadElement",
           children: [...spread, exp],
           expression: exp,
-          names: exp.names,
+          names: exp!.names,
         }
 
     return {
@@ -3674,18 +3726,18 @@ BulletedArray
     return $skip unless content
     content = [
       ...trimFirstSpace(content[0]), // replace first space with bracket
-      ...content[1].flat(),
+      ...content[1]!.flat(),
     ]
 
     // Remove implicit comma from last element
-    last .= content[content# - 1]
-    if last.children?.at(-1)?.implicit
-      content[content# - 1] = last =
-        { ...last, children: last.children.slice(0, -1) }
+    last .= content![content!# - 1]
+    if last!.children?.at(-1)?.implicit
+      content![content!# - 1] = last =
+        { ...last, children: last.children!.slice(0, -1) }
 
     return {
       type: "ArrayExpression",
-      children: [open, ...content, close],
+      children: [open, ...(content as any), close],
     }
 
 NestedArrayBullet
@@ -3758,13 +3810,13 @@ BracedObjectLiteral
       last = {
         ...last,
         delim: undefined,
-        children: last.children.filter((c) => c !== last.delim),
+        children: last.children.filter((c: any) => c !== last.delim),
       }
       properties = [ ...properties.slice(0, properties# - 1), last ]
     return {
       type: "ObjectExpression",
       children: [open, properties, close],
-      names: properties.flatMap((c) => c.names || []),
+      names: properties.flatMap((c: any) => c.names || []),
       properties,
     }
   OpenBrace:open AllowAll ( BracedObjectLiteralContent __ CloseBrace )? RestoreAll ->
@@ -3774,14 +3826,14 @@ BracedObjectLiteral
     return {
       type: "ObjectExpression",
       children: [open, properties, close],
-      names: properties.flatMap((c) => c.names || []),
+      names: properties.flatMap((c: any) => c.names || []),
       properties,
     }
 
 # Comma-separted properties on a single line. Allows for zero properties.
 SingleLineObjectProperties
   ( PropertyDefinition ObjectPropertyDelimiter )*:line ->
-    return line.flatMap(([prop, delim]) => {
+    return line.flatMap(([prop, delim]: [any, any]) => {
       // Allow each prop to be a single Property object or an array of such
       prop = Array.isArray(prop) ? prop : [prop]
       last .= prop[prop#-1]
@@ -3801,7 +3853,7 @@ BracedObjectLiteralContent
     return line.concat(nested || [])
   # As a backup, allow for arbitrary untracked indentation
   ( __ PropertyDefinition ObjectPropertyDelimiter )+ ->
-    return $0.flatMap(([ws, prop, delim]) => {
+    return $0.flatMap(([ws, prop, delim]: [any, any, any]) => {
       // Allow each prop to be a single Property object or an array of such
       prop = Array.isArray(prop) ? prop : [prop]
       last .= prop[prop#-1]
@@ -3849,7 +3901,7 @@ NestedPropertyDefinitions
 NestedPropertyDefinition
   # TODO: This may be a little weird/ambiguous with single identifier shorthand
   Nested:ws ( PropertyDefinition ObjectPropertyDelimiter )+:inlineProps ->
-    return inlineProps.flatMap( ([prop, delim], i) => {
+    return inlineProps.flatMap( ([prop, delim]: [any, any], i: number) => {
       // Allow each prop to be a single Property object or an array of such
       if not Array.isArray(prop) then prop = [prop]
       if i is 0
@@ -3909,7 +3961,7 @@ ObjectPropertyDelimiter
 PropertyDefinition
   # NOTE: This needs to be above NamedProperty so that
   # a `do` block doesn't get treated as {do} property
-  _?:ws InsertDotDotDot:dots IterationExpression:exp ->
+  _?:ws InsertDotDotDot:dots IterationExpression:exp ::SpreadProperty ->
     { statement } .= exp
     // Treat empty-bodied `do` and `loop` (which require no expression)
     // as keys instead of iterations
@@ -3941,13 +3993,13 @@ PropertyDefinition
       dots,
       value: exp,
     }
-  _?:ws NamedProperty:prop ->
-    return prepend(ws, prop)
+  _?:ws NamedProperty:prop ::Property | SpreadProperty ->
+    return prepend(ws, prop) as Property | SpreadProperty
 
   # NOTE: Added LiveScript flagging shorthand {+x, -y} -> {x: true, y: false}
   # NOTE: extended to allow {!y} -> {y: false}
   # NOTE: Must be after NamedProperty
-  _?:ws $[!+-]?:toggle PropertyName:id &ObjectPropertyDelimiter ->
+  _?:ws $[!+-]?:toggle PropertyName:id &ObjectPropertyDelimiter ::Property ->
     if toggle
       value := toggle is "+" ? "true" : "false"
       return {
@@ -3979,17 +4031,17 @@ PropertyDefinition
       implicitName: true,
     }
 
-  _?:ws MethodDefinition:def ->
+  _?:ws MethodDefinition:def ::unknown ->
     // Add commas between multiple method definitions (from globs)
     if def.type is "MultiMethodDefinition"
       return {
-        children: def.children.flatMap((c, i) => i ? [",", c] : [c])
+        children: def.children.flatMap((c: any, i: number) => i ? [",", c] : [c])
       }
     // NOTE: Forbidding EmptyBlock in MethodDefinition to allow `foo()`
     // shorthand for `foo: foo()`
     return $skip unless def.block and not def.block.empty
     return prepend(ws, def)
-  _?:ws DotDotDot:dots Expression:exp ->
+  _?:ws DotDotDot:dots Expression:exp ::SpreadProperty ->
     return {
       type: "SpreadProperty",
       children: [ws, dots, exp],
@@ -4001,23 +4053,23 @@ PropertyDefinition
   # NOTE: Added `{x.y?.z()}` shorthand for `{z: x.y?.z()}`
   # NOTE: this needs to be at the bottom to prevent shadowing NamedProperty
   # NOTE: Prevent `.x` from expanding to `x: $ => $.x`
-  _?:ws !( EOS / "." ) UnaryOp*:pre CallExpression:value UnaryPostfix?:post ->
+  _?:ws !( EOS / "." ) UnaryOp*:pre CallExpression:value UnaryPostfix?:post ::unknown ->
     unless pre# or post
-      switch value.type
+      switch value!.type
         // `{identifier}` remains `{identifier}`, the one shorthand JS supports
         case "Identifier":
           return prepend(ws, value)
         // PropertyGlob like x.{a,b} turns into ObjectExpression {a: x.a, b: x.b}
         // (via `processCallMemberExpression`)
         case "ObjectExpression":
-          first .= value.properties[0]
+          first .= value!.properties[0]
           if first
             first = {
               ...first,
               children: [ws, ...first.children],
-              hoistDec: value.hoistDec
+              hoistDec: value!.hoistDec
             }
-          return [ first, ...value.properties.slice(1) ]
+          return [ first, ...value!.properties.slice(1) ]
     last := lastAccessInCallExpression(value)
     return $skip unless last
 
@@ -4035,7 +4087,7 @@ PropertyDefinition
 
         value = {
           ...value,
-          children: value.children.map((c) => {
+          children: value!.children.map((c: any) => {
             if c === last then return {
               type: "Index",
               children: ["[", ref, "]"],
@@ -4057,13 +4109,13 @@ PropertyDefinition
     if name[0] is "#" then name = name.slice(1)
 
     // { y? } → { ...((y != null) && {y}) }
-    if not pre# and post?.token is "?" and value.type is "Identifier"
+    if not pre# and post?.token is "?" and value!.type is "Identifier"
       dots := { $loc, token: "..." }
       paren := parenthesizeExpression({ children: ["(", value, " != null) && {", name, "}"] })
       return {
         type: "SpreadProperty",
         children: [ws, dots, paren],
-        names: value.names,
+        names: value!.names,
         dots,
         value: paren,
       }
@@ -4091,7 +4143,7 @@ NamedProperty
     return {
       type: "SpreadProperty",
       children: [dots, paren],
-      names: exp.names || [],
+      names: exp!.names || [],
       dots,
       value: paren,
     }
@@ -4102,7 +4154,7 @@ NamedProperty
       type: "Property",
       children: $0,
       name: name,
-      names: exp.names || [],
+      names: exp!.names || [],
       value: exp,
     }
 
@@ -4118,7 +4170,7 @@ SnugNamedProperty
       type: "Property",
       children: [name, colon, expression],
       name,
-      names: expression.names || [],
+      names: (expression as any).names || [],
     }
 
 PropertyName
@@ -4221,12 +4273,12 @@ MethodDefinition
 
     unless rest#
       let name
-      if base.type is "MemberExpression"
+      if base!.type is "MemberExpression"
         lastAccess := lastAccessInCallExpression(base)
         if lastAccess
           ({ name } = lastAccess)
 
-      if not name then ({ name } = base)
+      if not name then ({ name } = base!)
       return $skip unless name
 
       // Remove leading # from private identifier since it makes no
@@ -4234,7 +4286,7 @@ MethodDefinition
       if name[0] is "#" then name = name.slice(1)
 
       // Skip autoReturn for identifiers with an explicit block like `get foo { true }`
-      autoReturn := not block or base.type !== "Identifier"
+      autoReturn := not block or base!.type !== "Identifier"
       return makeGetterMethod(name, ws, base, returnType, block, kind, autoReturn)
 
     last .= rest[rest#-1]
@@ -4253,7 +4305,7 @@ MethodDefinition
         // a top-level "Identifier" type would be dead here.
         return {
           type: "MultiMethodDefinition",
-          children: last.object.properties.map((p) => {
+          children: last.object.properties.map((p: any) => {
             { name } := p
             { value } := p
             v .= if value.privateShorthand
@@ -4302,15 +4354,14 @@ MethodModifier
       async,
       generator,
       modifier: {
-        async: !!async#,
+        async: !!async!#,
         get: false,
         set: false,
-        generator: !!generator#,
+        generator: !!generator!#,
       },
       children: [ async, generator ],
     }
 
-# TypeScript method signature
 MethodSignature
   ConstructorShorthand NonEmptyParameters:parameters ->
     return {
@@ -4333,7 +4384,7 @@ MethodSignature
       name = name.token.match(/^(?:"|')/) ? name.token[<..<] : name.token
 
     // TypeScript supports optional methods with bodies; remove ? from JS output
-    if optional then optional = { ...optional, ts: true }
+    if optional then optional = { ...optional, ts: true } as any
 
     return {
       type: "MethodSignature",
@@ -4354,7 +4405,7 @@ ClassElementName
   SymbolElement
 
 PrivateIdentifier
-  $(Hash IdentifierName):id ->
+  $(Hash IdentifierName):id ::Identifier ->
     // Private fields can't be string-keyed, so emit the mangled name
     // directly (`#😊` → `#u$1F60A$`); no `unicode` indirection.
     name := escapeIdentifier(id).name
@@ -4750,12 +4801,13 @@ UnaryOp
   # Lookahead to prevent unary operators from overriding update operators
   # ++/-- or block unary operator shorthand
   /(?!\+\+|--)[!~+-](?!\s)/ ->
-    return { $loc, token: $0 }
+    { $loc, token: $0 as "!" | "~" | "+" | "-" } as const
   AwaitOp
   ( Delete / Void / Typeof ):op ![:.] _?:ws ->
-    return [op, [" "]] unless ws
-    return [op, ws]
-  Not ![:.] " "? _? -> [$1, $4]
+    ws ??= [" "]
+    [op, ws] as const
+  Not ![:.] " "? _? ->
+    [$1, $4] as const
 
 # https://github.com/tc39/proposal-await.ops
 AwaitOp
@@ -4768,19 +4820,19 @@ AwaitOp
 
 # https://262.ecma-international.org/#prod-ModuleItem
 ModuleItem
-  IsBare ( ImportDeclaration / ExportDeclaration ) -> $2
-  StatementListItem
+  IsBare ( ImportDeclaration / ExportDeclaration ) ::ASTNode -> $2
+  StatementListItem ::ASTNode
 
 # https://262.ecma-international.org/#prod-StatementListItem
 StatementListItem
-  Declaration
+  Declaration ::Declaration
   # NOTE: Allow bulleted array literals as top-level statements.
-  BulletedArrayWithTrailing:array
+  BulletedArrayWithTrailing:array ::ASTNode
   # NOTE: Allow multi-line implicit object literals as top-level statements.
-  ImplicitObjectLiteral ->
+  ImplicitObjectLiteral ::ASTNode ->
     return makeLeftHandSideExpression($1)
   # NOTE: Added postfix conditionals/loops
-  PostfixedStatement
+  PostfixedStatement ::ASTNode
 
 PostfixedStatement
   Statement:statement ( _? PostfixStatement )?:post ->
@@ -4799,12 +4851,12 @@ PostfixedNoCommaStatement
 
 PostfixedExpression
   # Loops allow spreads before the postfix
-  AssignmentExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ->
+  AssignmentExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ::ASTNode ->
     return attachPostfixStatementAsExpression(expression, [ws, post])
   # Ifs just allow expressions
-  Expression:expression ( _? PostfixStatement ):post ->
+  Expression:expression ( _? PostfixStatement ):post ::ASTNode ->
     return attachPostfixStatementAsExpression(expression, post)
-  Expression
+  Expression ::ASTNode
 
 # Outside contexts where commas are too important (e.g. parameters/arguments),
 # postfixed loops can have comma expressions and spreads to accumulate multiple
@@ -4814,8 +4866,8 @@ CommaLoop
     return attachPostfixStatementAsExpression(expression, [ws, post])
 
 PostfixedExpressionOrCommaLoop
-  CommaLoop
-  PostfixedExpression
+  CommaLoop ::ASTNode
+  PostfixedExpression ::ASTNode
 
 # Expression with postfixes *or* comma operators (mixing seems ambiguous)
 # Note that postfixed loops do allow commas though, for accumulating multiple
@@ -4829,13 +4881,13 @@ PostfixedCommaExpression
   CommaExpression
 
 PostfixStatement
-  /(?=for|if|loop|unless|until|while)/ _PostfixStatement -> $2
+  /(?=for|if|loop|unless|until|while)/ _PostfixStatement ::ForStatement | IfStatement | IterationStatement -> $2
 
 _PostfixStatement
-  ForClause
-  IfClause
-  LoopClause
-  WhileClause
+  ForClause ::ForStatement
+  IfClause ::IfStatement
+  LoopClause ::IterationStatement
+  WhileClause ::IterationStatement
 
 # https://262.ecma-international.org/#prod-Statement
 Statement
@@ -4890,11 +4942,11 @@ NoCommaStatement
 
 # NOTE: EmptyStatement handled differently than spec, consuming inline whitespace and comments then asserting following semi-colon
 EmptyStatement
-  _? &";" ->
+  _? &";" ::EmptyStatement ->
     return { type: "EmptyStatement", children: $1 || [] }
 
 InsertEmptyStatement
-  InsertSemicolon ->
+  InsertSemicolon ::EmptyStatement ->
     return { type: "EmptyStatement", children: [$1], implicit: true }
 
 # https://262.ecma-international.org/#prod-BlockStatement
@@ -4904,7 +4956,7 @@ BlockStatement
 
 # https://262.ecma-international.org/#prod-LabelledStatement
 LabelledStatement
-  Label:label LabelledItem:statement ->
+  Label:label LabelledItem:statement ::LabelledStatement ->
     return {
       type: "LabelledStatement",
       label,
@@ -4914,7 +4966,7 @@ LabelledStatement
 
 Label
   # NOTE: `:label` instead of `label:` to not clash with implicit object literal
-  Colon:colon IdentifierName:id Whitespace:w ->
+  Colon:colon IdentifierName:id Whitespace:w ::Label ->
     // If `id` is a JavaScript reserved word, JS or TS will output an error.
     // `:void` is sometimes useful as a return-type annotation, so leave that.
     return $skip if id.name is "void"
@@ -4929,20 +4981,20 @@ Label
 # Colon is required if the identifier is a Civet keyword,
 # except for iteration keywords which refer to containing anonymous loop
 LabelIdentifier
-  Colon IdentifierName:id ->
+  Colon IdentifierName:id ::Label ->
     return {
       type: "Label",
       name: id.name,
       children: [id],
     }
-  /(?:loop|while|until|for|do)(?!\p{ID_Continue})/ ->
+  /(?:loop|while|until|for|do)(?!\p{ID_Continue})/ ::Label ->
     return {
       type: "Label",
       special: $0,
       name: "", // to be filled in
       children: []
     }
-  Identifier:id ->
+  Identifier:id ::Label ->
     return {
       type: "Label",
       name: id.name,
@@ -4956,10 +5008,10 @@ LabelledItem
 # https://262.ecma-international.org/#prod-IfStatement
 IfStatement
   # NOTE: Allow indentation in condition when there's an explicit `then` clause
-  ( If / Unless ):kind _?:ws BoundedCondition:condition ThenClause:block ElseClause?:e ->
+  ( If / Unless ):kind _?:ws BoundedCondition:condition ThenClause:block ElseClause?:e ::IfStatement ->
     if kind.negated
       kind = { ...kind, token: "if" }
-      condition = negateCondition(condition)
+      condition = negateCondition(condition, kind.$loc)
     // Ensure semicolon separating single line from `else`
     if block.bare and e
       block = bracedBlock(block)
@@ -4972,7 +5024,7 @@ IfStatement
       else: e,
     }
   # NOTE: Block isn't Statement so we can handle implied braces by nesting
-  IfClause:clause BlockOrEmpty:block ElseClause?:e ->
+  IfClause:clause BlockOrEmpty:block ElseClause?:e ::IfStatement ->
     // Ensure semicolon separating single line from `else`
     if block.bare and e
       block = bracedBlock(block)
@@ -4986,7 +5038,7 @@ IfStatement
     }
 
 ElseClause
-  ( Nested / _? ) Else BlockOrEmpty:block -> {
+  ( Nested / _? ) Else BlockOrEmpty:block ::ElseClause -> {
     type: "ElseClause",
     children: $0,
     block,
@@ -4996,7 +5048,7 @@ IfClause
   ( If / Unless ):kind _?:ws Condition:condition ->
     if kind.negated
       kind = { ...kind, token: "if" }
-      condition = negateCondition(condition)
+      condition = negateCondition(condition, kind.$loc)
 
     return {
       type: "IfStatement",
@@ -5007,7 +5059,7 @@ IfClause
 
 # https://262.ecma-international.org/#prod-IterationStatement
 IterationStatement
-  /(?=loop|comptime|do|for|until|while)/ _IterationStatement -> $2
+  /(?=loop|comptime|do|for|until|while)/ _IterationStatement ::IterationFamily -> $2
 
 _IterationStatement
   # NOTE: Added `loop` from CoffeeScript
@@ -5020,7 +5072,7 @@ _IterationStatement
   ForStatement
 
 IterationExpression
-  ( Async __ )?:async IterationStatement:statement ->
+  ( Async __ )?:async IterationStatement:statement ::IterationExpression ->
     return {
       type: "IterationExpression",
       subtype: statement.type,
@@ -5075,7 +5127,7 @@ DoWhileStatement
     }
 
 DoStatement
-  Do:d ( _? Star )?:generator NoPostfixBracedOrEmptyBlock:block ->
+  Do:d ( _? Star )?:generator NoPostfixBracedOrEmptyBlock:block ::DoStatement ->
     block = trimFirstSpace(block)
     return {
       type: "DoStatement",
@@ -5085,9 +5137,9 @@ DoStatement
     }
 
 ComptimeStatement
-  Comptime NoPostfixBracedOrEmptyBlock:t ElseClause?:e ->
+  Comptime NoPostfixBracedOrEmptyBlock:t ElseClause?:e ::ComptimeStatement ->
     // Wrap the else block if present and comptime is off
-    block .= not initialConfig.comptime and e?.block or t
+    block .= not (initialConfig as any)?.comptime and e?.block or t
     block = trimFirstSpace(block)
     return {
       type: "ComptimeStatement",
@@ -5113,7 +5165,7 @@ WhileClause
     subtype := kind.token
     if kind.negated
       kind = { ...kind, token: "while" }
-      condition = negateCondition(condition)
+      condition = negateCondition(condition, kind.$loc)
 
     return {
       type: "IterationStatement",
@@ -5138,7 +5190,7 @@ ForStatement
     }
 
 ForClause
-  For ( _? Star )?:generator __ ForStatementControlWithWhen:c  ->
+  For ( _? Star )?:generator __ ForStatementControlWithWhen:c ->
     {children, reduction} .= c
     if generator and reduction
       // TODO: `for* concat` might make sense
@@ -5259,7 +5311,7 @@ CoffeeForStatementParameters
       if index
         index = trimFirstSpace(index)
         indexAssignment = [index, "="]
-        assignmentNames./**/push(...index.names)
+        assignmentNames./**/push(...index!.names)
 
       expRefDec := (expRef !== exp)
         // Trim a single leading space if present
@@ -5425,7 +5477,7 @@ ForBinding
 
 # https://262.ecma-international.org/#prod-SwitchStatement
 SwitchStatement
-  Switch:s ForbidNewlineBinaryOp ( EmptyCondition / Condition )?:condition RestoreNewlineBinaryOp CaseBlock:caseBlock ->
+  Switch:s ForbidNewlineBinaryOp ( EmptyCondition / Condition )?:condition RestoreNewlineBinaryOp CaseBlock:caseBlock ::SwitchStatement ->
     /* c8 ignore next -- $skip backtrack: condition is `?` in the rule but earlier alternatives capture switches without a condition first; tests never reach this fallback */
     return $skip unless condition
     if condition.type is "EmptyCondition"
@@ -5433,7 +5485,7 @@ SwitchStatement
       // and is slightly smaller than switch(true) {case: !!exp ... }
       caseBlock.clauses.forEach {cases} =>
         if cases
-          cases.forEach (c) =>
+          cases.forEach (c: any) =>
             exp := c[1]
             switch exp.type
               when "Identifier", "Literal"
@@ -5450,7 +5502,7 @@ SwitchStatement
     }
 
 EmptyCondition
-  &EOS ->
+  &EOS ::EmptyCondition ->
     return {
       type: "EmptyCondition",
       children: [{
@@ -5461,7 +5513,7 @@ EmptyCondition
 
 # https://262.ecma-international.org/#prod-CaseBlock
 CaseBlock
-  ( Nested / _ )? OpenBrace NestedCaseClauses:clauses __ CloseBrace ->
+  ( Nested / _ )? OpenBrace NestedCaseClauses:clauses __ CloseBrace ::CaseBlock ->
     return {
       type: "CaseBlock",
       clauses: clauses,
@@ -5469,7 +5521,7 @@ CaseBlock
     }
 
   # NOTE: Added optional braces with nesting
-  InsertOpenBrace NestedCaseClauses:clauses InsertNewline InsertIndent InsertCloseBrace ->
+  InsertOpenBrace NestedCaseClauses:clauses InsertNewline InsertIndent InsertCloseBrace ::CaseBlock ->
     return {
       type: "CaseBlock",
       clauses: clauses,
@@ -5491,21 +5543,21 @@ NestedCaseClause
 
 # https://262.ecma-international.org/#prod-CaseClause
 CaseClause
-  PatternExpressionList:patterns ( ThenClause / BareBlock ):block ->
+  PatternExpressionList:patterns ( ThenClause / BareBlock ):block ::PatternClause ->
     return {
       type: "PatternClause",
       children: $0,
       patterns,
       block,
     }
-  Case CaseExpressionList:cases IgnoreColon ( ThenClause / BareBlock ):block -> {
+  Case CaseExpressionList:cases IgnoreColon ( ThenClause / BareBlock ):block ::CaseClause -> {
     type: "CaseClause",
     children: $0,
     cases,
     block,
   }
   # NOTE: Added "when" from CoffeeScript. `when` always inserts `break;`.
-  When CaseExpressionList:cases IgnoreColon InsertOpenBrace ( ThenClause / BareBlock ):block InsertBreak:b InsertNewline InsertIndent InsertCloseBrace ->
+  When CaseExpressionList:cases IgnoreColon InsertOpenBrace ( ThenClause / BareBlock ):block InsertBreak:b InsertNewline InsertIndent InsertCloseBrace ::WhenClause ->
     return {
       type: "WhenClause",
       children: $0,
@@ -5514,14 +5566,14 @@ CaseClause
       break: b,
     }
   # NOTE: Merged in default clause
-  Default ImpliedColon ( ThenClause / BareBlock):block ->
+  Default ImpliedColon ( ThenClause / BareBlock):block ::DefaultClause ->
     return {
       type: "DefaultClause",
       block,
       children: $0
     }
   # NOTE: Added else from CoffeeScript
-  Else:e ImpliedColon:colon ( ThenClause / BracedBlock / EmptyBlock ):block ->
+  Else:e ImpliedColon:colon ( ThenClause / BracedBlock / EmptyBlock ):block ::DefaultClause ->
     e = { ...e, token: "default" }
     return {
       type: "DefaultClause",
@@ -5650,16 +5702,14 @@ CatchParameter
 
 # An expression with explicit or implied parentheses, for use in if/while/switch
 Condition
-  # NOTE: DeclarationCondition must come before the ExpressionCondition because we need to look ahead to potentially match `:=` or `.=`
-  OpenParen:open _?:ws DeclarationCondition:expression CloseParen:close ->
+  OpenParen:open _?:ws DeclarationCondition:expression CloseParen:close ::Condition ->
     return {
       type: "ParenthesizedExpression",
       children: [open, ws, expression, close],
       expression,
     }
-  ParenthesizedExpression !TrailingOperator -> $1
-  # NOTE: DeclarationCondition must come before the ExpressionCondition because we need to look ahead to potentially match `:=` or `.=`
-  InsertOpenParen:open DeclarationCondition:expression InsertCloseParen:close ->
+  ParenthesizedExpression !TrailingOperator ::Condition -> $1
+  InsertOpenParen:open DeclarationCondition:expression InsertCloseParen:close ::Condition ->
     return {
       type: "ParenthesizedExpression",
       children: [open, expression, close],
@@ -5667,7 +5717,7 @@ Condition
     }
 
   # NOTE: Indented condition allows for further nested function application
-  PushIndent InsertOpenParen:open ( Nested PostfixedExpression )?:expression InsertCloseParen:close PopIndent ->
+  PushIndent InsertOpenParen:open ( Nested PostfixedExpression )?:expression InsertCloseParen:close PopIndent ::Condition ->
     return $skip unless expression
     return {
       type: "ParenthesizedExpression",
@@ -5677,7 +5727,7 @@ Condition
   # NOTE: Added paren-less condition
   # NOTE: Unindented condition forbids nested function application
   # to avoid ambiguity with 'then' clause
-  InsertOpenParen:open ExpressionWithObjectApplicationForbidden:expression InsertCloseParen:close ->
+  InsertOpenParen:open ExpressionWithObjectApplicationForbidden:expression InsertCloseParen:close ::Condition ->
     // Don't double wrap parenthesized expressions
     return expression if expression.type is "ParenthesizedExpression"
     expression = trimFirstSpace(expression)
@@ -5692,7 +5742,7 @@ Condition
 BoundedCondition
   InsertOpenParen:open PostfixedExpression:expression InsertCloseParen:close ->
     // Don't double wrap parenthesized expressions
-    return expression if expression.type is "ParenthesizedExpression"
+    return expression if expression!.type is "ParenthesizedExpression"
     expression = trimFirstSpace(expression)
     return {
       type: "ParenthesizedExpression",
@@ -5915,7 +5965,7 @@ KeywordStatement
   # https://262.ecma-international.org/#prod-BreakStatement
   # NOTE: Also allow `break :label` for symmetry
   Break ( _ LabelIdentifier )? ( _ With MaybeNestedExpression )? ->
-    children := [ $1 ]
+    children: Children := [ $1 ]
     children.push($2) if $2
     if $3
       children.push({
@@ -5941,7 +5991,7 @@ KeywordStatement
   # https://262.ecma-international.org/#prod-ContinueStatement
   # NOTE: Also allow `continue :label` for symmetry
   Continue ( _ LabelIdentifier )? ( _ With MaybeNestedExpression )? ->
-    children := [ $1 ]
+    children: Children := [ $1 ]
     children.push($2) if $2
     if $3
       children.push({
@@ -5971,14 +6021,14 @@ KeywordStatement
 
 # https://262.ecma-international.org/#sec-debugger-statement
 DebuggerStatement
-  Debugger -> {
+  Debugger ::DebuggerStatement -> {
     type: "DebuggerStatement",
     children: $0,
   }
 
 # https://262.ecma-international.org/#prod-ThrowStatement
 ThrowStatement
-  Throw MaybeParenNestedExpression -> {
+  Throw MaybeParenNestedExpression ::ThrowStatement -> {
     type: "ThrowStatement",
     children: $0,
   }
@@ -6011,11 +6061,11 @@ MaybeNestedPostfixedExpression
   # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
   # the second case, where they get checked by PrimaryExpression,
   # which then allows for trailing binary operators etc.
-  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested PostfixedExpression )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
+  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested PostfixedExpression )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ::unknown ->
     return $skip unless expression
     return expression unless trailing
     return [ expression, trailing ]
-  ForbidImplicitFragment PostfixedExpression?:expression RestoreImplicitFragment ->
+  ForbidImplicitFragment PostfixedExpression?:expression RestoreImplicitFragment ::ASTNode ->
     return $skip unless expression
     return expression
 
@@ -6023,11 +6073,11 @@ MaybeNestedPostfixedExpressionOrCommaLoop
   # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
   # the second case, where they get checked by PrimaryExpression,
   # which then allows for trailing binary operators etc.
-  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested PostfixedExpressionOrCommaLoop )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
+  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested PostfixedExpressionOrCommaLoop )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ::unknown ->
     return $skip unless expression
     return expression unless trailing
     return [ expression, trailing ]
-  ForbidImplicitFragment PostfixedExpressionOrCommaLoop?:expression RestoreImplicitFragment ->
+  ForbidImplicitFragment PostfixedExpressionOrCommaLoop?:expression RestoreImplicitFragment ::ASTNode ->
     return $skip unless expression
     return expression
 
@@ -6054,11 +6104,11 @@ MaybeNestedExpression
   # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
   # the second case, where they get checked by PrimaryExpression,
   # which then allows for trailing binary operators etc.
-  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested Expression )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
+  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested Expression )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ::unknown ->
     return $skip unless expression
     return expression unless trailing
     return [ expression, trailing ]
-  ForbidImplicitFragment Expression?:expression RestoreImplicitFragment ->
+  ForbidImplicitFragment Expression?:expression RestoreImplicitFragment ::unknown ->
     return $skip unless expression
     return expression
 
@@ -6083,7 +6133,7 @@ MaybeParenNestedExpression
 ImportDeclaration
   # NOTE: TypeScript's CommonJS import syntax
   # https://www.typescriptlang.org/docs/handbook/modules/reference.html#export--and-import--require
-  Import _ Identifier _? Equals __ "require" NonIdContinue Arguments ->
+  Import _ Identifier _? Equals __ "require" NonIdContinue Arguments ::ImportDeclaration ->
     // Replace `import` with `const` in JS output
     imp := [
       { ...$1, ts: true },
@@ -6093,7 +6143,7 @@ ImportDeclaration
       type: "ImportDeclaration",
       children: [imp, $0.slice(1)],
     }
-  ( ( Import SameLineOrIndentedFurther ) / ImpliedImport ):i Operator OperatorBehavior?:behavior SameLineOrIndentedFurther:ws1 OperatorNamedImports:imports SameLineOrIndentedFurther:ws2 FromClause:from ->
+  ( ( Import SameLineOrIndentedFurther ) / ImpliedImport ):i Operator OperatorBehavior?:behavior SameLineOrIndentedFurther:ws1 OperatorNamedImports:imports SameLineOrIndentedFurther:ws2 FromClause:from ::ImportDeclaration ->
     errors := []
     errors.push(behavior.error) if behavior?.error
     imports.specifiers.forEach (spec) =>
@@ -6107,7 +6157,7 @@ ImportDeclaration
       imports,
       from,
     }
-  Import SameLineOrIndentedFurther ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports __ FromClause:from ->
+  Import SameLineOrIndentedFurther ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports __ FromClause:from ::ImportDeclaration ->
     return {
       type: "ImportDeclaration",
       children: $0,
@@ -6118,9 +6168,9 @@ ImportDeclaration
   # &/\s/ assertion: ModuleSpecifier's UnquotedSpecifier can otherwise eat
   # the `(` of `import("foo")` or the `.` of `import.meta` as a one-char
   # specifier, masking the dynamic-import / member-access parse paths.
-  Import:i &/\s/ SameLineOrIndentedFurther:ws ModuleSpecifier:module -> { type: "ImportDeclaration", children: [i, ws, module], module }
+  Import:i &/\s/ SameLineOrIndentedFurther:ws ModuleSpecifier:module ::ImportDeclaration -> { type: "ImportDeclaration", children: [i, ws, module], module }
   # NOTE: Robust parsing for better LSP completions
-  Import:i _?:ws UnclosedSingleLineStringLiteral?:unclosed &EOS ->
+  Import:i _?:ws UnclosedSingleLineStringLiteral?:unclosed &EOS ::ImportDeclaration ->
     return {
       type: "ImportDeclaration",
       children: [
@@ -6137,17 +6187,17 @@ ImportDeclaration
   # NOTE: Added import shorthand
   # NOTE: Not adding $loc to source map here yet because it will point to the start of the identifier
   # the proper place may be to use the From location
-  ImpliedImport:i ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports SameLineOrIndentedFurther:w FromClause:from ->
+  ImpliedImport:i ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports SameLineOrIndentedFurther:w FromClause:from ::ImportDeclaration ->
     // Map implied import location to `from`
     // The pos and length adjustment better match how tsc outputs to include the space before `from` with the `from` token
     i.$loc = {
-      pos: from[0].$loc.pos-1,
-      length: from[0].$loc#+1,
+      pos: from[0]!.$loc.pos-1,
+      length: from[0]!.$loc#+1,
     }
     children := [i, t, imports, w, from]
     return { type: "ImportDeclaration", ts: !!t, children, imports, from }
   # NOTE: from ... import ... reverse syntax
-  FromClause:from SameLineOrIndentedFurther:fws Import:i SameLineOrIndentedFurther:iws Operator OperatorBehavior?:behavior SameLineOrIndentedFurther:ows OperatorNamedImports:imports ->
+  FromClause:from SameLineOrIndentedFurther:fws Import:i SameLineOrIndentedFurther:iws Operator OperatorBehavior?:behavior SameLineOrIndentedFurther:ows OperatorNamedImports:imports ::ImportDeclaration ->
     errors := []
     errors.push(behavior.error) if behavior?.error
     imports.specifiers.forEach (spec) =>
@@ -6161,7 +6211,7 @@ ImportDeclaration
       imports,
       from,
     }
-  FromClause:from SameLineOrIndentedFurther:fws Import:i SameLineOrIndentedFurther:iws ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports ->
+  FromClause:from SameLineOrIndentedFurther:fws Import:i SameLineOrIndentedFurther:iws ( TypeKeyword SameLineOrIndentedFurther )?:t ImportClause:imports ::ImportDeclaration ->
     return {
       type: "ImportDeclaration",
       children: [ i, iws, t, imports, fws, from ],
@@ -6197,7 +6247,7 @@ ImportClause
 
 # https://262.ecma-international.org/#prod-NameSpaceImport
 NameSpaceImport
-  Star:star ImportAsToken __ ImportedBinding:binding  ->
+  Star:star ImportAsToken __ ImportedBinding:binding ->
     return {
       type: "Declaration",
       children: $0,
@@ -6284,7 +6334,7 @@ TypeAndImportSpecifier
     return {
       ...spec,
       children: [
-        ws, trimFirstSpace(spec[0]),
+        ws, trimFirstSpace((spec as any)[0]),
         spec.children.slice(1),
       ],
     }
@@ -6642,8 +6692,8 @@ VariableDeclarationList
 # NOTE: No leading minus sign
 NumericLiteral
   # perf: short circuit if no possibility of being a number
-  /(?=[0-9.])/ NumericLiteralKind:token ->
-    return { type: "NumericLiteral", $loc, token }
+  /(?=[0-9.])/ NumericLiteralKind:token ::NumericLiteral ->
+    return { type: "NumericLiteral", $loc, token } as const
 
 NumericLiteralKind
   DecimalBigIntegerLiteral
@@ -6684,8 +6734,8 @@ HexIntegerLiteral
 # NOTE: Integer variation of NumericLiteral
 IntegerLiteral
   # perf: short circuit if no possibility of being an integer
-  /(?=[0-9])/ IntegerLiteralKind:token ->
-    return { type: "NumericLiteral", $loc, token }
+  /(?=[0-9])/ IntegerLiteralKind:token ::NumericLiteral ->
+    return { type: "NumericLiteral", $loc, token } as const
 
 IntegerLiteralKind
   DecimalBigIntegerLiteral
@@ -6703,19 +6753,19 @@ DecimalIntegerLiteral
 # accept a template literal in the form of a CoffeeScript double-quoted string
 # interpolation, be sure to check TemplateLiteral before StringLiteral.
 StringLiteral
-  DoubleQuote DoubleStringCharacters:str DoubleQuote ->
+  DoubleQuote DoubleStringCharacters:str DoubleQuote ::StringLiteral ->
     return {
       type: "StringLiteral",
+      $loc,
       token: `"${modifyString(str.token)}"`,
-      $loc,
-    }
+    } as const
 
-  SingleQuote SingleStringCharacters:str SingleQuote ->
+  SingleQuote SingleStringCharacters:str SingleQuote ::StringLiteral ->
     return {
       type: "StringLiteral",
-      token: `'${modifyString(str.token)}'`,
       $loc,
-    }
+      token: `'${modifyString(str.token)}'`,
+    } as const
 
 DoubleStringCharacters
   /(?:\\.|[^"])*/ ->
@@ -6727,12 +6777,12 @@ SingleStringCharacters
 
 # StringLiteral but without literal newlines, used for module names
 SingleLineStringLiteral
-  $( DoubleQuote /(?:\\.|[^"\n])*/ DoubleQuote ) / $( SingleQuote /(?:\\.|[^'\n])*/ SingleQuote ) ->
+  $( DoubleQuote /(?:\\.|[^"\n])*/ DoubleQuote ) / $( SingleQuote /(?:\\.|[^'\n])*/ SingleQuote ) ::StringLiteral ->
     return {
       type: "StringLiteral",
-      token: $1,
       $loc,
-    }
+      token: $1,
+    } as const
 
 # SingleLineStringLiteral but with no closing quote, for generating errors
 UnclosedSingleLineStringLiteral
@@ -6950,7 +7000,7 @@ ReservedWord
 # https://262.ecma-international.org/#sec-comments
 Comment
   # perf: assertion to exit early
-  /(?=\/|#)/ _Comment -> $2
+  /(?=\/|#)/ _Comment ::CommentNode -> $2
 
 _Comment
   MultiLineComment
@@ -6965,7 +7015,7 @@ SingleLineComment
 JSSingleLineComment
   # JS Comments are two slashes not followed by a third (because that is a heregex)
   /\/\/(?!\/)[^\r\n]*/ ->
-    return { type: "Comment", $loc, token: $0 }
+    return { type: "Comment", $loc, token: $0 } as const
 
 # https://262.ecma-international.org/#prod-MultiLineComment
 MultiLineComment
@@ -6975,19 +7025,19 @@ MultiLineComment
 
 JSMultiLineComment
   $( "/*" (!"*/" . )* "*/" ) ->
-    return { type: "Comment", $loc, token: $1 }
+    return { type: "Comment", $loc, token: $1 } as const
 
 CoffeeSingleLineComment
   # NOTE: CoffeeScript style single line comments
   /#(?!##(?!#))([^\r\n]*)/ ->
-    return { type: "Comment", $loc, token: `//${$1}` }
+    return { type: "Comment", $loc, token: `//${$1}` } as const
 
 # NOTE: ###...### is currently always enabled; just # needs a flag.
 # We could check for CoffeeCommentEnabled here.
 CoffeeMultiLineComment
   CoffeeHereCommentStart $/[^]*?###/ ->
     $2 = $2.slice(0, $2.length-3).replace(/\*\//g, "* /")
-    return { type: "Comment", $loc, token: `/*${$2}*/` }
+    return { type: "Comment", $loc, token: `/*${$2}*/` } as const
 
 CoffeeHereCommentStart
   /###(?!#)/
@@ -7072,7 +7122,7 @@ Loc
 
 Abstract
   $("abstract" NonIdContinue " "?) ->
-    return { $loc, token: $1, ts: true }
+    return { type: "Keyword" as const, $loc, token: $1 as "abstract" | "abstract ", ts: true }
 
 Ampersand
   "&" ->
@@ -7080,7 +7130,7 @@ Ampersand
 
 As
   "as" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 At
   "@" ->
@@ -7094,11 +7144,11 @@ AtAt
 
 Async
   "async" NonIdContinue ->
-    return { $loc, token: $1, type: "Async" }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Await
   "await" NonIdContinue ->
-    return { $loc, token: $1, type: "Await" }
+    return { type: "Await", $loc, token: $1 } as const
 
 Backtick
   "`" ->
@@ -7106,7 +7156,7 @@ Backtick
 
 By
   "by" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Caret
   "^" !"^" ->
@@ -7114,15 +7164,15 @@ Caret
 
 Case
   "case" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Catch
   "catch" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Class
   "class" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 CloseAngleBracket
   ">" ->
@@ -7154,7 +7204,7 @@ Comma
 
 Comptime
   "comptime" NonIdContinue !":" ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 ConstructorShorthand
   "@" ->
@@ -7162,19 +7212,19 @@ ConstructorShorthand
 
 Declare
   "declare" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Default
   "default" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Delete
   "delete" NonIdContinue ->
-    return { $loc, token: $1 }
+    { $loc, token: $1 } as const
 
 Do
   "do" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Dot
   "." ->
@@ -7216,11 +7266,11 @@ DoubleQuote
 
 Each
   "each" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Else
   "else" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Equals
   "=" ->
@@ -7232,31 +7282,31 @@ ExclamationPoint
 
 Export
   "export" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Extends
   "extends" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Finally
   "finally" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 For
   "for" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 From
   "from" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Function
   "function" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 GetOrSet
   ( "get" / "set" ) NonIdContinue ->
-    return { $loc, token: $1, type: 'GetOrSet' }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Hash
   "#" ->
@@ -7266,57 +7316,57 @@ If
   # NOTE: Pull a single space into the 'if ' token so if it is replaced
   # with a ternary in expressions it doesn't add an extra space
   $("if" NonIdContinue " "?) ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 as "if" | "if ", negated: false }
 
 Import
   "import" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 In
   "in" NonIdContinue ->
-    return { $loc, token: $1, spaced: true }
+    return { type: "Keyword" as const, $loc, token: $1, spaced: true }
 
 Infer
   "infer" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 # https://262.ecma-international.org/#prod-LetOrConst
 LetOrConst
   ( "let" / "const" ) NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Const
   "const" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Is
   "is" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 LetOrConstOrVar
   ( "let" / "const" / "var" ) NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Like
   "like" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Loop
   # NOTE: loop becomes while
   "loop" NonIdContinue ->
-    return { $loc, token: "while" }
+    return { type: "Keyword" as const, $loc, token: "while" }
 
 New
   "new" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Not
   "not" NonIdContinue !( _? ":" ) ->
-    return { $loc, token: "!" }
+    { $loc, token: "!" } as const
 
 Of
   "of" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 OpenAngleBracket
   "<" ->
@@ -7336,27 +7386,27 @@ OpenParen
 
 Operator
   "operator" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Override
   "override" NonIdContinue ->
-    return { $loc, token: $1, ts: true }
+    return { type: "Keyword" as const, $loc, token: $1, ts: true }
 
 Own
   "own" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Public
   "public" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Private
   "private" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Protected
   "protected" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Pipe
   "||>" / "|▷" ->
@@ -7370,19 +7420,19 @@ Pipe
 
 QuestionMark
   "?" ->
-    return { $loc, token: $1 }
+    { $loc, token: $1 } as const
 
 Readonly
   "readonly" NonIdContinue ->
-    return { $loc, token: $1, ts: true }
+    return { type: "Keyword" as const, $loc, token: $1, ts: true }
 
 Return
   "return" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Satisfies
   "satisfies" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Semicolon
   ";" ->
@@ -7394,15 +7444,15 @@ SingleQuote
 
 Star
   "*" ->
-    return { $loc, token: $1, type: "Star" }
+    return { type: "Star", $loc, token: $1 } as const
 
 Static
   "static" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
   # NOTE: In ClassElements @ is a shorthand for 'static'
   # NOTE: added negative assertion to prevent overlapping constructor shorthand and `@@` decorator syntax
   "@" !( "(" / "@" ) ->
-    return { $loc, token: "static " }
+    return { type: "Keyword" as const, $loc, token: "static " }
 
 SubstitutionStart
   "${" ->
@@ -7410,11 +7460,11 @@ SubstitutionStart
 
 Super
   "super" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Switch
   "switch" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Target
   "target" NonIdContinue ->
@@ -7427,11 +7477,11 @@ Then
 
 This
   "this" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Throw
   "throw" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 # NOTE: These become a single backtick, to properly escape "s and newlines
 # and in case there are interpolations
@@ -7455,52 +7505,52 @@ TripleTick
 
 Try
   "try" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Typeof
   "typeof" NonIdContinue ->
-    return { $loc, token: $1 }
+    { $loc, token: $1 } as const
 
 Undefined
   "undefined" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Unless
   "unless" NonIdContinue ->
-    return { $loc, token: $1, negated: true }
+    return { type: "Keyword" as const, $loc, token: $1, negated: true }
 
 Until
   "until" NonIdContinue ->
-    return { $loc, token: $1, negated: true }
+    return { type: "Keyword" as const, $loc, token: $1, negated: true }
 
 Using
   "using" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Var
   "var" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Void
   "void" NonIdContinue ->
-    return { $loc, token: $1 }
+    { $loc, token: $1 } as const
 
 # NOTE: When maps to 'case'
 When
   "when" NonIdContinue ->
-    return { $loc, token: "case" }
+    return { type: "Keyword" as const, $loc, token: "case" }
 
 While
   "while" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1, negated: false }
 
 With
   "with" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Yield
   "yield" NonIdContinue ->
-    return { $loc, token: $1, type: "Yield" }
+    return { type: "Yield", $loc, token: $1 } as const
 
 ## JSX
 
@@ -7510,18 +7560,18 @@ JSXImplicitFragment
   # forbidden status from binary ops on the following line.
   JSXTag:first ( ImplicitFragmentAllowed NestedBinaryOpAllowed NewlineBinaryOpAllowed ( Nested ( JSXTag / JSXAngleChild ) )* )?:rest ->
     rest = rest ? rest[3] : []
-    jsx := rest# === 0 ? first : {
+    jsx := rest!# === 0 ? first : {
       type: "JSXFragment",
       children: [
         "<>\n",
         state.currentIndent.token,
         first,
-        ...rest,
+        ...rest!,
         "\n",
         state.currentIndent.token,
         "</>",
       ],
-      jsxChildren: [ first, ...rest.map(([, tag]) => tag) ],
+      jsxChildren: [ first, ...rest!.map(([, tag]: [any, any]) => tag) ],
     }
     type := typeOfJSX(jsx, config)
     return type ? [
@@ -7541,10 +7591,10 @@ _JSXTag
 
 # https://facebook.github.io/jsx/#prod-JSXElement
 JSXElement
-  JSXSelfClosingElement
+  JSXSelfClosingElement ::ASTNode
   # NOTE: In default JSX mode, JSX children must be properly indented,
   # and closing tags are optional (but still allowed).
-  !CoffeeJSXEnabled PushJSXOpeningElement:open JSXMixedChildren?:children JSXOptionalClosingElement:close PopJSXStack ->
+  !CoffeeJSXEnabled PushJSXOpeningElement:open JSXMixedChildren?:children JSXOptionalClosingElement:close PopJSXStack ::ASTNode ->
     /* c8 ignore next -- JSXMixedChildren always returns an object; $skip kept as a defensive guard against future grammar edits that could change that */
     return $skip unless children
     let parts
@@ -7563,7 +7613,7 @@ JSXElement
     return { type: "JSXElement", children: parts, tag: open[1] }
   # NOTE: In CoffeeScript JSX mode, JSX children do not need to be properly
   # indented, but tags must be explicitly closed.
-  CoffeeJSXEnabled JSXOpeningElement:open JSXChildren? Whitespace? JSXClosingElement:close ->
+  CoffeeJSXEnabled JSXOpeningElement:open JSXChildren? Whitespace? JSXClosingElement:close ::ASTNode ->
     $0 = $0.slice(1)
     // Check that tags match
     return $skip if open[1] !== close[2]
@@ -7602,7 +7652,7 @@ JSXClosingElement
 JSXFragment
   # NOTE: In default JSX mode, JSX children must be properly indented,
   # and closing tags are optional (but still allowed).
-  !CoffeeJSXEnabled PushJSXOpeningFragment:open JSXMixedChildren?:children JSXOptionalClosingFragment:close PopJSXStack ->
+  !CoffeeJSXEnabled PushJSXOpeningFragment:open JSXMixedChildren?:children JSXOptionalClosingFragment:close PopJSXStack ::ASTNode ->
     /* c8 ignore next -- JSXMixedChildren always returns an object; $skip kept as a defensive guard against future grammar edits that could change that */
     return $skip unless children
     $0 = $0.slice(1)
@@ -7616,7 +7666,7 @@ JSXFragment
     return { type: "JSXFragment", children: parts, jsxChildren: children.jsxChildren }
   # NOTE: In CoffeeScript JSX mode, JSX children do not need to be properly
   # indented, but tags must be explicitly closed.
-  CoffeeJSXEnabled "<>" JSXChildren?:children Whitespace? JSXClosingFragment ->
+  CoffeeJSXEnabled "<>" JSXChildren?:children Whitespace? JSXClosingFragment ::ASTNode ->
     $0 = $0.slice(1)
     return {
       type: "JSXFragment",
@@ -7668,7 +7718,7 @@ JSXAttributes
     if classes#
       // Check for non-shorthand class or className attribute
       className .= config.react ? "className" : "class"
-      attrs = attrs.filter((pair) => {
+      attrs = attrs.filter((pair: any) => {
         attr := pair[1]
         if (attr[0][0] is "class" or attr[0][0] is "className") and
             not attr[0][1]
@@ -7677,19 +7727,19 @@ JSXAttributes
           return false
         return true
       })
-      function isBraced(c) {
+      function isBraced(c: any) {
         return c[0] === "{" || c[0]?.token === "{"
       }
-      function unbrace(c) {
+      function unbrace(c: any) {
         // Remove leading "{" and trailing "}" tokens
         return c.slice(1, -1)
       }
-      function parseClass(c) {
+      function parseClass(c: any) {
         c = c.token || c
         if (c.startsWith("'")) {
           c = '"' +
             c.slice(1, -1)
-            .replace(/\\*"/g, (m) => m# % 2 == 0 ? m : "\\"+m) +
+            .replace(/\\*"/g, (m: string) => m# % 2 == 0 ? m : "\\"+m) +
             '"'
         }
         return JSON.parse(c)
@@ -7798,7 +7848,6 @@ JSXAttribute
     })
     last := lastAccessInCallExpression(expr)
     assert last, "AtThis+id/rest guarantees lastAccess"
-    let name
     if last.type is "Index"
       return [
         "{...{",
@@ -7815,11 +7864,10 @@ JSXAttribute
       type: "CallExpression",
       children: [ id, ...rest.flat() ],
     })
-    if expr.type is "ObjectExpression"  // glob
+    if expr!.type is "ObjectExpression"  // glob
       return convertObjectToJSXAttributes(expr)
     last := lastAccessInCallExpression(expr)
     assert last, "Identifier base guarantees lastAccess"
-    let name
     if last.type is "Index"
       return [
         "{...{",
@@ -7896,7 +7944,7 @@ JSXAttributeValue
     // double-quoted string that didn't end up actually interpolating.
     // Instead parse using the following string literal rule,
     // which avoids e.g. converting newlines into \n.
-    return $skip if value.type is "StringLiteral"
+    return $skip if value!.type is "StringLiteral"
     return [open, value, close]  // omit &JSXAttributeSpace
   # NOTE: InlineJSXAttributeValue which contains TemplateLiteral must be before
   # StringLiteral, so that CoffeeScript interpolated strings get checked first.
@@ -8145,32 +8193,32 @@ JSXChildExpression
   Whitespace? LexicalDeclaration:d ->
     // Add refs from thisAssignments to list of names
     names .= d.names.concat(
-      d.thisAssignments.map((a) => a[1][1])
+      d.thisAssignments.map((a: any) => a[1][1])
     )
     // Remove duplicate names
     names.sort()
-    names = names.filter((name, i) => i is 0 or name !== names[i-1])
+    names = names.filter((name: string, i: number) => i is 0 or name !== names[i-1])
     d = {
       ...d,
       hoistDec: {
         type: "Declaration",
         children: [
           "let ",
-          names.map((n, i) => i is 0 ? [n] : [",", n]).flat()
+          names.map((n: string, i: number) => i is 0 ? [n] : [",", n]).flat()
         ],
       },
-      children: d.children.slice(1),  // drop LetOrConst
+      children: (d.children as any[]).slice(1),  // drop LetOrConst
     }
     if d.thisAssignments?#
-      d.children.push(...d.splices, ",", ...d.thisAssignments.map(
-        (a, i) => [
+      (d.children as any[]).push(...d.splices, ",", ...d.thisAssignments.map(
+        (a: any, i: number) => [
           ...a.slice(0, -1),
           i is d.thisAssignments#-1 ? "" : ",",
         ]
       ))
     else if d.splices?#
-      d.children.push(...d.splices)
-    d.children.push(",void 0")
+      (d.children as any[]).push(...d.splices)
+    (d.children as any[]).push(",void 0")
     return d
   # NOTE: Using PostfixedExpressionOrCommaLoop to allow If/Switch expressions and postfixes
   Whitespace? ( DotDotDot Whitespace? )? PostfixedExpressionOrCommaLoop
@@ -8303,7 +8351,7 @@ InterfaceDeclaration
     }
 
 NamespaceDeclaration
-  Namespace _? IdentifierName:id ModuleOrEmptyBlock ->
+  Namespace _? IdentifierName:id ModuleOrEmptyBlock ::NamespaceDeclaration ->
     return {
       type: "NamespaceDeclaration",
       id,
@@ -8351,27 +8399,27 @@ InterfaceExtendsTarget
 
 TypeKeyword
   "type" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Enum
   "enum" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Interface
   "interface" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Global
   "global" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Module
   "module" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 Namespace
   "namespace" NonIdContinue ->
-    return { $loc, token: $1 }
+    return { type: "Keyword" as const, $loc, token: $1 }
 
 InterfaceOrEmptyBlock
   InterfaceBlock
@@ -8387,7 +8435,7 @@ NestedInterfaceBlock
   InsertOpenBrace NestedInterfaceProperties InsertNewline InsertIndent InsertCloseBrace
 
 NestedInterfaceProperties
-  PushIndent NestedInterfaceProperty*:props PopIndent ->
+  PushIndent NestedInterfaceProperty*:props PopIndent ::ASTNode[] ->
     return props if props#
     return $skip
 
@@ -8415,7 +8463,7 @@ ModuleOrEmptyBlock
   EmptyBlock
 
 NestedModuleItems
-  PushIndent NestedModuleItem*:items PopIndent ->
+  PushIndent NestedModuleItem*:items PopIndent ::ASTNode[] ->
     return items if items#
     return $skip
 
@@ -8430,7 +8478,7 @@ DeclareBlock
   InsertOpenBrace NestedDeclareElements InsertNewline InsertIndent InsertCloseBrace
 
 NestedDeclareElements
-  PushIndent NestedDeclareElement*:decs PopIndent ->
+  PushIndent NestedDeclareElement*:decs PopIndent ::ASTNode[] ->
     return decs if decs#
     return $skip
 
@@ -8439,12 +8487,12 @@ NestedDeclareElement
 
 # NOTE: Variation on TypeDeclaration where Declare already applied.
 DeclareElement
-  Decorators? Export __ Default __ ( Identifier / ClassSignature / InterfaceDeclaration ):declaration
-  Decorators? ( Export _? )? TypeLexicalDeclaration -> { ts: true, children: $0 }
-  ( Export _? )? TypeDeclarationRest    -> { ts: true, children: $0 }
+  Decorators? Export __ Default __ ( Identifier / ClassSignature / InterfaceDeclaration ):declaration ::ASTNode
+  Decorators? ( Export _? )? TypeLexicalDeclaration ::ASTNode -> { ts: true, children: $0 }
+  ( Export _? )? TypeDeclarationRest ::ASTNode -> { ts: true, children: $0 }
 
 EnumDeclaration
-  ( Const _ )?:isConst Enum _? IdentifierName:id EnumBlock:block ->
+  ( Const _ )?:_isConst Enum _? IdentifierName:id EnumBlock:block ->
     ts := {
       ts: true,
       children: $0,
@@ -8565,7 +8613,7 @@ TypeIndex
 # parse both (?!).  For simplicity, we allow either in all cases.
 # In some cases (e.g. let/const), we transpile them away later.
 TypeSuffix
-  _? QuestionMark?:optional _? Colon:colon MaybeNestedType:t -> {
+  _? QuestionMark?:optional _? Colon:colon MaybeNestedType:t ::unknown -> {
     type: "TypeSuffix",
     ts: true,
     optional,
@@ -8573,7 +8621,7 @@ TypeSuffix
     colon,
     children: $0,
   }
-  _? QuestionMark:optional _? -> {
+  _? QuestionMark:optional _? ::unknown -> {
     type: "TypeSuffix",
     ts: true,
     optional,
@@ -8583,7 +8631,7 @@ TypeSuffix
   # TypeScript has a special error for ! without : ("Declarations with definite
   # assignment assertions must also have type annotations.") but we parse it
   # so that the user can get this more useful error message.
-  NonNullAssertion:nonnull _? (Colon MaybeNestedType)?:ct ->
+  NonNullAssertion:nonnull _? (Colon MaybeNestedType)?:ct ::unknown ->
     [colon, t] := ct ?? []
     return {
       type: "TypeSuffix",
@@ -8615,7 +8663,7 @@ MaybeNestedTypePrimary
   # NOTE: Next check for consistently indented binary operations (e.g. |)
   # at beginning of each line.
   NestedTypeBinaryChain
-  PushIndent ( Nested Type )? PopIndent ->
+  PushIndent ( Nested Type )? PopIndent ::[ASTNode, TypeNode] ->
     return $skip unless $2
     return $2
   TypePrimary
@@ -8628,13 +8676,13 @@ MaybeNestedTypeUnary
   # NOTE: Next check for consistently indented binary operations (e.g. |)
   # at beginning of each line.
   NestedTypeBinaryChain
-  PushIndent ( Nested Type )? PopIndent ->
+  PushIndent ( Nested Type )? PopIndent ::[ASTNode, TypeNode] ->
     return $skip unless $2
     return $2
   NotDedented TypeUnary
 
 ReturnTypeSuffix
-  _? QuestionMark?:optional _? Colon ReturnType:t ->
+  _? QuestionMark?:optional _? Colon ReturnType:t ::ASTNode ->
     return {
       ...t,
       optional,
@@ -8642,7 +8690,7 @@ ReturnTypeSuffix
     }
 
 ReturnType
-  ( __ "asserts" NonIdContinue )?:asserts ForbidIndentedApplication TypePredicate?:t RestoreIndentedApplication ->
+  ( __ "asserts" NonIdContinue )?:asserts ForbidIndentedApplication TypePredicate?:t RestoreIndentedApplication ::ReturnTypeAnnotation ->
     return $skip unless t
     if asserts
       t = {
@@ -8679,18 +8727,18 @@ TypeBinary
     return [optionalPrefix, t, ops]
 
 NestedTypeBinaryChain
-  PushIndent NestedTypeBinary* PopIndent ->
+  PushIndent NestedTypeBinary* PopIndent ::ASTNode[] ->
     return $skip unless $2.length
     return $2
 
 NestedTypeBinary
-  Nested:indent TypeBinaryOp:op PushExtraIndent1 TypeUnary?:t PopIndent ->
+  Nested:indent TypeBinaryOp:op PushExtraIndent1 TypeUnary?:t PopIndent ::ASTNode[] ->
     /* c8 ignore next -- $skip kept as state-safety belt inside PushExtraIndent1/PopIndent. If TypeBinaryOp matched, a TypeUnary invariably follows in practice. */
     return $skip unless t
     return [ indent, op, t ]
 
 TypeUnary
-  ( __ TypeUnaryOp )*:prefix TypePrimary:t TypeUnarySuffix*:suffix ->
+  ( __ TypeUnaryOp )*:prefix TypePrimary:t TypeUnarySuffix*:suffix ::TypeNode ->
     return t unless prefix# or suffix#
     return {
       type: "TypeUnary",
@@ -8805,11 +8853,12 @@ ImportType
   Import InsertOpenParen Trimmed_? StringLiteral InsertCloseParen
 
 TypeTuple
-  OpenBracket:open AllowAll TypeTupleContent?:elements RestoreAll __:ws CloseBracket:close ->
+  OpenBracket:open AllowAll TypeTupleContent?:elements RestoreAll __:ws CloseBracket:close ::TypeTuple ->
     /* c8 ignore next -- structurally unreachable: empty `[]` matched by other rules, valid content produces TypeTupleContent. $skip kept as state-safety belt inside AllowAll/RestoreAll. */
     return $skip unless elements
     return {
       type: "TypeTuple",
+      ts: true,
       elements,
       children: [ open, elements, ws, close ],
     }
@@ -8833,8 +8882,8 @@ TypeElementListWithIndentedApplicationForbidden
     return $skip
 
 TypeElementList
-  TypeBulletedTuple -> [$1]
-  !EOS TypeElement:first ( ( _? Comma !EOS ) TypeElement )*:rest ->
+  TypeBulletedTuple ::ASTNode[] -> [$1]
+  !EOS TypeElement:first ( ( _? Comma !EOS ) TypeElement )*:rest ::ASTNode[] ->
     return [first] unless rest#
     delim := [rest[0][0][0], rest[0][0][1]]
     return [
@@ -8924,15 +8973,15 @@ TypeBulletedTuple
 
     // Remove implicit comma from last element
     // NOTE: See NestedTypeBulletedTuple — Array.isArray(last) arm dead.
-    last := content[content# - 1]
+    last := content![content!# - 1]
     children .= last?.children
     if children?.at(-1).implicit
       children = children.slice(0, -1)
-      content[content# - 1] = { ...last, children }
+      content![content!# - 1] = { ...last, children }
 
     return {
       type: "TypeTuple",
-      children: [open, ...content, close],
+      children: [open, ...content!, close],
     }
 
 NestedTypeBullet
@@ -8954,18 +9003,18 @@ TypeBullet
     return list
 
 TypeWithPostfix
-  TypeConditional:t ( _? TypeIfClause )?:postfix ->
+  TypeConditional:t ( _? TypeIfClause )?:postfix ::TypeNode ->
     return t unless postfix
     return prepend(postfix[0],
       expressionizeTypeIf([ ...postfix[1], $1, undefined ]))
 
 TypeConditional
-  _? /(?=if|unless)/ TypeIfThenElse ->
+  _? /(?=if|unless)/ TypeIfThenElse ::ASTNode ->
     return prepend($1, expressionizeTypeIf($3))
-  TypeCondition NotDedented QuestionMark __ Type __ Colon __ Type ->
+  TypeCondition NotDedented QuestionMark __ Type __ Colon __ Type ::ASTNode ->
     return [ $1, $2, $3, $4, $9, $6, $7, $8, $5 ] if $1.negated
     return $0
-  TypeBinary
+  TypeBinary ::ASTNode
 
 TypeCondition
   # NOTE: Type after `extends` needs to forbid TypePostfix,
@@ -9028,7 +9077,7 @@ TypeLiteral
     return num if sign[0] is "+"
     return $0
   "void" NonIdContinue ->
-    return { type: "VoidType", $loc, token: $1 }
+    return { type: "VoidType", $loc, token: $1 } as const
   "unique" _ "symbol" NonIdContinue ->
     return { type: "UniqueSymbolType", children: $0 }
   "[]" ->
@@ -9040,7 +9089,7 @@ InlineInterfaceLiteral
 InlineBasicInterfaceProperty
   # NOTE: Not using TypeSuffix here to require a Colon, and to forbid spaces
   # before the colon (to enable conditional types like prop ? T1 : T2).
-  ( TypeIndexSignature / TypeProperty ) QuestionMark? Colon Type InlineInterfacePropertyDelimiter
+  ( TypeIndexSignature / TypeProperty ) QuestionMark? Colon Type InlineInterfacePropertyDelimiter ::ASTNode
 
 InlineInterfacePropertyDelimiter
   ( _? Semicolon ) / CommaDelimiter
@@ -9057,7 +9106,7 @@ TypeBinaryOp
 TypeFunction
   # NOTE: Forbid `:=` and `.=` after return type to avoid treating `f: (x: T) => y := z`
   # as a typed const; prefer implicit object/arrow function interpretation.
-  ( Abstract _? )?:abstract ( Async _? )?:async ( New _? )?:new_ Parameters __ TypeFunctionArrow ( ReturnType / Loc ):returnType !( _? ( ConstAssignment / LetAssignment ) ) ->
+  ( Abstract _? )?:abstract ( Async _? )?:async ( New _? )?:new_ Parameters __ TypeFunctionArrow ( ReturnType / Loc ):returnType !( _? ( ConstAssignment / LetAssignment ) ) ::TypeFunction ->
     children := [ abstract, ...$0.slice(2, -1) ] // omit async and trailing lookahead
     if abstract and not new_
       children[1] = {
@@ -9090,7 +9139,7 @@ TypeFunction
       type: "TypeFunction",
       children,
       ts: true,
-      returnType,
+      returnType: returnType as ReturnTypeAnnotation,
     }
 
 TypeFunctionArrow
@@ -9098,7 +9147,7 @@ TypeFunctionArrow
     return { $loc, token: "=>" }
 
 TypeArguments
-  OpenAngleBracket:open ( __ TypeArgumentDelimited )+:args __:ws CloseAngleBracket:close ->
+  OpenAngleBracket:open ( __ TypeArgumentDelimited )+:args __:ws CloseAngleBracket:close ::TypeArguments ->
     args = args.flatMap(([ws, [arg, delim]]) => [prepend(ws, arg), delim])
     args.pop() // remove last delimiter
     return {
@@ -9109,7 +9158,7 @@ TypeArguments
     }
 
 ImplicitTypeArguments
-  TypeApplicationStart InsertOpenAngleBracket:open Trimmed_?:ws TypeArgumentList:args InsertCloseAngleBracket:close ->
+  TypeApplicationStart InsertOpenAngleBracket:open Trimmed_?:ws TypeArgumentList:args InsertCloseAngleBracket:close ::TypeArguments ->
     // Remove trailing comma which is forbidden in TypeScript type arguments
     last := args[args# - 1]
     args = args.slice(0, -1) if isComma last
@@ -9137,7 +9186,7 @@ TypeArgumentList
   !EOS TypeArgument ( CommaDelimiter !EOS WTypeArgument )* ( CommaDelimiter ( NestedTypeBulletedTuple / NestedInterfaceBlock / NestedTypeArgumentList ) )+ ->
     return [
       $2,
-      ...$3.flatMap(([comma, eos, arg]) => [comma, arg]),
+      ...$3.flatMap(([comma, _eos, arg]) => [comma, arg]),
       ...$4.flatMap(([comma, args]) =>
         Array.isArray(args) ? [comma, ...args] : [comma, args]
       ),
@@ -9182,7 +9231,7 @@ TypeArgumentDelimited
   TypeArgument TypeArgumentDelimiter
 
 TypeArgument
-  Type:t -> { type: "TypeArgument", ts: true, t, children: [ t ] }
+  Type:t ::TypeArgument -> { type: "TypeArgument", ts: true, t, children: [ t ] }
 
 TypeArgumentDelimiter
   TypeParameterDelimiter
@@ -9238,7 +9287,7 @@ CivetPrologueContent
 CivetOption
   /\s+([+-]?)([a-zA-Z0-9-]+)(\s*=\s*([\p{ID_Continue}.,+-]*))?/ ->
     // Normalize option names to camelCase
-    optionName := $2.replace /-+([a-z]?)/g, (_, l) =>
+    optionName := $2.replace /-+([a-z]?)/g, (_: string, l: string) =>
       return l.toUpperCase() if l
       return ""
 
