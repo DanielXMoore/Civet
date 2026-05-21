@@ -62,8 +62,24 @@ module.exports = grammar({
 
     // ── Strings ──────────────────────────────────────────────────────────────
 
-    // Single- and double-quoted strings with escape sequences and multiline support.
+    // Triple-quoted block strings (must come before single-char delimiters so
+    // maximal munch in token(choice) picks them).
+    //
+    // The body is "any sequence of characters not containing `"""`": runs of
+    // non-quotes, optionally interspersed with 1 or 2 quotes followed by a
+    // non-quote, plus 0-2 trailing quotes. Tree-sitter's regex engine has no
+    // lookahead, so we can't port parser.hera's `(?:"(?!"")|\\.|[^"])+` exactly
+    // — the NFA picks the longest valid arrangement instead.
+    //
+    // Known limitation: two triple-quoted strings written directly adjacent
+    // with no separator (e.g. `"""a""""""b"""`) merge into one because the
+    // trailing `"{0,2}` greedily absorbs the next opener's quotes.  Real
+    // Civet code separates them, and a proper fix would require lookahead
+    // (unsupported here) or an external scanner.
     string: _ => token(choice(
+      seq('"""', /(?:[^"]|"[^"]|""[^"])*"{0,2}/, '"""'),
+      seq("'''", /(?:[^']|'[^']|''[^'])*'{0,2}/, "'''"),
+      // Single- and double-quoted strings with escape sequences and multiline support.
       seq("'", /[^'\\]*(?:\\(?:.|\n)[^'\\]*)*/, "'"),
       seq('"', /[^"\\]*(?:\\(?:.|\n)[^"\\]*)*/, '"'),
     )),
@@ -85,15 +101,34 @@ module.exports = grammar({
       ),
     ),
 
-    template_string: $ => seq(
-      '`',
-      repeat(choice(
-        $.escape_sequence,
-        $.template_substitution,
-        $.template_chars,
-        '$',              // lone $ not followed by {
-      )),
-      '`',
+    template_string: $ => choice(
+      // Triple-backtick block template (Civet). Listed first so the lexer's
+      // maximal-munch picks the 3-char opener over a single '`'. Internal
+      // lone '`' or '``' are allowed via explicit choice items; '```' is only
+      // ever matched as the closing delimiter (longest match wins).
+      seq(
+        '```',
+        repeat(choice(
+          $.escape_sequence,
+          $.template_substitution,
+          $.template_chars,
+          '$',
+          '`',
+          '``',
+        )),
+        '```',
+      ),
+      // Single-backtick template string.
+      seq(
+        '`',
+        repeat(choice(
+          $.escape_sequence,
+          $.template_substitution,
+          $.template_chars,
+          '$',              // lone $ not followed by {
+        )),
+        '`',
+      ),
     ),
 
     // Any chars that are not `, \, or $

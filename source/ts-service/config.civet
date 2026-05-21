@@ -71,17 +71,33 @@ export interface ParseTsConfigOptions
    */
   system?: ts.System
 
+export interface ParsedCivetConfig extends ts.ParsedCommandLine
+  /**
+   * False when no `tsconfig.json` was found at `<projectPath>` and no inline
+   * `tsConfig` was supplied — the parsed config is a Civet-only fallback
+   * narrowed to transpiler extensions (see #240).  Consumers should surface
+   * this to the user (the LSP shows a one-shot warning) so the missing
+   * tsconfig isn't a silent failure mode.
+   */
+  configFound: boolean
+
 /**
  * Parse `<projectPath>/tsconfig.json` (or the inline `tsConfig`),
  * applying Civet-aware defaults (`allowNonTsExtensions`, JSX preserve).
  * The returned `parsed.fileNames` reflects the widened include walk
  * when `widenIncludeFilter` is on.
+ *
+ * When neither a tsconfig.json nor an inline `tsConfig` is available,
+ * falls back to a Civet-only include pattern (`**​/*.<ext>` for each
+ * registered transpiler) rather than TypeScript's default `**​/*` walk,
+ * which can pull a project's entire `.ts`/`.js` tree into the service
+ * and OOM it for JS-heavy projects (#240).
  */
 export function parseTsConfigForCivet(
   projectPath: string
   transpilers: Map<string, Transpiler>
   options: ParseTsConfigOptions = {}
-): ts.ParsedCommandLine
+): ParsedCivetConfig
   widen := options.widenIncludeFilter ?? true
   system := options.system ?? ts.sys
   extraExtensions := Array.from transpilers.keys()
@@ -106,7 +122,25 @@ export function parseTsConfigForCivet(
   } else system
 
   tsConfigPath := path.join projectPath, "tsconfig.json"
-  config := options.tsConfig ?? ts.readConfigFile(tsConfigPath, system.readFile).config
+  let config: any
+  let configFound: boolean
+  if options.tsConfig?
+    config = options.tsConfig
+    configFound = true
+  else
+    configFound = system.fileExists tsConfigPath
+    config = if configFound
+      ts.readConfigFile(tsConfigPath, system.readFile).config
+    else
+      // Narrow to the registered transpiler extensions so a JS-heavy project
+      // without a tsconfig doesn't pull its whole tree through TS (#240).
+      // With no transpilers registered there's nothing meaningful to scope to,
+      // so keep TS's default `["**/*"]` walk.
+      if extraExtensions.length > 0
+        include: extraExtensions.map (ext) => `**/*${ext}`
+      else
+        {}
+
   parsed := ts.parseJsonConfigFileContent(
     config
     configSys
@@ -114,8 +148,9 @@ export function parseTsConfigForCivet(
     {}
     tsConfigPath
     undefined
-  )
+  ) as ParsedCivetConfig
   parsed.options.allowNonTsExtensions ??= true
   parsed.options.jsx ??= ts.JsxEmit.Preserve
   parsed.options.rootDir ??= projectPath
+  parsed.configFound = configFound
   parsed

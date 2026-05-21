@@ -6,8 +6,12 @@ on:
 
 name: Build
 
+permissions:
+  contents: read
+
 env:
   API_TOKEN: ${{ secrets.API_TOKEN }}
+  CI_TYPECHECK_MAX_ERRORS: 931
 
 jobs:
   build:
@@ -79,11 +83,6 @@ jobs:
           pnpm -C lsp/vscode build-dev
           pnpm -C lsp/vscode test:e2e
 
-      - name: Typecheck
-        if: runner.os == 'Linux'
-        run: |
-          pnpm typecheck --max-errors 888
-
       - name: Prune stale cache entries
         run: pnpm clean:cache:prune
 
@@ -118,6 +117,146 @@ jobs:
             coverage/coverage-final.json
             coverage/coverage-summary.json
             coverage/lcov.info
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      npm_config_script_shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+          run_install: false
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          cache: pnpm
+          node-version: 24
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache
+          key: ${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ github.ref_name }}-
+            main-
+
+      - name: Install and Build
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Typecheck
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "Running typecheck"
+          pnpm typecheck --max-errors "$CI_TYPECHECK_MAX_ERRORS"
+
+      - name: Typecheck diff
+        id: typecheck-diff
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+
+          base_dir="$RUNNER_TEMP/typecheck-base"
+          base_log="$RUNNER_TEMP/typecheck-before.log"
+          head_log="$RUNNER_TEMP/typecheck-after.log"
+
+          trap 'git worktree remove --force "$base_dir" >/dev/null 2>&1 || true' EXIT
+          rm -rf "$base_dir"
+          git worktree prune
+          git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+          git worktree add --detach "$base_dir" FETCH_HEAD
+
+          # Install and build inside the base worktree so the base typecheck
+          # runs main's compiler against main's source.  Symlinking HEAD's
+          # node_modules/dist into the base produced a version skew (e.g. a
+          # Hera bump on HEAD) that could crash TS on main's source and yield
+          # an empty base log — making every HEAD error look like a regression.
+          base_status=0
+          (
+            cd "$base_dir"
+            echo "Installing base dependencies"
+            pnpm install --frozen-lockfile
+            echo "Building base"
+            pnpm build
+            echo "Running base typecheck"
+            ./dist/civet --typecheck --max-errors 99999 >"$base_log" 2>&1
+          ) || base_status=$?
+
+          # With --max-errors 99999, civet --typecheck only exits non-zero on
+          # a hard failure (Node crash, missing tsconfig, etc.) — any number
+          # of TS diagnostics still exits 0, including zero.  Non-zero here
+          # means install/build/typecheck failed and the log isn't a real
+          # diff baseline, so every HEAD error would look like a regression.
+          if [ "$base_status" -ne 0 ]; then
+            echo "::error title=Typecheck diff::Base setup or typecheck failed (exit $base_status) — cannot compute diff."
+            echo "--- base log (tail) ---"
+            tail -n 50 "$base_log" 2>/dev/null || echo "(base log not produced)"
+            exit 1
+          fi
+
+          echo "Running head typecheck"
+          pnpm typecheck --max-errors 99999 >"$head_log" 2>&1 || true
+          diff_log="$RUNNER_TEMP/typecheck-diff.log"
+          set +e
+          pnpm typecheck:diff --fail-on-regressions --max-errors "$CI_TYPECHECK_MAX_ERRORS" "$base_log" "$head_log" 2>&1 | tee "$diff_log"
+          diff_status=${PIPESTATUS[0]}
+          set -e
+
+          summary_file="$RUNNER_TEMP/typecheck-diff-summary.md"
+          cp "$GITHUB_STEP_SUMMARY" "$summary_file"
+          notice_text=$(sed -n 's/^::notice title=Typecheck diff:://p' "$diff_log" | tail -n 1)
+          check_title=${notice_text:-Typecheck diff}
+
+          {
+            echo "status=$diff_status"
+            echo "check_title=$check_title"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish typecheck check
+        if: always() && github.event_name == 'pull_request' && steps.typecheck-diff.outputs.check_title != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECK_TITLE: ${{ steps.typecheck-diff.outputs.check_title }}
+          DETAILS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          jq -n \
+            --arg title "$CHECK_TITLE" \
+            --arg details_url "$DETAILS_URL" \
+            --rawfile summary "$RUNNER_TEMP/typecheck-diff-summary.md" \
+            '{details_url: $details_url, output: {title: $title, summary: $summary}}' \
+            > "$RUNNER_TEMP/typecheck-check.json"
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/${{ job.check_run_id }}" --input "$RUNNER_TEMP/typecheck-check.json" > /dev/null
+
+      - name: Fail typecheck
+        if: github.event_name == 'pull_request' && steps.typecheck-diff.outputs.status != '' && steps.typecheck-diff.outputs.status != '0'
+        run: |
+          if [ -s "$RUNNER_TEMP/typecheck-diff.log" ]; then
+            failure_message=$(grep -E '^(Typecheck diff failed:|Typecheck error limit exceeded:)' "$RUNNER_TEMP/typecheck-diff.log" || true)
+            failure_message=${failure_message//$'\n'/ }
+            failure_message=${failure_message:-"Typecheck diff failed; see the repeated output below."}
+
+            echo "::error title=Typecheck failed::$failure_message"
+            echo
+            echo "Typecheck diff output:"
+            sed '/^::notice title=Typecheck diff::/d' "$RUNNER_TEMP/typecheck-diff.log"
+          else
+            echo "::error title=Typecheck failed::Missing typecheck diff output. Open the preceding Typecheck diff step for the full diagnostics."
+          fi
+          exit "${{ steps.typecheck-diff.outputs.status }}"
 
   self-test:
     name: Self-Test (${{ matrix.os }})

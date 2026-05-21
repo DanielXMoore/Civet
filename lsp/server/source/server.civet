@@ -20,6 +20,17 @@
   SemanticTokensRequest
   FileChangeType
   type Connection
+  type SignatureHelp
+  type SignatureInformation
+  type ParameterInformation
+  type DocumentHighlight
+  DocumentHighlightKind
+  type FoldingRange
+  type SelectionRange
+  type LinkedEditingRanges
+  type SignatureHelpContext
+  SignatureHelpTriggerKind
+  type Range
 } from vscode-languageserver
 
 {
@@ -84,6 +95,35 @@ semanticTokenModifiers := [
   "local"          // 5
 ] as const
 
+// Map LSP SignatureHelpContext → TS SignatureHelpItemsOptions so that
+// retriggers and character-typed invocations preserve activeSignature
+// instead of resetting to 0 on every overload cycle / cursor move.
+//
+// TS only accepts a fixed set of trigger characters (`(`, `,`, `<`, plus
+// `)` for retriggers).  LSP registrations may include other characters
+// — notably space, which Civet uses for whitespace-call form `greet "x"`
+// — so anything outside the TS set falls through to `invoked` rather
+// than being cast through an invalid value.
+function toTsSignatureHelpOptions(
+  context: SignatureHelpContext | undefined
+): ts.SignatureHelpItemsOptions | undefined
+  return undefined unless context
+  { triggerCharacter, triggerKind, isRetrigger } := context
+  validTrigger := triggerCharacter is '(' or triggerCharacter is ',' or triggerCharacter is '<'
+  validRetrigger := validTrigger or triggerCharacter is ')'
+  if isRetrigger
+    triggerReason:
+      kind: 'retrigger'
+      triggerCharacter: validRetrigger
+        ? triggerCharacter as ts.SignatureHelpRetriggerCharacter
+        : undefined
+  else if triggerKind is SignatureHelpTriggerKind.TriggerCharacter and validTrigger
+    triggerReason:
+      kind: 'characterTyped'
+      triggerCharacter: triggerCharacter as ts.SignatureHelpTriggerCharacter
+  else
+    triggerReason: { kind: 'invoked' }
+
 export interface ServerDependencies
   TSService: typeof import("./lib/typescript-service.civet").default
   tsSys: ts.System
@@ -123,6 +163,34 @@ export function startServer(connection: Connection, dependencies: ServerDependen
 
   // Set of project paths that need another rebuild after the current one completes
   rebuildQueued := new Set<string>()
+
+  // Project paths we've already warned the user about (missing tsconfig.json).
+  // Dedupes the warning so the popup fires once per project per session, not on
+  // every TSService reload (#240).
+  missingConfigWarned := new Set<string>()
+
+  warnIfConfigMissing := (projPath: string, service: ResolvedService): void =>
+    return if service.configFound or missingConfigWarned.has projPath
+    missingConfigWarned.add projPath
+    // projPath is a file:// URI; show the user the native filesystem path so
+    // the message reads naturally and the platform-native separator matches
+    // what they'd see in their editor (esp. Windows: backslashes, decoded `~`).
+    displayPath := URI.parse(projPath).fsPath
+    message := `No tsconfig.json found at ${displayPath} — Civet LSP fell back to a Civet/Hera-only project scope.  Add a tsconfig.json to enable cross-file types and analysis of .ts/.js files.`
+    // window/logMessage (output channel) + window/showMessage (toast).  The
+    // vscode-languageserver `showWarningMessage` helper uses showMessageRequest
+    // even with no actions, which not every client renders as a passive toast,
+    // so send the plain ShowMessageNotification directly.
+    logger.warn? message
+    /* c8 ignore start -- defensive: connection.sendNotification is always
+       present on createConnection's return, but a custom Connection stub in
+       a test harness might not have it; better to swallow than crash the
+       reload path. */
+    try
+      connection.sendNotification 'window/showMessage', { type: 2, message }
+    catch e
+      logger.error `Failed to surface missing-tsconfig warning: ${e}`
+    /* c8 ignore stop */
 
   let rootUri: string | undefined, rootDir: string | undefined
 
@@ -172,6 +240,7 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     await service.loadPlugins()
     projectPathToServiceMap.set(projPath, service)
     projectPathToPendingPromiseMap.delete(projPath)
+    warnIfConfigMissing(projPath, service)
     resolveInit!()
 
     return service
@@ -206,9 +275,25 @@ export function startServer(connection: Connection, dependencies: ServerDependen
         documentSymbolProvider: true
         workspaceSymbolProvider: true
         definitionProvider: true
+        typeDefinitionProvider: true
+        implementationProvider: true
         hoverProvider: true
         referencesProvider: true
-        renameProvider: true
+        documentHighlightProvider: true
+        renameProvider:
+          prepareProvider: true
+        foldingRangeProvider: true
+        selectionRangeProvider: true
+        linkedEditingRangeProvider: true
+        signatureHelpProvider:
+          // Space supports Civet's whitespace-call form (`greet "x"`).
+          // It is not a valid TS trigger character; `toTsSignatureHelpOptions`
+          // sanitizes it to `invoked` before calling into TS.
+          triggerCharacters: ['(', ',', '<', ' ']
+          // `>` retriggers signatureHelp after a closing generic type
+          // argument (`Foo<bar>|`), where TS may still want to keep the
+          // tooltip visible for subsequent value arguments.
+          retriggerCharacters: [')', '>']
         semanticTokensProvider:
           legend:
             tokenTypes: semanticTokenTypes as! string[]
@@ -868,6 +953,294 @@ export function startServer(connection: Connection, dependencies: ServerDependen
 
     changes: createRenameLocationChanges(service, program, locations, newName)
 
+  connection.onPrepareRename ({ textDocument, position }) =>
+    sourcePath := documentToSourcePath(textDocument)
+    assert sourcePath
+    service := await ensureServiceForSourcePath(sourcePath)
+    await updating(textDocument)
+
+    mapped := getRenameSourceDetails(service, textDocument, sourcePath, position)
+    return null unless mapped
+
+    info := service.getRenameInfo(mapped.sourcePath, mapped.offset)
+    return null unless info.canRename
+
+    program := service.getProgram()
+    return null unless program
+
+    sourceFile := program.getSourceFile(mapped.sourcePath)
+    return null unless sourceFile
+
+    start .= sourceFile.getLineAndCharacterOfPosition(info.triggerSpan.start)
+    end .= sourceFile.getLineAndCharacterOfPosition(info.triggerSpan.start + info.triggerSpan.length)
+
+    rawSourceName := service.getSourceFileName(mapped.sourcePath)
+    meta := service.host.getMeta(rawSourceName)
+    if meta?.sourcemapLines
+      start = remapPosition(start, meta.sourcemapLines)
+      end = remapPosition(end, meta.sourcemapLines)
+
+    { range: { start, end }, placeholder: info.displayName }
+
+  // Shared plumbing for go-to-typeDefinition / go-to-implementation, both
+  // of which are structurally identical to onDefinition but call a
+  // different TS method and need to know their own name for logging.
+  function locationLookup(
+    methodName: 'getTypeDefinitionAtPosition' | 'getImplementationAtPosition'
+    textDocument: TextDocumentIdentifier
+    position: Position
+  ): Promise<Location[] | undefined>
+    sourcePath := documentToSourcePath(textDocument)
+    assert sourcePath
+    service := await ensureServiceForSourcePath(sourcePath)
+    await updating(textDocument)
+
+    let entries
+    if sourcePath.match tsSuffix
+      document := documents.get(textDocument.uri)
+      return unless document
+      p := document.offsetAt(position)
+      entries = service[methodName](sourcePath, p)
+    else
+      meta := service.host.getMeta(sourcePath)
+      return unless meta
+      { sourcemapLines, transpiledDoc } := meta
+      return unless transpiledDoc
+      mappedPos := sourcemapLines ? forwardMap(sourcemapLines, position) : position
+      p := transpiledDoc.offsetAt(mappedPos)
+      transpiledPath := documentToSourcePath(transpiledDoc)
+      entries = service[methodName](transpiledPath, p)
+
+    return unless entries
+
+    program := service.getProgram()
+    return unless program
+
+    out: Location[] := []
+    for entry of (entries as readonly ts.DefinitionInfo[])
+      { fileName, textSpan } := entry
+      sourceFile := program.getSourceFile(fileName)
+      continue unless sourceFile
+      start .= sourceFile.getLineAndCharacterOfPosition(textSpan.start)
+      end .= sourceFile.getLineAndCharacterOfPosition(textSpan.start + textSpan.length)
+      rawSourceName := service.getSourceFileName(fileName)
+      meta := service.host.getMeta(rawSourceName)
+      if meta?.sourcemapLines
+        start = remapPosition(start, meta.sourcemapLines)
+        end = remapPosition(end, meta.sourcemapLines)
+      out.push {
+        uri: URI.file(rawSourceName).toString()
+        range: { start, end }
+      }
+    out
+
+  connection.onTypeDefinition ({ textDocument, position }) =>
+    locationLookup('getTypeDefinitionAtPosition', textDocument, position)
+
+  connection.onImplementation ({ textDocument, position }) =>
+    locationLookup('getImplementationAtPosition', textDocument, position)
+
+  connection.onDocumentHighlight ({ textDocument, position }) =>
+    sourcePath := documentToSourcePath(textDocument)
+    assert sourcePath
+    service := await ensureServiceForSourcePath(sourcePath)
+    await updating(textDocument)
+
+    mapped := getRenameSourceDetails(service, textDocument, sourcePath, position)
+    return unless mapped
+
+    // TS expects filesToSearch but for documentHighlight we restrict to the
+    // single transpiled file the position came from.
+    raw := service.getDocumentHighlights(mapped.sourcePath, mapped.offset, [mapped.sourcePath])
+    return unless raw?#
+
+    program := service.getProgram()
+    return unless program
+
+    out: DocumentHighlight[] := []
+    for fileHighlights of raw
+      sourceFile := program.getSourceFile(fileHighlights.fileName)
+      continue unless sourceFile
+      sourceFileName := service.getSourceFileName(fileHighlights.fileName)
+      meta := service.host.getMeta(sourceFileName)
+      for hl of fileHighlights.highlightSpans
+        start .= sourceFile.getLineAndCharacterOfPosition(hl.textSpan.start)
+        end .= sourceFile.getLineAndCharacterOfPosition(hl.textSpan.start + hl.textSpan.length)
+        if meta?.sourcemapLines
+          start = remapPosition(start, meta.sourcemapLines)
+          end = remapPosition(end, meta.sourcemapLines)
+        // TS's HighlightSpanKind: 'reference' → Read, 'writtenReference' and
+        // 'definition' (function/class/type/interface name sites) → Write,
+        // 'none' → Text fallback (rare; e.g. string-literal highlights).
+        kind := if hl.kind is 'writtenReference' or hl.kind is 'definition'
+          DocumentHighlightKind.Write
+        else if hl.kind is 'reference'
+          DocumentHighlightKind.Read
+        /* c8 ignore next 2 -- 'none' only fires for non-identifier spans (string contents); no fixture exercises it */
+        else
+          DocumentHighlightKind.Text
+        out.push { range: { start, end }, kind }
+    out
+
+  connection.onFoldingRanges ({ textDocument }) =>
+    sourcePath := documentToSourcePath(textDocument)
+    assert sourcePath
+    service := await ensureServiceForSourcePath(sourcePath)
+    await updating(textDocument)
+
+    let transpiledPath: string
+    let transpiledDoc: TextDocument | undefined
+    let sourcemapLines: SourcemapLines | undefined
+    if sourcePath.match tsSuffix
+      transpiledPath = sourcePath
+    else
+      meta := service.host.getMeta(sourcePath)
+      return unless meta?.transpiledDoc
+      transpiledDoc = meta.transpiledDoc
+      sourcemapLines = meta.sourcemapLines
+      transpiledPath = documentToSourcePath(transpiledDoc!)
+
+    spans := service.getOutliningSpans(transpiledPath)
+    return unless spans?#
+
+    tsDoc := transpiledDoc ?? documents.get(textDocument.uri)
+    return unless tsDoc
+
+    out: FoldingRange[] := []
+    for span of spans
+      tsStart := tsDoc.positionAt(span.textSpan.start)
+      tsEnd := tsDoc.positionAt(span.textSpan.start + span.textSpan.length)
+      start := sourcemapLines ? remapPosition(tsStart, sourcemapLines) : tsStart
+      end := sourcemapLines ? remapPosition(tsEnd, sourcemapLines) : tsEnd
+      continue if start.line < 0 or end.line < 0 or end.line <= start.line
+      out.push {
+        startLine: start.line
+        startCharacter: start.character
+        endLine: end.line
+        endCharacter: end.character
+      }
+    out
+
+  connection.onSelectionRanges ({ textDocument, positions }) =>
+    sourcePath := documentToSourcePath(textDocument)
+    assert sourcePath
+    service := await ensureServiceForSourcePath(sourcePath)
+    await updating(textDocument)
+
+    let transpiledPath: string
+    let transpiledDoc: TextDocument | undefined
+    let sourcemapLines: SourcemapLines | undefined
+    if sourcePath.match tsSuffix
+      transpiledPath = sourcePath
+      transpiledDoc = documents.get(textDocument.uri)
+    else
+      meta := service.host.getMeta(sourcePath)
+      return unless meta?.transpiledDoc
+      transpiledDoc = meta.transpiledDoc
+      sourcemapLines = meta.sourcemapLines
+      transpiledPath = documentToSourcePath(transpiledDoc!)
+
+    return unless transpiledDoc
+
+    function convertSelectionRange(node: ts.SelectionRange): SelectionRange
+      start .= transpiledDoc!.positionAt(node.textSpan.start)
+      end .= transpiledDoc!.positionAt(node.textSpan.start + node.textSpan.length)
+      if sourcemapLines
+        start = remapPosition(start, sourcemapLines)
+        end = remapPosition(end, sourcemapLines)
+      result: SelectionRange := { range: { start, end } }
+      result.parent = convertSelectionRange(node.parent) if node.parent
+      result
+
+    out: SelectionRange[] := []
+    for pos of positions
+      mappedPos := sourcemapLines ? forwardMap(sourcemapLines, pos) : pos
+      tsOffset := transpiledDoc.offsetAt(mappedPos)
+      try
+        node := service.getSmartSelectionRange(transpiledPath, tsOffset)
+        out.push convertSelectionRange(node)
+      /* c8 ignore next 3 -- TS clamps offsets; reaching here from real editors is rare. Fallback exists for LSP spec compliance: response array must be 1:1 with `positions`. */
+      catch e
+        logger.error("Selection range error: " + e)
+        out.push { range: { start: pos, end: pos } }
+    out
+
+  connection.onSignatureHelp ({ textDocument, position, context }) =>
+    sourcePath := documentToSourcePath(textDocument)
+    assert sourcePath
+    service := await ensureServiceForSourcePath(sourcePath)
+    await updating(textDocument)
+
+    mapped := getRenameSourceDetails(service, textDocument, sourcePath, position)
+    return null unless mapped
+
+    options := toTsSignatureHelpOptions context
+    items := service.getSignatureHelpItems(mapped.sourcePath, mapped.offset, options)
+    return null unless items?.items?#
+
+    markdown := (text: string) =>
+      text ? { kind: MarkupKind.Markdown, value: text } : undefined
+
+    signatures: SignatureInformation[] := items.items.map((item) =>
+      label .= displayPartsToString(item.prefixDisplayParts)
+      separator := displayPartsToString(item.separatorDisplayParts)
+      parameters: ParameterInformation[] := []
+      for param, i of item.parameters
+        paramText := displayPartsToString(param.displayParts)
+        start := label#
+        label += paramText
+        parameters.push {
+          label: [start, label#] as [number, number]
+          documentation: markdown displayPartsToString(param.documentation)
+        }
+        label += separator if i < item.parameters# - 1
+      label += displayPartsToString(item.suffixDisplayParts)
+      {
+        label
+        documentation: markdown displayPartsToString(item.documentation)
+        parameters
+      }
+    )
+
+    {
+      signatures
+      activeSignature: items.selectedItemIndex
+      activeParameter: items.argumentIndex
+    } as SignatureHelp
+
+  // `connection.languages` is undefined in some lightweight test harnesses
+  // that mock the connection. The capability is still advertised; falling
+  // through here just leaves the request unhandled in those harnesses.
+  if connection.languages?.onLinkedEditingRange
+    connection.languages.onLinkedEditingRange ({ textDocument, position }) =>
+      sourcePath := documentToSourcePath(textDocument)
+      assert sourcePath
+      service := await ensureServiceForSourcePath(sourcePath)
+      await updating(textDocument)
+
+      mapped := getRenameSourceDetails(service, textDocument, sourcePath, position)
+      return null unless mapped
+
+      info := service.getLinkedEditingRangeAtPosition(mapped.sourcePath, mapped.offset)
+      return null unless info?.ranges?#
+
+      program := service.getProgram()
+      return null unless program
+      sourceFile := program.getSourceFile(mapped.sourcePath)
+      return null unless sourceFile
+
+      meta := service.host.getMeta(service.getSourceFileName(mapped.sourcePath))
+      ranges: Range[] := []
+      for span of info.ranges
+        start .= sourceFile.getLineAndCharacterOfPosition(span.start)
+        end .= sourceFile.getLineAndCharacterOfPosition(span.start + span.length)
+        if meta?.sourcemapLines
+          start = remapPosition(start, meta.sourcemapLines)
+          end = remapPosition(end, meta.sourcemapLines)
+        ranges.push { start, end }
+
+      { ranges, wordPattern: info.wordPattern } as LinkedEditingRanges
+
   documents.onDidClose ({ document }) =>
     logger.log "close " + document.uri
     sourcePath := documentToSourcePath(document)
@@ -1147,6 +1520,7 @@ export function startServer(connection: Connection, dependencies: ServerDependen
       // Atomically swap: incoming requests continue using the old service until this point
       oldService := projectPathToServiceMap.get(projPath)
       projectPathToServiceMap.set(projPath, newService)
+      warnIfConfigMissing(projPath, newService)
 
       // Dispose old service after a short grace period so in-flight requests finish
       if oldService

@@ -1,0 +1,83 @@
+{ describe, it } from mocha
+assert from assert
+
+* as fs from node:fs
+* as os from node:os
+* as path from node:path
+
+{ buildTranspilers, parseTsConfigForCivet } from "../../source/ts-service/config.civet"
+{ type Plugin } from "../../source/ts-service/types.civet"
+
+makeCivetTranspiler := () =>
+  buildTranspilers [
+    transpilers: [
+      extension: ".civet"
+      target: ".tsx"
+      compile: (_path: string, _source: string) => code: ""
+    ]
+  ] as Plugin[]
+
+describe "parseTsConfigForCivet missing-tsconfig fallback", ->
+  it "sets configFound=true when tsconfig.json exists on disk", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-cfg-found-'
+    try
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020"}}'
+      parsed := parseTsConfigForCivet tmpDir, makeCivetTranspiler()
+      assert.equal parsed.configFound, true
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "sets configFound=true when an inline tsConfig is supplied", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-cfg-inline-'
+    try
+      parsed := parseTsConfigForCivet tmpDir, makeCivetTranspiler(), {
+        tsConfig: { compilerOptions: target: 'es2020' }
+      }
+      assert.equal parsed.configFound, true
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "sets configFound=false and narrows include to transpiler extensions when tsconfig is missing", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-cfg-missing-'
+    try
+      // Two .civet files (in scope) and one stray .ts file (out of scope under
+      // the narrowed fallback include).
+      fs.writeFileSync path.join(tmpDir, 'a.civet'), 'x := 1\n'
+      fs.writeFileSync path.join(tmpDir, 'b.civet'), 'y := 2\n'
+      fs.writeFileSync path.join(tmpDir, 'stray.ts'), 'const z = 3\n'
+
+      parsed := parseTsConfigForCivet tmpDir, makeCivetTranspiler()
+      assert.equal parsed.configFound, false
+
+      // .civet files are discovered (reported as their .tsx siblings via the
+      // widened readDirectory).
+      assert parsed.fileNames.some(.endsWith 'a.civet.tsx'),
+        `expected a.civet in fallback scope; got ${parsed.fileNames.join(', ')}`
+      assert parsed.fileNames.some(.endsWith 'b.civet.tsx'),
+        `expected b.civet in fallback scope; got ${parsed.fileNames.join(', ')}`
+
+      // The stray .ts file is NOT included — that's the whole point of the
+      // narrowed fallback (issue #240: huge JS/TS trees OOM the service).
+      assert not parsed.fileNames.some(.endsWith 'stray.ts'),
+        `expected stray.ts to be excluded from fallback scope; got ${parsed.fileNames.join(', ')}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "falls back to TS's default include when missing tsconfig + no transpilers registered", ->
+    // Edge case: no Civet/Hera plugin registered means there's no meaningful
+    // narrower scope, so we leave TS to its default `["**/*"]` walk rather
+    // than synthesizing an empty include that would discover zero files.
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-cfg-empty-'
+    try
+      fs.writeFileSync path.join(tmpDir, 'plain.ts'), 'export const a = 1\n'
+
+      emptyTranspilers := buildTranspilers ([] as Plugin[])
+      parsed := parseTsConfigForCivet tmpDir, emptyTranspilers
+      assert.equal parsed.configFound, false
+      // With no transpilers, the .ts walk is still active — confirms the
+      // empty-include arm was taken (otherwise this would be empty).
+      assert parsed.fileNames.some(.endsWith 'plain.ts'),
+        `expected plain.ts in default walk; got ${parsed.fileNames.join(', ')}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }

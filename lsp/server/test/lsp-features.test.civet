@@ -507,6 +507,449 @@ describe "LSP features (shared project server)", ->
     assert.equal phantom, undefined,
       `expected no type/typeParameter tokens on bareword import line; got ${JSON.stringify phantom}`
 
+  it "signatureHelp returns parameter info inside a call", ->
+    uri := docUri path.join(projectRoot, "sighelp.civet")
+    text := """
+      function add(x: number, y: number): number
+        x + y
+      r := add(1, 2)
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    callLine := lines.findIndex (l) => l.startsWith "r := add("
+    // Position right after the opening `(` of `add(1, 2)`.
+    openParenCol := lines[callLine].indexOf("add(") + 4
+    result := await client.request "textDocument/signatureHelp", {
+      textDocument: { uri }
+      position: { line: callLine, character: openParenCol }
+    }
+    assert result, "expected signatureHelp result"
+    assert result.signatures?.length, "expected at least one signature"
+    sig := result.signatures[0]
+    assert sig.label.includes("add"), `signature label should mention 'add', got: ${sig.label}`
+    assert sig.parameters?.length is 2, `expected 2 parameters, got ${sig.parameters?.length}`
+
+    // Exercise the four SignatureHelpContext → TS triggerReason mappings.
+    // SignatureHelpTriggerKind: 1=Invoked, 2=TriggerCharacter, 3=ContentChange.
+    // Space is in our LSP triggerCharacters (for Civet's `f "x"` form) but
+    // is not a valid TS trigger char; the handler must sanitize it to
+    // `invoked` instead of casting through ts.SignatureHelpTriggerCharacter.
+    contexts := [
+      { triggerKind: 2, triggerCharacter: '(', isRetrigger: false }
+      { triggerKind: 2, triggerCharacter: ',', isRetrigger: true }
+      { triggerKind: 2, triggerCharacter: ' ', isRetrigger: false }
+      { triggerKind: 2, triggerCharacter: ')', isRetrigger: true }
+      { triggerKind: 1, isRetrigger: false }
+      { triggerKind: 1, isRetrigger: true }
+    ]
+    for ctx of contexts
+      r := await client.request "textDocument/signatureHelp", {
+        textDocument: { uri }
+        position: { line: callLine, character: openParenCol }
+        context: ctx
+      }
+      assert r?.signatures?.length, `expected signatures for ctx ${JSON.stringify ctx}`
+
+  it "signatureHelp works for Civet whitespace-call form", ->
+    // `greet "world", 3` is Civet's whitespace-call form; it compiles to
+    // `greet("world", 3)`.  Editors trigger signatureHelp when the user
+    // types the space after `greet`, with triggerCharacter: ' '.  Verify
+    // both (a) the handler returns signatures at the post-space position
+    // and (b) it does so when the space-trigger context is supplied.
+    uri := docUri path.join(projectRoot, "sighelp-whitespace.civet")
+    text := """
+      function greet(name: string, count: number): string
+        name.repeat count
+      greet "world", 3
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    callLine := lines.findIndex (l) => l.startsWith "greet "
+    // Position immediately after the space following `greet`.
+    afterSpace := "greet ".length
+
+    invokedResult := await client.request "textDocument/signatureHelp", {
+      textDocument: { uri }
+      position: { line: callLine, character: afterSpace }
+    }
+    assert invokedResult?.signatures?.length,
+      `expected signatures at post-space whitespace-call position; got ${JSON.stringify invokedResult}`
+    sig := invokedResult.signatures[0]
+    assert sig.label.includes("greet"), `signature label should mention 'greet', got: ${sig.label}`
+    assert sig.parameters?.length is 2, `expected 2 parameters, got ${sig.parameters?.length}`
+
+    spaceTriggered := await client.request "textDocument/signatureHelp", {
+      textDocument: { uri }
+      position: { line: callLine, character: afterSpace }
+      context: { triggerKind: 2, triggerCharacter: ' ', isRetrigger: false }
+    }
+    assert spaceTriggered?.signatures?.length,
+      `expected signatures for space-triggered request at whitespace-call position; got ${JSON.stringify spaceTriggered}`
+
+  it "signatureHelp returns constructor parameter info", ->
+    uri := docUri path.join(projectRoot, "sighelp-ctor.civet")
+    text := """
+      class Container<T>
+        @(public value: T, public label: string)
+      c := new Container<string>("v", "name")
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    callLine := lines.findIndex (l) => l.includes "new Container"
+    // Position right after the value-args opening paren.
+    openParenCol := lines[callLine].indexOf("\"v\"")
+    result := await client.request "textDocument/signatureHelp", {
+      textDocument: { uri }
+      position: { line: callLine, character: openParenCol }
+      context: { triggerKind: 2, triggerCharacter: '(', isRetrigger: false }
+    }
+    assert result?.signatures?.length,
+      `expected signatures for constructor call; got ${JSON.stringify result}`
+    sig := result.signatures[0]
+    assert sig.parameters?.length is 2,
+      `expected 2 constructor parameters, got ${sig.parameters?.length}`
+
+  it "signatureHelp handles '<' trigger inside a generic type-argument list", ->
+    uri := docUri path.join(projectRoot, "sighelp-generic.civet")
+    text := """
+      function pick<T, U>(t: T, u: U): T
+        t
+      r := pick<string, number>("hi", 1)
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    callLine := lines.findIndex (l) => l.startsWith "r := pick<"
+    // Position immediately after the `<` opening the type-argument list.
+    afterAngle := lines[callLine].indexOf("pick<") + "pick<".length
+    result := await client.request "textDocument/signatureHelp", {
+      textDocument: { uri }
+      position: { line: callLine, character: afterAngle }
+      context: { triggerKind: 2, triggerCharacter: '<', isRetrigger: false }
+    }
+    assert result?.signatures?.length,
+      `expected signatures for '<' trigger inside generic args; got ${JSON.stringify result}`
+    sig := result.signatures[0]
+    // Inside the type-argument list TS reports the type parameters as the
+    // active parameters (T, U), not the value parameters.
+    assert sig.parameters?.length is 2,
+      `expected 2 type parameters at '<' position, got ${sig.parameters?.length}`
+    assert sig.label.includes("T") and sig.label.includes("U"),
+      `expected type-parameter signature to mention T and U; got: ${sig.label}`
+
+  it "signatureHelp retriggers on ')' for an outer call when inner closes", ->
+    // Real retrigger scenario: when typing `)` closes an inner call, the
+    // editor retriggers to surface the outer call's signature again.
+    uri := docUri path.join(projectRoot, "sighelp-retrigger-close.civet")
+    text := """
+      function add(x: number, y: number): number
+        x + y
+      r := add(add(1, 2), 3)
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    callLine := lines.findIndex (l) => l.startsWith "r := add(add"
+    // Position right after the inner call's closing `)` — still inside
+    // the outer `add(..., 3)` call.
+    afterInnerClose := lines[callLine].indexOf("add(1, 2)") + "add(1, 2)".length
+    result := await client.request "textDocument/signatureHelp", {
+      textDocument: { uri }
+      position: { line: callLine, character: afterInnerClose }
+      context: { triggerKind: 2, triggerCharacter: ')', isRetrigger: true }
+    }
+    assert result?.signatures?.length,
+      `expected outer-call signatures after ')' retrigger; got ${JSON.stringify result}`
+    sig := result.signatures[0]
+    assert sig.label.includes("add"), `expected 'add' signature; got: ${sig.label}`
+    assert result.activeParameter is 0,
+      `expected activeParameter 0 (just closed first arg of outer add), got ${result.activeParameter}`
+
+  it "signatureHelp documentation is wrapped in MarkupContent", ->
+    uri := docUri path.join(projectRoot, "sighelp-doc.civet")
+    text := """
+      /**
+       * Adds two numbers together.
+       * @param x first addend
+       * @param y second addend
+       */
+      function add(x: number, y: number): number
+        x + y
+      r := add(1, 2)
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    callLine := lines.findIndex (l) => l.startsWith "r := add("
+    openParenCol := lines[callLine].indexOf("add(") + 4
+    result := await client.request "textDocument/signatureHelp", {
+      textDocument: { uri }
+      position: { line: callLine, character: openParenCol }
+    }
+    assert result?.signatures?.length, "expected signatures for documented function"
+    sig := result.signatures[0]
+    // Documentation, when present, must be a MarkupContent object with
+    // kind: 'markdown' rather than a plain string.
+    assert sig.documentation is undefined or
+      (sig.documentation.kind is "markdown" and typeof sig.documentation.value is "string"),
+      `signature documentation should be MarkupContent or undefined; got ${JSON.stringify sig.documentation}`
+    paramWithDoc := sig.parameters?.find (p) => p.documentation
+    if paramWithDoc
+      assert paramWithDoc.documentation.kind is "markdown" and
+        typeof paramWithDoc.documentation.value is "string",
+        `parameter documentation should be MarkupContent; got ${JSON.stringify paramWithDoc.documentation}`
+
+  it "prepareRename returns the range of a renameable local", ->
+    uri := docUri path.join(projectRoot, "prepare-rename.civet")
+    text := """
+      x := 1
+      console.log x
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    result := await client.request "textDocument/prepareRename", {
+      textDocument: { uri }
+      position: { line: 0, character: 0 }
+    }
+    assert result, "expected prepareRename result"
+    range := result.range ?? result
+    assert range?.start, "expected a range or { range, placeholder }"
+    assert range.start.line is 0 and range.start.character is 0,
+      `expected range to start at 0:0, got ${JSON.stringify range.start}`
+
+  it "documentHighlight returns occurrences of a local", ->
+    uri := docUri path.join(projectRoot, "highlight.civet")
+    text := """
+      x := 1
+      y := x + x + 2
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    result := await client.request "textDocument/documentHighlight", {
+      textDocument: { uri }
+      position: { line: 0, character: 0 }
+    }
+    assert Array.isArray(result), "expected documentHighlight to return an array"
+    assert result.length >= 3, `expected >= 3 highlights for 'x', got ${result.length}`
+
+  it "documentHighlight classifies a function declaration name as Write", ->
+    // TS reports HighlightSpanKind.definition for function/class/type/interface
+    // declaration names; we map those to LSP DocumentHighlightKind.Write (3).
+    uri := docUri path.join(projectRoot, "highlight-fn.civet")
+    text := """
+      function greet(name: string): string
+        "hi " + name
+      greet "world"
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    // Cursor on the `g` of `function greet` — the declaration site.
+    result := await client.request "textDocument/documentHighlight", {
+      textDocument: { uri }
+      position: { line: 0, character: 9 }
+    }
+    assert Array.isArray(result), "expected documentHighlight to return an array"
+    declSite := result.find (h) => h.range.start.line is 0
+    assert declSite, "expected a highlight at the function declaration"
+    assert declSite.kind is 3,
+      `expected Write (3) for the declaration site, got ${declSite.kind}`
+
+  it "typeDefinition jumps to the named type of a variable", ->
+    uri := docUri path.join(projectRoot, "typedef.civet")
+    text := """
+      type Foo = { n: number }
+      f: Foo := { n: 1 }
+      f
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    lastFLine := lines.length - 2
+    result := await client.request "textDocument/typeDefinition", {
+      textDocument: { uri }
+      position: { line: lastFLine, character: 0 }
+    }
+    assert Array.isArray(result) and result.length, "expected at least one typeDefinition location"
+    assert result[0].uri.includes("typedef.civet"), `expected location in same file, got ${result[0].uri}`
+
+  it "implementation finds the class implementing an interface", ->
+    uri := docUri path.join(projectRoot, "impl.civet")
+    text := """
+      interface Greeter
+        greet(): string
+      class HiGreeter implements Greeter
+        greet(): string
+          "hi"
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    interfaceLine := lines.findIndex (l) => l.startsWith "interface Greeter"
+    greeterCol := lines[interfaceLine].indexOf "Greeter"
+    result := await client.request "textDocument/implementation", {
+      textDocument: { uri }
+      position: { line: interfaceLine, character: greeterCol + 1 }
+    }
+    assert Array.isArray(result) and result.length, "expected at least one implementation location"
+
+  it "foldingRange returns at least one range for a class body", ->
+    uri := docUri path.join(projectRoot, "folding.civet")
+    text := """
+      class Foo
+        bar(): number
+          x := 1
+          y := 2
+          x + y
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    result := await client.request "textDocument/foldingRange", {
+      textDocument: { uri }
+    }
+    assert Array.isArray(result), "expected foldingRange to return an array"
+    assert result.length, `expected at least one folding range, got ${result.length}`
+    fr := result[0]
+    assert fr.startLine < fr.endLine, "folding range must span >= 1 line"
+
+  it "selectionRange returns nested ranges around a position", ->
+    uri := docUri path.join(projectRoot, "selrange.civet")
+    text := """
+      x := { a: 1, b: 2 }
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    // Position on the `1` inside the object literal.
+    line := text.indexOf "1"
+    result := await client.request "textDocument/selectionRange", {
+      textDocument: { uri }
+      positions: [ { line: 0, character: line } ]
+    }
+    assert Array.isArray(result) and result.length is 1, "expected one selection range entry"
+    sr := result[0]
+    assert sr.range, "expected a range"
+    assert sr.parent, "expected at least one nested parent range"
+
+    // LSP spec: response array must be index-aligned with `positions`,
+    // even when one entry would otherwise be dropped.  Send three positions
+    // including one well past EOF; expect three entries back regardless.
+    multi := await client.request "textDocument/selectionRange", {
+      textDocument: { uri }
+      positions: [
+        { line: 0, character: line }
+        { line: 9999, character: 9999 }
+        { line: 0, character: text.indexOf("2") }
+      ]
+    }
+    assert Array.isArray(multi) and multi.length is 3,
+      `expected 3 selection range entries (one per input position), got ${multi?.length}`
+
+  it "linkedEditingRange returns matching JSX tag ranges", ->
+    // Use a .civet file with JSX-like syntax; TS service powers the
+    // detection. Some configurations don't support JSX, in which case the
+    // handler returns null — accept that too, just verify it doesn't error.
+    uri := docUri path.join(projectRoot, "linked-edit.civet")
+    text := """
+      el := <div>hello</div>
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    openTagCol := text.indexOf("div")
+    result := await client.request "textDocument/linkedEditingRange", {
+      textDocument: { uri }
+      position: { line: 0, character: openTagCol + 1 }
+    }
+    // Result can be null if JSX isn't enabled in the project's tsconfig;
+    // just verify the request roundtrips without erroring.
+    assert result is null or result?.ranges, "linkedEditingRange should return null or { ranges }"
+
+  // Covers the non-Civet (tsSuffix) branch in `locationLookup` for
+  // typeDefinition/implementation. The Civet branch is exercised by the
+  // earlier `typeDefinition jumps to the named type of a variable` test.
+  it "typeDefinition works on a .ts file (non-transpiled branch)", ->
+    uri := docUri path.join(projectRoot, "typedef-ts.ts")
+    text := """
+      type Foo = { n: number }
+      const f: Foo = { n: 1 }
+      f
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "typescript", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    lines := text.split "\n"
+    // Position on `f` in `const f: Foo = ...` (line 1, col 6).
+    result := await client.request "textDocument/typeDefinition", {
+      textDocument: { uri }
+      position: { line: 1, character: 6 }
+    }
+    assert Array.isArray(result) and result.length,
+      `expected typeDefinition locations for .ts file, got ${JSON.stringify result}`
+
+  // Covers the non-Civet branch in onSelectionRanges.
+  it "selectionRange works on a .ts file (non-transpiled branch)", ->
+    uri := docUri path.join(projectRoot, "selrange-ts.ts")
+    text := """
+      const x = { a: 1, b: 2 };
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "typescript", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    col := text.indexOf "1"
+    result := await client.request "textDocument/selectionRange", {
+      textDocument: { uri }
+      positions: [ { line: 0, character: col } ]
+    }
+    assert Array.isArray(result) and result.length is 1, "expected one selection range entry"
+    assert result[0].parent, "expected a nested parent range"
+
   it "completion resolve returns details for a symbol", ->
     uri := docUri path.join(projectRoot, "complete-resolve.civet")
     text := """

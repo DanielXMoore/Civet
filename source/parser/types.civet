@@ -58,6 +58,7 @@ export type ExpressionNode =
   | ObjectExpression
   | ParenthesizedExpression
   | PipelineExpression
+  | RangeExpression
   | RegularExpressionLiteral
   | StatementExpression
   | TemplateLiteral
@@ -109,6 +110,7 @@ export type OtherNode =
   | ImportAssertion
   | Index
   | Initializer
+  | Keyword
   | Label
   | ModuleSpecifier
   | NamedBindingPattern
@@ -227,6 +229,90 @@ export type CommentNode =
   parent?: Parent
   children?: never
 
+/**
+ * A pre-parsed source keyword.  Distinct from raw strings the grammar
+ * splices into children (`","`, `";"`, `" "`) and from punctuation tokens
+ * (Dot, OpenParen, etc.) that today share ASTLeaf's typeless shape.
+ * Add a token literal to `KeywordToken` when converting another rule.
+ */
+export type Keyword =
+  type: "Keyword"
+  $loc: Loc
+  token: KeywordToken
+  parent?: Parent
+  children?: never
+  /**
+   * Optional flags carried by some keyword rules (Unless/Until/While/If have
+   * `negated`; In has `spaced`; Override/Readonly have `ts`).
+   */
+  negated?: boolean
+  spaced?: boolean
+  ts?: boolean
+
+export type KeywordToken =
+  | "abstract"
+  | "abstract "
+  | "as"
+  | "async"
+  | "by"
+  | "case"
+  | "catch"
+  | "class"
+  | "comptime"
+  | "const"
+  | "declare"
+  | "default"
+  | "do"
+  | "each"
+  | "else"
+  | "enum"
+  | "export"
+  | "extends"
+  | "finally"
+  | "for"
+  | "from"
+  | "function"
+  | "get"
+  | "global"
+  | "if"
+  | "if "
+  | "import"
+  | "in"
+  | "infer"
+  | "interface"
+  | "is"
+  | "let"
+  | "like"
+  | "module"
+  | "namespace"
+  | "new"
+  | "of"
+  | "operator"
+  | "override"
+  | "own"
+  | "private"
+  | "protected"
+  | "public"
+  | "readonly"
+  | "return"
+  | "satisfies"
+  | "set"
+  | "static"
+  | "static "
+  | "super"
+  | "switch"
+  | "this"
+  | "throw"
+  | "try"
+  | "type"
+  | "undefined"
+  | "unless"
+  | "until"
+  | "using"
+  | "var"
+  | "while"
+  | "with"
+
 export type BinaryOp = (string &
   name?: never
   spaced?: never
@@ -297,15 +383,63 @@ export type CallExpression = ASTParent &
   type: "CallExpression"
   implicit?: boolean // manufactured by Civet to implement an operator?
 
-export type Existence = ASTParent &
+export type NullCheckLeaf = ASTLeaf & token: " != null" | " == null"
+
+export type Existence = ASTObject &
   type: "Existence"
   expression: ASTNode
+  nullCheck: NullCheckLeaf
+  children: [ASTNode, NullCheckLeaf]
+
+/** Symbol unary op leaf: regex `[!~+-]` in the UnaryOp grammar rule. */
+export type UnaryOpSymbolLeaf = ASTLeaf & token: "!" | "~" | "+" | "-"
+
+/** Keyword unary op leaf: from the Delete/Void/Typeof/Not grammar rules. */
+export type UnaryOpKeywordLeaf = ASTLeaf & token: "delete" | "void" | "typeof" | "!"
+
+/** QuestionMark leaf: from the QuestionMark grammar rule. */
+export type QuestionMarkLeaf = ASTLeaf & token: "?"
+
+/**
+* `[opLeaf, ws]` keyword unary entry — `delete`/`void`/`typeof`/`not`.
+* Grammar emits with `as const` so the tuple and leaf are readonly.
+* Consumers `isUnaryOpTuple`-gate to discriminate from the leaf/`Await` arms.
+*/
+export type UnaryOpKeyword = readonly [Readonly<UnaryOpKeywordLeaf>, ASTNode | undefined]
+
+/**
+* One element of a `UnaryOp*` array, as emitted by the `UnaryOp` grammar
+* rule.  Variants:
+*  - symbol op leaf (`!`/`~`/`+`/`-`) — grammar emits with `as const`
+*  - `Await` — from `AwaitOp`, mutable
+*  - keyword tuple (above) — readonly
+*/
+export type UnaryOpElement = Readonly<UnaryOpSymbolLeaf> | Await | UnaryOpKeyword
+
+/**
+* One `UnaryPostfix?` slot.  Either a `QuestionMark` leaf (readonly, from
+* `as const` in grammar) or a `TypePostfix+` list.  `isUnaryPostfixList`-gate
+* at consumers to discriminate.
+*/
+export type UnaryPostfixNode = Readonly<QuestionMarkLeaf> | ASTNode[]
 
 export type UnaryExpression = ASTParent &
   type: "UnaryExpression"
-  pre?: ASTNode[]
+  /**
+   * Set to "Negation" by `negateCondition` (synthesized `!`-wrap of an
+   * `unless`/`until` condition).  Parser-built UnaryExpressions leave it
+   * unset.  Downstream transforms test this to detect the negation form
+   * without probing `.pre` contents or `.children` slots.
+   */
+  subtype?: "Negation"
+  /**
+   * `pre`/`post` carry values built by `processUnaryExpression` verbatim
+   * and may be `undefined`; postfix `?` admits that under
+   * `exactOptionalPropertyTypes` while staying Civet-idiomatic.
+   */
+  pre?: UnaryOpElement[]?
   expression: ASTNode
-  post?: ASTNode
+  post?: UnaryPostfixNode?
 
 export type Await = ASTTokenOrParent &
   type: "Await"
@@ -325,6 +459,7 @@ export type UnwrappedExpression = ASTParent &
 
 export type Yield = ASTTokenOrParent &
   type: "Yield"
+  $loc?: Loc
 
 export type YieldExpression = ASTParent &
   type: "YieldExpression"
@@ -357,7 +492,7 @@ export type ElseClause = ASTObject &
   children: Children & [ Whitespace | ASTString, ElseToken, BlockStatement ]
   block: BlockStatement
 
-export type ElseToken = "else " | { $loc: Loc, token: "else" }
+export type ElseToken = "else " | (Keyword & { token: "else" })
 
 export type IfExpression = ASTParent &
   type: "IfExpression"
@@ -368,7 +503,8 @@ export type IterationExpression = ASTParent &
   block: BlockStatement
   statement: IterationFamily
   async: boolean
-  generator?: ASTNode
+  /** Propagated from the wrapped iteration statement's `( _? Star )?` */
+  generator: [Whitespace, Star] | undefined
   resultsRef: ASTRef?
 
 export type IterationFamily = ForStatement | IterationStatement | DoStatement | ComptimeStatement
@@ -379,7 +515,8 @@ export type IterationStatement = ASTParent &
   condition: Condition
   block: BlockStatement
   negated: boolean?
-  generator?: ASTNode
+  /** From grammar `( _? Star )?`: optional [whitespace, Star] tuple. */
+  generator: [Whitespace, Star] | undefined
   object?: boolean
   resultsRef: ASTRef?
   resultsParent?: boolean // inherit resultsRef from parent loop
@@ -392,6 +529,12 @@ export type BreakStatement = ASTParent &
 export type ComptimeStatement = ASTParent &
   type: "ComptimeStatement"
   block: BlockStatement
+  /**
+   * Source blocks preserved so consumers can read the original `then`/`else`
+   * independently of which one `block` selected.
+   */
+  then: BlockStatement
+  else: ElseClause?
 
 export type ComptimeExpression = ASTParent &
   type: "ComptimeExpression"
@@ -406,6 +549,8 @@ export type ContinueStatement = ASTParent &
 export type DoStatement = ASTParent &
   type: "DoStatement"
   block: BlockStatement
+  /** From grammar `( _? Star )?`: optional [whitespace, Star] tuple. */
+  generator: [Whitespace, Star] | undefined
 
 export type ForStatement = ASTParent &
   type: "ForStatement"
@@ -415,7 +560,8 @@ export type ForStatement = ASTParent &
   eachDeclaration?: (Declaration | ForDeclaration)?
   block: BlockStatement
   hoistDec: ASTNode
-  generator?: ASTNode
+  /** From grammar `( _? Star )?`: optional [whitespace, Star] tuple. */
+  generator: [Whitespace, Star] | undefined
   resultsRef: ASTRef?
   resultsParent?: boolean // inherit resultsRef from parent loop
   reduction?: ForReduction
@@ -469,6 +615,15 @@ export type DefaultClause = ASTParent &
 export type EmptyStatement = ASTParent &
   type: "EmptyStatement"
   implicit?: boolean
+
+/**
+ * Synthetic condition emitted by the SwitchStatement rule when no
+ * explicit `switch (cond)` head is provided. Lets the SwitchStatement
+ * action discriminate this case from a real ParenthesizedExpression
+ * condition without resorting to undefined.
+ */
+export type EmptyCondition = ASTParent &
+  type: "EmptyCondition"
 
 export type LabelledStatement = ASTParent &
   type: "LabelledStatement"
@@ -532,12 +687,15 @@ export type ASTRef = ASTObject &
   /** Original id that base was based on. Includes leading `#` for private fields */
   id: string
   token?: undefined
+  /** Optional source location propagated to the resolved child by populateRefs */
+  $loc?: Loc
   /**
    * populateRefs resolves the ref to a concrete name and writes both
    * .names and .children. Before resolution neither is present.
+   * children is an ASTLeaf when $loc was set, else a bare ASTString.
    */
   names?: [ASTString]
-  children?: [ASTString]
+  children?: [ASTString] | [ASTLeaf]
   /**
    * Source string when escapeIdentifier mangled the @-binding name; lets
    * binding-side `this.X = X` emit bracket access matching the expression-
@@ -571,15 +729,32 @@ export type ImportDeclaration = ASTParent &
   ts?: boolean
   imports?: ASTNode
   from?: ASTNode
+  /**
+   * Set by the bare `import "./mod"` parser alternative (no clause, no
+   * bindings) — carries the module specifier directly so downstream code
+   * can detect side-effect imports without re-parsing `children`.
+   */
+  module?: ModuleSpecifier
 
 export type ExportDeclaration = ASTParent &
   type: "ExportDeclaration"
   ts?: boolean
   declaration?: ASTNode
 
-export type Star = ASTObject &
+/**
+ * `namespace Foo { … }` (TS).  Always ts:true since namespaces don't exist
+ * in JS output paths.
+ */
+export type NamespaceDeclaration = ASTParent &
+  type: "NamespaceDeclaration"
+  id: Identifier
+  ts: true
+
+export type Star =
   type: "Star"
+  $loc: Loc
   token: "*"
+  parent?: Parent
   children?: never
 
 export type ModuleSpecifier = ASTParent &
@@ -612,22 +787,39 @@ export type Binding = ASTParent &
   splices: unknown[]
   thisAssignments: unknown[]
 
-export type Initializer = ASTParent &
+/**
+* `let x = expression` / `{x = default}` / etc.  Children are a 3-tuple
+* `[whitespace-before-=, equals-token, expression]` — slot 2 is the
+* `expression` alias.  `prependStatementExpressionBlock` writes to both
+* `.expression` and `.children[2]` in tandem when hoisting a
+* StatementExpression, so the tuple shape is load-bearing.
+*/
+export type Initializer = ASTObject &
   type: "Initializer"
   expression: ASTNode
+  children: [WSNode | ASTString, ASTLeaf | ASTString, ASTNode]
 
 export type Identifier =
   type: "Identifier"
   name: string
   names: string[]
-  children: Children & [ ASTLeaf | ASTString ]
+  /**
+   * Keyword covers the `import` → Identifier path that promotes the Import
+   * keyword node into an identifier reference. ASTRef covers
+   * pattern-matching's aliasBinding which rewrites children[0] to a Ref.
+   */
+  children: Children & [ ASTLeaf | ASTString | Keyword | ASTRef ]
   parent?: Parent
-  // Source string when escapeIdentifier mangled it (non-id-unicode codepoints
-  // like 😊 / △). Property-key sites use this for the user-visible name.
+  /**
+   * Source string when escapeIdentifier mangled it (non-id-unicode codepoints
+   * like 😊 / △). Property-key sites use this for the user-visible name.
+   */
   unicode?: string
-  // Original identifier when PropertyName rewrote children to render a
-  // quoted source string. Shorthand consumers reach this for the value-side
-  // reference (which still needs the mangled local-variable name).
+  /**
+   * Original identifier when PropertyName rewrote children to render a
+   * quoted source string. Shorthand consumers reach this for the value-side
+   * reference (which still needs the mangled local-variable name).
+   */
   identifier?: Identifier
 
 export type ReturnValue = ASTParent &
@@ -666,7 +858,7 @@ export type CatchClause = ASTObject &
   block: BlockStatement
   binding: CatchBinding?
 
-export type CatchToken = { $loc: Loc, token: "catch" }
+export type CatchToken = Keyword & { token: "catch" }
 
 export type CatchBinding = ASTParent &
   type: "CatchBinding"
@@ -694,7 +886,7 @@ export type FinallyClause = ASTObject &
   )
   block: BlockStatement
 
-export type FinallyToken = "finally " | { $loc: Loc, token: "finally" }
+export type FinallyToken = "finally " | (Keyword & { token: "finally" })
 
 export type BindingIdentifier = AtBinding | Identifier | ReturnValue
 
@@ -770,7 +962,7 @@ export type Placeholder = ASTObject &
 
 export type PinPattern = ASTParent &
   type: "PinPattern"
-  expression: ExpressionNode
+  expression: ASTNode
   ref?: ASTRef
   typeSuffix?: TypeSuffix?
 
@@ -783,7 +975,7 @@ export type NamedBindingPattern = ASTParent &
 export type HasSubbinding = BindingProperty | NamedBindingPattern
 
 // _?, __
-export type Whitespace = (ASTLeaf | ASTString)[]?
+export type Whitespace = (ASTLeaf | ASTString | CommentNode)[]?
 
 export type Delimiter = ASTLeaf | ASTString | Delimiter[]
 
@@ -1147,6 +1339,7 @@ export type TypeElement = ASTParent &
 export type TypeFunction = ASTParent &
   type: "TypeFunction"
   ts: true
+  returnType?: ReturnTypeAnnotation?
 
 export type TypeParenthesized = ASTParent &
   type: "TypeParenthesized"

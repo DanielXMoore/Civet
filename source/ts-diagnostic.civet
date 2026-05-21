@@ -21,24 +21,35 @@ export type SourcemapLines = SourceMap['lines']
  * Take a position in generated code and map it into a position in source code.
  * Reverse mapping.
  *
+ * When the queried line has no usable 4-tuple mapping, walks back through
+ * preceding lines until one is found — matching the standard sourcemap
+ * "nearest preceding mapping wins" behavior (e.g. source-map's
+ * `originalPositionFor`).  Required for chained / sparse maps like the
+ * Hera→Civet→TS pipeline, where only ~18% of generated TS lines have a
+ * direct source mapping; without walk-back, the other 82% would land far
+ * past EOF in the .hera source.
+ *
  * Return position as-is if no sourcemap is available or no mapping exists
- * at `position`.  Callers that need to distinguish "fell back to identity"
- * from "actually mapped" should use `remapPositionStrict`.
+ * anywhere at or before the queried position.  Callers that need to
+ * distinguish "fell back to identity" from "actually mapped" should use
+ * `remapPositionStrict`.
  */
 export function remapPosition(
   position: Position,
   sourcemapLines?: SourcemapLines
 ): Position
-  if !sourcemapLines return position
-  return remapPositionStrict(position, sourcemapLines) ?? position
+  return position unless sourcemapLines
+  return remapPositionStrict(position, sourcemapLines) ?? walkBack(position, sourcemapLines) ?? position
 
 /**
  * Like `remapPosition`, but returns `undefined` when `position` has no
- * actual source mapping — i.e. the generated line has no 4-tuple mapping
- * at or before `position.character`.  This happens when generated code
- * is purely compiler-synthesized (e.g. Civet's `type AutoPromise<T> = ...`
- * prelude), in which case mapping back to the original-position fallback
- * would produce a phantom location in the user's source.
+ * direct source mapping on the queried line — i.e. the generated line
+ * has no 4-tuple mapping at or before `position.character`.  Does NOT
+ * walk back to preceding lines; for that, use `remapPosition`.
+ *
+ * This narrow semantics lets the semantic-tokens path drop tokens in
+ * compiler-synthesized code (e.g. Civet's `type AutoPromise<T> = ...`
+ * prelude) rather than emit a phantom location at the identity fallback.
  */
 export function remapPositionStrict(
   position: Position,
@@ -79,6 +90,22 @@ export function remapPositionStrict(
   return
     line: srcLine
     character: Math.max(0, newChar)
+
+// Walk back through preceding sourcemap lines looking for the nearest
+// 4-tuple.  Character offset doesn't interpolate across line boundaries;
+// the source column is the mapping's anchor.  Returns undefined if no
+// preceding line has a 4-tuple.
+walkBack := (position: Position, sourcemapLines: SourcemapLines): Position | undefined ->
+  for l of [Math.min(position.line, sourcemapLines#) > .. 0]
+    prevLine := sourcemapLines[l]
+    continue unless prevLine?.length
+    lastMapping := for first i of [prevLine# > .. 0] when prevLine[i].length === 4
+      prevLine[i]
+    if lastMapping
+      return
+        line: lastMapping[2]!
+        character: Math.max(0, lastMapping[3]!)
+  return undefined
 
 /**
  * Use sourcemap lines to remap the start and end position of a range.

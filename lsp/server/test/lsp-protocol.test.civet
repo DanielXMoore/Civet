@@ -8,6 +8,8 @@
 // its capture closure doesn't see other tests' publishes.
 
 { spawnLspServer, docUri, type LspClient } from ./lsp-harness.civet
+{ mkdtempSync, rmSync, writeFileSync } from node:fs
+{ tmpdir } from node:os
 path from node:path
 assert from assert
 
@@ -182,3 +184,49 @@ describe "LSP protocol", ->
     errorDiags := tail.diagnostics.filter(hasError)
     assert.equal errorDiags.length, 0,
       `expected last publish to have no errors (final text is valid), got ${JSON.stringify errorDiags}`
+
+describe "LSP missing tsconfig warning", ->
+  @timeout 15000
+
+  let client: LspClient
+  let tmpDir: string
+
+  before ->
+    tmpDir = mkdtempSync path.join(tmpdir(), 'civet-lsp-no-tsconfig-')
+    // .civet file the editor opens — drives ensureServiceForSourcePath, which
+    // surfaces the missing-tsconfig warning via window/showMessage.
+    writeFileSync path.join(tmpDir, 'sample.civet'), "x := 1\n"
+    client = spawnLspServer()
+    rootUri := docUri tmpDir
+    await client.request "initialize", {
+      processId: process.pid
+      rootUri
+      capabilities: {}
+      workspaceFolders: [{ uri: rootUri, name: "no-tsconfig" }]
+    }
+    client.notify "initialized", {}
+
+  after ->
+    await client.stop() if client
+    rmSync(tmpDir, { recursive: true, force: true }) if tmpDir
+
+  it "sends window/showMessage when project has no tsconfig.json", ->
+    samplePath := path.join tmpDir, 'sample.civet'
+    uri := docUri samplePath
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text: "x := 1\n" }
+    }
+
+    // LSP MessageType.Warning is 2.  Match on the well-known prefix the
+    // server emits so a future copy edit doesn't silently break this test.
+    msg := await client.waitFor "window/showMessage", (p) =>
+      p.type is 2 and String(p.message).includes "No tsconfig.json found"
+
+    assert msg, "expected a window/showMessage warning for missing tsconfig"
+    // Check basename (unique mkdtempSync suffix) rather than full tmpDir: on
+    // Windows the displayed fsPath uses backslashes and a lowercased drive
+    // letter, so the raw tmpDir from mkdtempSync ("C:\\...") won't substring-
+    // match the message ("c:\\..."). Basename uniquely identifies the project.
+    projectName := path.basename tmpDir
+    assert String(msg.message).includes(projectName),
+      `expected warning to mention the project ${projectName} (from ${tmpDir}), got: ${msg.message}`

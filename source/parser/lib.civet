@@ -19,6 +19,7 @@ import type {
   CaseBlock
   CatchBinding
   CatchClause
+  Children
   ComptimeStatement
   Condition
   ContinueStatement
@@ -30,6 +31,7 @@ import type {
   FunctionSignature
   IfStatement
   Initializer
+  IterationExpression
   IterationStatement
   Label
   LabelledStatement
@@ -42,13 +44,14 @@ import type {
   ParametersNode
   ParenthesizedExpression
   Placeholder
-  StatementNode
   StatementTuple
   SwitchStatement
   TypeArgument
   TypeArguments
   TypeNode
   TypeSuffix
+  Loc
+  UnaryOpSymbolLeaf
   WSNode
 } from ./types.civet
 
@@ -182,7 +185,7 @@ import {
   getSync
 } from ../parser.hera
 
-function addPostfixStatement(statement: StatementNode, ws: ASTNode, post: IterationStatement | ForStatement | IfStatement)
+function addPostfixStatement(statement: ASTNode, ws: ASTNode, post: IterationStatement | ForStatement | IfStatement)
   expressions := [
     ...post.blockPrefix or []
     ["", statement]
@@ -218,8 +221,8 @@ function adjustIndexAccess(dot: AccessStart): AccessStart
     }
   else
     dot = replaceNodes deepCopy(dot),
-      (node) => node.token is ".",
-      (node) => ({ ...node, token: "[" })
+      (node: any) => node.token is ".",
+      (node: any) => ({ ...node, token: "[" })
 
   return dot
 
@@ -282,20 +285,21 @@ function rewriteDynamicImportCall(call: Call): Call
     children: call.children.map & is call.args ? args : &
   }
 
-// Negate expression inside condition
-function negateCondition(condition: Condition)
+// Negate expression inside condition.  `notLoc` is the source location of
+// the `unless`/`until` keyword being rewritten — the synthesized `!` leaf
+// inherits it so the output stays source-mapped.
+function negateCondition(condition: Condition, notLoc: Loc)
   { expression } .= condition
   children := condition.children.slice()
   i := children.indexOf(expression)
   assert.notEqual i, -1, "negateCondition: expression must be directly in condition.children"
-  pre := ["!"]
+  bang: UnaryOpSymbolLeaf := { $loc: notLoc, token: "!" }
+  pre := [bang]
   expression = makeLeftHandSideExpression expression
   children[i] = expression = {
     type: "UnaryExpression"
-    children: [
-      pre
-      expression
-    ]
+    subtype: "Negation"
+    children: [pre, expression]
     pre
     expression
   }
@@ -397,7 +401,7 @@ function expressionizeIfStatement(statement: IfStatement): ASTNode
     children
   }
 
-function expressionizeTypeIf([ifOp, condition, t, e])
+function expressionizeTypeIf([ifOp, condition, t, e]: [any, any, any, any])
   children := [
     "("
     trimFirstSpace condition
@@ -425,7 +429,7 @@ function expressionizeTypeIf([ifOp, condition, t, e])
  *
  * [See More](../test/object.civet)
  */
-function handleThisPrivateShorthands(value)
+function handleThisPrivateShorthands(value: any): [any, any]
   if value.privateShorthand
     value = value.children[1].children[1]
 
@@ -435,7 +439,7 @@ function handleThisPrivateShorthands(value)
     suppressPrefix .= value.thisShorthand
     value = {
       ...value,
-      children: value.children.map (c, i) =>
+      children: value.children.map (c: any, i: number) =>
         if i is 0
           let s
           [c, s] = handleThisPrivateShorthands c
@@ -483,7 +487,7 @@ function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause[],
             type: "Initializer"
             expression: ref
             children: [ "", " = ", ref ]
-          bindings: Bindings[] := [{
+          bindings: Binding[] := [{
             type: "Binding"
             names: pattern.names
             pattern
@@ -864,7 +868,7 @@ function makeExpressionStatement(expression: ASTNode): ASTNode
   if Array.isArray(expression) and expression[1]?[0]?[0]?[1]?.token is "," // CommaExpression
     [
       makeExpressionStatement expression[0]
-      expression[1].map [comma, exp] => // CommaDelimiter AssignmentExpression
+      expression[1].map ([comma, exp]: [any, any]) => // CommaDelimiter AssignmentExpression
         [comma, makeExpressionStatement exp]
     ]
   else if expression?.type is "ObjectExpression" or
@@ -883,7 +887,7 @@ The return value should have a `name` property (for "Identifier",
 "PropertyAcess", and "Index"), or have `type` of "Index" (for `[computed]`),
 or be undefined.
 */
-function lastAccessInCallExpression(exp)
+function lastAccessInCallExpression(exp: any)
   while exp.type is "MemberExpression" or exp.type is "CallExpression"
     { children } := exp
     i .= children# - 1
@@ -902,7 +906,7 @@ function lastAccessInCallExpression(exp)
 
 // Given a MethodDefinition, convert into a FunctionExpression.
 // Returns undefined if the method is a getter or setter.
-function convertMethodToFunction(method)
+function convertMethodToFunction(method: any)
   { signature, block } := method
   { async, modifier, optional } := signature
 
@@ -932,8 +936,8 @@ function convertMethodToFunction(method)
     block
   }
 
-function convertFunctionToMethod(id, exp)
-  fnTokenIndex := exp.children.findIndex (c) -> c?.token?.startsWith("function")
+function convertFunctionToMethod(id: any, exp: any)
+  fnTokenIndex := exp.children.findIndex (c: any) -> c?.token?.startsWith("function")
   // copy
   children := exp.children.slice()
   // Replace "function" and move the generator slot ahead of id so a "*"
@@ -948,9 +952,9 @@ function convertFunctionToMethod(id, exp)
     children
   }
 
-function convertArrowFunctionToMethod(id, exp)
+function convertArrowFunctionToMethod(id: any, exp: any)
   block := {...exp.block} // prepare for bracing
-  children := exp.children.filter((c) -> !(Array.isArray(c) && c[c.length-1]?.token?.includes("=>"))).map((c) -> c === exp.block ? block : c)
+  children := exp.children.filter((c: any) -> !(Array.isArray(c) && c[c.length-1]?.token?.includes("=>"))).map((c: any) -> c === exp.block ? block : c)
   children.unshift(id)
   exp = {
     ...exp,
@@ -966,8 +970,8 @@ function convertArrowFunctionToMethod(id, exp)
   exp
 
 // Convert NamedImports into equivalent ObjectExpression or ObjectBindingPattern
-function convertNamedImportsToObject(node, pattern?: boolean)
-  properties := node.specifiers.map (specifier) =>
+function convertNamedImportsToObject(node: any, pattern?: boolean)
+  properties := node.specifiers.map (specifier: any) =>
     if specifier.ts
       { type: "Error", message: "cannot use `type` in dynamic import" }
     else
@@ -1029,7 +1033,7 @@ function convertObjectToJSXAttributes(obj: ObjectExpression)
 /**
  * Returns a new MethodDefinition node.
  */
-function makeGetterMethod(name, ws, value, returnType, block?: BlockStatement, kind: { token: "get" | "set" } = { token: "get" }, autoReturn: boolean = true): MethodDefinition
+function makeGetterMethod(name: ASTNode, ws: ASTNode, value: ASTNode, returnType: ASTNode, block?: BlockStatement, kind: { token: "get" | "set" } = { token: "get" }, autoReturn: boolean = true): MethodDefinition
   { token } := kind
   ws = trimFirstSpace ws
   let setVal
@@ -1085,7 +1089,7 @@ function makeGetterMethod(name, ws, value, returnType, block?: BlockStatement, k
     parameters
   }
 
-function processBindingPatternLHS(lhs, tail): void
+function processBindingPatternLHS(lhs: any, tail: any): void
   // Expand AtBindingProperty (@x shorthand in object patterns) to x: this.x
   adjustAtBindings lhs, true
   // In assignment (non-binding) context, @x can be used directly as this.x
@@ -1098,7 +1102,7 @@ function processBindingPatternLHS(lhs, tail): void
     // Update blockPrefixes that use this ref as a rest identifier (e.g. [...@x, y] = z)
     for each nodeWithPrefix of gatherRecursiveAll lhs, (n) => n.blockPrefix
       { blockPrefix } := nodeWithPrefix
-      blockPrefix.children = blockPrefix.children.map (c) => c is ref ? thisExpr : c
+      blockPrefix.children = blockPrefix.children.map (c: any) => c is ref ? thisExpr : c
   // Also handle AtBindings inside blockPrefixes (e.g. post-rest @x in [a, ..., @x] = y)
   for each nodeWithPrefix of gatherRecursiveAll lhs, (n) => n.blockPrefix
     { blockPrefix } := nodeWithPrefix
@@ -1115,7 +1119,7 @@ function processBindingPatternLHS(lhs, tail): void
     ...thisAssignments.map (a) => [", ", a]
     ...subbindings
 
-function processAssignments(statements): void
+function processAssignments(statements: ASTNode): void
   // Move assignments/updates within LHS of assignments/updates
   // to run earlier via comma operator
   for each exp of gatherRecursiveAll statements, .type is "AssignmentExpression" or .type is "UpdateExpression"
@@ -1185,7 +1189,7 @@ function processAssignments(statements): void
         outerBase := if baseRefAssignment then [baseRef] else children.slice 0, j
         { ...assigned, children: [...outerBase, outerTerminal, ...children.slice j + 1] }
 
-    const pre = [], post = []
+    const pre: Children = [], post: Children = []
     switch exp.type
       when "AssignmentExpression"
         continue unless exp.lhs
@@ -1225,8 +1229,11 @@ function processAssignments(statements): void
     // no operator might shortcut
     if blockContainingStatement(exp) and !$1.-1?.-1?.special and
        not isShortCircuitOp($1.-1?.-1)
+      // Synthetic Initializer wrapper used solely to invoke the helper —
+      // never inserted in the AST, so children[0]/[1] are inert placeholders
+      // (helper reads `.expression` and may write `.children[2]`).
       if ref := prependStatementExpressionBlock(
-        {type: "Initializer", expression: $2, children: [undefined, undefined, $2]}
+        {type: "Initializer", expression: $2, children: ["", " = ", $2]}
         exp
       )
         replaceNode $2, ref, exp
@@ -1234,7 +1241,7 @@ function processAssignments(statements): void
         $2 = ref
 
     // identifier=, xor=, ++=
-    if $1.some &.-1.special
+    if $1.some((x: any) => x.-1.special)
       [, lhs, , op] := $1[0]
       { call, omitLhs } := op
       // Wrap right-hand side with call
@@ -1281,10 +1288,10 @@ function processAssignments(statements): void
           lastMember := members[members.length - 1]
 
           // TODO: this is kind of bonkers
-          if lastMember.type is "SliceExpression"
+          if lastMember!.type is "SliceExpression"
             const { start, end, children: c } = lastMember
             // TODO: don't lose as many source mappings
-            c[0].token = ".splice("
+            c[0]!.token = ".splice("
             c[1] = start
             c[2] = ", "
             if (end)
@@ -1367,7 +1374,7 @@ function processAssignments(statements): void
       assert.notEqual index, -1, "processAssignments tail: $2 must be directly in exp.children"
       exp.children.splice(index + 1, 0, ...tail)
 
-function unchainOptionalMemberExpression(exp: MemberExpression | CallExpression, ref: ASTRef, innerExp: (exp) => ASTNode)
+function unchainOptionalMemberExpression(exp: MemberExpression | CallExpression, ref: ASTRef, innerExp: (exp: ASTNode) => ASTNode)
   j .= 0
   { children } := exp
   usesRef .= false
@@ -1411,7 +1418,7 @@ function unchainOptionalMemberExpression(exp: MemberExpression | CallExpression,
 
     j++
 
-  if l := conditions.length
+  if conditions.length
     cs := flatJoin conditions, " && "
 
     {
@@ -1422,21 +1429,24 @@ function unchainOptionalMemberExpression(exp: MemberExpression | CallExpression,
   else // Unchanged
     exp
 
-function attachPostfixStatementAsExpression(exp, post: [WSNode, IfStatement | IterationStatement | DoStatement | ForStatement])
+function attachPostfixStatementAsExpression(exp: ASTNode, post: [WSNode, IfStatement | IterationStatement | DoStatement | ForStatement])
   postfixStatement := post[1]
 
   switch postfixStatement.type
     when "ForStatement", "IterationStatement", "DoStatement"
-      statement := addPostfixStatement(exp, ...post)
+      statement := addPostfixStatement(exp, ...post) as IterationStatement | ForStatement | DoStatement
       return {
-        type: "IterationExpression",
-        children: [statement],
-        block: statement.block,
-        statement,
-        generator: statement.generator,
-      }
+        type: "IterationExpression"
+        subtype: statement.type
+        children: [statement]
+        block: statement.block
+        statement
+        async: false
+        generator: statement.generator
+        resultsRef: undefined
+      } as IterationExpression
     when "IfStatement"
-      return expressionizeIfStatement { ...postfixStatement, then: exp }
+      return expressionizeIfStatement { ...postfixStatement, then: exp as BlockStatement }
 
 function processTypes(node: ASTNode)
   // T? -> T | undefined; T?? -> T | undefined | null; T! -> NonNullable<T>
@@ -1622,7 +1632,7 @@ function processFinallyClauses(statements: StatementTuple[]): void
       children: [ "{", expressions, "}" ]
       bare: false
     }
-    f = prepend(" ", f) as FinallyClause
+    f = prepend(" ", f)
     tuple: StatementTuple := [indent,
       makeNode
         type: "TryStatement"
@@ -1714,7 +1724,7 @@ function processCoffeeClasses(statements: StatementTuple[]): void
       index := findSuperCall construct.block
       construct.block.expressions.splice index+1, 0,
         ...for each [, a] of autoBinds
-          [indent, ["this.", a.name, " = this.", a.name, ".bind(this)"], ";"]
+          [indent, ["this.", a!.name, " = this.", a!.name, ".bind(this)"], ";"]
 
     public_static_function_assignments := expressions.filter((&[1]?.type is "CoffeeClassPublic") && (&[1].assignment?.expression?.type is "FunctionExpression")).map &[1].assignment
     for public_static_function_assignment of public_static_function_assignments
@@ -2024,12 +2034,12 @@ function processPlaceholders(statements: StatementTuple[]): void
 
   return
 
-function reorderBindingRestProperty(props)
-  const names = props.flatMap((p) => p.names)
+function reorderBindingRestProperty(props: any)
+  const names = props.flatMap((p: any) => p.names)
 
   let restIndex = -1
   let restCount = 0
-  props.forEach(({ type }, i) => {
+  props.forEach(({ type }: any, i: number) => {
     if (type is "BindingRestProperty") {
       if (restIndex < 0) restIndex = i
       restCount++
@@ -2082,14 +2092,14 @@ function reorderBindingRestProperty(props)
 
   return { children, names }
 
-function typeOfJSX(node, config)
+function typeOfJSX(node: any, config: any)
   switch node.type
     when "JSXElement"
       typeOfJSXElement node, config
     when "JSXFragment"
       typeOfJSXFragment node, config
 
-function typeOfJSXElement(node, config)
+function typeOfJSXElement(node: any, config: any)
   if config.solid
     if config.server and not config.client  // server only
       return ["string"]
@@ -2106,10 +2116,10 @@ function typeOfJSXElement(node, config)
     else  // client only (default)
       return clientType
 
-function collectJSXFragmentTypes(node, config)
-  type := []
+function collectJSXFragmentTypes(node: ASTNode, config: unknown): ASTNode[]
+  type: ASTNode[] := []
   let lastType
-  for child of node.jsxChildren
+  for child of (node as any).jsxChildren
     switch child.type
       when "JSXText"
         // Solid combines multiple consecutive texts into one string
@@ -2127,7 +2137,7 @@ function collectJSXFragmentTypes(node, config)
     lastType = child.type
   return type
 
-function typeOfJSXFragment(node, config)
+function typeOfJSXFragment(node: any, config: any)
   if config.solid
     type .= collectJSXFragmentTypes node, config
     // Solid doesn't wrap single fragment child in an array
