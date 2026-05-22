@@ -327,12 +327,12 @@ function isPureNode(node: ASTNode): boolean
 
 /**
 Walk an array (transparent for parent-pointers) looking for `target`.
-Returns "safe" if `target` is reachable through pure preceding siblings,
-"unsafe" if any sibling before `target` is impure, or "notfound" if the
-target isn't in this subtree.
+Returns "found" if `target` is reachable, "notfound" if it isn't in this
+subtree.  Any impure preceding siblings are appended to `hoists` so the
+caller can lift them to temps alongside the main target.
 */
-function checkLiftSafe(start: ASTNode, target: ASTNode): "safe" | "unsafe" | "notfound"
-  return "safe" if start is target
+function collectLiftHoists(start: ASTNode, target: ASTNode, hoists: ASTNode[]): "found" | "notfound"
+  return "found" if start is target
   return "notfound" unless start? and typeof start is "object"
   return "notfound" unless Array.isArray start
 
@@ -340,19 +340,14 @@ function checkLiftSafe(start: ASTNode, target: ASTNode): "safe" | "unsafe" | "no
   for each elem of start
     if found
       // Already located target earlier in this array — later elements stay
-      // in place and evaluate after the lifted statement, so no purity
-      // requirement here.
+      // in place and evaluate after the lifted statement, so no constraint.
       continue
-    sub := checkLiftSafe elem, target
-    switch sub
-      when "safe"
-        found = true
-      when "unsafe"
-        return "unsafe"
-      else
-        // notfound: elem comes before target in this array.  It must be pure.
-        return "unsafe" unless isPureNode elem
-  found ? "safe" : "notfound"
+    sub := collectLiftHoists elem, target, hoists
+    if sub is "found"
+      found = true
+    else if not isPureNode elem
+      hoists.push elem
+  found ? "found" : "notfound"
 
 /**
 Walk up `exp`'s parent chain through lift-safe expression nesting to find
@@ -369,6 +364,7 @@ verify preceding siblings are pure via `checkLiftSafe`.
 function findContainingStatement(exp: ASTNodeObject)
   child .= exp as ASTNode
   parent .= exp.parent
+  hoists: ASTNode[] := []
   while parent?
     switch parent.type
       when "BlockStatement"
@@ -379,9 +375,9 @@ function findContainingStatement(exp: ASTNodeObject)
           tuple := block.expressions[i]
           stmt := tuple[1]
           if stmt is child
-            return { block, index: i }
-          if Array.isArray(stmt) and checkLiftSafe(stmt, child) is "safe"
-            return { block, index: i }
+            return { block, index: i, hoists }
+          if Array.isArray(stmt) and collectLiftHoists(stmt, child, hoists) is "found"
+            return { block, index: i, hoists }
         return
       when "StatementExpression", "UnwrappedExpression", "PipelineExpression"
         child = parent
@@ -393,12 +389,13 @@ function findContainingStatement(exp: ASTNodeObject)
         child = parent
         parent = parent.parent
       when "Call"
-        // Lift is safe past arguments that precede `child` only if those
-        // earlier arguments are pure.  Arguments after `child` stay in place.
+        // Hoist impure args that precede the lift target; later args stay
+        // in place (they evaluate after the lifted statement).
         argIndex := (parent.args as ASTNode[]).indexOf(child)
         return unless argIndex >= 0
         for i .= 0; i < argIndex; i++
-          return unless isPureNode (parent.args as ASTNode[])[i]
+          argi := (parent.args as ASTNode[])[i]
+          hoists.push argi unless isPureNode argi
         child = parent
         parent = parent.parent
       when "CallExpression"
@@ -413,8 +410,8 @@ function findContainingStatement(exp: ASTNodeObject)
         child = parent
         parent = parent.parent
       when "ArrayExpression"
-        // Verify preceding sibling elements (and brackets/commas) are pure.
-        return unless checkLiftSafe(parent.children, child) is "safe"
+        // Hoist impure preceding elements; pure ones stay where they are.
+        return unless collectLiftHoists(parent.children, child, hoists) is "found"
         child = parent
         parent = parent.parent
       when "AssignmentExpression"
@@ -429,8 +426,8 @@ function findContainingStatement(exp: ASTNodeObject)
         return if opLeaf?.token? and isShortCircuitOp opLeaf
         // Verify the LHS is pure (simple identifier assignment etc.).
         return unless isPureNode parent.children[0]
-        // Verify the RHS path from parent down to `child` is lift-safe.
-        return unless checkLiftSafe(parent.children, child) is "safe"
+        // Hoist impure siblings on the RHS path from parent down to `child`.
+        return unless collectLiftHoists(parent.children, child, hoists) is "found"
         child = parent
         parent = parent.parent
       else
