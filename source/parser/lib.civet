@@ -44,6 +44,7 @@ import type {
   ParametersNode
   ParenthesizedExpression
   Placeholder
+  StatementExpression
   StatementTuple
   SwitchStatement
   TypeArgument
@@ -115,7 +116,9 @@ import {
   braceBlock
   bracedBlock
   duplicateBlock
+  findContainingStatement
   hoistRefDecs
+  insertBlockStatements
   makeEmptyBlock
   processBlocks
 } from ./block.civet
@@ -134,6 +137,7 @@ import { buildExportSplitClause, escapeIdentifier, propertyKey } from ./identifi
 import { processPipelineExpressions } from ./pipe.civet
 import { forRange, processForInOf, processRangeExpression } from ./for.civet
 import {
+  assignResults
   findSuperCall
   makeAmpersandFunction
   processCoffeeDo
@@ -1563,6 +1567,43 @@ function processTypes(node: ASTNode)
           suffixIndex--
 
 /**
+Try to lift a statement-expression out of its containing expression into the
+surrounding block: hoist the statement before the containing statement, push
+assignments of the statement's exit values into a ref, and substitute the ref
+where the statement-expression originally sat.  Returns true on success.
+
+Limited to positions where lifting is unambiguous — `findContainingStatement`
+gates the set of expression contexts we walk through.
+*/
+function liftStatementExpression(exp: StatementExpression): boolean
+  { statement } := exp
+  // `throw` exits — lifting it produces dead code after the throw.  The
+  // IIFE form is cleaner; let the caller wrap it.
+  return false if statement.type is "ThrowStatement"
+
+  context := findContainingStatement exp
+  return false unless context
+  { block, index } := context
+
+  ref := makeRef()
+
+  lifted: StatementTuple := ["", statement, ";"]
+  assignResults lifted, (resultNode) =>
+    // @ts-ignore: AssignmentExpression has extra required fields we don't need here
+    makeNode
+      type: "AssignmentExpression"
+      children: [ref, " = ", resultNode]
+
+  refDec :=
+    type: "Declaration"
+    children: ["let ", ref]
+  as ASTNode
+
+  replaceNode exp, ref
+  insertBlockStatements block, index, ["", refDec, ";"], lifted
+  return true
+
+/**
 Wrap any remaining statement expressions in IIFE.
 */
 function processStatementExpressions(statements: StatementTuple[]): void
@@ -1585,6 +1626,7 @@ function processStatementExpressions(statements: StatementTuple[]): void
             exp
         // else do nothing, handled separately currently
       else
+        continue if liftStatementExpression exp
         replaceNode statement, wrapIIFE([["", statement]]), exp
 
 function processNegativeIndexAccess(statements: StatementTuple[]): void

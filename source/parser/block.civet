@@ -301,11 +301,122 @@ function blockContainingStatement(exp: ASTNodeObject)
     child
   }
 
+/**
+Coarse purity check used by the lift to verify that hoisting an expression
+past its preceding siblings preserves evaluation order.  Conservative — only
+returns true for things we know can't observe side effects.
+*/
+function isPureNode(node: ASTNode): boolean
+  return true unless node?
+  return true if typeof node is "string"
+  if Array.isArray node
+    return node.every isPureNode
+  return false unless typeof node is "object"
+  // Tokens / whitespace nodes (this, super, undefined, operators, etc.)
+  return true if "token" in node and (node as any).token?
+  switch node.type
+    when "Identifier", "Literal"
+      true
+    else
+      false
+
+/**
+Walk an array (transparent for parent-pointers) looking for `target`.
+Returns "safe" if `target` is reachable through pure preceding siblings,
+"unsafe" if any sibling before `target` is impure, or "notfound" if the
+target isn't in this subtree.
+*/
+function checkLiftSafe(start: ASTNode, target: ASTNode): "safe" | "unsafe" | "notfound"
+  return "safe" if start is target
+  return "notfound" unless start? and typeof start is "object"
+  return "notfound" unless Array.isArray start
+
+  found .= false
+  for each elem of start
+    if found
+      // Already located target earlier in this array — later elements stay
+      // in place and evaluate after the lifted statement, so no purity
+      // requirement here.
+      continue
+    sub := checkLiftSafe elem, target
+    switch sub
+      when "safe"
+        found = true
+      when "unsafe"
+        return "unsafe"
+      else
+        // notfound: elem comes before target in this array.  It must be pure.
+        return "unsafe" unless isPureNode elem
+  found ? "safe" : "notfound"
+
+/**
+Walk up `exp`'s parent chain through lift-safe expression nesting to find
+the BlockStatement that ultimately contains it, returning the block and the
+index of the containing statement.  Lift-safe means hoisting `exp` to a
+statement before that containing statement preserves evaluation order.
+
+Walks transparently through wrappers (StatementExpression /
+UnwrappedExpression / PipelineExpression), a sole `Argument` of a `Call`
+whose callee is a simple `Identifier`, and `AssignmentExpression`s with a
+pure LHS.  Crossings through "transparent" arrays (e.g. binary-op operands)
+verify preceding siblings are pure via `checkLiftSafe`.
+*/
+function findContainingStatement(exp: ASTNodeObject)
+  child .= exp as ASTNode
+  parent .= exp.parent
+  while parent?
+    switch parent.type
+      when "BlockStatement"
+        // exp may sit directly at a tuple's [1], or it may be nested through
+        // transparent arrays (e.g. a binary-op operand).
+        block := parent as BlockStatement
+        for i .= 0; i < block.expressions.length; i++
+          tuple := block.expressions[i]
+          stmt := tuple[1]
+          if stmt is child
+            return { block, index: i }
+          if Array.isArray(stmt) and checkLiftSafe(stmt, child) is "safe"
+            return { block, index: i }
+        return
+      when "StatementExpression", "UnwrappedExpression", "PipelineExpression"
+        child = parent
+        parent = parent.parent
+      when "Argument"
+        // Only liftable when the Argument's content is the lift target itself
+        // (no preceding spread, default, etc.) — for now, require simple shape.
+        return unless parent.expression is child or parent.children is child
+        child = parent
+        parent = parent.parent
+      when "Call"
+        // First-slice constraint: only safe when exp is the only argument.
+        return unless parent.args# is 1
+        child = parent
+        parent = parent.parent
+      when "CallExpression"
+        // First-slice constraint: callee must be pure (a simple Identifier).
+        callee := parent.children[0]
+        return unless callee?.type is "Identifier"
+        child = parent
+        parent = parent.parent
+      when "AssignmentExpression"
+        // We may have arrived here transparently through a binary-op array in
+        // the RHS.  Verify the LHS is pure (a simple Identifier assignment).
+        lhs := parent.children[0]
+        return unless isPureNode lhs
+        // Verify the RHS path from parent down to `child` is lift-safe.
+        return unless checkLiftSafe(parent.children, child) is "safe"
+        child = parent
+        parent = parent.parent
+      else
+        return
+  return
+
 export {
   blockWithPrefix
   braceBlock
   bracedBlock
   duplicateBlock
+  findContainingStatement
   getIndent
   blockContainingStatement
   hoistRefDecs
