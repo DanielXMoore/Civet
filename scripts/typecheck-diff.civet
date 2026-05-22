@@ -8,16 +8,23 @@
  *
  * This is the right tool for "did my PR add type errors?" — naive line-by-line
  * diffs flag every shifted preexisting error as new.  Diagnostics here are
- * matched in two passes:
+ * matched in three passes:
  *
  *   1. strict: (file, code, normalized message)
  *   2. message-only: (file, normalized message)
+ *   3. source-type-only: (file, code, source-side of "Type X is not
+ *      assignable to type Y" — ignores Y)
  *
  * Pass 2 catches errors where the code changed but the underlying message
  * didn't — e.g. when adding a function overload reclassifies many TS2345
  * "Argument not assignable" calls as TS2769 "No overload matches" with the
- * same embedded reason.  We deliberately do NOT match by (file, line, col)
- * alone — that paired genuinely-different errors at the same site.
+ * same embedded reason.  Pass 3 catches assignability errors whose target
+ * type (Y) shifted printout because an adjacent type widened — e.g.
+ * `Type '…' is not assignable to type 'ASTNode'` becoming
+ * `Type '…' is not assignable to type '…'` (target now >40 chars) when a
+ * field's type changes to a longer union.  We deliberately do NOT match by
+ * (file, line, col) alone — that paired genuinely-different errors at the
+ * same site.
  *
  * Normalization also alphabetizes union members within short quoted type
  * literals so that `'"let" | "const" | "var"'` and `'"const" | "let" | "var"'`
@@ -134,6 +141,17 @@ function strictKey(d: Diag): string
 function messageKey(d: Diag): string
   `${d.file}:${normalizeMessage d.message}`
 
+// Source-type pass: matches "Type 'X' is not assignable to type 'Y'"
+// errors by (file, code, source X) ignoring target Y.  TS narrows or widens
+// target-type printouts when nearby types gain fields, which would otherwise
+// rebucket the same underlying error across passes.  Returns a non-matching
+// sentinel for diagnostics that don't fit the assignability pattern so they
+// never cross-pair.
+function sourceTypeKey(d: Diag): string
+  m := normalizeMessage(d.message).match /^Type ('…'|'[^']*') is not assignable to type '/
+  return `${d.file}:${d.code}:no-source-pattern:${d.line}` unless m
+  `${d.file}:${d.code}:source=${m[1]}`
+
 function indexBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]>
   m := new Map<string, T[]>
   for item of items
@@ -154,12 +172,18 @@ type DiffResult =
   // without-code) pass.  Non-zero means the dedup is catching code-class
   // shuffles (TS2345 ↔ TS2769 from added overloads, etc.).
   loosePairs: number
+  // How many matched only via the source-type pass.  Non-zero means
+  // baseline assignability errors had their target-type printouts rewritten
+  // by adjacent type changes (e.g. ASTNode widening to a union).
+  sourcePairs: number
 
 function diff(left: Diag[], right: Diag[]): DiffResult
-  // Two-pass match: strict (file+code+msg), then message-only (file+msg).
-  // Each match consumes a `right` item so it's never used twice.
+  // Three-pass match: strict (file+code+msg), message-only (file+msg),
+  // source-type-only (file+code+source).  Each match consumes a `right`
+  // item so it's never used twice.
   byStrict := indexBy right, strictKey
   byMessage := indexBy right, messageKey
+  bySource := indexBy right, sourceTypeKey
   consumed := new Set<Diag>
 
   function findMatch(buckets: Map<string, Diag[]>, key: string): boolean
@@ -173,13 +197,17 @@ function diff(left: Diag[], right: Diag[]): DiffResult
 
   unmatched: Diag[] := []
   loose .= 0
+  source .= 0
   for d of left
     continue if findMatch byStrict, strictKey d
     if findMatch byMessage, messageKey d
       loose++
       continue
+    if findMatch bySource, sourceTypeKey d
+      source++
+      continue
     unmatched.push d
-  { unmatched, loosePairs: loose }
+  { unmatched, loosePairs: loose, sourcePairs: source }
 
 regressions := diff newDiags, oldDiags
 fixed := diff oldDiags, newDiags
@@ -230,7 +258,9 @@ console.log `Old: ${oldDiags#} diagnostics  →  New: ${newDiags#} diagnostics`
 netText := `${net >= 0 ? "+" : ""}${net}`
 console.log `Net: ${netText}`
 loose := regressions.loosePairs + fixed.loosePairs
-console.log `Deduped ${loose} noise pair${loose is 1 ? '' : 's'} (code-class reshuffles, union reordering).` if loose > 0
+source := regressions.sourcePairs + fixed.sourcePairs
+noise := loose + source
+console.log `Deduped ${noise} noise pair${noise is 1 ? '' : 's'} (code-class reshuffles, union reordering, target-type rewrites).` if noise > 0
 console.log `Regressions: ${regressions.unmatched#}`
 console.log `Fixed: ${fixed.unmatched#}`
 if process.env.GITHUB_ACTIONS
