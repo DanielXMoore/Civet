@@ -1176,7 +1176,7 @@ describe "CLI --watch", ->
   // Poll a predicate until it returns truthy, with a timeout.  Used in place
   // of fixed sleeps to keep tests responsive on fast machines without
   // flaking on slow CI.
-  async function waitFor(check: => Promise<unknown>, timeout = 3000): Promise<void>
+  async function waitFor(check: => unknown | Promise<unknown>, timeout = 3000): Promise<void>
     start := Date.now()
     while Date.now() - start < timeout
       return if await check()
@@ -1292,15 +1292,35 @@ describe "CLI --watch", ->
       finally
         handle?.close()
 
-  it "logs and continues when fsSync.watch fails (missing file)", ->
+  it "logs missing-file load error and doesn't attempt to watch", ->
     missing := path.join tmpDir, "definitely-does-not-exist.civet"
     let handle: any
     { stdErr } := await captureProcess =>
       handle = await cli ['-w', '--no-config', missing]
-    try
-      // readFiles reports a load error first ("failed to load") and the
-      // watch setup additionally fails with ENOENT ("Could not watch").
-      assert stdErr.includes('Could not watch') or stdErr.includes('failed to load'),
-        "stderr surfaces missing file: " + stdErr
-    finally
       handle?.close()
+    assert stdErr.includes('failed to load'),
+      "stderr surfaces missing file: " + stdErr
+
+  it "clears pending debounce timers when closed mid-debounce", ->
+    inputFile := await makeCivetTempFile "cancel := 1\n"
+    outputFile := inputFile + '.tsx'
+    let handle: any
+    await captureProcess =>
+      handle = await cli ['-w', '--no-config', inputFile]
+      try
+        initial := await readFile outputFile, 'utf8'
+        // fs.watch can take a few ms to arm on Linux
+        await new Promise (r) => setTimeout r, 50
+        await writeFile inputFile, "cancelAfter := 2\n"
+        // Let the inotify callback fire scheduleRebuild (queueing a 100ms
+        // debounce timer) but close before the debounce expires.
+        await new Promise (r) => setTimeout r, 50
+        handle?.close()
+        handle = null
+        // Past the debounce window: the cleared timer must not recompile.
+        await new Promise (r) => setTimeout r, 200
+        after := await readFile outputFile, 'utf8'
+        assert.equal after, initial,
+          "output unchanged after close cancelled the pending recompile"
+      finally
+        handle?.close()
