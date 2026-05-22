@@ -1,11 +1,5 @@
 # Civet VS Code Extension Changelog
 
-> Pre-0.3.33 releases were published from the `lsp/` directory (which
-> contained the combined extension + language server). From 2026-04-13
-> the layout was reorganized to separate packages: `lsp/server/` for the
-> language server, `lsp/vscode/` for this extension, `lsp/monaco/`,
-> `lsp/zed/`, and `lsp/tree-sitter/`.
-
 ## 0.3.36 (2026-05-22)
 * Grammar: align `const`/`let`/`var` and template-expression scopes with JS [[#2094](https://github.com/DanielXMoore/Civet/pull/2094)]
 * Add `vscode-tmgrammar-test` harness for TextMate grammar regressions
@@ -30,7 +24,6 @@
 ## 0.3.33 (2026-04-25)
 * Auto-publish to VS Code Marketplace and Open VSX on version bump [[#1963](https://github.com/DanielXMoore/Civet/pull/1963)]
 * Extract language server into standalone `@danielx/civet-language-server` package [[#1950](https://github.com/DanielXMoore/Civet/pull/1950)]
-* Reorganize repository: extension moves from `lsp/` → `lsp/vscode/`
 * LSP: TypeScript-classifier-based semantic tokens [[#1881](https://github.com/DanielXMoore/Civet/pull/1881)]
 * LSP: semantic tokens for comments, fixing `coffeeComment` highlighting [[#2011](https://github.com/DanielXMoore/Civet/pull/2011)]
 * LSP: auto-import when selecting completions [[#1956](https://github.com/DanielXMoore/Civet/pull/1956)]
@@ -39,9 +32,6 @@
 * Bump VS Code engine and Node requirements (Node ≥ 23, VS Code ≥ 1.115)
 
 ## 0.3.30 (2026-03-07)
-
-> Last release published from the legacy `lsp/` directory.
-
 * LSP: use `vscode-uri` to canonicalize file paths consistently across platforms
 * LSP: import completion for module exports, TypeScript path aliases, and relative paths
 * LSP: autocomplete closing quote, fix quote closing and space triggering
@@ -144,11 +134,6 @@
 * Maintenance release
 
 ## 0.3.0 (2022-12-13)
-
-> Initial 0.3 release of the standalone Civet Language Server backing the
-> VS Code extension. Earlier exploratory commits trace back to the first
-> "Starting vscode extension" commit on 2022-08-23.
-
-* Standalone Civet Language Server
+* Initial release of the Civet Language Server backing the VS Code extension
 * Civet syntax highlighting (originally adapted from CoffeeScript)
 * Basic hover and completion via the TypeScript service
