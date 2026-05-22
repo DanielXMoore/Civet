@@ -139,6 +139,7 @@ import { forRange, processForInOf, processRangeExpression } from ./for.civet
 import {
   assignResults
   findSuperCall
+  insertReturn
   makeAmpersandFunction
   processCoffeeDo
   processFunctions
@@ -1575,20 +1576,65 @@ where the statement-expression originally sat.  Returns true on success.
 Limited to positions where lifting is unambiguous — `findContainingStatement`
 gates the set of expression contexts we walk through.
 */
+/**
+Extract the lift-target statement from a `StatementExpression`.  Handles
+the `IterationExpression` wrapper around `do` (returning the inner
+`DoStatement`).  Returns undefined for cases that can't lift (async/
+generator do, other iteration subtypes).
+*/
+function liftTargetStatement(outerStatement: ASTNode): ASTNode?
+  if outerStatement?.type is "IterationExpression"
+    return undefined unless outerStatement.subtype is "DoStatement"
+    return undefined if outerStatement.async or outerStatement.generator
+    return outerStatement.statement
+  outerStatement
+
+/**
+When a `StatementExpression` is the entire value of a `ReturnStatement`
+that sits at the top of a block, replace the `ReturnStatement` with the
+inner statement and push `return` into each of its exit points via
+`insertReturn`.  Skips the ref-hoist dance for this common case.
+*/
+function liftReturnedStatementExpression(exp: StatementExpression): boolean
+  ret := exp.parent
+  return false unless ret?.type is "ReturnStatement"
+  return false unless ret.expression is exp
+  context := findContainingStatement ret
+  return false unless context
+
+  liftedStatement := liftTargetStatement exp.statement
+  return false unless liftedStatement?
+  // Restrict to inner statement types that `insertReturn` handles cleanly.
+  // Switch can carry PatternClauses that `insertReturn`'s switch arm doesn't
+  // know about; if/else also needs careful sourcemap handling.  These can be
+  // added incrementally.
+  return false unless liftedStatement.type is "TryStatement" or
+                      liftedStatement.type is "DoStatement" or
+                      liftedStatement.type is "BlockStatement"
+
+  // `insertReturn` expects either a top-level block / clause or a tuple
+  // wrapping a statement — wrap the lift target so it pushes `return` into
+  // each exit point (try blocks, do block tail, etc.).
+  wrappedTuple: StatementTuple := ["", liftedStatement, ";"]
+  insertReturn wrappedTuple
+  replaceNode ret, liftedStatement
+  true
+
 function liftStatementExpression(exp: StatementExpression): boolean
   outerStatement := exp.statement
   // `throw` exits — lifting it produces dead code after the throw.  The
   // IIFE form is cleaner; let the caller wrap it.
   return false if outerStatement.type is "ThrowStatement"
 
+  // Try the dedicated `return <stmt-expr>` rewrite first — it avoids the
+  // unnecessary ref and matches what the implicit-return path produces.
+  return true if liftReturnedStatementExpression exp
+
   // `IterationExpression` wraps `for` / `while` / `loop` / `do` / `comptime`.
   // Only plain `do` is supported by the lift path right now; the others have
   // their own (existing) lift mechanism in `processIterationExpressions`.
-  liftedStatement: ASTNode .= outerStatement
-  if outerStatement.type is "IterationExpression"
-    return false unless outerStatement.subtype is "DoStatement"
-    return false if outerStatement.async or outerStatement.generator
-    liftedStatement = outerStatement.statement
+  liftedStatement := liftTargetStatement outerStatement
+  return false unless liftedStatement?
 
   context := findContainingStatement exp
   return false unless context
