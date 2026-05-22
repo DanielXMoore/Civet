@@ -1576,10 +1576,19 @@ Limited to positions where lifting is unambiguous — `findContainingStatement`
 gates the set of expression contexts we walk through.
 */
 function liftStatementExpression(exp: StatementExpression): boolean
-  { statement } := exp
+  outerStatement := exp.statement
   // `throw` exits — lifting it produces dead code after the throw.  The
   // IIFE form is cleaner; let the caller wrap it.
-  return false if statement.type is "ThrowStatement"
+  return false if outerStatement.type is "ThrowStatement"
+
+  // `IterationExpression` wraps `for` / `while` / `loop` / `do` / `comptime`.
+  // Only plain `do` is supported by the lift path right now; the others have
+  // their own (existing) lift mechanism in `processIterationExpressions`.
+  liftedStatement: ASTNode .= outerStatement
+  if outerStatement.type is "IterationExpression"
+    return false unless outerStatement.subtype is "DoStatement"
+    return false if outerStatement.async or outerStatement.generator
+    liftedStatement = outerStatement.statement
 
   context := findContainingStatement exp
   return false unless context
@@ -1587,7 +1596,7 @@ function liftStatementExpression(exp: StatementExpression): boolean
 
   ref := makeRef()
 
-  lifted: StatementTuple := ["", statement, ";"]
+  lifted: StatementTuple := ["", liftedStatement, ";"]
   assignResults lifted, (resultNode) =>
     // @ts-ignore: AssignmentExpression has extra required fields we don't need here
     makeNode
@@ -1624,7 +1633,10 @@ function processStatementExpressions(statements: StatementTuple[]): void
           replaceNode statement,
             expressionizeComptime statement.statement as ComptimeStatement
             exp
-        // else do nothing, handled separately currently
+        else
+          // `do` can lift here; for/while/loop are handled by
+          // `processIterationExpressions`.  Other subtypes fall through.
+          liftStatementExpression exp
       else
         continue if liftStatementExpression exp
         replaceNode statement, wrapIIFE([["", statement]]), exp
