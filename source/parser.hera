@@ -22,6 +22,7 @@ import {
   dedentBlockString,
   dedentBlockSubstitutions,
   deepCopy,
+  desugarStaticImport,
   dynamizeImportDeclaration,
   dynamizeImportDeclarationExpression,
   escapeIdentifier,
@@ -115,6 +116,7 @@ import type {
   Label,
   LabelledStatement,
   NamedBindingPattern,
+  NamedImportElement,
   NamespaceDeclaration,
   NonNullAssertion,
   ObjectBindingPattern,
@@ -4820,7 +4822,8 @@ AwaitOp
 
 # https://262.ecma-international.org/#prod-ModuleItem
 ModuleItem
-  IsBare ( ImportDeclaration / ExportDeclaration ) ::ASTNode -> $2
+  IsBare ImportDeclaration:decl ::ASTNode -> desugarStaticImport(decl)
+  IsBare ExportDeclaration ::ASTNode -> $2
   StatementListItem ::ASTNode
 
 # https://262.ecma-international.org/#prod-StatementListItem
@@ -6228,12 +6231,17 @@ ImpliedImport
 ImportClause
   ImportedBinding:binding ( __ Comma __ ( NameSpaceImport / NamedImports ) )?:rest ->
     if rest
+      // `named` is NameSpaceImport or NamedImports — both shapes share these
+      // optional fields so we can forward them uniformly.
+      named := rest[3]
       return {
         type: "Declaration",
         children: [binding, ...rest],
-        names: [...binding.names, ...rest[3].names],
+        names: [...binding.names, ...named.names],
         binding,
-        specifiers: rest[3].specifiers,
+        specifiers: named.specifiers,
+        rest: named.rest,
+        needsDesugar: named.needsDesugar,
       }
 
     return {
@@ -6254,18 +6262,55 @@ NameSpaceImport
       names: binding.names,
       binding,
       star,
+      // Present so the NamedImports/NameSpaceImport union exposes a uniform
+      // shape to ImportClause callers.
+      specifiers: undefined,
+      rest: undefined,
+      needsDesugar: undefined,
     }
 
 # https://262.ecma-international.org/#prod-NamedImports
 NamedImports
-  OpenBrace TypeAndImportSpecifier*:specifiers ( __ Comma )? __ CloseBrace ->
-    names := specifiers.flatMap(({binding}) => binding.names)
+  OpenBrace ( NamedImportRest / TypeAndImportSpecifier )*:items ( __ Comma )? __ CloseBrace ->
+    // Accept `...rest` anywhere (matching Civet object destructuring), then
+    // reorderBindingRestProperty swaps delimiters and moves rest to the tail.
+    // We ignore the returned `names` and compute our own below from each
+    // specifier's binding (item.names isn't populated for ImportSpecifiers).
+    reordered := (reorderBindingRestProperty items).children as (NamedImportElement | { type: "Error", message: string })[]
+    // reorderBindingRestProperty appends an Error node when restCount > 1.
+    // We exclude it from `specifiers` (it has no `binding`) so the parser can
+    // backtrack cleanly out of speculative implied-import matches like
+    // `{...c, ...d} = e`; we still surface it through `children` so real
+    // multi-rest imports report the error.
+    error := reordered.find .type is "Error"
+    specifiers := reordered.filter .type is undefined
+    rest := reordered.find .type is "BindingRestProperty"
+    names := specifiers.flatMap .binding.names
+    if rest
+      names.push(...rest.binding.names)
+    needsDesugar := !!rest || specifiers.some .pattern
 
     return {
       type: "Declaration",
-      children: $0,
+      children: error ? [...$0, error] : $0,
       names,
       specifiers,
+      rest,
+      needsDesugar,
+    }
+
+# `...rest` inside named imports — only meaningful with desugaring, since
+# native ESM doesn't allow rest in `import {…}`. Position-flexible to match
+# Civet's destructuring (e.g. `{...rest, a}`); the desugar emits it at the
+# tail of the resulting const pattern.
+NamedImportRest
+  __:ws DotDotDot:dots BindingIdentifier:binding ObjectPropertyDelimiter:delim ->
+    return {
+      type: "BindingRestProperty",
+      children: [ws, dots, binding, delim],
+      dots,
+      binding,
+      delim,
     }
 
 OperatorNamedImports
@@ -6325,7 +6370,7 @@ ImportAssertion
 # https://devblogs.microsoft.com/typescript/announcing-typescript-3-8-beta/#type-only-imports-exports
 TypeAndImportSpecifier
   __ TypeKeyword ImportSpecifier ->
-    return { ts: true, children: $0, binding: $3.binding }
+    return { ts: true, children: $0, binding: $3.binding, pattern: $3.pattern }
   ImportSpecifier
   # `operator id` blesses `id` as operator; doesn't make sense with `type`
   __:ws Operator OperatorImportSpecifier:spec ->
@@ -6333,6 +6378,7 @@ TypeAndImportSpecifier
     setOperatorBehavior(spec.binding.name, spec.behavior)
     return {
       ...spec,
+      pattern: false,
       children: [
         ws, trimFirstSpace((spec as any)[0]),
         spec.children.slice(1),
@@ -6340,12 +6386,19 @@ TypeAndImportSpecifier
     }
 
 # https://262.ecma-international.org/#prod-ImportSpecifier
+# `delim` exposed so reorderBindingRestProperty can shuffle a misplaced
+# `...rest` against these like a regular destructuring property.
 ImportSpecifier
-  __:ws1 ModuleExportName:source ImportAsToken:as __:ws2 ImportedBinding:binding ObjectPropertyDelimiter:delim ->
+  __:ws1 ModuleExportName:source ImportAsToken:as __:ws2 ( BindingPattern / ImportedBinding ):binding ObjectPropertyDelimiter:delim ->
+    // `import { x: {y} }` / `import { x as {y} }` — pattern binding forces
+    // desugaring to namespace import + const destructuring.
+    pattern := binding.type is "ObjectBindingPattern" or binding.type is "ArrayBindingPattern"
     // `import { 😊 as x }` → `"😊" as x` (module-side is the source name).
     return {
       source,
       binding,
+      pattern,
+      delim,
       children: [ws1, propertyKey(source), as, ws2, binding, delim],
     }
   __:ws ImportedBinding:binding ObjectPropertyDelimiter:delim ->
@@ -6354,11 +6407,15 @@ ImportSpecifier
       return {
         source: binding,
         binding,
+        pattern: false,
+        delim,
         children: [ws, propertyKey(binding), " as ", binding, delim],
       }
     return {
       source: binding,
       binding,
+      pattern: false,
+      delim,
       children: [ws, binding, delim],
     }
 

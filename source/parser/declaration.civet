@@ -485,6 +485,67 @@ function dynamizeFromClause(from: any)
     from.push ", {", assert.keyword, ":", assert.object, "}"
   ["(", ...from, ")"]
 
+// Top-level `import {…, ...rest} from "x"` / `import {a: {b}} from "x"`
+// — rewrite to `import * as ref from "x"` plus a following `const {…} = ref`,
+// since native ESM `import {…}` doesn't allow rest or nested destructuring.
+// Returns the input unchanged when no desugar is needed.
+function desugarStaticImport(decl: any)
+  { imports, from } := decl
+  return decl unless imports?.needsDesugar
+
+  // The NamedImports node carrying `specifiers`/`rest` is either `imports`
+  // itself (no default) or its last child (default + named: `y, {…}`).
+  namedImports := imports.binding ? imports.children.at(-1) : imports
+
+  ref := makeRef "imports"
+  star := { type: "Star", token: "*" }
+
+  namespaceClause := {
+    type: "Declaration"
+    children: [star, " as ", ref]
+    names: [ref.id]
+    binding: ref
+    star
+  }
+
+  // Preserve `default,` prefix when present (e.g. `import y, {…}` → `import y, * as ref`).
+  newImportsClause := if imports.binding
+    {
+      type: "Declaration"
+      children: [imports.binding, ", ", namespaceClause]
+      names: [...imports.binding.names, ref.id]
+      binding: imports.binding
+      star
+    }
+  else
+    namespaceClause
+
+  newImportChildren := decl.children.map (c: any) => c is imports ? newImportsClause : c
+
+  importDecl := {
+    type: "ImportDeclaration"
+    children: newImportChildren
+    imports: newImportsClause
+    from
+    ts: decl.ts
+  }
+
+  pattern := convertNamedImportsToObject namedImports, true, "destructuring"
+  constDecl := {
+    type: "Declaration"
+    children: ["\nconst ", pattern, " = ", ref]
+    names: namedImports.names
+    decl: "const"
+  }
+
+  {
+    type: "ImportDeclaration"
+    children: [importDecl, constDecl]
+    imports: newImportsClause
+    from
+    ts: decl.ts
+  }
+
 function dynamizeImportDeclaration(decl: any)
   { imports } := decl
   { star, binding, specifiers } .= imports
@@ -638,6 +699,7 @@ function convertWithClause(withClause: WithClause, extendsClause?: [ASTLeaf, WSN
 
 export {
   convertWithClause
+  desugarStaticImport
   dynamizeImportDeclaration
   dynamizeImportDeclarationExpression
   prependStatementExpressionBlock
