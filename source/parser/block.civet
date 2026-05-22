@@ -319,10 +319,14 @@ function isPureNode(node: ASTNode): boolean
   switch node.type
     when "Identifier", "Literal"
       true
-    when "ArrayElement", "SpreadElement", "Argument", "Initializer"
+    when "ArrayElement", "SpreadElement", "Argument", "Initializer", "ParenthesizedExpression"
       // Wrappers: pure iff their expression is pure
       isPureNode (node as any).expression
     else
+      if (node as any).type is "Property"
+        // Pure iff value is pure (key has no observable side effects for
+        // plain Properties — computed keys would warrant more care)
+        return isPureNode (node as any).value
       false
 
 /**
@@ -363,7 +367,10 @@ verify preceding siblings are pure via `checkLiftSafe`.
 */
 function findContainingStatement(exp: ASTNodeObject)
   child .= exp as ASTNode
-  parent .= exp.parent
+  // Cast to `any` so the switch can branch on node types that aren't in the
+  // (admittedly incomplete) `ASTNodeObject` union — Property, ObjectExpression,
+  // Binding, etc.  The runtime type check is still authoritative.
+  parent: any .= exp.parent
   hoists: ASTNode[] := []
   while parent?
     switch parent.type
@@ -399,11 +406,19 @@ function findContainingStatement(exp: ASTNodeObject)
         child = parent
         parent = parent.parent
       when "CallExpression"
-        // First-slice constraint: callee must be pure (a simple Identifier).
         callee := parent.children[0]
-        return unless callee?.type is "Identifier"
-        child = parent
-        parent = parent.parent
+        if child is callee
+          // We came up through the callee (e.g. `(try a).method()`).  The
+          // args evaluate after the callee — no preceding-sibling constraint.
+          child = parent
+          parent = parent.parent
+        else
+          // We came up through an argument.  The callee runs first, so it
+          // must be safely hoistable.  Require it pure to avoid losing the
+          // implicit `this` binding when callee is a method-access.
+          return unless isPureNode callee
+          child = parent
+          parent = parent.parent
       when "ArrayElement"
         // Pass through if this element wraps the lift target.
         return unless parent.expression is child
@@ -411,6 +426,69 @@ function findContainingStatement(exp: ASTNodeObject)
         parent = parent.parent
       when "ArrayExpression"
         // Hoist impure preceding elements; pure ones stay where they are.
+        return unless collectLiftHoists(parent.children, child, hoists) is "found"
+        child = parent
+        parent = parent.parent
+      when "Property"
+        // Pass through if this property's value position is the lift target.
+        return unless parent.value is child
+        child = parent
+        parent = parent.parent
+      when "ObjectExpression"
+        // Hoist impure preceding properties' values.
+        return unless collectLiftHoists(parent.children, child, hoists) is "found"
+        child = parent
+        parent = parent.parent
+      when "TemplateLiteral"
+        // Substitutions evaluate left to right.  Hoist impure preceding
+        // substitutions; static text fragments are pure tokens.
+        return unless collectLiftHoists(parent.children, child, hoists) is "found"
+        child = parent
+        parent = parent.parent
+      when "Initializer"
+        // `<wsBefore>= <expression>` — the expression slot is at children[2]
+        // and aliased on `.expression`.  Pass through.
+        return unless parent.expression is child
+        child = parent
+        parent = parent.parent
+      when "Binding"
+        // `pattern: T = initializer` — descend if we came up through the
+        // initializer.  Require a simple Identifier pattern so the lift
+        // can't reorder side effects in a computed destructuring key.
+        return unless parent.initializer is child
+        return unless parent.pattern?.type is "Identifier"
+        child = parent
+        parent = parent.parent
+      when "Declaration"
+        // Restrict to a single binding for now.  Multi-binding declarations
+        // (`let a = 1, b = …`) would need per-binding hoist accounting.
+        return unless parent.bindings?.length is 1
+        return unless parent.bindings[0] is child
+        child = parent
+        parent = parent.parent
+      when "ParenthesizedExpression"
+        // The parens are inert — pass through to whatever surrounds them.
+        return unless parent.expression is child
+        child = parent
+        parent = parent.parent
+      when "UnaryExpression"
+        // Prefix/postfix operators (`-`, `!`, `~`, `typeof`, etc.) and the
+        // wrapping for await/yield.  Pass through via `.expression`.
+        return unless parent.expression is child
+        child = parent
+        parent = parent.parent
+      when "AwaitExpression", "YieldExpression"
+        // The `await`/`yield` token precedes the operand; hoisting through
+        // here moves the lifted statement before the await/yield, which is
+        // semantically equivalent.
+        return unless collectLiftHoists(parent.children, child, hoists) is "found"
+        child = parent
+        parent = parent.parent
+      when "MemberExpression"
+        // `.foo.bar` chains: the base evaluates first.  collectLiftHoists
+        // finds where `child` sits in the children array and hoists any
+        // impure preceding sibling (none for a leading base, but handles
+        // exotic chains).
         return unless collectLiftHoists(parent.children, child, hoists) is "found"
         child = parent
         parent = parent.parent
