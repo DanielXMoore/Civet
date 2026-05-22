@@ -142,7 +142,7 @@ hx --health civet
 - [Astro, esbuild, NextJS, Farm, Rolldown, Rollup, Vite, and Webpack](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin-examples)
 - [Solid](https://github.com/edemaine/civet-solid-vite-template) ([older](https://github.com/orenelbaum/solid-civet-template))
 - [SolidStart](https://github.com/orenelbaum/solid-start-civet-template)
-- [Qwik](https://github.com/DanielXMoore/Civet/tree/main/integration/unplugin-examples/qwik) — add Civet's [Vite plugin](#build-tools) to `vite.config.ts` before `qwikCity()` / `qwikVite()`. `qwik build` runs `tsc --noEmit` separately from Vite, so prepend a `build.civet` script that calls `civet --emit-declaration` to generate `.d.ts` neighbors tsc can resolve.
+- [Qwik](https://github.com/DanielXMoore/Civet/tree/main/integration/unplugin-examples/qwik) — add Civet's [Vite plugin](#build-tools) to `vite.config.ts` before `qwikCity()` / `qwikVite()`. `qwik build` runs `tsc --noEmit` separately from Vite, so prepend a small script that runs `civet --emit-declaration` over your `.civet` sources to generate `.d.ts` neighbors tsc can resolve.
 - [p5.js](https://codesandbox.io/p/sandbox/drawing-points-civet-2tk4jq)
 
 ## Linters
