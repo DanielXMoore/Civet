@@ -768,6 +768,10 @@ You can override this behavior via: --civet rewriteCivetImports=.ext
     console.error `Civet watching for changes... (Ctrl+C to stop)`
     debounceTimers := new Map<string, ReturnType<typeof setTimeout>>
     watchers := new Map<string, FSWatcher>
+    // Re-watch timers tracked so close() can cancel them; otherwise a
+    // rename followed immediately by close() leaks a new watcher created
+    // 100 ms later into the already-cleared `watchers` map.
+    rewatchTimers := new Map<string, ReturnType<typeof setTimeout>>
     recompile := (filename: string): Promise<void> =>
       outputFilename := makeOutputFilename filename, options
       try
@@ -803,7 +807,17 @@ You can override this behavior via: --civet rewriteCivetImports=.ext
           if eventType is 'rename'
             watchers.get(filename)?.close()
             watchers.delete filename
-            setTimeout (=> startWatching filename), 100
+            // Defensive: the original watcher is closed above, so no
+            // second rename can race the pending timer.  Kept in case
+            // a future event source breaks that invariant.
+            existing := rewatchTimers.get filename
+            /* c8 ignore next -- unreachable under the closed-watcher invariant above */
+            clearTimeout existing if existing?
+            timer := setTimeout =>
+              rewatchTimers.delete filename
+              startWatching filename
+            , 100
+            rewatchTimers.set filename, timer
         watchers.set filename, watcher
       /* c8 ignore next 3 -- fsSync.watch already passed an existsSync check above; only fires on a TOCTOU race (file deleted between check and watch) or rare permission failures */
       catch error
@@ -824,6 +838,9 @@ You can override this behavior via: --civet rewriteCivetImports=.ext
         for timer of debounceTimers.values()
           clearTimeout timer
         debounceTimers.clear()
+        for timer of rewatchTimers.values()
+          clearTimeout timer
+        rewatchTimers.clear()
     }
 
   process.exitCode = Math.min 255, errorCount

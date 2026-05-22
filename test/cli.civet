@@ -1324,3 +1324,35 @@ describe "CLI --watch", ->
           "output unchanged after close cancelled the pending recompile"
       finally
         handle?.close()
+
+  it "cancels pending re-watch when closed mid rename-recovery window", ->
+    inputFile := await makeCivetTempFile "rwStart := 1\n"
+    outputFile := inputFile + '.tsx'
+    let handle: any
+    await captureProcess =>
+      handle = await cli ['-w', '--no-config', inputFile]
+      try
+        initial := await readFile outputFile, 'utf8'
+        await new Promise (r) => setTimeout r, 50
+        // Trigger a rename: this closes the watcher and queues a 100ms
+        // setTimeout that would re-arm startWatching on the same path.
+        { rename } := await import 'fs/promises'
+        tempPath := inputFile + '.tmp'
+        await writeFile tempPath, "rwAtomic := 7\n"
+        await rename tempPath, inputFile
+        // Close inside the 100ms re-arm window.  Without timer tracking
+        // a brand-new FSWatcher would be created post-close and leak
+        // into the cleared `watchers` map.
+        await new Promise (r) => setTimeout r, 30
+        handle?.close()
+        handle = null
+        // Past the 100ms re-arm window plus the 100ms debounce window:
+        // if a leaked watcher exists, the edit below would still recompile.
+        await new Promise (r) => setTimeout r, 250
+        await writeFile inputFile, "rwAfterClose := 9\n"
+        await new Promise (r) => setTimeout r, 250
+        after := await readFile outputFile, 'utf8'
+        assert.equal after, initial,
+          "output unchanged after close cancelled the rename re-watch"
+      finally
+        handle?.close()
