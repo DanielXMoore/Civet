@@ -488,6 +488,8 @@ function dynamizeFromClause(from: any)
   ["(", ...from, ")"]
 
 // Rewrite `import {…rest|nested}` to namespace import + const destructure.
+// Per-spec `type` imports get pulled into a separate native `import {type X}`
+// since a const-destructure can't bind types.
 function desugarStaticImport(decl: ImportDeclaration)
   { imports, from, children } := decl
   // `in` narrows the union — only ImportClauseNode has `needsDesugar`.
@@ -497,6 +499,19 @@ function desugarStaticImport(decl: ImportDeclaration)
 
   ref := makeRef "imports"
   star := { type: "Star", token: "*" }
+
+  allSpecs := namedImports.specifiers ?? []
+  tsSpecs := allSpecs.filter (s) => s.ts
+  runtimeSpecs := allSpecs.filter (s) => not s.ts
+
+  runtimeNames := runtimeSpecs.flatMap (s) => s.binding.names
+  if namedImports.rest
+    runtimeNames.push(...namedImports.rest.binding.names)
+  runtimeNamed := {
+    ...namedImports
+    specifiers: runtimeSpecs
+    names: runtimeNames
+  }
 
   namespaceClause := {
     type: "Declaration"
@@ -527,17 +542,32 @@ function desugarStaticImport(decl: ImportDeclaration)
     ts: decl.ts
   }
 
-  pattern := convertNamedImportsToObject namedImports, true, "destructuring"
+  pattern := convertNamedImportsToObject runtimeNamed, true, "destructuring"
   constDecl := {
     type: "Declaration"
     children: ["\nconst ", pattern, " = ", ref]
-    names: namedImports.names
+    names: runtimeNames
     decl: "const"
   }
 
+  typeImportDecl := if tsSpecs#
+    tsImports := {
+      type: "Declaration"
+      children: ["{", tsSpecs, "}"]
+      names: []
+      specifiers: tsSpecs
+    }
+    {
+      type: "ImportDeclaration"
+      children: ["import ", tsImports, " ", from, "\n"]
+      imports: tsImports
+      from
+      ts: true
+    }
+
   {
     type: "ImportDeclaration"
-    children: [importDecl, constDecl]
+    children: typeImportDecl ? [typeImportDecl, importDecl, constDecl] : [importDecl, constDecl]
     imports: newImportsClause
     from
     ts: decl.ts
