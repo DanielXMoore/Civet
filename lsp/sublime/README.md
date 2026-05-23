@@ -28,10 +28,20 @@ ln -s "$(pwd)/lsp/sublime" "$HOME/.config/sublime-text/Packages/Civet"
 ```
 
 **Windows**
+
+Build a local package directory first. This materializes the grammar file so the package does not depend on Git file symlink support on Windows:
+
 ```cmd
-mklink /D "%APPDATA%\Sublime Text\Packages\Civet" "%CD%\lsp\sublime"
+civet lsp\sublime\build.civet
 ```
 
+Then link the built package with a directory junction:
+
+```cmd
+mklink /J "%APPDATA%\Sublime Text\Packages\Civet" "%CD%\lsp\sublime\dist"
+```
+
+**All**
 Restart Sublime Text. `.civet` files should now syntax-highlight.
 
 ## Installing `civet-lsp`
@@ -64,4 +74,10 @@ This package is intended for dev / local install. It is not yet on [Package Cont
 
 ## Updating the grammar
 
-The grammar is a symlink to `../vscode/syntaxes/civet.json`. Edits to the VS Code grammar take effect in Sublime automatically — no copy step. Restart Sublime Text (or run *View → Syntax → Reload Syntax*) to pick up changes.
+The source grammar is a symlink to `../vscode/syntaxes/civet.json`. Edits to the VS Code grammar take effect in source installs automatically — no copy step. Restart Sublime Text (or run *View → Syntax → Reload Syntax*) to pick up changes.
+
+For Windows or packaged installs that use `dist`, rebuild after grammar changes:
+
+```bash
+civet lsp/sublime/build.civet
+```
