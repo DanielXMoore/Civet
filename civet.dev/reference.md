@@ -3196,6 +3196,23 @@ import {X: LocalX, Y: LocalY} from "./util"
 {X: LocalX, Y: LocalY} from "./util"
 </Playground>
 
+You can also use `...rest` (in any position — Civet normalizes it to the
+tail) and nested object/array patterns.  Since native ESM can't express
+these directly, the import rewrites to a namespace import plus a
+following `const` destructure:
+
+<Playground>
+import {a, b, ...rest} from "./y"
+import {a: {b, c}} from "./y"
+</Playground>
+
+Per-spec `type` imports are split into their own native type-import so
+the runtime destructure still binds cleanly:
+
+<Playground>
+import {a, type T, ...rest} from "./y"
+</Playground>
+
 ### Dynamic Import
 
 If it's not the start of a statement,

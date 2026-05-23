@@ -45,6 +45,8 @@ Hera 0.9.6+ emits real TypeScript types for each grammar rule's return value. Lo
 
 - **Vague array types in unions are a refactoring signal.** When `children` is part of a union (`Children | Foo | undefined`), TS won't expose `.push`/`.slice`/`.indexOf` because the brand on `Children` doesn't lift through union members. A cast to `ASTNode[]` at the call site unblocks immediate work, but the better long-term move is replacing the vague `ASTNode[]`/`Children` arm with a fixed-arity tuple of known types. Treat each cast as a marker for a follow-up refactor.
 
+- **`is` / `is not` are real TS narrowing.** Civet's `is` compiles to `===` (`is not` → `!==`), so TypeScript narrows discriminated unions on them exactly like any other equality check. `arr.filter .type is "Foo"` or `arr.find (item) => item.type is "Foo"` produce a typed `Foo[]` / `Foo | undefined` with no `as Extract<…>` cast or explicit `: item is Foo` predicate needed. If you find yourself adding one, check whether your input array type is the problem instead — the right fix is usually annotating the source array, not papering over the filter result.
+
 ## Workflow
 
 ### Build / typecheck
