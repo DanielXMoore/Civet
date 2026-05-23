@@ -6,10 +6,16 @@ title: Integrations
 
 ## Text Editors
 
-### VSCode
+### VS Code
 
-- [Civet VSCode extension](https://marketplace.visualstudio.com/items?itemName=DanielX.civet)
+- [Civet VS Code extension](https://marketplace.visualstudio.com/items?itemName=DanielX.civet), also available on [Open VSX](https://open-vsx.org/extension/DanielX/civet)
 - [Monaco / VS Code for the Web](https://github.com/DanielXMoore/Civet/tree/main/lsp/monaco) via `@danielx/civet-monaco`; see the [Playground](/playground) for a working example.
+
+### Sublime Text
+
+The [Civet Sublime Text package](https://github.com/DanielXMoore/Civet/tree/main/lsp/sublime) provides syntax highlighting and optional LSP integration via the [Sublime LSP package](https://lsp.sublimetext.io/) and `civet-lsp`.
+
+It is currently intended for dev / local install and is not yet on Package Control.
 
 ### Zed
 
