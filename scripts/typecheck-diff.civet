@@ -8,16 +8,23 @@
  *
  * This is the right tool for "did my PR add type errors?" — naive line-by-line
  * diffs flag every shifted preexisting error as new.  Diagnostics here are
- * matched in two passes:
+ * matched in three passes:
  *
  *   1. strict: (file, code, normalized message)
  *   2. message-only: (file, normalized message)
+ *   3. source-type-only: (file, code, source-side of "Type X is not
+ *      assignable to type Y" — ignores Y)
  *
  * Pass 2 catches errors where the code changed but the underlying message
  * didn't — e.g. when adding a function overload reclassifies many TS2345
  * "Argument not assignable" calls as TS2769 "No overload matches" with the
- * same embedded reason.  We deliberately do NOT match by (file, line, col)
- * alone — that paired genuinely-different errors at the same site.
+ * same embedded reason.  Pass 3 catches assignability errors whose target
+ * type (Y) shifted printout because an adjacent type widened — e.g.
+ * `Type '…' is not assignable to type 'ASTNode'` becoming
+ * `Type '…' is not assignable to type '…'` (target now >40 chars) when a
+ * field's type changes to a longer union.  We deliberately do NOT match by
+ * (file, line, col) alone — that paired genuinely-different errors at the
+ * same site.
  *
  * Normalization also alphabetizes union members within short quoted type
  * literals so that `'"let" | "const" | "var"'` and `'"const" | "let" | "var"'`
@@ -109,15 +116,39 @@ function parse(logPath: string): Diag[]
   out.push current if current
   out
 
-// Sort union members within short quoted literals so that
-// reorderings don't masquerade as new errors.  Skip literals with `<`
-// (generic type parameters) where naive splitting on ` | ` would corrupt.
+// Sort union members within short quoted literals so that reorderings don't
+// masquerade as new errors.  Sort both parenthesized sub-unions (so
+// `'(B | A)[]'` matches `'(A | B)[]'`) and top-level unions.  Skip literals
+// with `<` (generic type parameters) where naive splitting on ` | ` would
+// corrupt nested arguments.
 function sortQuotedUnions(s: string): string
   s.replace /'([^']+)'/g, (full, inner) =>
-    return full unless inner.includes " | "
     return full if inner.includes "<"
-    parts := inner.split(" | ").sort()
-    `'${parts.join " | "}'`
+    // Sort parenthesized sub-unions first
+    inner = inner.replace /\(([^()]+)\)/g, (sub, parts) =>
+      return sub unless parts.includes " | "
+      `(${parts.split(" | ").sort().join(" | ")})`
+    return `'${inner}'` unless inner.includes " | "
+    // Split on top-level ` | ` (outside parens) so the outer sort doesn't
+    // shred parenthesized groups.
+    tops: string[] := []
+    buf .= ""
+    depth .= 0
+    i .= 0
+    while i < inner.length
+      ch := inner[i]
+      if ch is "(" then depth++
+      else if ch is ")" then depth--
+      else if depth is 0 and inner.startsWith(" | ", i)
+        tops.push buf
+        buf = ""
+        i += 3
+        continue
+      buf += ch
+      i++
+    tops.push buf
+    return `'${inner}'` unless tops# > 1
+    `'${tops.sort().join " | "}'`
 
 function normalizeMessage(s: string): string
   scrubbed := s
@@ -126,6 +157,10 @@ function normalizeMessage(s: string): string
     .replace /\.\.\. \d+ more \.\.\./g, "…"
     .replace /\{[^{}]{40,}\}/g, "{…}"
     .replace /\([^()]{40,}\)/g, "(…)"
+    // Strip the TS2719-specific tail so reshuffles between TS2322 and TS2719
+    // (same underlying assignment failure, different error class) match via
+    // the loose pass.
+    .replace /[ ]Two different types with this name exist, but they are unrelated\./g, ""
   sortQuotedUnions scrubbed
 
 function strictKey(d: Diag): string
@@ -133,6 +168,17 @@ function strictKey(d: Diag): string
 
 function messageKey(d: Diag): string
   `${d.file}:${normalizeMessage d.message}`
+
+// Source-type pass: matches "Type 'X' is not assignable to type 'Y'"
+// errors by (file, code, source X) ignoring target Y.  TS narrows or widens
+// target-type printouts when nearby types gain fields, which would otherwise
+// rebucket the same underlying error across passes.  Returns a non-matching
+// sentinel for diagnostics that don't fit the assignability pattern so they
+// never cross-pair.
+function sourceTypeKey(d: Diag): string
+  m := normalizeMessage(d.message).match /^Type ('…'|'[^']*') is not assignable to type '/
+  return `${d.file}:${d.code}:no-source-pattern:${d.line}` unless m
+  `${d.file}:${d.code}:source=${m[1]}`
 
 function indexBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]>
   m := new Map<string, T[]>
@@ -154,32 +200,68 @@ type DiffResult =
   // without-code) pass.  Non-zero means the dedup is catching code-class
   // shuffles (TS2345 ↔ TS2769 from added overloads, etc.).
   loosePairs: number
+  // How many matched only via the source-type pass.  Non-zero means
+  // baseline assignability errors had their target-type printouts rewritten
+  // by adjacent type changes (e.g. ASTNode widening to a union).
+  sourcePairs: number
 
 function diff(left: Diag[], right: Diag[]): DiffResult
-  // Two-pass match: strict (file+code+msg), then message-only (file+msg).
-  // Each match consumes a `right` item so it's never used twice.
+  // Four-pass match.  Each match consumes a `right` item so it's never used
+  // twice.
+  //
+  //   1. strict same-line:    file+code+msg AND same (line, column)
+  //   2. strict any-line:     file+code+msg
+  //   3. message-only:        file+msg
+  //   4. source-type-only:    file+code+source-side of "Type X is not
+  //                           assignable to type Y" (ignores Y)
+  //
+  // Pass 1 first keeps reported regressions pinned to the lines that
+  // actually changed when bucket counts shift — otherwise iteration order
+  // can have a NEW error at line N consume the slot that a pre-existing
+  // error at line N would have filled.  Pass 3 catches code-class shuffles
+  // (TS2345 ↔ TS2769 from added overloads).  Pass 4 catches assignability
+  // errors whose target type Y rewrites because an adjacent type widens.
   byStrict := indexBy right, strictKey
   byMessage := indexBy right, messageKey
+  bySource := indexBy right, sourceTypeKey
   consumed := new Set<Diag>
 
-  function findMatch(buckets: Map<string, Diag[]>, key: string): boolean
+  function findInBucket(buckets: Map<string, Diag[]>, key: string, l: Diag, sameLineOnly: boolean): boolean
     bucket := buckets.get key
     return false unless bucket
     for r of bucket
-      if not consumed.has r
-        consumed.add r
-        return true
+      continue if consumed.has r
+      if sameLineOnly
+        continue unless r.line is l.line and r.column is l.column
+      consumed.add r
+      return true
     false
 
+  // Pass 1: same-line strict
+  passLeft1: Diag[] := []
+  for d of left
+    continue if findInBucket byStrict, strictKey(d), d, true
+    passLeft1.push d
+
+  // Pass 2: any-line strict
+  passLeft2: Diag[] := []
+  for d of passLeft1
+    continue if findInBucket byStrict, strictKey(d), d, false
+    passLeft2.push d
+
+  // Pass 3 + 4: message-only and source-type fallback
   unmatched: Diag[] := []
   loose .= 0
-  for d of left
-    continue if findMatch byStrict, strictKey d
-    if findMatch byMessage, messageKey d
+  source .= 0
+  for d of passLeft2
+    if findInBucket byMessage, messageKey(d), d, false
       loose++
       continue
+    if findInBucket bySource, sourceTypeKey(d), d, false
+      source++
+      continue
     unmatched.push d
-  { unmatched, loosePairs: loose }
+  { unmatched, loosePairs: loose, sourcePairs: source }
 
 regressions := diff newDiags, oldDiags
 fixed := diff oldDiags, newDiags
@@ -230,7 +312,9 @@ console.log `Old: ${oldDiags#} diagnostics  →  New: ${newDiags#} diagnostics`
 netText := `${net >= 0 ? "+" : ""}${net}`
 console.log `Net: ${netText}`
 loose := regressions.loosePairs + fixed.loosePairs
-console.log `Deduped ${loose} noise pair${loose is 1 ? '' : 's'} (code-class reshuffles, union reordering).` if loose > 0
+source := regressions.sourcePairs + fixed.sourcePairs
+noise := loose + source
+console.log `Deduped ${noise} noise pair${noise is 1 ? '' : 's'} (code-class reshuffles, union reordering, target-type rewrites).` if noise > 0
 console.log `Regressions: ${regressions.unmatched#}`
 console.log `Fixed: ${fixed.unmatched#}`
 if process.env.GITHUB_ACTIONS

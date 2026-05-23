@@ -10,6 +10,8 @@ import type {
   Declaration
   ExpressionNode
   IfStatement
+  ImportClauseNode
+  ImportDeclaration
   Initializer
   IterationStatement
   ParenthesizedExpression
@@ -485,6 +487,94 @@ function dynamizeFromClause(from: any)
     from.push ", {", assert.keyword, ":", assert.object, "}"
   ["(", ...from, ")"]
 
+// Rewrite `import {…rest|nested}` to namespace import + const destructure.
+// Per-spec `type` imports get pulled into a separate native `import {type X}`
+// since a const-destructure can't bind types.
+function processStaticImport(decl: ImportDeclaration)
+  { imports, from, children } := decl
+  // `"rest" in imports` narrows the union — only ImportClauseNode declares it.
+  return decl unless imports and "rest" in imports
+
+  namedImports := (imports.binding ? imports.children!.at(-1)! : imports) as ImportClauseNode
+  allSpecs := namedImports.specifiers!
+  // Rewrite only when native ESM can't express the shape: rest or pattern bindings.
+  return decl unless namedImports.rest or allSpecs.some (s) => s.pattern
+
+  ref := makeRef "imports"
+  star := { type: "Star", token: "*" }
+
+  tsSpecs := allSpecs.filter (s) => s.ts
+  runtimeSpecs := allSpecs.filter (s) => not s.ts
+
+  runtimeNames := runtimeSpecs.flatMap (s) => s.binding.names
+  if namedImports.rest
+    runtimeNames.push(...namedImports.rest.binding.names)
+  runtimeNamed := {
+    ...namedImports
+    specifiers: runtimeSpecs
+    names: runtimeNames
+  }
+
+  namespaceClause := {
+    type: "Declaration"
+    children: [star, " as ", ref]
+    names: [ref.id]
+    binding: ref
+    star
+  }
+
+  newImportsClause := if imports.binding
+    {
+      type: "Declaration"
+      children: [imports.binding, ", ", namespaceClause]
+      names: [...imports.binding.names, ref.id]
+      binding: imports.binding
+      star
+    }
+  else
+    namespaceClause
+
+  newImportChildren := children!.map (c) => c is imports ? newImportsClause : c
+
+  importDecl := {
+    type: "ImportDeclaration"
+    children: newImportChildren
+    imports: newImportsClause
+    from
+    ts: decl.ts
+  }
+
+  pattern := convertNamedImportsToObject runtimeNamed, true, "destructuring"
+  constDecl := {
+    type: "Declaration"
+    children: ["\nconst ", pattern, " = ", ref]
+    names: runtimeNames
+    decl: "const"
+  }
+
+  typeImportDecl := if tsSpecs#
+    tsImports := {
+      type: "Declaration"
+      children: ["{", tsSpecs, "}"]
+      names: []
+      specifiers: tsSpecs
+    }
+    {
+      type: "ImportDeclaration"
+      children: ["import ", tsImports, " ", from, "\n"]
+      imports: tsImports
+      from
+      ts: true
+    }
+
+  {
+    type: "ImportDeclaration"
+    children: typeImportDecl ? [typeImportDecl, importDecl, constDecl] : [importDecl, constDecl]
+    imports: newImportsClause
+    from
+    ts: decl.ts
+  } as ImportDeclaration
+
 function dynamizeImportDeclaration(decl: any)
   { imports } := decl
   { star, binding, specifiers } .= imports
@@ -638,6 +728,7 @@ function convertWithClause(withClause: WithClause, extendsClause?: [ASTLeaf, WSN
 
 export {
   convertWithClause
+  processStaticImport
   dynamizeImportDeclaration
   dynamizeImportDeclarationExpression
   prependStatementExpressionBlock
