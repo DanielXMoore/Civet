@@ -116,15 +116,39 @@ function parse(logPath: string): Diag[]
   out.push current if current
   out
 
-// Sort union members within short quoted literals so that
-// reorderings don't masquerade as new errors.  Skip literals with `<`
-// (generic type parameters) where naive splitting on ` | ` would corrupt.
+// Sort union members within short quoted literals so that reorderings don't
+// masquerade as new errors.  Sort both parenthesized sub-unions (so
+// `'(B | A)[]'` matches `'(A | B)[]'`) and top-level unions.  Skip literals
+// with `<` (generic type parameters) where naive splitting on ` | ` would
+// corrupt nested arguments.
 function sortQuotedUnions(s: string): string
   s.replace /'([^']+)'/g, (full, inner) =>
-    return full unless inner.includes " | "
     return full if inner.includes "<"
-    parts := inner.split(" | ").sort()
-    `'${parts.join " | "}'`
+    // Sort parenthesized sub-unions first
+    inner = inner.replace /\(([^()]+)\)/g, (sub, parts) =>
+      return sub unless parts.includes " | "
+      `(${parts.split(" | ").sort().join(" | ")})`
+    return `'${inner}'` unless inner.includes " | "
+    // Split on top-level ` | ` (outside parens) so the outer sort doesn't
+    // shred parenthesized groups.
+    tops: string[] := []
+    buf .= ""
+    depth .= 0
+    i .= 0
+    while i < inner.length
+      ch := inner[i]
+      if ch is "(" then depth++
+      else if ch is ")" then depth--
+      else if depth is 0 and inner.startsWith(" | ", i)
+        tops.push buf
+        buf = ""
+        i += 3
+        continue
+      buf += ch
+      i++
+    tops.push buf
+    return `'${inner}'` unless tops# > 1
+    `'${tops.sort().join " | "}'`
 
 function normalizeMessage(s: string): string
   scrubbed := s
@@ -182,32 +206,58 @@ type DiffResult =
   sourcePairs: number
 
 function diff(left: Diag[], right: Diag[]): DiffResult
-  // Three-pass match: strict (file+code+msg), message-only (file+msg),
-  // source-type-only (file+code+source).  Each match consumes a `right`
-  // item so it's never used twice.
+  // Four-pass match.  Each match consumes a `right` item so it's never used
+  // twice.
+  //
+  //   1. strict same-line:    file+code+msg AND same (line, column)
+  //   2. strict any-line:     file+code+msg
+  //   3. message-only:        file+msg
+  //   4. source-type-only:    file+code+source-side of "Type X is not
+  //                           assignable to type Y" (ignores Y)
+  //
+  // Pass 1 first keeps reported regressions pinned to the lines that
+  // actually changed when bucket counts shift — otherwise iteration order
+  // can have a NEW error at line N consume the slot that a pre-existing
+  // error at line N would have filled.  Pass 3 catches code-class shuffles
+  // (TS2345 ↔ TS2769 from added overloads).  Pass 4 catches assignability
+  // errors whose target type Y rewrites because an adjacent type widens.
   byStrict := indexBy right, strictKey
   byMessage := indexBy right, messageKey
   bySource := indexBy right, sourceTypeKey
   consumed := new Set<Diag>
 
-  function findMatch(buckets: Map<string, Diag[]>, key: string): boolean
+  function findInBucket(buckets: Map<string, Diag[]>, key: string, l: Diag, sameLineOnly: boolean): boolean
     bucket := buckets.get key
     return false unless bucket
     for r of bucket
-      if not consumed.has r
-        consumed.add r
-        return true
+      continue if consumed.has r
+      if sameLineOnly
+        continue unless r.line is l.line and r.column is l.column
+      consumed.add r
+      return true
     false
 
+  // Pass 1: same-line strict
+  passLeft1: Diag[] := []
+  for d of left
+    continue if findInBucket byStrict, strictKey(d), d, true
+    passLeft1.push d
+
+  // Pass 2: any-line strict
+  passLeft2: Diag[] := []
+  for d of passLeft1
+    continue if findInBucket byStrict, strictKey(d), d, false
+    passLeft2.push d
+
+  // Pass 3 + 4: message-only and source-type fallback
   unmatched: Diag[] := []
   loose .= 0
   source .= 0
-  for d of left
-    continue if findMatch byStrict, strictKey d
-    if findMatch byMessage, messageKey d
+  for d of passLeft2
+    if findInBucket byMessage, messageKey(d), d, false
       loose++
       continue
-    if findMatch bySource, sourceTypeKey d
+    if findInBucket bySource, sourceTypeKey(d), d, false
       source++
       continue
     unmatched.push d
