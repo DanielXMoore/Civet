@@ -1230,22 +1230,17 @@ function processFunctions(statements: ASTNode, config: any): void
     processParams(f)
     processReturn(f, config.implicitReturns)
 
-/**
-Return true if the value at `parentBlock.expressions[index]` is definitely
-discarded — i.e. nothing observes the iteration expression's result.
-Used to skip building a `results` accumulator when it would only be
-collected to be thrown away (issue #565).
-*/
+// Issue #565: when the iteration expression's value is observably discarded,
+// `expressionizeIteration` can skip the `results = []` accumulator scaffolding.
 function iterationValueDiscarded(parentBlock: BlockStatement, index: number, consumeRoot: boolean): boolean
-  // Not the last meaningful expression in its block → value dropped
+  tuple := parentBlock.expressions[index]
+  // Trailing `;` opts out of implicit return
+  return true if tuple[2]?.type is "SemicolonDelimiter"
+  // Followed by another statement
   return true unless isLastMeaningful parentBlock.expressions, index
-
-  // At module root → value dropped unless wrapped by --iife / --repl
+  // Module root: needed only when wrapped by --iife / --repl
   return not consumeRoot if parentBlock.root
-
-  // Inside a for/while/loop body the value is dropped; for everything else
-  // (function bodies, if/switch/try, declarations, …) stay conservative
-  // and assume the value is consumed.
+  // for/while/loop body discards; assume everything else consumes
   parentBlock.parent?.type is like "ForStatement", "IterationStatement"
 
 function isLastMeaningful(expressions: StatementTuple[], index: number): boolean
@@ -1291,18 +1286,15 @@ function expressionizeIteration(exp: IterationExpression, consumeRoot: boolean):
       . ["", statement]
 
   else
-    // If at top level of a block and value is discarded, emit just the
-    // bare statement — skip `results = []` declaration, body push wrapping
-    // and trailing reference (issue #565).
-    // Exclude reductions and empty-body comprehensions: those are explicit
-    // syntactic forms whose intent is to compute a specific value.
+    // #565: skip `results` accumulator when value is discarded. Reductions
+    // and empty bodies are explicit value-computing forms — leave them be.
     reduction := statement.type is "ForStatement" and statement.reduction
     parentInfo := if not async and not reduction and not statement.block.empty
       blockContainingStatement exp
     if parentInfo and iterationValueDiscarded parentInfo.block, parentInfo.index, consumeRoot
-      // Postfix-for blocks are created with bare: false, so no trailing
-      // semicolon is needed here.
-      statements = [["", statement]]
+      // Preserve original trailing semi so insertReturn skips this statement
+      origSemi := parentInfo.block.expressions[parentInfo.index][2]
+      statements = [["", statement, origSemi]]
     else
       resultsRef := statement.resultsRef ??= makeRef "results"
 
