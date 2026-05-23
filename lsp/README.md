@@ -9,6 +9,7 @@ Language server and editor integrations for Civet.
 | `server/` | `@danielx/civet-language-server` | Standalone, editor-agnostic Language Server |
 | `monaco/` | `@danielx/civet-monaco` | Monaco language registration, token, and LSP provider helpers |
 | `vscode/` | `@danielx/civet-vscode` | VS Code extension |
+| `sublime/` | — | Sublime Text package |
 | `zed/` | — | Zed editor extension (Rust/WASM) |
 | `tree-sitter/` | — | Tree-sitter grammar for syntax highlighting |
 
@@ -25,5 +26,6 @@ pnpm -C lsp/monaco build
 
 - **VS Code** — install from the [marketplace](https://marketplace.visualstudio.com/items?itemName=DanielX.civet), or see `vscode/` to develop locally
 - **Monaco** — use `@danielx/civet-monaco` with `@danielx/civet-language-server/browser`; see `monaco/`
+- **Sublime Text** — see `sublime/`
 - **Zed** — see `zed/`
 - **Neovim / other LSP clients** — run `civet-lsp --stdio`; see [integrations docs](https://civet.dev/integrations)
