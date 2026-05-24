@@ -86,6 +86,7 @@ import type {
   AssignmentExpression,
   ASTNode,
   ASTRef,
+  Binding,
   BindingRestElement,
   BlockStatement,
   CaseBlock,
@@ -5295,16 +5296,24 @@ CoffeeForStatementParameters
 
       // TODO: Exp ref if exp is not a literal or identifier
 
+      // When declaration carries a const/let/var keyword (ForDeclaration node),
+      // its children render as `const a`; use just the binding (with leading
+      // whitespace trimmed) when emitting it as an expression operand for the
+      // hasProp guard or the value-index lookup.
+      declarationExp := declaration.binding
+        ? trimFirstSpace(declaration.binding)
+        : declaration
+
       if declaration.own
         hasPropRef := getHelperRef("hasProp")
 
-        blockPrefix./**/push(["", ["if (!", hasPropRef, "(", exp, ", ", declaration, ")) continue"], ";"])
+        blockPrefix./**/push(["", ["if (!", hasPropRef, "(", exp, ", ", declarationExp, ")) continue"], ";"])
 
       // index is actually value in Coffee "for of", y = z[x]
       if index
         blockPrefix./**/push(["", {
           type: "AssignmentExpression",
-          children: [index, " = ", exp, "[", declaration, "]"],
+          children: [index, " = ", exp, "[", declarationExp, "]"],
           names: index.names,
         }, ";"])
 
@@ -5334,18 +5343,27 @@ CoffeeForStatementParameters
         ? [expRef, " = ", trimFirstSpace(exp), ", "]
         : []
 
-      blockPrefix./**/push(["", {
-        type: "AssignmentExpression",
-        children: [varRef, " = ", expRef, "[", indexAssignment, counterRef, "]"],
-        names: assignmentNames,
-      }, ";"])
+      if varRef.decl
+        // With a declaration kind (const/let/var), emit a Declaration node so
+        // autoVar doesn't also hoist the name. varRef already includes the
+        // keyword in its children.
+        blockPrefix./**/push(["", {
+          type: "Declaration",
+          children: [varRef, " = ", expRef, "[", indexAssignment, counterRef, "]"],
+          names: [],
+        }, ";"])
+      else
+        blockPrefix./**/push(["", {
+          type: "AssignmentExpression",
+          children: [varRef, " = ", expRef, "[", indexAssignment, counterRef, "]"],
+          names: assignmentNames,
+        }, ";"])
 
-      declaration = {
-        type: "Declaration",
-        children: ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", expRef, ".length"],
-        names: []
-      }
-
+      // The for-head Declaration (`let i = 0, len = arr.length` or, for a
+      // literal negative step, `let i = arr.length - 1`). Distinct from the
+      // CoffeeForDeclaration `declaration` capture, whose shape is the
+      // iteration variable; this is the loop counter init.
+      let forHeadChildren = ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", expRef, ".length"]
       condition .= [counterRef, " < ", lenRef, "; "]
 
       if step
@@ -5355,11 +5373,8 @@ CoffeeForStatementParameters
           increment = [" +=", ...stepWs, stepExp]
           // Negative step loops are reversed
           if stepExp.raw[0] is "-"
-            declaration = {
-              type: "Declaration",
-              children: ["let ", ...expRefDec, counterRef, " = ", expRef, ".length - 1"],
-              names: []
-            }
+            forHeadChildren =
+              ["let ", ...expRefDec, counterRef, " = ", expRef, ".length - 1"]
             condition = [counterRef, " >= 0; "]
         else
           increment = [" +=", ...stepWs, stepExp, {
@@ -5367,15 +5382,15 @@ CoffeeForStatementParameters
             message: "TODO: Support non-literal step in CoffeeScript for loops",
           }]
 
-        return {
-          declaration,
-          children: [$1, open, declaration, "; ", ...condition, counterRef, increment, close],
-          blockPrefix,
-        }
+      forHead := {
+        type: "Declaration"
+        children: forHeadChildren
+        names: []
+      }
 
       return {
-        declaration,
-        children: [$1, open, declaration, "; ", ...condition, counterRef, increment, close],
+        declaration: forHead,
+        children: [$1, open, forHead, "; ", ...condition, counterRef, increment, close],
         blockPrefix,
       }
 
@@ -5397,12 +5412,22 @@ CoffeeForIndex
 
 CoffeeForDeclaration
   # NOTE: Coffee doesn't allow expression bindings like `for a.x in b`
-  ( __ Own )?:own ForBinding:binding ->
+  ( __ Own )?:own ( __ LetOrConstOrVar )?:kind ForBinding:binding ->
+    if kind
+      return {
+        type: "ForDeclaration",
+        own: Boolean(own),
+        decl: kind[1].token,
+        kind: kind[1],
+        binding,
+        children: [kind[0], kind[1], binding],
+        names: binding.names,
+      }
     return {
       type: "AssignmentExpression",
       own: Boolean(own),
-      children: [$2],
-      names: $2.names,
+      children: [binding],
+      names: binding.names,
     }
 
 ForStatementParameters
@@ -5479,14 +5504,13 @@ ForDeclaration
 
 # https://262.ecma-international.org/#prod-ForBinding
 ForBinding
-  ( BindingPattern / BindingIdentifier ):pattern TypeSuffix?:typeSuffix ->
-    typeSuffix ??= pattern.typeSuffix
+  ( BindingPattern / BindingIdentifier ):pattern TypeSuffix?:typeSuffix ::Binding ->
     return {
       type: "Binding",
-      children: [ pattern, typeSuffix ],
+      children: [ pattern, typeSuffix ?? pattern.typeSuffix ],
       names: pattern.names,
       pattern,
-      typeSuffix,
+      typeSuffix: typeSuffix ?? pattern.typeSuffix,
       splices: [],
       thisAssignments: [],
     }

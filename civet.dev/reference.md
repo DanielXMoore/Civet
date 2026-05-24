@@ -3703,6 +3703,19 @@ for item from iterable
   console.log item
 </Playground>
 
+You can also declare the loop variable explicitly with `const`, `let`,
+or `var`, which avoids the need for `autoVar`:
+
+<Playground>
+"civet coffeeForLoops"
+for const item in array
+  console.log item
+for let key of object
+  console.log key
+for const item from iterable
+  console.log item
+</Playground>
+
 ### CoffeeScript Do Blocks
 
 This option disables [Civet `do` blocks](#do-blocks)
