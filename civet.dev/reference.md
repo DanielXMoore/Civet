@@ -519,6 +519,15 @@ for i of [0...a#]
 
 See also [length shorthand](#length-shorthand).
 
+### Random Indexing
+
+You can use `a[?]` to select a random element from an array:
+
+<Playground>
+greeting := greetings[?]
+getGrid()[?] = newValue
+</Playground>
+
 ## Strings
 
 Strings can span multiple lines:

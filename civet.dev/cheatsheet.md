@@ -325,7 +325,7 @@ and [non-identifier Unicode codepoints in identifiers](/reference#unicode-identi
 | Symbol | Meanings |
 |--------|----------|
 | space | Function call `f x`; TypeScript argument `Set T` |
-| `?` | Non-null test `x?`, `if x? := foo()`; non-null access `x?.y`, `x?y`, `x?(...)`, `x?[...]`; null coalescing `x ?? y` (`x ? y` with `coffeeBinaryExistential`); TypeScript optionals `(x?: T) => x`; optional declaration `let x?: T`; optional types `T?`, `T??`; instanceof shorthand `x <? Class`; typeof shorthand `x <? "string"`; if/then/else ternary `x ? y : z` |
+| `?` | Non-null test `x?`, `if x? := foo()`; non-null access `x?.y`, `x?y`, `x?(...)`, `x?[...]`; random indexing `x[?]`; null coalescing `x ?? y` (`x ? y` with `coffeeBinaryExistential`); TypeScript optionals `(x?: T) => x`; optional declaration `let x?: T`; optional types `T?`, `T??`; instanceof shorthand `x <? Class`; typeof shorthand `x <? "string"`; if/then/else ternary `x ? y : z` |
 | `!` | Negation `!x`; negated operators `!=`, `!==`, `!in`, `!instanceof`, `is !like`, `!custom`, `!<?`, `!^`, `!^^`; object flag `{!x}`; JSX flag `<div !draggable>`; TypeScript non-null assertion `x!`; non-null assertion access `x!.y`, `x!y`; non-null type `T!`; forced type assertion `as!`; negated extends shorthand `!<` |
 | `@` | this shorthand `@`; this properties `@x`; method bind `x@y`, `x@.y`, `@@x`; decorators `@@d` |
 | `#` | private properties `x.#y`, `#y`; length shorthand `x#`, `#`; block comments `### ... ###`; one-line comments `# ...` with `coffeeComment`; CoffeeScript string interpolations `"x#{y}"` with `coffeeInterpolation` |
