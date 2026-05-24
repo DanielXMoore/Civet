@@ -13,6 +13,7 @@ import type {
 
 import {
   checkValidLHS
+  isBigIntLiteral
   literalValue
   makeLeftHandSideExpression
   makeNode
@@ -91,32 +92,52 @@ function processRangeExpression(start: ASTNode, ws1: ASTNode, range: RangeDots, 
             .join ", "
           . "]"
         children.unshift range.error if range.error?
+    else if startValue <? "bigint" and endValue <? "bigint" and range.increasing?
+      step := range.increasing ? 1n : -1n
+      signedDiff := range.increasing ? endValue - startValue : startValue - endValue
+      length := Number(signedDiff) + lengthAdjust
+      startValue += step unless range.left.inclusive
+      if length <= 20
+        // Use array of literal bigint values
+        startBig := startValue as bigint
+        children =
+          . "["
+          . Array.from({ length }, (_, i) => `${startBig + BigInt(i) * step}n`)
+            .join ", "
+          . "]"
+        children.unshift range.error if range.error?
 
   unless children?
+    bigint := isBigIntLiteral(start) or isBigIntLiteral(end)
+    one := bigint ? "1n" : "1"
     if range.increasing?
       sign := range.increasing ? "+" : "-"
+      ascHelper := bigint ? 'bigintRange' : 'range'
+      descHelper := bigint ? 'bigintRevRange' : 'revRange'
       end = makeLeftHandSideExpression end
       children =
-        . getHelperRef range.increasing ? 'range' : 'revRange'
+        . getHelperRef range.increasing ? ascHelper : descHelper
         . "("
         . if range.left.inclusive
             start
           else
-            [makeLeftHandSideExpression(start), ` ${sign} 1`]
+            [makeLeftHandSideExpression(start), ` ${sign} ${one}`]
         . ","
         . if range.right.inclusive
-            [makeLeftHandSideExpression(end), ` ${sign} 1`]
+            [makeLeftHandSideExpression(end), ` ${sign} ${one}`]
           else
             end
         . ...ws1, ")"
     else
+      ascHelper := bigint ? 'bigintRange' : 'range'
+      descHelper := bigint ? 'bigintRevRange' : 'revRange'
       children =
         . "((s, e) => s > e ? "
-        . getHelperRef("revRange"), "(s, e"
-        . if range.right.inclusive then " - 1"
+        . getHelperRef(descHelper), "(s, e"
+        . if range.right.inclusive then ` - ${one}`
         . ") : "
-        . getHelperRef("range"), "(s, e"
-        . if range.right.inclusive then " + 1"
+        . getHelperRef(ascHelper), "(s, e"
+        . if range.right.inclusive then ` + ${one}`
         . "))"
         . "(", start, ...ws1, comma, ws2, end, ")"
 
@@ -142,23 +163,26 @@ function forRange(
   counterRef := makeRef("i")
 
   infinite := end is like {type: "Identifier", name: "Infinity"}
+  bigint := isBigIntLiteral(start) or isBigIntLiteral(end)
+  one := bigint ? 1n : 1
+  negOne := bigint ? -1n : -1
 
   let stepRef, asc: boolean?
   if stepExp
     stepExp = trimFirstSpace(stepExp)
     stepRef = maybeRef(stepExp, "step")
   else if infinite
-    stepExp = stepRef = makeNumericLiteral 1
+    stepExp = stepRef = makeNumericLiteral one
   else if increasing?
     if increasing
-      stepExp = stepRef = makeNumericLiteral 1
+      stepExp = stepRef = makeNumericLiteral one
       asc = true
     else
-      stepExp = stepRef = makeNumericLiteral -1
+      stepExp = stepRef = makeNumericLiteral negOne
       asc = false
   stepValue := if stepExp?.type is "Literal"
     literalValue stepExp
-  if stepValue <? "number"
+  if stepValue <? "number" or stepValue <? "bigint"
     asc = stepValue > 0
 
   // start needs to be ref'd to compute start <= end, unless we know direction
@@ -222,14 +246,16 @@ function forRange(
     : [counterRef, " < ", endRef, " : ", counterRef, " > ", endRef]
 
   condition :=
-    infinite or stepValue is 0 ? [] :
+    infinite or stepValue is 0 or stepValue is 0n ? [] :
     asc? ? (asc ? counterPart[0...3] : counterPart[4..]) :
-    stepRef ? [stepRef, " !== 0 && (", stepRef, " > 0 ? ", ...counterPart, ")"] :
+    // `!= 0` (loose) so a dynamic 0n step is also treated as zero — `0n !== 0`
+    // is always true, which would let `i += 0n` infinite-loop.
+    stepRef ? [stepRef, " != 0 && (", stepRef, " > 0 ? ", ...counterPart, ")"] :
     [ascRef, " ? ", ...counterPart]
 
   increment :=
-    stepValue is +1 ? [...varAssign, "++", counterRef] :
-    stepValue is -1 ? [...varAssign, "--", counterRef] :
+    stepValue is +1 or stepValue is 1n ? [...varAssign, "++", counterRef] :
+    stepValue is -1 or stepValue is -1n ? [...varAssign, "--", counterRef] :
     stepRef
       ? [...varAssign, counterRef, " += ", stepRef]
       : ascRef
