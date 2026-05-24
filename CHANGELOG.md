@@ -4,6 +4,33 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.11 (2026-05-24, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.10...v0.11.11), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.11))
+* Dev: typecheck-diff in CI [[#2083](https://github.com/DanielXMoore/Civet/pull/2083)]
+* Add comptime Float16Array support [[#2084](https://github.com/DanielXMoore/Civet/pull/2084)]
+* tree-sitter: fix triple-quote and triple-backtick parsing [[#2081](https://github.com/DanielXMoore/Civet/pull/2081)]
+* LSP: add `--version` / `--help` flags, default to `--stdio` [[#2082](https://github.com/DanielXMoore/Civet/pull/2082)]
+* LSP: improve compatibility by renaming duplicate named groups in import-path regex [[#2086](https://github.com/DanielXMoore/Civet/pull/2086)]
+* CI typecheck: rebuild base in its own worktree [[#2085](https://github.com/DanielXMoore/Civet/pull/2085)]
+* CI: Clarify typecheck-diff output [[#2087](https://github.com/DanielXMoore/Civet/pull/2087)]
+* Dev: Reduce type errors by 50 [[#2088](https://github.com/DanielXMoore/Civet/pull/2088)]
+* Dev: Update @danielx/hera 0.9.2 → 0.9.7 [[#2038](https://github.com/DanielXMoore/Civet/pull/2038)]
+* Dev: Remove legacy .civet/hera-plugin.mjs [[#2089](https://github.com/DanielXMoore/Civet/pull/2089)]
+* CLI: parallelize compile loop [[#2080](https://github.com/DanielXMoore/Civet/pull/2080)]
+* Dev: Property children false-leak + literal-leaf type tags [[#2090](https://github.com/DanielXMoore/Civet/pull/2090)]
+* fix: `try … catch` in expression position crashes insertReturn (#2093) [[#2095](https://github.com/DanielXMoore/Civet/pull/2095)]
+* Grammar: align `const`/`let`/`var` and template-expression scopes with JS [[#2094](https://github.com/DanielXMoore/Civet/pull/2094)]
+* Dev: Exclude lsp/zed/grammars from coverage scans [[#2096](https://github.com/DanielXMoore/Civet/pull/2096)]
+* Add -w/--watch flag for continuous compilation [[#2048](https://github.com/DanielXMoore/Civet/pull/2048)]
+* Sublime Text: add `lsp/sublime/` dev-install package [[#2097](https://github.com/DanielXMoore/Civet/pull/2097)]
+* Support destructuring-style imports with rest and nested patterns [[#2092](https://github.com/DanielXMoore/Civet/pull/2092)]
+* Drop results accumulator from postfix-for when value is discarded [[#2098](https://github.com/DanielXMoore/Civet/pull/2098)]
+* Fix unicode identifiers in shorthand object forms [[#2102](https://github.com/DanielXMoore/Civet/pull/2102)]
+* Fix BigInt ranges as values and in exclusive for-of forms [[#2103](https://github.com/DanielXMoore/Civet/pull/2103)]
+* Add esBraceBlock flag so `=> {…}` is a block, not an object [[#2104](https://github.com/DanielXMoore/Civet/pull/2104)]
+* feat: support declaration types in coffeeForLoops (#583) [[#2101](https://github.com/DanielXMoore/Civet/pull/2101)]
+* Add `array[?]` shorthand for random element selection [[#2105](https://github.com/DanielXMoore/Civet/pull/2105)]
+* Coffee classes: `name: value` colon form becomes prototype assignment [[#2107](https://github.com/DanielXMoore/Civet/pull/2107)]
+
 ## 0.11.10 (2026-05-18, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.9...v0.11.10), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.10))
 * Coverage: re-enable `--parallel` for test runs [[#2064](https://github.com/DanielXMoore/Civet/pull/2064)]
 * LSP: implement workspace/symbol [[#2049](https://github.com/DanielXMoore/Civet/pull/2049)]
