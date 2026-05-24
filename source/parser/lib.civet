@@ -1691,6 +1691,39 @@ function processBreaksContinues(statements: StatementTuple[]): void
     label.children.push label.name = parent.label.name
     delete label.special
 
+/**
+ * Construct `ClassName.prototype<access> = exp` for a lifted
+ * CoffeeClassPrototype entry, where <access> is `.name` for plain
+ * identifiers, `[Symbol.foo]` for symbol-keyed elements, or `[key]`
+ * for other computed forms.
+ */
+function makePrototypeAssignment(className: ASTNode, id: ASTNode, exp: ASTNode): ASTNode
+  access: ASTNode .=
+    // SymbolElement already has the form `["[", SymbolLiteral, "]"]`
+    if Array.isArray id then id
+    // ComputedPropertyName children already include the brackets.
+    else if (id as ASTNodeObject)?.type is "ComputedPropertyName" then id
+    // Plain identifier (including LengthShorthand) gets dot access,
+    // unless its name was a non-ASCII unicode identifier that had to
+    // be rendered via brackets to preserve the original source name.
+    else if (id as Identifier)?.type is "Identifier"
+      if (id as Identifier).unicode
+        ["[\"", (id as Identifier).unicode, "\"]"]
+      else
+        [".", id]
+    // Numeric/string literals (and any other ClassElementName shape)
+    // round-trip via bracket access.
+    else
+      ["[", id, "]"]
+  return makeNode {
+    type: "AssignmentExpression"
+    children: [className, ".prototype", access, " = ", exp]
+    lhs: className as any
+    assigned: className
+    expression: exp as any
+    names: []
+  }
+
 function processCoffeeClasses(statements: StatementTuple[]): void
   for each ce of gatherRecursiveAll statements, .type is "ClassExpression"
     { expressions } := ce.body
@@ -1741,24 +1774,61 @@ function processCoffeeClasses(statements: StatementTuple[]): void
       replaceNode public_static_arrow_function_assignment, convertArrowFunctionToMethod(id, public_static_arrow_function_assignment.expression)
 
     // In a CoffeeScript class, `x = y` makes a private variable x visible
-    // only within the class scope only, implemented via IIFE wrapper
+    // only within the class scope only, implemented via IIFE wrapper.
+    // In a CoffeeScript class, `name: value` (where value is not a
+    // function) is a prototype assignment Class.prototype.name = value,
+    // also lifted out of the class body via the same IIFE wrapper.
     privates := expressions.filter &[1]?.type is "CoffeeClassPrivate"
-    continue unless privates#
+    prototypes := expressions.filter &[1]?.type is "CoffeeClassPrototype"
+    continue unless privates# or prototypes#
 
     { parent } := ce
 
-    // Remove privates from class body, in place
+    // Remove privates and prototypes from class body, in place
     for i of [expressions# >.. 0]
-      if expressions[i][1]?.type is "CoffeeClassPrivate"
+      t := expressions[i][1]?.type
+      if t is "CoffeeClassPrivate" or t is "CoffeeClassPrototype"
         expressions.splice i, 1
 
-    wrapped .= wrapIIFE
-      . ...privates
-      . [indent, wrapWithReturn ce]
+    let wrapped: ASTNode
+    if prototypes#
+      // The class needs a local name to receive prototype assignments.
+      // Named classes use their declared name directly; anonymous
+      // classes are bound to a generated ref via `let _Class = class {}`
+      // inside the IIFE.
+      let className: ASTNode
+      let classStatement: ASTNode = ce
+      if ce.binding
+        className = ce.name as! string
+      else
+        classRef := makeRef "_Class"
+        className = classRef
+        classStatement = makeNode {
+          type: "Declaration"
+          children: ["let ", classRef, " = ", ce]
+          names: []
+        } as! Declaration
+      body: StatementTuple[] := [...privates]
+      body.push [indent, classStatement]
+      for [, p] of prototypes
+        body.push [indent, makePrototypeAssignment(className, p.id!, p.exp!)]
+      body.push [indent, makeNode {
+        type: "ReturnStatement"
+        children: ["return ", className]
+        expression: className
+      }]
+      wrapped = wrapIIFE body
+    else
+      wrapped = wrapIIFE
+        . ...privates
+        . [indent, wrapWithReturn ce]
 
-    // Outer assignment
-    if { binding } .= ce
-      binding = trimFirstSpace binding
+    // Outer assignment for named classes: `class Foo` becomes
+    // `Foo = (IIFE)` so the IIFE result is captured into the binding.
+    // Anonymous classes skip this — replaceNode below puts the IIFE
+    // directly where the ClassExpression was.
+    if ce.binding
+      binding .= trimFirstSpace ce.binding
       wrapped = makeNode {
         type: "AssignmentExpression"
         children: [binding, " = ", wrapped]
