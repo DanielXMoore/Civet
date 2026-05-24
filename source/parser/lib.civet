@@ -27,6 +27,9 @@ import type {
   DoStatement
   ElseClause
   FinallyClause
+  ClassElementName
+  CoffeeClassPrototype
+  ExpressionNode
   ForStatement
   FunctionSignature
   IfStatement
@@ -1697,18 +1700,18 @@ function processBreaksContinues(statements: StatementTuple[]): void
  * identifiers, `[Symbol.foo]` for symbol-keyed elements, or `[key]`
  * for other computed forms.
  */
-function makePrototypeAssignment(className: ASTNode, id: ASTNode, exp: ASTNode): ASTNode
+function makePrototypeAssignment(className: ASTNode, id: ClassElementName, exp: ExpressionNode | ASTRef): ASTNode
   access: ASTNode .=
     // SymbolElement already has the form `["[", SymbolLiteral, "]"]`
     if Array.isArray id then id
     // ComputedPropertyName children already include the brackets.
-    else if (id as ASTNodeObject)?.type is "ComputedPropertyName" then id
+    else if id.type is "ComputedPropertyName" then id
     // Plain identifier (including LengthShorthand) gets dot access,
     // unless its name was a non-ASCII unicode identifier that had to
     // be rendered via brackets to preserve the original source name.
-    else if (id as Identifier)?.type is "Identifier"
-      if (id as Identifier).unicode
-        ["[\"", (id as Identifier).unicode, "\"]"]
+    else if id.type is "Identifier"
+      if id.unicode
+        ["[\"", id.unicode, "\"]"]
       else
         [".", id]
     // Numeric/string literals (and any other ClassElementName shape)
@@ -1779,8 +1782,13 @@ function processCoffeeClasses(statements: StatementTuple[]): void
     // function) is a prototype assignment Class.prototype.name = value,
     // also lifted out of the class body via the same IIFE wrapper.
     privates := expressions.filter &[1]?.type is "CoffeeClassPrivate"
-    prototypes := expressions.filter &[1]?.type is "CoffeeClassPrototype"
-    continue unless privates# or prototypes#
+    // Iterate-and-narrow to get a properly-typed CoffeeClassPrototype[]:
+    // `filter` can't carry a tuple-element narrowing into the result.
+    prototypeNodes: CoffeeClassPrototype[] := []
+    for [, p] of expressions
+      if p?.type is "CoffeeClassPrototype"
+        prototypeNodes.push p
+    continue unless privates# or prototypeNodes#
 
     { parent } := ce
 
@@ -1791,7 +1799,7 @@ function processCoffeeClasses(statements: StatementTuple[]): void
         expressions.splice i, 1
 
     let wrapped: ASTNode
-    if prototypes#
+    if prototypeNodes#
       // The class needs a local name to receive prototype assignments.
       // Named classes use their declared name directly; anonymous
       // classes are bound to a generated ref via `let _Class = class {}`
@@ -1810,8 +1818,8 @@ function processCoffeeClasses(statements: StatementTuple[]): void
         } as! Declaration
       body: StatementTuple[] := [...privates]
       body.push [indent, classStatement]
-      for [, p] of prototypes
-        body.push [indent, makePrototypeAssignment(className, p.id!, p.exp!)]
+      for p of prototypeNodes
+        body.push [indent, makePrototypeAssignment(className, p.id, p.exp)]
       body.push [indent, makeNode {
         type: "ReturnStatement"
         children: ["return ", className]
