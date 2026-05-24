@@ -4,38 +4,36 @@ Sublime Text 4 package providing Civet syntax highlighting and LSP wiring.
 
 ## Features
 
-- Syntax highlighting via the TextMate grammar at [`Civet.tmLanguage.json`](./Civet.tmLanguage.json) (a symlink to `../vscode/syntaxes/civet.json` — single source of truth shared with the VS Code extension)
+- Syntax highlighting via a generated TextMate plist grammar, built from the VS Code grammar at `../vscode/syntaxes/civet.json`
 - Optional LSP integration via the [Sublime LSP package](https://lsp.sublimetext.io/) and `civet-lsp` (diagnostics, completions, hover, go-to-definition)
 
 ## Requirements
 
-- Sublime Text 4 (build 4075 or later — needed for `.tmLanguage.json` support)
+- Sublime Text 4
 - For LSP: the [LSP package](https://packagecontrol.io/packages/LSP) from Package Control
 - For LSP: `civet-lsp` on your `PATH`
 
 ## Installing as a dev package
 
-Sublime Text loads any folder placed under its `Packages/` directory as a package. Symlink this directory in:
+Build a local package directory first. This converts the shared VS Code JSON grammar into Sublime's TextMate plist format:
+
+```bash
+pnpm -C lsp/sublime build
+```
+
+Sublime Text loads any folder placed under its `Packages/` directory as a package. Symlink the generated `dist` directory in:
 
 **macOS**
 ```bash
-ln -s "$(pwd)/lsp/sublime" "$HOME/Library/Application Support/Sublime Text/Packages/Civet"
+ln -s "$(pwd)/lsp/sublime/dist" "$HOME/Library/Application Support/Sublime Text/Packages/Civet"
 ```
 
 **Linux**
 ```bash
-ln -s "$(pwd)/lsp/sublime" "$HOME/.config/sublime-text/Packages/Civet"
+ln -s "$(pwd)/lsp/sublime/dist" "$HOME/.config/sublime-text/Packages/Civet"
 ```
 
 **Windows**
-
-Build a local package directory first. This materializes the grammar file so the package does not depend on Git file symlink support on Windows:
-
-```cmd
-civet lsp\sublime\build.civet
-```
-
-Then link the built package with a directory junction:
 
 ```cmd
 mklink /J "%APPDATA%\Sublime Text\Packages\Civet" "%CD%\lsp\sublime\dist"
@@ -61,6 +59,12 @@ export PATH="/path/to/Civet/lsp/server/bin:$PATH"
 
 (The in-repo binary requires `pnpm -C lsp/server build` first.)
 
+On Windows, if you use the in-repo binary instead of a global npm install, point Sublime at Node explicitly because `lsp\server\bin\civet-lsp.js` is not a Windows command shim:
+
+```js
+"command": ["node", "C:\\path\\to\\Civet\\lsp\\server\\bin\\civet-lsp.js", "--stdio"]
+```
+
 ## Wiring up LSP
 
 1. Install the [LSP package](https://packagecontrol.io/packages/LSP) from Package Control.
@@ -74,10 +78,27 @@ This package is intended for dev / local install. It is not yet on [Package Cont
 
 ## Updating the grammar
 
-The source grammar is a symlink to `../vscode/syntaxes/civet.json`. Edits to the VS Code grammar take effect in source installs automatically — no copy step. Restart Sublime Text (or run *View → Syntax → Reload Syntax*) to pick up changes.
-
-For Windows or packaged installs that use `dist`, rebuild after grammar changes:
+The Sublime grammar is generated from `../vscode/syntaxes/civet.json`. Rebuild after grammar changes:
 
 ```bash
-civet lsp/sublime/build.civet
+pnpm -C lsp/sublime build
 ```
+
+## Debugging in Sublime Text
+
+Open the Sublime console with <kbd>Ctrl</kbd>+<kbd>`</kbd> and check for package load errors. With a `.civet` file focused, these console checks are useful:
+
+```py
+view.settings().get("syntax")
+view.scope_name(0)
+sublime.find_resources("Civet.tmLanguage")
+sublime.load_resource("Packages/Civet/Civet.tmLanguage")[:200]
+```
+
+Expected results:
+
+- `view.settings().get("syntax")` points at `Packages/Civet/Civet.tmLanguage`
+- `view.scope_name(0)` includes `source.civet`
+- `find_resources` includes `Packages/Civet/Civet.tmLanguage`
+
+For LSP issues after syntax highlighting works, run **LSP: Toggle Log Panel** and **LSP: Restart Servers** from the command palette. The LSP client only starts when the focused view's selector matches `source.civet`, so syntax highlighting must work first.

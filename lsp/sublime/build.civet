@@ -1,19 +1,196 @@
-{ copyFileSync, mkdirSync, rmSync } from node:fs
+// This script converts the VS Code TextMate JSON grammar to plist/XML format
+// that Sublime Text's legacy grammar loader can read.
+//
+// Some VS Code TextMate constructs are accepted by vscode-textmate but not by
+// Sublime's legacy grammar loader. Normalize only those known incompatibilities
+// while keeping the source grammar as the single source of truth.
+
+{ copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from node:fs
 { dirname, join, relative } from node:path
 { fileURLToPath } from node:url
 
-sublimeDir := dirname fileURLToPath import.meta.url
-repoRoot := join sublimeDir, "../.."
-outDir := join sublimeDir, "dist"
+// JSON -> XML conversion
 
-rmSync outDir, recursive: true, force: true
-mkdirSync outDir, recursive: true
+xmlEscapes: Record<string, string> :=
+  "&": "&amp;"
+  "<": "&lt;"
+  ">": "&gt;"
 
-copyFileSync
-  join repoRoot, "lsp", "vscode", "syntaxes", "civet.json"
-  join outDir, "Civet.tmLanguage.json"
-copyFileSync
-  join sublimeDir, "LSP.sublime-settings.example"
-  join outDir, "LSP.sublime-settings.example"
+function escapeXml(value: string): string
+  value.replace /[&<>]/g, xmlEscapes[&]
 
-console.log `Built ${relative repoRoot, outDir}`
+function plistValue(value: ???, indent = ""): string
+  if Array.isArray value
+    out .= `${indent}<array>\n`
+    for item of value
+      out += plistValue item, `${indent}  `
+    out += `${indent}</array>\n`
+    out
+  else if value? <? "object"
+    out .= `${indent}<dict>\n`
+    for key, item in value as Record<string, ???>
+      out += `${indent}  <key>${escapeXml key}</key>\n`
+      out += plistValue item, `${indent}  `
+    out += `${indent}</dict>\n`
+    out
+  else if value <? "boolean"
+    `${indent}<${value}/>\n`
+  else if value <? "number"
+    if Number.isInteger value
+      `${indent}<integer>${value}</integer>\n`
+    else
+      `${indent}<real>${value}</real>\n`
+  else
+    `${indent}<string>${escapeXml String(value ?? "")}</string>\n`
+
+function plist(value: ???): string
+  ```
+  <?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  <plist version="1.0">
+  ${plistValue value, "  "}</plist>
+  ```
+
+// Grammar normalization to sidestep Sublime's lack of support
+
+unboundedLookbehindErrors .= 0
+
+type TextMatePattern =
+  include?: string
+
+type TextMateCapture =
+  name?: string
+  patterns?: TextMatePattern[]
+
+type TextMateCaptures = Record<string, TextMateCapture>
+
+type TextMateRule = Record<string, ???> &
+  match?: string
+  begin?: string
+  end?: string
+  captures?: TextMateCaptures
+  name?: string
+
+function normalizeForSublime(value: ???, path = "grammar"): void
+  if Array.isArray value
+    for item, index of value
+      normalizeForSublime item, `${path}[${index}]`
+  else if value? <? "object"
+    normalizeRuleForSublime value as TextMateRule, path
+    for key, item in value as Record<string, ???>
+      if key.match /^(?:captures|(?:begin|end|while)Captures)$/
+        normalizeCapturesForSublime item as TextMateCaptures
+      else
+        normalizeForSublime item, `${path}.${key}`
+
+function normalizeRuleForSublime(rule: TextMateRule, path: string): void
+  // Sublime's legacy TextMate loader rejects variable-length lookbehind.
+  // Rewrite such rules while capturing parts we can.
+  switch rule.match
+    when "(?<=^\\s*((import|export)\\s+)?(type\\s+)?((\\w+\\s*,\\s*)?\\{[^{}]*\\}|\\w+(\\s*,\\s*\\w+)*|\\*(\\s+as\\s+\\w+)?|operator(?:\\s+[^{}\\n]+)?\\s+\\{[^{}]*\\})\\s+from\\s+)([^\\(\\{\\[\"';\\s=>][^\"';\\s=>]*)(?=[^()]|$)"
+      rule.match = "^\\s*(?:(import|export)\\s+)?(?:(type)\\s+)?(?:(?:\\w+\\s*,\\s*)?\\{[^{}]*\\}|\\w+(?:\\s*,\\s*\\w+)*|\\*(?:\\s+(as)\\s+\\w+)?|(operator)(?:\\s+[^{}\\n]+)?\\s+\\{[^{}]*\\})\\s+(from)\\s+([^\\(\\{\\[\"';\\s=>][^\"';\\s=>]*)(?=[^()]|$)"
+      rule.captures =
+        1:
+          name: "keyword.control.civet"
+        2:
+          name: "keyword.reserved.civet"
+        3:
+          name: "keyword.control.civet"
+        4:
+          name: "keyword.operator.civet"
+        5:
+          name: "keyword.control.civet"
+        6:
+          name: "string.unquoted.module-reference.civet"
+      delete rule.name
+    when "(?<=^\\s*from\\s+)([^\\(\\{\\[\"';\\s=>][^\"';\\s=>]*)(?=\\s+((with|assert)\\s+\\{[^{}]*\\}\\s+)?(import|export)\\s*[^()])"
+      rule.match = "^\\s*(from)\\s+([^\\(\\{\\[\"';\\s=>][^\"';\\s=>]*)(?=\\s+(?:(?:with|assert)\\s+\\{[^{}]*\\}\\s+)?(?:import|export)\\s*[^()])"
+      rule.captures =
+        1:
+          name: "keyword.control.civet"
+        2:
+          name: "string.unquoted.module-reference.civet"
+      delete rule.name
+    when "(?<=^\\s*import\\s+)([^\\(\\{\\[\"';\\s=>][^\"';\\s=>]*)(?=\\s*((with|assert)\\s+\\{[^{}]*\\})?\\s*$)"
+      rule.match = "^\\s*(import)\\s+([^\\(\\{\\[\"';\\s=>][^\"';\\s=>]*)(?=\\s*(?:(?:with|assert)\\s+\\{[^{}]*\\})?\\s*$)"
+      rule.captures =
+        1:
+          name: "keyword.control.civet"
+        2:
+          name: "string.unquoted.module-reference.civet"
+      delete rule.name
+
+  // Check for remaining unbounded lookbehind after rewriting of known cases.
+  for key of ["match", "begin", "end"]
+    item := rule[key]
+    if item <? "string"
+      if hasUnboundedLookbehind item
+        unboundedLookbehindErrors++
+        console.log `ERROR: ${path}.${key} has unbounded lookbehind: ${item}`
+
+function normalizeCapturesForSublime(captures: TextMateCaptures): void
+  for _, capture in captures
+    if capture.patterns
+      // Sublime capture values can name scopes, but cannot contain
+      // nested pattern includes. Collapse known function/method-name
+      // capture includes to the broad scope used by their fallback rule.
+      name := capturePatternName capture.patterns
+      capture.name = name if name
+      delete capture.patterns
+
+function capturePatternName(patterns: TextMatePattern[]): string?
+  switch patterns?[0]?.include
+    when "#function_names", "#method_names"
+      "entity.name.function.civet"
+    else undefined
+
+function hasUnboundedLookbehind(pattern: string): boolean
+  for match of pattern.matchAll /\(\?<[=!]/g
+    depth .= 1
+    :LOOKBEHIND for position .= match.index + 4; position < pattern#; position++
+      switch pattern[position]
+        when "\\"
+          position++ // skip escaped character
+        when "[" // character class
+          while ++position < pattern# and pattern[position] is not "]"
+            position++ if pattern[position] is "\\"
+        when "+", "*" // unbounded quantifiers
+          return true
+        when "{" // potentially unbounded quantifier
+          return true if /^\{\d*,\}/.test pattern[position..]
+        when "("
+          depth++
+        when ")"
+          depth--
+          // Reached the end of the lookbehind
+          break LOOKBEHIND unless depth
+  false
+
+// Build script
+
+function build(): void
+  sublimeDir := dirname fileURLToPath import.meta.url
+  repoRoot := join sublimeDir, "../.."
+  outDir := join sublimeDir, "dist"
+
+  rmSync outDir, recursive: true, force: true
+  mkdirSync outDir, recursive: true
+
+  grammarPath := join repoRoot, "lsp", "vscode", "syntaxes", "civet.json"
+  grammar := JSON.parse readFileSync grammarPath, "utf8"
+  normalizeForSublime grammar
+  writeFileSync
+    join outDir, "Civet.tmLanguage"
+    plist grammar
+  copyFileSync
+    join sublimeDir, "LSP.sublime-settings.example"
+    join outDir, "LSP.sublime-settings.example"
+
+  console.log `Built ${relative repoRoot, outDir}`
+
+  if unboundedLookbehindErrors
+    console.log `ERROR: Sublime grammar build failed: ${unboundedLookbehindErrors} unbounded lookbehind error${if unboundedLookbehindErrors is 1 then "" else "s"}`
+    console.log "Update lsp/sublime/build.civet to rewrite the offending rules."
+    process.exitCode = 1
+
+build()
