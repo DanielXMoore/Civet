@@ -3647,6 +3647,25 @@ greet := (name) => `Hello, ${name}!`
 noArgs := => console.log "Hello, world!"
 </Playground>
 
+### Brace Block Bodies
+
+By default, Civet reinterprets a braced body after `=>` or `->`
+as an object literal, so `=> { foo(x) }` becomes `=> ({foo: foo(x)})`
+via Civet's `{expr.foo()}` → `{foo: expr.foo()}` shorthand.
+With `"civet esBraceBlock"` (or `"civet esCompat"`),
+braces after `=>` and `->` are always parsed as block bodies,
+matching ECMAScript. Use explicit parentheses `() => ({a: 1})`
+to return an object literal from an arrow function.
+
+<Playground>
+"civet esBraceBlock"
+run := x => {
+  log x
+  process x
+}
+makeObj := () => ({ a: 1, b: 2 })
+</Playground>
+
 ### Strict Mode
 
 Output from Civet runs by default in JavaScript's sloppy mode,
