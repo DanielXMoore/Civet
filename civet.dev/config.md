@@ -73,6 +73,7 @@ You can also turn on/off individual compatibility features.
 |---------------------|---------------------------------------|
 | [`esCompat`](reference#ecmascript-compatibility) | enable all of the following ECMAScript compatibility flags |
 | [`esArrowFunction`](reference#single-argument-arrow-functions) | `x => x+1` as shorthand for `(x) => x+1`; does not affect `->` |
+| [`esBraceBlock`](reference#brace-block-bodies) | treat `{...}` after `=>`/`->` as a block, never an object literal |
 | [`-implicit-returns`](reference#no-implicit-returns) | turn off implicit return of last value in functions, except in one-line `=>` |
 
 ## CoffeeScript Compatibility
