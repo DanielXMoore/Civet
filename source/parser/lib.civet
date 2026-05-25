@@ -1283,41 +1283,38 @@ function processAssignments(statements: ASTNode): void
       { call, omitLhs } := op
       callLhs .= lhs
       // For non-omitLhs operators (e.g. `min=`, `xor=`), `lhs` is referenced
-      // twice (assignment target and inside the call). Cache the last
-      // side-effectful Index expression so it isn't re-evaluated. Critical
-      // for `arr[?]` (each Math.random() yields a different index) and for
-      // `obj[i++]` / `obj[f()]`. Trailing PropertyAccess after the Index
-      // (e.g. `obj[f()].prop min= 3`) is fine — the suffix is shared by
-      // reference between the two `lhs` occurrences.
+      // twice (assignment target and inside the call). Cache every
+      // side-effectful Index expression so each runs once. Critical for
+      // `arr[?]` (Math.random) and for `obj[i++]` / `obj[f()][g()]`. Non-
+      // Index children (base Identifier, PropertyAccess) are shared by
+      // reference between the two `lhs` occurrences — pre-existing
+      // limitation if the base itself has side effects.
       if not omitLhs and (lhs as MemberExpression).type is "MemberExpression"
         memberLhs := lhs as MemberExpression
         { children: memberChildren } := memberLhs
-        j := memberChildren.findLastIndex (c) => c?.type is "Index"
-        if j > 0
-          terminal := memberChildren[j] as Index
-          { ref, refAssignment } := maybeRefAssignment terminal.expression
-          if refAssignment
-            // Original lhs (assignment target): inline `ref = idx` in the
-            // Index — runs first as part of evaluating the LHS reference.
-            // replaceNode also updates `terminal.expression` since it's an
-            // alias for `terminal.children[1]`.
-            replaceNode terminal.expression, refAssignment, terminal
-            // Call-side copy: new terminal Index with bare ref, sharing
-            // the base/suffix children (preexisting bug if the base has
-            // side effects — separate from #2110).
-            outerTerminal: Index := makeNode {
-              type: "Index"
-              children: ["[", ref, "]"]
-              expression: ref
-            }
-            callLhs = makeNode {
-              ...memberLhs
-              children: [
-                ...memberChildren[..<j]
-                outerTerminal
-                ...memberChildren[>j]
-              ]
-            }
+        mutated .= false
+        callChildren := memberChildren.map (child) =>
+          return child unless child?.type is "Index"
+          indexNode := child as Index
+          { ref, refAssignment } := maybeRefAssignment indexNode.expression
+          return child unless refAssignment
+          mutated = true
+          // Assignment-target side: inline `ref = idx` in the Index —
+          // runs first as part of evaluating the LHS reference.
+          // replaceNode also updates `indexNode.expression` since it
+          // aliases `indexNode.children[1]`.
+          replaceNode indexNode.expression, refAssignment, indexNode
+          // Call-side copy: new Index with bare ref.
+          makeNode {
+            type: "Index"
+            children: ["[", ref, "]"]
+            expression: ref
+          }
+        if mutated
+          callLhs = makeNode {
+            ...memberLhs
+            children: callChildren
+          }
       // Wrap right-hand side with call
       index := exp.children.indexOf($2)
       assert.notEqual index, -1, "processAssignments: $2 must be directly in exp.children"
