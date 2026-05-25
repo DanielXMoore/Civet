@@ -33,6 +33,7 @@ import type {
   ForStatement
   FunctionSignature
   IfStatement
+  Index
   Initializer
   IterationExpression
   IterationStatement
@@ -1280,11 +1281,48 @@ function processAssignments(statements: ASTNode): void
     if $1.some((x: any) => x.-1.special)
       [, lhs, , op] := $1[0]
       { call, omitLhs } := op
+      callLhs .= lhs
+      // For non-omitLhs operators (e.g. `min=`, `xor=`), `lhs` is referenced
+      // twice (assignment target and inside the call). Cache any
+      // side-effectful terminal Index expression so it isn't re-evaluated.
+      // Critical for `arr[?]` (each Math.random() yields a different
+      // index) and for `obj[i++]` / `obj[f()]`. MemberExpression is the
+      // only lhs shape that can carry a meaningful terminal Index.
+      if not omitLhs and (lhs as MemberExpression).type is "MemberExpression"
+        memberLhs := lhs as MemberExpression
+        { children: memberChildren } := memberLhs
+        j := memberChildren.findLastIndex (c) =>
+          c?.type is like "PropertyAccess", "Index"
+        if j > 0
+          terminal := memberChildren[j] as Index
+          if terminal.type is "Index"
+            { ref, refAssignment } := maybeRefAssignment terminal.expression
+            if refAssignment
+              // Original lhs (assignment target): inline `ref = idx` so it
+              // runs as part of evaluating the LHS reference.
+              replaceNode terminal.expression, refAssignment, terminal
+              terminal.expression = refAssignment
+              // Call-side copy: new terminal Index with bare ref, sharing
+              // the base children (preexisting bug if the base has side
+              // effects — separate issue from #2110).
+              outerTerminal: Index := makeNode {
+                type: "Index"
+                children: ["[", ref, "]"]
+                expression: ref
+              }
+              callLhs = makeNode {
+                ...memberLhs
+                children: [
+                  ...memberChildren[..<j]
+                  outerTerminal
+                  ...memberChildren[>j]
+                ]
+              }
       // Wrap right-hand side with call
       index := exp.children.indexOf($2)
       assert.notEqual index, -1, "processAssignments: $2 must be directly in exp.children"
       exp.children.splice index, 1,
-        exp.expression = $2 = [call, "(", lhs, ", ", $2, ")"]
+        exp.expression = $2 = [call, "(", callLhs, ", ", $2, ")"]
       if omitLhs
         replaceNode exp, $2
         continue
