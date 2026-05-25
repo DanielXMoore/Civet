@@ -3350,16 +3350,21 @@ PostfixedSingleLineNoCommaStatements
     }
 
 NestedBlockStatements
-  PushIndent NestedBlockStatement*:statements PopIndent ->
-    return $skip unless statements#
+  PushIndent NestedBlockStatement*:statements TrailingNestedComments?:trailing PopIndent ->
+    return $skip unless statements# or trailing?#
 
     // Each element of statements is a list of same-line statements. Flatten.
-    statements = statements.flat()
+    expressions: StatementTuple[] := statements.flat()
+    // Trailing same-indent comments (issue #832) live in children, NOT in
+    // expressions, so downstream walkers (assignResults / insertReturn / etc.)
+    // still see the last real statement as expressions.-1.
+    children: ASTNode[] := [expressions]
+    children.push(trailing) if trailing?#
 
     return {
       type: "BlockStatement",
-      expressions: statements,
-      children: [statements],
+      expressions,
+      children,
       bare: true,
     }
 
@@ -3369,6 +3374,27 @@ NestedBlockStatement
       [nested, ...statements[0]],
       ...statements.slice(1).map (s) => ["", ...s],
     ]
+
+# Captures trailing `// ...` comments at the end of an indented block: an
+# optional inline comment on the last statement's line, plus any number of
+# standalone same-indent comment lines. The lookahead `&EOL` keeps these from
+# eating into content that belongs to the surrounding block. (issue #832)
+TrailingNestedComments
+  TrailingInlineComment?:inline TrailingNestedCommentLine*:lines ->
+    return $skip unless inline or lines?#
+    out := []
+    out.push(inline) if inline
+    out.push(...lines) if lines?#
+    return out
+
+TrailingInlineComment
+  _?:ws SingleLineComment:c &EOL ->
+    return [ws, c]
+
+TrailingNestedCommentLine
+  EOL:eol Indent:indent SingleLineComment:c &EOL ->
+    return $skip unless indent.level is state.currentIndent.level
+    return [eol, indent, c]
 
 BlockStatementPart
   # NOTE: !EOS forces semicolon after all but last statement, forbids leading __
@@ -5625,6 +5651,12 @@ CaseClause
   }
   # NOTE: Added "when" from CoffeeScript. `when` always inserts `break;`.
   When CaseExpressionList:cases IgnoreColon InsertOpenBrace ( ThenClause / BareBlock ):block InsertBreak:b InsertNewline InsertIndent InsertCloseBrace ::WhenClause ->
+    // If the block ends with a `// ...` comment (issue #832), prefix the
+    // inserted `;break;` with a newline so it isn't swallowed by the comment.
+    if hasTrailingComment block
+      bIdx := $0.indexOf b
+      b = { ...b, token: "\n" + b.token }
+      $0[bIdx] = b
     return {
       type: "WhenClause",
       children: $0,
@@ -9838,6 +9870,15 @@ TrackIndented
     state.indentLevels.push(indent)
     return $1
 
+# Like TrackIndented, but for a deeper-indent comment-only line. Used so an
+# indented block whose body is only comments still pushes an indent. (#832)
+TrackCommentLine
+  Indent:indent &SingleLineComment ->
+    {level} := indent
+    return $skip if level <= state.currentIndent.level
+    state.indentLevels.push(indent)
+    return $1
+
 # Indents one level deeper,
 # without consuming the indentation so it can be by Nested
 # Must be matched with PopIndent
@@ -9845,6 +9886,9 @@ PushIndent
   # TrackIndented pushes the indent level if it is deeper than the current level
   # it will skip if it is not deeper
   &( EOS TrackIndented )
+  # Fallback for comment-only block bodies (issue #832) so the body still has
+  # a pushed indent level even though it lacks a real statement to gate on.
+  &( EOL TrackCommentLine )
 
 PopIndent
   "" ->
