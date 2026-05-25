@@ -164,6 +164,8 @@ interface ParserState
   forbidNewlineBinaryOp: boolean[]
   forbidImplicitFragment: boolean[]
   forbidPipeline: boolean[]
+  forbidTernaryColon: boolean[]
+  forbidInlineObjectLiteral: boolean[]
   JSXTagStack: unknown[]
   indentLevels: { level: number, token?: string }[]
   operators: Map<string, any>
@@ -182,6 +184,8 @@ interface ParserState
   readonly newlineBinaryOpForbidden: number
   readonly implicitFragmentForbidden: number
   readonly pipelineForbidden: number
+  readonly ternaryColonForbidden: number
+  readonly inlineObjectLiteralForbidden: number
   readonly currentJSXTag: unknown
 
 export const state = {    // parser state
@@ -194,6 +198,8 @@ export const state = {    // parser state
   forbidNewlineBinaryOp: [false],
   forbidImplicitFragment: [false],
   forbidPipeline: [false],
+  forbidTernaryColon: [false],
+  forbidInlineObjectLiteral: [false],
   JSXTagStack: [undefined],
 } as! ParserState
 
@@ -249,6 +255,16 @@ Object.defineProperties(state, {
       {forbidPipeline: s} := state
       s[s#-1]
   },
+  ternaryColonForbidden: {
+    get()
+      {forbidTernaryColon: s} := state
+      s[s#-1]
+  },
+  inlineObjectLiteralForbidden: {
+    get()
+      {forbidInlineObjectLiteral: s} := state
+      s[s#-1]
+  },
   currentJSXTag: {
     get()
       {JSXTagStack: s} := state
@@ -266,15 +282,17 @@ function setOperatorBehavior(name: string, behavior: unknown)
 
 export function getStateKey()
   stateInt :=
-    ((state.currentIndent.level % 256) << 9) |
-    (state.classImplicitCallForbidden << 8) |
-    (state.indentedApplicationForbidden << 7) |
-    (state.bracedApplicationForbidden << 6) |
-    (state.trailingMemberPropertyForbidden << 5) |
-    (state.nestedBinaryOpForbidden << 4) |
-    (state.newlineBinaryOpForbidden << 3) |
-    (state.implicitFragmentForbidden << 2) |
-    (state.pipelineForbidden << 1) |
+    ((state.currentIndent.level % 256) << 11) |
+    (state.classImplicitCallForbidden << 10) |
+    (state.indentedApplicationForbidden << 9) |
+    (state.bracedApplicationForbidden << 8) |
+    (state.trailingMemberPropertyForbidden << 7) |
+    (state.nestedBinaryOpForbidden << 6) |
+    (state.newlineBinaryOpForbidden << 5) |
+    (state.implicitFragmentForbidden << 4) |
+    (state.pipelineForbidden << 3) |
+    (state.ternaryColonForbidden << 2) |
+    (state.inlineObjectLiteralForbidden << 1) |
     // This is slightly different than the rest of the state,
     // since it is affected by the directive prologue and may be hit
     // by the EOL rule early in the parse. Later if we wanted to
@@ -545,6 +563,10 @@ ForbiddenImplicitCalls
   PostfixStatement NoBlock
   # `x ... y` is reserved for a range, but `x ...y` is an implicit call
   "... "
+  # Within a ternary "then" expression, `b :foo` would otherwise be parsed as a
+  # SymbolLiteral implicit-call argument `b(Symbol.for("foo"))`, swallowing the
+  # ternary colon.
+  TernaryColonForbidden ":"
 
 # Binary operators that are reserved in that context
 ReservedBinary
@@ -830,7 +852,9 @@ ParenthesizedAssignment
   InsertOpenParen ( ActualAssignment / ArrowFunction ) InsertCloseParen
 
 UnaryPostfix
-  QuestionMark
+  # The `!( PropertyAccessContent ":" ![=:] )` lookahead reserves `a?b:c` for
+  # snug ternary (#1507); `a?` alone is still the existential check `a != null`.
+  QuestionMark:q !( PropertyAccessContent ":" ![=:] ) -> q
   TypePostfix+
 
 TypePostfix
@@ -1079,8 +1103,19 @@ TernaryRest
   !CoffeeBinaryExistentialEnabled &[ \t] _ QuestionMark PushIndent (Nested Expression _ Colon Nested Expression)?:thenelse PopIndent ->
     return $skip unless thenelse
     return [$3, $4, ...thenelse]
-  !CoffeeBinaryExistentialEnabled &[ \t] _ QuestionMark MaybeNestedExpression __ Colon MaybeNestedExpression ->
-    return $0.slice(2)
+  # Snug ternary `a?b:c` (no whitespace before `?`). The "then" expression has
+  # both `ForbidTernaryColon` (so `b :c` doesn't become `b(Symbol.for("c"))`)
+  # and `ForbidInlineObjectLiteral` (so `b:c` doesn't become `{b:c}` and eat
+  # the ternary colon). The negative lookahead after `?` rules out optional
+  # chain/call/index (`?.`, `?(`, `?[`), `??`, `?=`, and whitespace (handled
+  # by the half-snug rule below).
+  !CoffeeBinaryExistentialEnabled QuestionMark:q !( "." / "(" / "[" / "?" / "=" / [ \t\r\n] ) ForbidSnugTernaryThen MaybeNestedExpression:thenE RestoreSnugTernaryThen __:ws Colon:colon MaybeNestedExpression:elseE ->
+    return [q, thenE, ws, colon, elseE]
+  # Half-snug / spaced ternary `a ?b :c` or `a ? b : c`. Only ForbidTernaryColon
+  # (not InlineObjectLiteral) because the existing braceless-object form
+  # `x ? a: b : c: d` needs `a:b` and `c:d` to still parse as `{a:b}`/`{c:d}`.
+  !CoffeeBinaryExistentialEnabled &[ \t] _:ws1 QuestionMark:q ForbidTernaryColon MaybeNestedExpression:thenE RestoreTernaryColon __:ws2 Colon:colon MaybeNestedExpression:elseE ->
+    return [ws1, q, thenE, ws2, colon, elseE]
 
 NestedTernaryRest
   # ?/: on following line at same indentation level
@@ -1978,13 +2013,32 @@ AccessStart
       children: modifier ? [modifier, dot] : [dot],
       optional: modifier?.token === "?",
     }
-  # NOTE: ?x -> ?.x, !x -> !.x shorthand
-  PropertyAccessModifier:modifier InsertDot:dot ![.\s] ::AccessStart ->
+  # NOTE: ?x -> ?.x shorthand. The `!( PropertyAccessContent ":" ![=:] )`
+  # lookahead reserves `a?b:c` for snug ternary (#1507); `a?b` alone is still
+  # `a?.b`. Covers identifier, numeric, string, symbol, and negative-index
+  # access forms.
+  QuestionMark:modifier InsertDot:dot ![.\s] !( PropertyAccessContent ":" ![=:] ) ::AccessStart ->
     return {
       type: "AccessStart",
       children: [modifier, dot],
-      optional: modifier.token === "?",
+      optional: true,
     }
+  # NOTE: !x -> !.x shorthand
+  NonNullAssertion:modifier InsertDot:dot ![.\s] ::AccessStart ->
+    return {
+      type: "AccessStart",
+      children: [modifier, dot],
+      optional: false,
+    }
+
+# Mirrors the content forms a PropertyAccess accepts after AccessStart;
+# used in the snug-ternary lookahead in AccessStart above.
+PropertyAccessContent
+  TemplateLiteral
+  AccessLiteral
+  SymbolLiteral
+  "-" IntegerLiteral
+  InlineComment* ( IdentifierName / PrivateIdentifier / LengthShorthand )
 
 ExplicitAccessStart
   PropertyAccessModifier?:modifier Dot:dot !Dot ->
@@ -3977,8 +4031,12 @@ ImplicitObjectPropertyDelimiter
 # NOTE: Inline object literals are intended for within expressions.
 # They can only go onto another line if there's a trailing comma.
 # They must start with a snug property, and all properties must have a colon.
+# Disabled in the "then" expression of a full-snug ternary (`a?b:c`) so the
+# inline object `{b:c}` doesn't swallow the ternary colon. Spaced ternary
+# `x ? a: b : c: d` still allows `{a:b}` and `{c:d}` because that rule doesn't
+# set this flag.
 InlineObjectLiteral
-  InsertInlineOpenBrace:open SnugNamedProperty:first ( InlineObjectPropertyDelimiter NamedProperty )*:rest ( _? Comma &Dedented )?:trailing InsertCloseBrace:close ->
+  !InlineObjectLiteralForbidden InsertInlineOpenBrace:open SnugNamedProperty:first ( InlineObjectPropertyDelimiter NamedProperty )*:rest ( _? Comma &Dedented )?:trailing InsertCloseBrace:close ->
     return {
       type: "ObjectExpression",
       children: [open, first, ...rest, trailing, close],
@@ -6002,11 +6060,57 @@ PipelineAllowed
       console.log("forbidPipeline:", state.forbidPipeline)
     return $skip if state.pipelineForbidden
 
+AllowTernaryColon
+  "" ->
+    state.forbidTernaryColon.push(false);
+
+ForbidTernaryColon
+  "" ->
+    state.forbidTernaryColon.push(true);
+
+RestoreTernaryColon
+  "" ->
+    state.forbidTernaryColon.pop();
+
+TernaryColonForbidden
+  "" ->
+    /* c8 ignore next 2 -- debug output for verbose config */
+    if config.verbose
+      console.log("forbidTernaryColon:", state.forbidTernaryColon)
+    return $skip unless state.ternaryColonForbidden
+
+AllowInlineObjectLiteral
+  "" ->
+    state.forbidInlineObjectLiteral.push(false);
+
+ForbidInlineObjectLiteral
+  "" ->
+    state.forbidInlineObjectLiteral.push(true);
+
+RestoreInlineObjectLiteral
+  "" ->
+    state.forbidInlineObjectLiteral.pop();
+
+InlineObjectLiteralForbidden
+  "" ->
+    /* c8 ignore next 2 -- debug output for verbose config */
+    if config.verbose
+      console.log("forbidInlineObjectLiteral:", state.forbidInlineObjectLiteral)
+    return $skip unless state.inlineObjectLiteralForbidden
+
+# Compound rules used by the snug-ternary "then" expression to forbid both the
+# `:foo` symbol implicit-call arg and `b:c` inline object in one grammar slot.
+ForbidSnugTernaryThen
+  ForbidTernaryColon ForbidInlineObjectLiteral
+
+RestoreSnugTernaryThen
+  RestoreInlineObjectLiteral RestoreTernaryColon
+
 AllowAll
-  AllowTrailingMemberProperty AllowBracedApplication AllowIndentedApplication AllowClassImplicitCall AllowNestedBinaryOp AllowNewlineBinaryOp AllowImplicitFragment AllowPipeline
+  AllowTrailingMemberProperty AllowBracedApplication AllowIndentedApplication AllowClassImplicitCall AllowNestedBinaryOp AllowNewlineBinaryOp AllowImplicitFragment AllowPipeline AllowTernaryColon AllowInlineObjectLiteral
 
 RestoreAll
-  RestoreTrailingMemberProperty RestoreBracedApplication RestoreIndentedApplication RestoreClassImplicitCall RestoreNestedBinaryOp RestoreNewlineBinaryOp RestoreImplicitFragment RestorePipeline
+  RestoreTrailingMemberProperty RestoreBracedApplication RestoreIndentedApplication RestoreClassImplicitCall RestoreNestedBinaryOp RestoreNewlineBinaryOp RestoreImplicitFragment RestorePipeline RestoreTernaryColon RestoreInlineObjectLiteral
 
 # https://262.ecma-international.org/#prod-ExpressionStatement
 CommaExpressionStatement
@@ -9647,6 +9751,8 @@ Reset
     state.forbidNewlineBinaryOp = [false]
     state.forbidImplicitFragment = [false]
     state.forbidPipeline = [false]
+    state.forbidTernaryColon = [false]
+    state.forbidInlineObjectLiteral = [false]
     state.JSXTagStack = [undefined]
 
     state.operators = new Map
