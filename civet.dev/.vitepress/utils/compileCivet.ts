@@ -6,15 +6,37 @@ export function compileCivet(
   parseOptions: any
 ) {
   // This SSR rendering code must be synchronous because of Markdown API
-  let tsCode = civetInstance.compile(code, { parseOptions, sync: true });
+  const ast = civetInstance.compile(code, {
+    parseOptions,
+    sync: true,
+    ast: true,
+  });
+  let tsCode = civetInstance.generate(ast, {});
   const tsRawCode = tsCode;
 
   if (prettierInstance) {
     try {
-      tsCode = prettierInstance.format(tsCode, {
+      // Prettier misparses top-level `yield` (it's not legal there), turning
+      // `yield [a, b]` into `yield[(a, b)]`. Work around by wrapping in a
+      // generator function, formatting, then stripping the wrapper.
+      // https://github.com/DanielXMoore/Civet/issues/1673
+      const wrapYield = ast?.topLevelYield;
+      const wrapped = wrapYield
+        ? `function*$civetYieldWrap(){\n${tsCode}\n}`
+        : tsCode;
+      let formatted = prettierInstance.format(wrapped, {
         parser: 'typescript',
         printWidth: 50,
       });
+      if (wrapYield) {
+        const match = formatted.match(
+          /^function\* \$civetYieldWrap\(\) \{\n([\s\S]*)\n\}\s*$/
+        );
+        if (match) {
+          formatted = match[1].replace(/^  /gm, '') + '\n';
+        }
+      }
+      tsCode = formatted;
     } catch (err) {
       console.info('Prettier error. Fallback to raw civet output', {
         tsCode,

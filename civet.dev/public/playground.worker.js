@@ -102,11 +102,28 @@ onmessage = async (e) => {
   let formattedOutput;
   if (prettierOutput) {
     try {
-      tsCode = await prettier.format(tsCode, {
+      // Prettier misparses top-level `yield` (it's not legal there), turning
+      // `yield [a, b]` into `yield[(a, b)]`. Work around by wrapping in a
+      // generator function, formatting, then stripping the wrapper.
+      // https://github.com/DanielXMoore/Civet/issues/1673
+      const wrapYield = ast?.topLevelYield;
+      const wrapped = wrapYield
+        ? `function*$civetYieldWrap(){\n${tsCode}\n}`
+        : tsCode;
+      let formatted = await prettier.format(wrapped, {
         parser: 'typescript',
         plugins: prettierPlugins,
         printWidth: 50,
       });
+      if (wrapYield) {
+        const match = formatted.match(
+          /^function\* \$civetYieldWrap\(\) \{\n([\s\S]*)\n\}\s*$/
+        );
+        if (match) {
+          formatted = match[1].replace(/^  /gm, '') + '\n';
+        }
+      }
+      tsCode = formatted;
       formattedOutput = tsCode;
     } catch (err) {
       console.info('Prettier error. Fallback to raw civet output', {
