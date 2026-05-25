@@ -8,6 +8,7 @@
 
 import type {
   AccessStart
+  ASTError
   ASTLeaf
   ASTNode
   ASTNodeObject
@@ -47,6 +48,8 @@ import type {
   ParametersNode
   ParenthesizedExpression
   Placeholder
+  Property
+  SpreadProperty
   StatementTuple
   SwitchStatement
   TypeArgument
@@ -1303,25 +1306,28 @@ function processAssignments(statements: ASTNode): void
     // Expand to comma-separated direct assignments: `(obj.#x = src.#x, obj.#y = src.#y)`.
     if $1.length is 1
       [, soleLhs, , soleOp] := $1[0]
+      isPrivateGlobProp := (p: Property | SpreadProperty | MethodDefinition | ASTError): p is Property =>
+        p?.type is "Property" and !!p.privateField
       if soleOp.token is "=" and soleLhs.type is "ObjectExpression" and
-         soleLhs.properties?.some((p) => p?.privateField?) and
+         soleLhs.properties?.some(isPrivateGlobProp) and
          not soleLhs.properties.some((p) => p?.type is "SpreadProperty")
-        properties := soleLhs.properties.filter (p) => p?.type is "Property"
+        properties := soleLhs.properties.filter (p): p is Property => p?.type is "Property"
         // Use a ref for the source if there are multiple properties and it
         // has side effects, so we don't re-evaluate it for each assignment.
-        let prefix, sourceExpr
+        let prefix: ASTNode[], sourceExpr: ASTNode
         if properties.length > 1 and needsRef $2
           srcRef := makeRef()
           prefix = [srcRef, " = ", $2, ", "]
           sourceExpr = srcRef
-          // Hoist `let ref` declaration on this AssignmentExpression
-          if exp.hoistDec
-            exp.hoistDec.children.push ",", srcRef
-          else
-            exp.hoistDec =
-              type: "Declaration"
-              children: ["let ", srcRef]
-              names: []
+          // Hoist `let ref` declaration; nothing else sets `exp.hoistDec`
+          // before this point and we `continue` past everything that would.
+          exp.hoistDec = {
+            type: "Declaration"
+            children: ["let ", srcRef]
+            names: []
+            bindings: []
+            decl: "let"
+          }
         else
           prefix = []
           sourceExpr = $2
