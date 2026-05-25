@@ -68,8 +68,8 @@ On Windows, if you use the in-repo binary instead of a global npm install, point
 ## Wiring up LSP
 
 1. Install the [LSP package](https://packagecontrol.io/packages/LSP) from Package Control.
-2. Open **Preferences → Package Settings → LSP → Settings**.
-3. Merge the snippet from [`LSP.sublime-settings.example`](./LSP.sublime-settings.example) into the user settings on the right. If a `clients` block already exists, add the `civet-lsp` entry inside it.
+2. Open **Preferences → Package Settings → LSP → Server Configurations**.
+3. Merge the snippet from [`LanguageServers.sublime-settings.example`](./LanguageServers.sublime-settings.example) into the server configurations on the right.
 4. Open a `.civet` file. The LSP status should appear in the bottom bar.
 
 ## Known limitations
