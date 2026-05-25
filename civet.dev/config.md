@@ -275,3 +275,4 @@ top-level options (above `parseOptions`):
       "exclude": ["dist"]
     }
   }
+  ```
