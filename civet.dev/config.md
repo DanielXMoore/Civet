@@ -262,3 +262,17 @@ In addition to the "parse options" described above, there are a few
 top-level options (above `parseOptions`):
 
 - `threads`: Use specified number of Node worker threads to compile Civet files faster. Default: `0` (don't use threads), or `CIVET_THREADS` environment variable if set.
+- `tsConfig`: Inline `tsconfig.json` contents (same shape — `compilerOptions`, `include`, `exclude`, …) used by the Civet LSP and `civet --typecheck`.  When present, takes precedence over `tsconfig.json` on disk.  Lets a Civet-only project skip having a `tsconfig.json` at all, which keeps VSCode's built-in TypeScript LSP from complaining about an empty `include` (since it doesn't see your `.civet` files).  Example:
+
+  ```json
+  {
+    "tsConfig": {
+      "compilerOptions": {
+        "target": "es2020",
+        "strict": true
+      },
+      "include": ["src"],
+      "exclude": ["dist"]
+    }
+  }
+  ```

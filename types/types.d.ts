@@ -140,6 +140,15 @@ declare module "@danielx/civet" {
      *   - comptime code can't return promises
      */
     sync?: boolean
+    /**
+     * Inline tsconfig.json contents (same shape — `compilerOptions`,
+     * `include`, `exclude`, …).  Consumed by the LSP and typecheck
+     * pipelines: when present, takes precedence over `<project>/tsconfig.json`
+     * on disk.  Lets a project use a civetconfig instead of a real
+     * `tsconfig.json` so VSCode's built-in TS LSP stays out of a
+     * Civet-only project (#379).  Ignored by `compile`.
+     */
+    tsConfig?: any
   }
   export type GenerateOptions = Omit<CompileOptions, "sourceMap"> & {
     sourceMap?: undefined | SourceMap
