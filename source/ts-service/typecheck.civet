@@ -25,6 +25,7 @@ ts from typescript
   mogrifyPackageJsonImports
   parseTsConfigForCivet
 } from ./config.civet
+{ resolveTranspiledModuleName } from ./resolve.civet
 
 export interface IncrementalTypecheckOptions
   /** Plugins providing transpilers for `.civet`, `.hera`, etc. */
@@ -59,7 +60,6 @@ export function makeIncrementalTypecheckProgram(
   options: IncrementalTypecheckOptions
 ): IncrementalTypecheckResult
   transpilers := buildTranspilers options.plugins
-  extraExtensions := Array.from transpilers.keys()
   parsed := parseTsConfigForCivet projectPath, transpilers, { tsConfig: options.tsConfig }
 
   compilerOptions: ts.CompilerOptions := {
@@ -127,6 +127,8 @@ export function makeIncrementalTypecheckProgram(
     sf
 
   origFileExists := baseHost.fileExists.bind baseHost
+  /* c8 ignore next -- modern TS hosts provide directoryExists; fallback supports older/custom hosts. */
+  origDirectoryExists := baseHost.directoryExists?.bind(baseHost) ?? => false
   // fileExists override: TS validates resolveModuleNameLiterals's outputs
   // (synthetic `.civet.tsx` paths) by asking the host whether they exist.
   // Without this override, TS would consult the bare filesystem, the
@@ -149,27 +151,21 @@ export function makeIncrementalTypecheckProgram(
       return mogrifyPackageJsonImports contents, transpilers
     contents
 
-  // Redirect `import './foo.civet'` to its `.civet.tsx` synthetic sibling;
-  // anything else falls through to ts.resolveModuleName.  ts.resolveModuleName
-  // returns `{ resolvedModule: ResolvedModuleFull | undefined }`, so we can
-  // pass the field through directly without an explicit if/else.
-  baseHost.resolveModuleNameLiterals = (literals: readonly any[], containingFile: string, _redirected, opts: ts.CompilerOptions) =>
-    literals.map (lit) =>
+  baseHost.resolveModuleNameLiterals = (literals: readonly any[], containingFile: string, redirectedReference, opts: ts.CompilerOptions, containingSourceFile?: ts.SourceFile) =>
+    literals.map (lit, index) =>
       name: string := lit.text
-      for ext of extraExtensions
-        if name.endsWith ext
-          t := transpilers.get(ext)!
-          containingDir := path.dirname containingFile
-          resolved := path.resolve containingDir, name
-          if origFileExists resolved
-            return {
-              resolvedModule: {
-                resolvedFileName: resolved + t.target
-                extension: t.target
-                isExternalLibraryImport: false
-              }
-            }
-      { resolvedModule: ts.resolveModuleName(name, containingFile, opts, baseHost).resolvedModule }
+      resolutionMode := containingSourceFile and ts.getModeForResolutionAtIndex containingSourceFile, index, opts
+      resolveTranspiledModuleName {
+        name
+        containingFile
+        compilerOptions: opts
+        resolutionMode
+        transpilers
+        resolveTypeScript: =>
+          ts.resolveModuleName name, containingFile, opts, baseHost, undefined, redirectedReference, resolutionMode
+        fileExists: origFileExists
+        directoryExists: origDirectoryExists
+      }
 
   // ts.createIncrementalProgram reads any prior tsbuildinfo via the
   // host's readFile (driven by compilerOptions.tsBuildInfoFile) — no
