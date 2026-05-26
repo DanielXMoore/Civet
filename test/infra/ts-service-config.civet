@@ -6,6 +6,12 @@ assert from assert
 * as path from node:path
 
 { buildTranspilers, parseTsConfigForCivet } from "../../source/ts-service/config.civet"
+{
+  TSService
+  createInMemoryDocFactory
+  makeCivetPlugin
+  makeIncrementalTypecheckProgram
+} from "../../source/ts-service/index.civet"
 { type Plugin } from "../../source/ts-service/types.civet"
 
 makeCivetTranspiler := () =>
@@ -57,7 +63,7 @@ describe "parseTsConfigForCivet missing-tsconfig fallback", ->
       assert parsed.fileNames.some(.endsWith 'b.civet.tsx'),
         `expected b.civet in fallback scope; got ${parsed.fileNames.join(', ')}`
 
-      // The stray .ts file is NOT included — that's the whole point of the
+      // The stray .ts file is NOT included - that's the whole point of the
       // narrowed fallback (issue #240: huge JS/TS trees OOM the service).
       assert not parsed.fileNames.some(.endsWith 'stray.ts'),
         `expected stray.ts to be excluded from fallback scope; got ${parsed.fileNames.join(', ')}`
@@ -75,9 +81,234 @@ describe "parseTsConfigForCivet missing-tsconfig fallback", ->
       emptyTranspilers := buildTranspilers ([] as Plugin[])
       parsed := parseTsConfigForCivet tmpDir, emptyTranspilers
       assert.equal parsed.configFound, false
-      // With no transpilers, the .ts walk is still active — confirms the
+      // With no transpilers, the .ts walk is still active - confirms the
       // empty-include arm was taken (otherwise this would be empty).
       assert parsed.fileNames.some(.endsWith 'plain.ts'),
         `expected plain.ts in default walk; got ${parsed.fileNames.join(', ')}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+describe "ts-service legacy module resolver", ->
+  it "resolveModuleNames resolves extensionless imports to .civet siblings", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-legacy-'
+    try
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","strict":true},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from './dep'\nconst x: number = n\n"
+      fs.writeFileSync path.join(tmpDir, 'dep.civet'), "export const n: number := 1\n"
+
+      service := TSService tmpDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory: createInMemoryDocFactory()
+      }
+      resolved := service.host.resolveModuleNames!(
+        ['./dep']
+        indexPath
+        undefined
+        undefined
+        service.host.getCompilationSettings()
+        undefined
+      )
+      assert resolved[0]?.resolvedFileName.endsWith('dep.civet.tsx'),
+        `expected ./dep to resolve to dep.civet.tsx, got ${resolved[0]?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "resolveModuleNames resolves tsconfig paths aliases to explicit .civet files", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-paths-'
+    try
+      srcDir := path.join tmpDir, 'src'
+      fs.mkdirSync srcDir
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","strict":true,"baseUrl":".","paths":{"@/*":["src/*"]}},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from '@/dep.civet'\nconst x: number = n\n"
+      fs.writeFileSync path.join(srcDir, 'dep.civet'), "export const n: number := 1\n"
+
+      service := TSService tmpDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory: createInMemoryDocFactory()
+      }
+      resolved := service.host.resolveModuleNames!(
+        ['@/dep.civet']
+        indexPath
+        undefined
+        undefined
+        service.host.getCompilationSettings()
+        undefined
+      )
+      resolvedFile := resolved[0]?.resolvedFileName.replace(/\\/g, '/')
+      assert resolvedFile?.endsWith('src/dep.civet.tsx'),
+        `expected @/dep.civet to resolve to src/dep.civet.tsx, got ${resolved[0]?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "resolveModuleNames resolves tsconfig paths aliases to .civet index files", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-paths-index-'
+    try
+      depDir := path.join tmpDir, 'src', 'dep'
+      fs.mkdirSync depDir, { recursive: true }
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","strict":true,"baseUrl":".","paths":{"@/*":["src/*"]}},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from '@/dep'\nconst x: number = n\n"
+      fs.writeFileSync path.join(depDir, 'index.civet'), "export const n: number := 1\n"
+
+      service := TSService tmpDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory: createInMemoryDocFactory()
+      }
+      resolved := service.host.resolveModuleNames!(
+        ['@/dep']
+        indexPath
+        undefined
+        undefined
+        service.host.getCompilationSettings()
+        undefined
+      )
+      resolvedFile := resolved[0]?.resolvedFileName.replace(/\\/g, '/')
+      assert resolvedFile?.endsWith('src/dep/index.civet.tsx'),
+        `expected @/dep to resolve to src/dep/index.civet.tsx, got ${resolved[0]?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "resolveModuleNames resolves explicit .civet files from packages", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-package-'
+    try
+      pkgDir := path.join tmpDir, 'node_modules', 'pkg'
+      fs.mkdirSync pkgDir, { recursive: true }
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","moduleResolution":"node","strict":true},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from 'pkg/dep.civet'\nconst x: number = n\n"
+      fs.writeFileSync path.join(pkgDir, 'package.json'), '{"name":"pkg","version":"1.0.0"}'
+      fs.writeFileSync path.join(pkgDir, 'dep.civet'), "export const n: number := 1\n"
+
+      service := TSService tmpDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory: createInMemoryDocFactory()
+      }
+      resolved := service.host.resolveModuleNames!(
+        ['pkg/dep.civet']
+        indexPath
+        undefined
+        undefined
+        service.host.getCompilationSettings()
+        undefined
+      )
+      resolvedFile := resolved[0]?.resolvedFileName.replace(/\\/g, '/')
+      assert resolvedFile?.endsWith('node_modules/pkg/dep.civet.tsx'),
+        `expected pkg/dep.civet to resolve to node_modules/pkg/dep.civet.tsx, got ${resolved[0]?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "incremental resolveModuleNames resolves extensionless imports to .civet siblings", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-incremental-'
+    try
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","strict":true},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from './dep'\nconst x: number = n\n"
+      fs.writeFileSync path.join(tmpDir, 'dep.civet'), "export const n: number := 1\n"
+
+      { host, builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      resolved := host.resolveModuleNames!(
+        ['./dep']
+        indexPath
+        undefined
+        undefined
+        builder.getProgram().getCompilerOptions()
+        undefined
+      )
+      assert resolved[0]?.resolvedFileName.endsWith('dep.civet.tsx'),
+        `expected ./dep to resolve to dep.civet.tsx, got ${resolved[0]?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "incremental resolveModuleNames resolves tsconfig paths aliases to explicit .civet files", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-paths-incremental-'
+    try
+      srcDir := path.join tmpDir, 'src'
+      fs.mkdirSync srcDir
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","strict":true,"baseUrl":".","paths":{"@/*":["src/*"]}},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from '@/dep.civet'\nconst x: number = n\n"
+      fs.writeFileSync path.join(srcDir, 'dep.civet'), "export const n: number := 1\n"
+
+      { host, builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      resolved := host.resolveModuleNames!(
+        ['@/dep.civet']
+        indexPath
+        undefined
+        undefined
+        builder.getProgram().getCompilerOptions()
+        undefined
+      )
+      resolvedFile := resolved[0]?.resolvedFileName.replace(/\\/g, '/')
+      assert resolvedFile?.endsWith('src/dep.civet.tsx'),
+        `expected @/dep.civet to resolve to src/dep.civet.tsx, got ${resolved[0]?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "incremental resolveModuleNames resolves tsconfig paths aliases to .civet index files", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-paths-index-incremental-'
+    try
+      depDir := path.join tmpDir, 'src', 'dep'
+      fs.mkdirSync depDir, { recursive: true }
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","strict":true,"baseUrl":".","paths":{"@/*":["src/*"]}},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from '@/dep'\nconst x: number = n\n"
+      fs.writeFileSync path.join(depDir, 'index.civet'), "export const n: number := 1\n"
+
+      { host, builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      resolved := host.resolveModuleNames!(
+        ['@/dep']
+        indexPath
+        undefined
+        undefined
+        builder.getProgram().getCompilerOptions()
+        undefined
+      )
+      resolvedFile := resolved[0]?.resolvedFileName.replace(/\\/g, '/')
+      assert resolvedFile?.endsWith('src/dep/index.civet.tsx'),
+        `expected @/dep to resolve to src/dep/index.civet.tsx, got ${resolved[0]?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "incremental resolveModuleNames resolves explicit .civet files from packages", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-package-incremental-'
+    try
+      pkgDir := path.join tmpDir, 'node_modules', 'pkg'
+      fs.mkdirSync pkgDir, { recursive: true }
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","moduleResolution":"node","strict":true},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from 'pkg/dep.civet'\nconst x: number = n\n"
+      fs.writeFileSync path.join(pkgDir, 'package.json'), '{"name":"pkg","version":"1.0.0"}'
+      fs.writeFileSync path.join(pkgDir, 'dep.civet'), "export const n: number := 1\n"
+
+      { host, builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      resolved := host.resolveModuleNames!(
+        ['pkg/dep.civet']
+        indexPath
+        undefined
+        undefined
+        builder.getProgram().getCompilerOptions()
+        undefined
+      )
+      resolvedFile := resolved[0]?.resolvedFileName.replace(/\\/g, '/')
+      assert resolvedFile?.endsWith('node_modules/pkg/dep.civet.tsx'),
+        `expected pkg/dep.civet to resolve to node_modules/pkg/dep.civet.tsx, got ${resolved[0]?.resolvedFileName}`
     finally
       fs.rmSync tmpDir, { recursive: true, force: true }
