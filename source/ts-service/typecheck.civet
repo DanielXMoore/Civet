@@ -127,6 +127,8 @@ export function makeIncrementalTypecheckProgram(
     sf
 
   origFileExists := baseHost.fileExists.bind baseHost
+  /* c8 ignore next -- modern TS hosts provide directoryExists; fallback supports older/custom hosts. */
+  origDirectoryExists := baseHost.directoryExists?.bind(baseHost) ?? => false
   // fileExists override: TS validates resolveModuleNameLiterals's outputs
   // (synthetic `.civet.tsx` paths) by asking the host whether they exist.
   // Without this override, TS would consult the bare filesystem, the
@@ -149,27 +151,46 @@ export function makeIncrementalTypecheckProgram(
       return mogrifyPackageJsonImports contents, transpilers
     contents
 
-  // Redirect `import './foo.civet'` to its `.civet.tsx` synthetic sibling;
-  // anything else falls through to ts.resolveModuleName.  ts.resolveModuleName
-  // returns `{ resolvedModule: ResolvedModuleFull | undefined }`, so we can
-  // pass the field through directly without an explicit if/else.
   baseHost.resolveModuleNameLiterals = (literals: readonly any[], containingFile: string, _redirected, opts: ts.CompilerOptions) =>
     literals.map (lit) =>
       name: string := lit.text
+      // 1. Check for explicit transpiled extensions.
       for ext of extraExtensions
         if name.endsWith ext
           t := transpilers.get(ext)!
           containingDir := path.dirname containingFile
           resolved := path.resolve containingDir, name
           if origFileExists resolved
-            return {
-              resolvedModule: {
+            return
+              resolvedModule:
                 resolvedFileName: resolved + t.target
                 extension: t.target
                 isExternalLibraryImport: false
-              }
-            }
-      { resolvedModule: ts.resolveModuleName(name, containingFile, opts, baseHost).resolvedModule }
+      // 2. Try regular TypeScript resolution.
+      tsResolved := ts.resolveModuleName(name, containingFile, opts, baseHost)
+      return tsResolved if tsResolved.resolvedModule
+      // 3. Check for implicit transpiled extensions.
+      resolved := path.resolve path.dirname(containingFile), name
+      for [ext, t] of transpilers
+        sourcePath := resolved + ext
+        if origFileExists sourcePath
+          return
+            resolvedModule:
+              resolvedFileName: sourcePath + t.target
+              extension: t.target
+              isExternalLibraryImport: false
+      // 4. Check for directory imports of index files.
+      if origDirectoryExists resolved
+        for [_, t] of transpilers
+          index := path.join resolved, "index" + t.extension
+          if origFileExists index
+            return
+              resolvedModule:
+                resolvedFileName: index + t.target
+                extension: t.target
+                isExternalLibraryImport: false
+      // 5. Return TypeScript's failure information.
+      tsResolved
 
   // ts.createIncrementalProgram reads any prior tsbuildinfo via the
   // host's readFile (driven by compilerOptions.tsBuildInfoFile) — no
