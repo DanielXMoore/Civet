@@ -8,10 +8,11 @@ onmessage = async (e) => {
   const highlighter = await getHighlighter();
   const inputHtml = highlighter.codeToHtml(code, { lang: 'civet' });
 
-  let tsCode, ast, sourceMap
+  let tsCode, ast, sourceMap, topLevelYield
   let errors = []
   try {
     ast = await Civet.compile(code, { ast: true, parseOptions });
+    topLevelYield = ast.topLevelYield;
     sourceMap = new Civet.SourceMap(code);
     tsCode = Civet.generate(ast, { js: !tsOutput, errors, sourceMap });
     if (errors.length) {
@@ -106,8 +107,7 @@ onmessage = async (e) => {
       // `yield [a, b]` into `yield[(a, b)]`. Work around by wrapping in a
       // generator function, formatting, then stripping the wrapper.
       // https://github.com/DanielXMoore/Civet/issues/1673
-      const wrapYield = ast?.topLevelYield;
-      const wrapped = wrapYield
+      const wrapped = topLevelYield
         ? `function*$civetYieldWrap(){\n${tsCode}\n}`
         : tsCode;
       let formatted = await prettier.format(wrapped, {
@@ -115,13 +115,13 @@ onmessage = async (e) => {
         plugins: prettierPlugins,
         printWidth: 50,
       });
-      if (wrapYield) {
+      if (topLevelYield) {
         const match = formatted.match(
           /^function\* \$civetYieldWrap\(\) \{\n([\s\S]*)\n\}\s*$/
         );
-        if (match) {
-          formatted = match[1].replace(/^  /gm, '') + '\n';
-        }
+        // Fall back to raw output if Prettier reshaped the wrapper
+        // unexpectedly — better to ship unformatted than to leak the wrapper.
+        formatted = match ? match[1].replace(/^  /gm, '') + '\n' : tsCode;
       }
       tsCode = formatted;
       formattedOutput = tsCode;

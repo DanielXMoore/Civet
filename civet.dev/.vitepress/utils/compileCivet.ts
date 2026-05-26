@@ -32,9 +32,9 @@ export function compileCivet(
         const match = formatted.match(
           /^function\* \$civetYieldWrap\(\) \{\n([\s\S]*)\n\}\s*$/
         );
-        if (match) {
-          formatted = match[1].replace(/^  /gm, '') + '\n';
-        }
+        // Fall back to raw output if Prettier reshaped the wrapper
+        // unexpectedly — better to ship unformatted than to leak the wrapper.
+        formatted = match ? match[1].replace(/^  /gm, '') + '\n' : tsCode;
       }
       tsCode = formatted;
     } catch (err) {
