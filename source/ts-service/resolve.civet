@@ -8,6 +8,7 @@ path from node:path
 
 ts from typescript
 { type Transpiler } from ./types.civet
+{ getExtensionFromPath } from ./path.civet
 
 export interface ResolveTranspiledModuleOptions
   name: string
@@ -29,64 +30,129 @@ export function resolveTranspiledModuleName({
   fileExists
   directoryExists
 }: ResolveTranspiledModuleOptions): ts.ResolvedModuleWithFailedLookupLocations
-  // 1. Check for explicit transpiled extensions.
-  for [ext, t] of transpilers
-    if name.endsWith ext
-      resolved := path.resolve path.dirname(containingFile), name
-      if fileExists resolved
-        return
-          resolvedModule:
-            resolvedFileName: resolved + t.target
-            extension: t.target
-            isExternalLibraryImport: false
+  resolvedModule := (sourcePath: string, transpiler: Transpiler): ts.ResolvedModuleFull =>
+    resolvedFileName: sourcePath + transpiler.target
+    extension: transpiler.target
+    isExternalLibraryImport: false
 
-  // 2. Try regular TypeScript resolution.
+  // Try regular TypeScript resolution first. This preserves TS's own `paths`,
+  // `package.json#imports`, and package-resolution behavior when the target is
+  // already a TS/JS file or a mogrified `.civet.tsx` package import.
   tsResolved := resolveTypeScript()
   return tsResolved if tsResolved.resolvedModule
 
-  // TypeScript resolution should suffice for package imports like `node:fs`.
-  // Don't try implicit extensions or directory imports.
-  return tsResolved unless ts.isExternalModuleNameRelative name
-
-  // Node16/NodeNext ESM resolution intentionally rejects extensionless
-  // relative imports and directory `import`s, while CommonJS/`require`
-  // mode still permits them.  Respect TS's per-specifier mode so Civet
-  // does not make `import "./dep"` work where `import "./dep.ts"` or an
-  // explicit index path would be required.
-  // getEmitModuleResolutionKind is exported at runtime but omitted from
-  // typescript.d.ts, so declare just that member at the call site.
   moduleResolution := (ts as typeof ts & {
     getEmitModuleResolutionKind: (compilerOptions: ts.CompilerOptions) => ts.ModuleResolutionKind
   }).getEmitModuleResolutionKind compilerOptions
-  return tsResolved if resolutionMode is ts.ModuleKind.ESNext and (
-    moduleResolution is ts.ModuleResolutionKind.Node16 or
-    moduleResolution is ts.ModuleResolutionKind.NodeNext
+  isRelative := ts.isExternalModuleNameRelative name
+  // Node16/NodeNext ESM resolution intentionally rejects extensionless
+  // relative imports and directory `import`s, while CommonJS/`require` mode
+  // still permits them.  Respect TS's per-specifier mode so Civet does not
+  // make `import "./dep"` work where `import "./dep.ts"` or an explicit index
+  // path would be required.
+  allowImplicitExtension .= isRelative and not (
+    resolutionMode is ts.ModuleKind.ESNext and (
+      moduleResolution is ts.ModuleResolutionKind.Node16 or
+      moduleResolution is ts.ModuleResolutionKind.NodeNext
+    )
   )
+  allowDirectoryIndex .= (not isRelative or allowImplicitExtension) and
+    moduleResolution is not ts.ModuleResolutionKind.Classic
 
-  // 3. Check for implicit transpiled extensions.
-  resolved := path.resolve path.dirname(containingFile), name
-  for [ext, t] of transpilers
-    sourcePath := resolved + ext
+  // Resolve a concrete source path to its synthetic TS sibling.  Explicit
+  // extensions are always allowed; implicit extensions and directory indexes
+  // are controlled by the closure flags above so the paths and relative-import
+  // phases can apply different fallback rules without extra parameters.
+  tryResolveSource := (sourcePath: string): ts.ResolvedModuleFull? =>
+    // Explicit transpiler extension, e.g. "./dep.civet" or a paths target
+    // "src/dep.civet". This is valid even in Node16/NodeNext ESM mode because
+    // the import already names the source extension.
     if fileExists sourcePath
-      return
-        resolvedModule:
-          resolvedFileName: sourcePath + t.target
-          extension: t.target
-          isExternalLibraryImport: false
+      candidateExtension := getExtensionFromPath sourcePath
+      if candidateTranspiler := transpilers.get candidateExtension
+        return resolvedModule sourcePath, candidateTranspiler
 
-  // 4. Check for directory imports of index files.
-  // Classic resolution checks files but not directory indexes; node-style
-  // and bundler resolutions support `./dir` -> `./dir/index.*`.
-  return tsResolved if moduleResolution is ts.ModuleResolutionKind.Classic
-  if directoryExists resolved
-    for [_, t] of transpilers
-      index := path.join resolved, "index" + t.extension
-      if fileExists index
-        return
-          resolvedModule:
-            resolvedFileName: index + t.target
-            extension: t.target
-            isExternalLibraryImport: false
+    // Implicit source extensions are a relative-import fallback: "./dep" can
+    // resolve to "./dep.civet" when the active module-resolution mode allows
+    // extensionless relative imports.  The paths-alias pass keeps this off so
+    // aliases do not gain bare-file probing behavior.
+    if allowImplicitExtension
+      for [ext, t] of transpilers
+        candidate := sourcePath + ext
+        if fileExists candidate
+          return resolvedModule candidate, t
 
-  // 5. Return TypeScript's failure information.
+    // Directory imports mirror node-style resolution, e.g. "./dir" or a paths
+    // alias target "src/dir" resolving to "src/dir/index.civet". Classic TS
+    // resolution checks files only, so keep that old guard here.
+    if allowDirectoryIndex and directoryExists sourcePath
+      for [_, t] of transpilers
+        index := path.join sourcePath, "index" + t.extension
+        if fileExists index
+          return resolvedModule index, t
+    return
+
+  unless isRelative
+    if paths := compilerOptions.paths
+      // parseJsonConfigFileContent sets pathsBasePath when `paths` is present.
+      // If baseUrl is also set, TS still treats it as the paths base even
+      // though standalone baseUrl probing is deprecated and intentionally not
+      // recreated below.
+      if pathsBase := compilerOptions.baseUrl ?? (
+        compilerOptions as ts.CompilerOptions & { pathsBasePath?: string }
+      ).pathsBasePath
+        // Mimic the important part of TS's paths matching: only the best
+        // (longest-prefix) pattern contributes replacements, and replacement
+        // order is preserved.  We only use this after TS's own resolver failed,
+        // so this is a Civet-target fallback, not a full replacement for TS.
+        bestPrefixLength .= -1
+        bestCandidates: string[] .= []
+
+        for [pattern, replacements] of Object.entries paths
+          starIndex := pattern.indexOf "*"
+          let matched: string?
+          let prefixLength: number
+          if starIndex >= 0
+            prefix := pattern[<starIndex]
+            suffix := pattern[>starIndex]
+            if name.startsWith(prefix) and name.endsWith(suffix) and name# >= prefix# + suffix#
+              matched = name[prefix# ..< name# - suffix#]
+              prefixLength = prefix#
+            else
+              continue
+          else
+            continue unless name is pattern
+            matched = ""
+            prefixLength = pattern#
+
+          continue if prefixLength < bestPrefixLength
+          if prefixLength > bestPrefixLength
+            bestPrefixLength = prefixLength
+            bestCandidates = []
+
+          for replacement of replacements
+            target := if starIndex >= 0
+              replacement.replace "*", => matched
+            else
+              replacement
+            bestCandidates.push path.resolve pathsBase, target
+
+        // Paths aliases can point at explicit `.civet` files or at directories
+        // with `index.civet`, but not at bare files that need implicit
+        // ".civet" suffix probing.
+        for candidate of bestCandidates
+          if resolved := tryResolveSource candidate
+            return resolvedModule: resolved
+
+  // For package/bare specifiers, TypeScript resolution should either succeed
+  // via the host's synthetic `.civet.tsx` fileExists hook or provide the right
+  // failure details.  Do not apply relative-style implicit extension or
+  // directory probing to unresolved packages.
+  return tsResolved unless isRelative
+
+  relativeSourcePath := path.resolve path.dirname(containingFile), name
+  resolved := tryResolveSource relativeSourcePath
+  return resolvedModule: resolved if resolved
+
+  // Return TypeScript's failure information.
   tsResolved

@@ -4,8 +4,18 @@ assert from assert
 * as fs from node:fs
 * as os from node:os
 * as path from node:path
+ts from typescript
 
 { buildTranspilers, parseTsConfigForCivet } from "../../source/ts-service/config.civet"
+{ resolveTranspiledModuleName } from "../../source/ts-service/resolve.civet"
+{ createBaseHost } from "../../source/ts-service/service.civet"
+{
+  TSHost
+  TSService
+  createInMemoryDocFactory
+  makeCivetPlugin
+  makeIncrementalTypecheckProgram
+} from "../../source/ts-service/index.civet"
 { type Plugin } from "../../source/ts-service/types.civet"
 
 makeCivetTranspiler := () =>
@@ -57,7 +67,7 @@ describe "parseTsConfigForCivet missing-tsconfig fallback", ->
       assert parsed.fileNames.some(.endsWith 'b.civet.tsx'),
         `expected b.civet in fallback scope; got ${parsed.fileNames.join(', ')}`
 
-      // The stray .ts file is NOT included — that's the whole point of the
+      // The stray .ts file is NOT included - that's the whole point of the
       // narrowed fallback (issue #240: huge JS/TS trees OOM the service).
       assert not parsed.fileNames.some(.endsWith 'stray.ts'),
         `expected stray.ts to be excluded from fallback scope; got ${parsed.fileNames.join(', ')}`
@@ -75,9 +85,413 @@ describe "parseTsConfigForCivet missing-tsconfig fallback", ->
       emptyTranspilers := buildTranspilers ([] as Plugin[])
       parsed := parseTsConfigForCivet tmpDir, emptyTranspilers
       assert.equal parsed.configFound, false
-      // With no transpilers, the .ts walk is still active — confirms the
+      // With no transpilers, the .ts walk is still active - confirms the
       // empty-include arm was taken (otherwise this would be empty).
       assert parsed.fileNames.some(.endsWith 'plain.ts'),
         `expected plain.ts in default walk; got ${parsed.fileNames.join(', ')}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+describe "createBaseHost", ->
+  it "delegates custom System directoryExists when present", ->
+    system := {
+      ...ts.sys
+      directoryExists: (_path: string) => true
+      realpath: (_path: string) => "real"
+    } as unknown as ts.System
+    host := createBaseHost {}, system
+    assert.equal host.directoryExists!("present"), true
+    assert.equal host.realpath!("present"), "real"
+
+  it "returns false when custom System directoryExists is absent", ->
+    system := {
+      ...ts.sys
+      directoryExists: undefined
+      realpath: undefined
+    } as unknown as ts.System
+    host := createBaseHost {}, system
+    assert.equal host.directoryExists!("missing"), false
+    assert.equal host.realpath!("missing"), "missing"
+
+describe "TSHost", ->
+  it "accepts a base host without directoryExists", ->
+    baseHost := {
+      readFile: (_fileName: string) => undefined
+      fileExists: (_fileName: string) => false
+      getDefaultLibFileName: (_options: ts.CompilerOptions) => "lib.d.ts"
+    } as ts.CompilerHost
+    host := TSHost(
+      { rootDir: os.tmpdir() }
+      []
+      baseHost
+      makeCivetTranspiler()
+      createInMemoryDocFactory()
+    )
+    assert.equal host.fileExists(path.join(os.tmpdir(), 'missing.civet.tsx')), false
+
+describe "resolveTranspiledModuleName fallback branches", ->
+  failure := {
+    resolvedModule: undefined
+    failedLookupLocations: []
+  } as ts.ResolvedModuleWithFailedLookupLocations
+
+  directoryExists := (p: string) =>
+    fs.existsSync(p) and fs.statSync(p).isDirectory()
+
+  it "returns TypeScript failure details for unresolved relative imports", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-missing-relative-'
+    try
+      resolved := resolveTranspiledModuleName({
+        name: './missing'
+        containingFile: path.join tmpDir, 'index.ts'
+        compilerOptions:
+          moduleResolution: ts.ModuleResolutionKind.Node10
+        transpilers: makeCivetTranspiler()
+        resolveTypeScript: => failure
+        fileExists: fs.existsSync
+        directoryExists
+      })
+      assert.equal resolved, failure
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  nodeEsmModes: {
+    label: string
+    moduleResolution: ts.ModuleResolutionKind
+    moduleKind: ts.ModuleKind
+  }[] := [
+    { label: 'Node16', moduleResolution: ts.ModuleResolutionKind.Node16, moduleKind: ts.ModuleKind.Node16 }
+    { label: 'NodeNext', moduleResolution: ts.ModuleResolutionKind.NodeNext, moduleKind: ts.ModuleKind.NodeNext }
+  ]
+  for { label, moduleResolution, moduleKind } of nodeEsmModes
+    it `does not probe implicit extensions in ${label} ESM mode`, ->
+      tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-esm-extensionless-'
+      try
+        fs.writeFileSync path.join(tmpDir, 'dep.civet'), "export n: number := 1\n"
+
+        resolved := resolveTranspiledModuleName({
+          name: './dep'
+          containingFile: path.join tmpDir, 'index.ts'
+          compilerOptions:
+            module: moduleKind
+            moduleResolution: moduleResolution
+          resolutionMode: ts.ModuleKind.ESNext
+          transpilers: makeCivetTranspiler()
+          resolveTypeScript: => failure
+          fileExists: fs.existsSync
+          directoryExists
+        })
+        assert.equal resolved, failure
+      finally
+        fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "returns TypeScript failure details for unresolved bare imports", ->
+    resolved := resolveTranspiledModuleName({
+      name: 'missing-package'
+      containingFile: path.join os.tmpdir(), 'index.ts'
+      compilerOptions:
+        moduleResolution: ts.ModuleResolutionKind.Node10
+      transpilers: makeCivetTranspiler()
+      resolveTypeScript: => failure
+      fileExists: fs.existsSync
+      directoryExists
+    })
+    assert.equal resolved, failure
+
+  it "skips paths mappings when TypeScript did not provide a paths base", ->
+    resolved := resolveTranspiledModuleName({
+      name: '@/dep.civet'
+      containingFile: path.join os.tmpdir(), 'index.ts'
+      compilerOptions:
+        moduleResolution: ts.ModuleResolutionKind.Node10
+        paths:
+          '@/*': ['src/*']
+      transpilers: makeCivetTranspiler()
+      resolveTypeScript: => failure
+      fileExists: fs.existsSync
+      directoryExists
+    })
+    assert.equal resolved, failure
+
+  it "uses the best paths pattern and preserves replacement order", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-paths-branches-'
+    try
+      srcDir := path.join tmpDir, 'src'
+      fs.mkdirSync srcDir
+      exactPath := path.join srcDir, 'exact.civet'
+      fs.writeFileSync exactPath, "export n: number := 1\n"
+
+      resolved := resolveTranspiledModuleName({
+        name: '@long/dep'
+        containingFile: path.join tmpDir, 'index.ts'
+        compilerOptions:
+          moduleResolution: ts.ModuleResolutionKind.Node10
+          baseUrl: tmpDir
+          paths:
+            'nomatch/*': ['nope/*']
+            'other': ['src/other.civet']
+            '@long/dep': ['src/missing.civet', 'src/exact.civet']
+            '@long/*': ['src/star-missing/*']
+        transpilers: makeCivetTranspiler()
+        resolveTypeScript: => failure
+        fileExists: fs.existsSync
+        directoryExists
+      })
+
+      resolvedFile := resolved.resolvedModule?.resolvedFileName.replace(/\\/g, '/')
+      assert resolvedFile?.endsWith('src/exact.civet.tsx'),
+        `expected exact paths replacement to resolve, got ${resolved.resolvedModule?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "treats paths wildcard matches as literal replacement text", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-paths-dollar-'
+    try
+      srcDir := path.join tmpDir, 'src'
+      fs.mkdirSync srcDir
+      fs.writeFileSync path.join(srcDir, 'dep$&name.civet'), "export n: number := 1\n"
+
+      resolved := resolveTranspiledModuleName({
+        name: '@special/dep$&name'
+        containingFile: path.join tmpDir, 'index.ts'
+        compilerOptions:
+          moduleResolution: ts.ModuleResolutionKind.Node10
+          baseUrl: tmpDir
+          paths:
+            '@special/*': ['src/*.civet']
+        transpilers: makeCivetTranspiler()
+        resolveTypeScript: => failure
+        fileExists: fs.existsSync
+        directoryExists
+      })
+
+      resolvedFile := resolved.resolvedModule?.resolvedFileName.replace(/\\/g, '/')
+      assert resolvedFile?.endsWith('src/dep$&name.civet.tsx'),
+        `expected literal wildcard replacement, got ${resolved.resolvedModule?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+describe "ts-service legacy module resolver", ->
+  it "resolveModuleNames resolves extensionless imports to .civet siblings", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-legacy-'
+    try
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","strict":true},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from './dep'\nconst x: number = n\n"
+      fs.writeFileSync path.join(tmpDir, 'dep.civet'), "export const n: number := 1\n"
+
+      service := TSService tmpDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory: createInMemoryDocFactory()
+      }
+      resolved := service.host.resolveModuleNames!(
+        ['./dep']
+        indexPath
+        undefined
+        undefined
+        service.host.getCompilationSettings()
+        undefined
+      )
+      assert resolved[0]?.resolvedFileName.endsWith('dep.civet.tsx'),
+        `expected ./dep to resolve to dep.civet.tsx, got ${resolved[0]?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "resolveModuleNames resolves tsconfig paths aliases to explicit .civet files", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-paths-'
+    try
+      srcDir := path.join tmpDir, 'src'
+      fs.mkdirSync srcDir
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","strict":true,"baseUrl":".","paths":{"@/*":["src/*"]}},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from '@/dep.civet'\nconst x: number = n\n"
+      fs.writeFileSync path.join(srcDir, 'dep.civet'), "export const n: number := 1\n"
+
+      service := TSService tmpDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory: createInMemoryDocFactory()
+      }
+      resolved := service.host.resolveModuleNames!(
+        ['@/dep.civet']
+        indexPath
+        undefined
+        undefined
+        service.host.getCompilationSettings()
+        undefined
+      )
+      resolvedFile := resolved[0]?.resolvedFileName.replace(/\\/g, '/')
+      assert resolvedFile?.endsWith('src/dep.civet.tsx'),
+        `expected @/dep.civet to resolve to src/dep.civet.tsx, got ${resolved[0]?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "resolveModuleNames resolves tsconfig paths aliases to .civet index files", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-paths-index-'
+    try
+      depDir := path.join tmpDir, 'src', 'dep'
+      fs.mkdirSync depDir, { recursive: true }
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","strict":true,"baseUrl":".","paths":{"@/*":["src/*"]}},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from '@/dep'\nconst x: number = n\n"
+      fs.writeFileSync path.join(depDir, 'index.civet'), "export const n: number := 1\n"
+
+      service := TSService tmpDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory: createInMemoryDocFactory()
+      }
+      resolved := service.host.resolveModuleNames!(
+        ['@/dep']
+        indexPath
+        undefined
+        undefined
+        service.host.getCompilationSettings()
+        undefined
+      )
+      resolvedFile := resolved[0]?.resolvedFileName.replace(/\\/g, '/')
+      assert resolvedFile?.endsWith('src/dep/index.civet.tsx'),
+        `expected @/dep to resolve to src/dep/index.civet.tsx, got ${resolved[0]?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "resolveModuleNames resolves explicit .civet files from packages", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-package-'
+    try
+      pkgDir := path.join tmpDir, 'node_modules', 'pkg'
+      fs.mkdirSync pkgDir, { recursive: true }
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","moduleResolution":"node","strict":true},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from 'pkg/dep.civet'\nconst x: number = n\n"
+      fs.writeFileSync path.join(pkgDir, 'package.json'), '{"name":"pkg","version":"1.0.0"}'
+      fs.writeFileSync path.join(pkgDir, 'dep.civet'), "export const n: number := 1\n"
+
+      service := TSService tmpDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory: createInMemoryDocFactory()
+      }
+      resolved := service.host.resolveModuleNames!(
+        ['pkg/dep.civet']
+        indexPath
+        undefined
+        undefined
+        service.host.getCompilationSettings()
+        undefined
+      )
+      resolvedFile := resolved[0]?.resolvedFileName.replace(/\\/g, '/')
+      assert resolvedFile?.endsWith('node_modules/pkg/dep.civet.tsx'),
+        `expected pkg/dep.civet to resolve to node_modules/pkg/dep.civet.tsx, got ${resolved[0]?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "incremental resolveModuleNames resolves extensionless imports to .civet siblings", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-incremental-'
+    try
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","strict":true},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from './dep'\nconst x: number = n\n"
+      fs.writeFileSync path.join(tmpDir, 'dep.civet'), "export const n: number := 1\n"
+
+      { host, builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      resolved := host.resolveModuleNames!(
+        ['./dep']
+        indexPath
+        undefined
+        undefined
+        builder.getProgram().getCompilerOptions()
+        undefined
+      )
+      assert resolved[0]?.resolvedFileName.endsWith('dep.civet.tsx'),
+        `expected ./dep to resolve to dep.civet.tsx, got ${resolved[0]?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "incremental resolveModuleNames resolves tsconfig paths aliases to explicit .civet files", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-paths-incremental-'
+    try
+      srcDir := path.join tmpDir, 'src'
+      fs.mkdirSync srcDir
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","strict":true,"baseUrl":".","paths":{"@/*":["src/*"]}},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from '@/dep.civet'\nconst x: number = n\n"
+      fs.writeFileSync path.join(srcDir, 'dep.civet'), "export const n: number := 1\n"
+
+      { host, builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      resolved := host.resolveModuleNames!(
+        ['@/dep.civet']
+        indexPath
+        undefined
+        undefined
+        builder.getProgram().getCompilerOptions()
+        undefined
+      )
+      resolvedFile := resolved[0]?.resolvedFileName.replace(/\\/g, '/')
+      assert resolvedFile?.endsWith('src/dep.civet.tsx'),
+        `expected @/dep.civet to resolve to src/dep.civet.tsx, got ${resolved[0]?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "incremental resolveModuleNames resolves tsconfig paths aliases to .civet index files", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-paths-index-incremental-'
+    try
+      depDir := path.join tmpDir, 'src', 'dep'
+      fs.mkdirSync depDir, { recursive: true }
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","strict":true,"baseUrl":".","paths":{"@/*":["src/*"]}},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from '@/dep'\nconst x: number = n\n"
+      fs.writeFileSync path.join(depDir, 'index.civet'), "export const n: number := 1\n"
+
+      { host, builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      resolved := host.resolveModuleNames!(
+        ['@/dep']
+        indexPath
+        undefined
+        undefined
+        builder.getProgram().getCompilerOptions()
+        undefined
+      )
+      resolvedFile := resolved[0]?.resolvedFileName.replace(/\\/g, '/')
+      assert resolvedFile?.endsWith('src/dep/index.civet.tsx'),
+        `expected @/dep to resolve to src/dep/index.civet.tsx, got ${resolved[0]?.resolvedFileName}`
+    finally
+      fs.rmSync tmpDir, { recursive: true, force: true }
+
+  it "incremental resolveModuleNames resolves explicit .civet files from packages", ->
+    tmpDir := fs.mkdtempSync path.join os.tmpdir(), 'civet-resolve-package-incremental-'
+    try
+      pkgDir := path.join tmpDir, 'node_modules', 'pkg'
+      fs.mkdirSync pkgDir, { recursive: true }
+      indexPath := path.join tmpDir, 'index.ts'
+      fs.writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"commonjs","moduleResolution":"node","strict":true},"files":["index.ts"]}'
+      fs.writeFileSync indexPath, "import { n } from 'pkg/dep.civet'\nconst x: number = n\n"
+      fs.writeFileSync path.join(pkgDir, 'package.json'), '{"name":"pkg","version":"1.0.0"}'
+      fs.writeFileSync path.join(pkgDir, 'dep.civet'), "export const n: number := 1\n"
+
+      { host, builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      resolved := host.resolveModuleNames!(
+        ['pkg/dep.civet']
+        indexPath
+        undefined
+        undefined
+        builder.getProgram().getCompilerOptions()
+        undefined
+      )
+      resolvedFile := resolved[0]?.resolvedFileName.replace(/\\/g, '/')
+      assert resolvedFile?.endsWith('node_modules/pkg/dep.civet.tsx'),
+        `expected pkg/dep.civet to resolve to node_modules/pkg/dep.civet.tsx, got ${resolved[0]?.resolvedFileName}`
     finally
       fs.rmSync tmpDir, { recursive: true, force: true }
