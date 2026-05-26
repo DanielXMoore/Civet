@@ -12,6 +12,8 @@ ts from typescript
 export interface ResolveTranspiledModuleOptions
   name: string
   containingFile: string
+  compilerOptions: ts.CompilerOptions
+  resolutionMode?: ts.ResolutionMode
   transpilers: Map<string, Transpiler>
   resolveTypeScript(): ts.ResolvedModuleWithFailedLookupLocations
   fileExists(path: string): boolean
@@ -20,6 +22,8 @@ export interface ResolveTranspiledModuleOptions
 export function resolveTranspiledModuleName({
   name
   containingFile
+  compilerOptions
+  resolutionMode
   transpilers
   resolveTypeScript
   fileExists
@@ -39,7 +43,25 @@ export function resolveTranspiledModuleName({
   // 2. Try regular TypeScript resolution.
   tsResolved := resolveTypeScript()
   return tsResolved if tsResolved.resolvedModule
+
+  // TypeScript resolution should suffice for package imports like `node:fs`.
+  // Don't try implicit extensions or directory imports.
   return tsResolved unless ts.isExternalModuleNameRelative name
+
+  // Node16/NodeNext ESM resolution intentionally rejects extensionless
+  // relative imports and directory `import`s, while CommonJS/`require`
+  // mode still permits them.  Respect TS's per-specifier mode so Civet
+  // does not make `import "./dep"` work where `import "./dep.ts"` or an
+  // explicit index path would be required.
+  // getEmitModuleResolutionKind is exported at runtime but omitted from
+  // typescript.d.ts, so declare just that member at the call site.
+  moduleResolution := (ts as typeof ts & {
+    getEmitModuleResolutionKind: (compilerOptions: ts.CompilerOptions) => ts.ModuleResolutionKind
+  }).getEmitModuleResolutionKind compilerOptions
+  return tsResolved if resolutionMode is ts.ModuleKind.ESNext and (
+    moduleResolution is ts.ModuleResolutionKind.Node16 or
+    moduleResolution is ts.ModuleResolutionKind.NodeNext
+  )
 
   // 3. Check for implicit transpiled extensions.
   resolved := path.resolve path.dirname(containingFile), name
@@ -53,6 +75,9 @@ export function resolveTranspiledModuleName({
           isExternalLibraryImport: false
 
   // 4. Check for directory imports of index files.
+  // Classic resolution checks files but not directory indexes; node-style
+  // and bundler resolutions support `./dir` -> `./dir/index.*`.
+  return tsResolved if moduleResolution is ts.ModuleResolutionKind.Classic
   if directoryExists resolved
     for [_, t] of transpilers
       index := path.join resolved, "index" + t.extension
