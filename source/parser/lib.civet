@@ -8,6 +8,7 @@
 
 import type {
   AccessStart
+  ASTError
   ASTLeaf
   ASTNode
   ASTNodeObject
@@ -47,6 +48,8 @@ import type {
   ParametersNode
   ParenthesizedExpression
   Placeholder
+  Property
+  SpreadProperty
   StatementTuple
   SwitchStatement
   TypeArgument
@@ -704,6 +707,14 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
         value .= part.value ?? name
         wValue := getTrimmingSpace part.value
 
+        // Capture private-field shorthand info before handleThisPrivateShorthands
+        // strips the synthetic `this.` wrapper. Used in processAssignments to
+        // polyfill `obj.{#x} = src` as `obj.#x = src.#x` since JS destructuring
+        // can't target private fields.
+        privateField .= undefined as string?
+        if value?.privateShorthand
+          privateField = value.privateId?.name
+
         [value, suppressPrefix] = handleThisPrivateShorthands value
 
         // Not yet needed:
@@ -750,6 +761,7 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
             type: part.type
             name
             value
+            privateField
             delim: part.delim
             names: part.names
             children: [
@@ -1287,6 +1299,44 @@ function processAssignments(statements: ASTNode): void
         exp.expression = $2 = [call, "(", lhs, ", ", $2, ")"]
       if omitLhs
         replaceNode exp, $2
+        continue
+
+    // Polyfill private-field glob assignment: `obj.{#x, #y} = src` cannot use
+    // JS destructuring because private fields aren't valid destructuring targets.
+    // Expand to comma-separated direct assignments: `(obj.#x = src.#x, obj.#y = src.#y)`.
+    if $1.length is 1
+      [, soleLhs, , soleOp] := $1[0]
+      isPrivateGlobProp := (p: Property | SpreadProperty | MethodDefinition | ASTError): p is Property =>
+        p?.type is "Property" and !!p.privateField
+      if soleOp.token is "=" and soleLhs.type is "ObjectExpression" and
+         soleLhs.properties?.some(isPrivateGlobProp) and
+         not soleLhs.properties.some((p) => p?.type is "SpreadProperty")
+        properties := soleLhs.properties.filter (p): p is Property => p?.type is "Property"
+        // Use a ref for the source if there are multiple properties and it
+        // has side effects, so we don't re-evaluate it for each assignment.
+        let prefix: ASTNode[], sourceExpr: ASTNode
+        if properties.length > 1 and needsRef $2
+          srcRef := makeRef()
+          prefix = [srcRef, " = ", $2, ", "]
+          sourceExpr = srcRef
+          // Hoist `let ref` declaration; nothing else sets `exp.hoistDec`
+          // before this point and we `continue` past everything that would.
+          exp.hoistDec = {
+            type: "Declaration"
+            children: ["let ", srcRef]
+            names: []
+            bindings: []
+            decl: "let"
+          }
+        else
+          prefix = []
+          sourceExpr = $2
+        assignments := properties.map (prop) =>
+          sourceName := prop.privateField ?? prop.name
+          [prop.value, " = ", sourceExpr, ".", sourceName]
+        joined := assignments.flatMap (a, idx) => idx ? [", ", a] : [a]
+        exp.children = [["(", prefix, joined, ")"]]
+        exp.names = []
         continue
 
     // Force parens around destructuring object assignments
