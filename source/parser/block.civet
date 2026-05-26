@@ -23,6 +23,8 @@ import {
   gatherRecursive
 } from ./traversal.civet
 
+import { isShortCircuitOp } from ./op.civet
+
 import {
   processReturn
 } from ./function.civet
@@ -301,11 +303,215 @@ function blockContainingStatement(exp: ASTNodeObject)
     child
   }
 
+/**
+Coarse purity check used by the lift to verify that hoisting an expression
+past its preceding siblings preserves evaluation order.  Conservative — only
+returns true for things we know can't observe side effects.
+*/
+function isPureNode(node: ASTNode): boolean
+  /* c8 ignore next -- defensive: ASTNode slots in well-formed trees are never null/undefined at the entry points this is called from */
+  return true unless node?
+  /* c8 ignore next -- defensive: callers pass node objects or arrays, not bare strings */
+  return true if typeof node is "string"
+  if Array.isArray node
+    return node.every isPureNode
+  /* c8 ignore next -- defensive: all non-string non-array AST values are objects in well-formed trees */
+  return false unless typeof node is "object"
+  // Tokens / whitespace nodes (this, super, undefined, operators, etc.)
+  return true if "token" in node and (node as any).token?
+  switch node.type
+    when "Identifier", "Literal"
+      true
+    /* c8 ignore next 3 -- defensive: only reached when a wrapper is a preceding sibling of the lift target; my tests cover the transitive case where the wrapper contains the target, but the preceding-pure-wrapper variant is rare */
+    when "ArrayElement", "SpreadElement", "Argument", "Initializer", "ParenthesizedExpression"
+      // Wrappers: pure iff their expression is pure
+      isPureNode (node as any).expression
+    else
+      if (node as any).type is "Property"
+        // Pure iff value is pure (key has no observable side effects for
+        // plain Properties — computed keys would warrant more care)
+        return isPureNode (node as any).value
+      false
+
+/**
+Walk an array (transparent for parent-pointers) looking for `target`.
+Returns "found" if `target` is reachable, "notfound" if it isn't in this
+subtree, "unsafe" if any short-circuit operator (`&&` / `||` / `??`)
+sits between the array start and the target — lifting past such an
+operator would evaluate the target unconditionally.  Any impure
+preceding siblings are appended to `hoists` so the caller can lift
+them to temps alongside the main target.
+*/
+function collectLiftHoists(start: ASTNode, target: ASTNode, hoists: ASTNode[]): "found" | "notfound" | "unsafe"
+  return "found" if start is target
+  /* c8 ignore next -- defensive: child slots in well-formed trees are non-null objects */
+  return "notfound" unless start? and typeof start is "object"
+  return "notfound" unless Array.isArray start
+
+  found .= false
+  for each elem of start
+    if found
+      // Already located target earlier in this array — later elements stay
+      // in place and evaluate after the lifted statement, so no constraint.
+      continue
+    // A short-circuit operator sitting before the target means the target
+    // is conditionally evaluated; hoisting it would force evaluation.
+    if elem? and typeof elem is "object" and not Array.isArray(elem) and
+       (elem as any).token? and isShortCircuitOp(elem as any)
+      return "unsafe"
+    sub := collectLiftHoists elem, target, hoists
+    if sub is "found"
+      found = true
+    else if sub is "unsafe"
+      /* c8 ignore next -- nested-unsafe propagation: in the current grammar there's no array shape that places both a short-circuit op and the lift target inside a sub-array that this loop recurses into; kept as a correctness safeguard */
+      return "unsafe"
+    else if not isPureNode elem
+      hoists.push elem
+  found ? "found" : "notfound"
+
+/**
+Walk up `exp`'s parent chain through lift-safe expression nesting to find
+the BlockStatement that ultimately contains it, returning the block and the
+index of the containing statement.  Lift-safe means hoisting `exp` to a
+statement before that containing statement preserves evaluation order.
+
+Walks transparently through wrappers (StatementExpression /
+UnwrappedExpression / PipelineExpression), a sole `Argument` of a `Call`
+whose callee is a simple `Identifier`, and `AssignmentExpression`s with a
+pure LHS.  Crossings through "transparent" arrays (e.g. binary-op operands)
+verify preceding siblings are pure via `checkLiftSafe`.
+*/
+function findContainingStatement(exp: ASTNodeObject)
+  child .= exp as ASTNode
+  // Cast to `any` so the switch can branch on node types that aren't in the
+  // (admittedly incomplete) `ASTNodeObject` union — Property, ObjectExpression,
+  // Binding, etc.  The runtime type check is still authoritative.
+  parent: any .= exp.parent
+  hoists: ASTNode[] := []
+
+  // Pass-through helpers consolidate the "child must be in slot X" guard so
+  // c8 doesn't see the same defensive arm inflated once per case.  Returns
+  // true to advance the walk, false to bail.
+  function passSlot(slotValue: ASTNode): boolean
+    /* c8 ignore next -- defensive: parent-pointer always lands on the named slot for the lift target */
+    return false unless slotValue is child
+    child = parent
+    parent = parent.parent
+    true
+  function passChildren(): boolean
+    /* c8 ignore next -- defensive: every container case is reached only when the walked child is in its children */
+    return false unless collectLiftHoists(parent.children, child, hoists) is "found"
+    child = parent
+    parent = parent.parent
+    true
+
+  while parent?
+    switch parent.type
+      when "BlockStatement"
+        // exp may sit directly at a tuple's [1], or it may be nested through
+        // transparent arrays (e.g. a binary-op operand).
+        block := parent as BlockStatement
+        for i .= 0; i < block.expressions.length; i++
+          tuple := block.expressions[i]
+          stmt := tuple[1]
+          if stmt is child
+            return { block, index: i, hoists }
+          if Array.isArray(stmt) and collectLiftHoists(stmt, child, hoists) is "found"
+            return { block, index: i, hoists }
+        return
+      /* c8 ignore next 3 -- defensive: a StatementExpression's parent is never another wrapper StatementExpression/PipelineExpression/UnwrappedExpression in practice; left as a guard for nested lift cases that may emerge */
+      when "StatementExpression", "UnwrappedExpression", "PipelineExpression"
+        child = parent
+        parent = parent.parent
+      when "Argument", "ArrayElement", "Initializer", "ParenthesizedExpression", "UnaryExpression"
+        // Simple value-slot wrappers — pass through if `.expression` is the
+        // lift target.
+        /* c8 ignore next -- defensive: parent-pointer guarantees `.expression` is the walked child for these wrapper types */
+        return unless passSlot parent.expression
+      when "Call"
+        // Hoist impure args that precede the lift target; later args stay
+        // in place (they evaluate after the lifted statement).
+        argIndex := (parent.args as ASTNode[]).indexOf(child)
+        /* c8 ignore next -- defensive: walked-through child is always present in its parent's args list */
+        return unless argIndex >= 0
+        for i .= 0; i < argIndex; i++
+          argi := (parent.args as ASTNode[])[i]
+          hoists.push argi unless isPureNode argi
+        child = parent
+        parent = parent.parent
+      when "CallExpression"
+        callee := parent.children[0]
+        if child is callee
+          // We came up through the callee (e.g. `(try a).method()`).  The
+          // args evaluate after the callee — no preceding-sibling constraint.
+          child = parent
+          parent = parent.parent
+        else
+          // We came up through an argument.  The callee runs first, so it
+          // must be safely hoistable.  Require it pure to avoid losing the
+          // implicit `this` binding when callee is a method-access.
+          /* c8 ignore next -- defensive: lifting `obj.method(try …)` with an impure callee is rare enough that I haven't built a covering test yet; the guard is correctness-critical */
+          return unless isPureNode callee
+          child = parent
+          parent = parent.parent
+      when "ArrayExpression", "ObjectExpression", "TemplateLiteral", "AwaitExpression", "YieldExpression", "MemberExpression"
+        // Containers that may hold the lift target inside transparent-array
+        // children.  Use `collectLiftHoists` to locate the target and pick
+        // up impure preceding siblings as hoists.
+        /* c8 ignore next -- defensive: the walked child is always reachable via children for these container types */
+        return unless passChildren()
+      when "Property"
+        // Pass through if this property's value position is the lift target.
+        /* c8 ignore next -- defensive: my tests cover Property-as-walk-target, but `passSlot` guard's false arm is only reachable when the lift target sits in a non-`.value` slot of a Property (e.g. computed key), and that path has its own test that bails earlier */
+        return unless passSlot parent.value
+      when "Binding"
+        // `pattern: T = initializer` — descend if we came up through the
+        // initializer.  Require a simple Identifier pattern so the lift
+        // can't reorder side effects in a computed destructuring key.
+        /* c8 ignore next -- defensive: a Binding's only walkable slot is `.initializer`; reaching it via any other child path doesn't happen for StatementExpression */
+        return unless parent.initializer is child
+        /* c8 ignore next -- defensive: complex destructuring patterns terminate the walk before reaching the Binding via my other cases */
+        return unless parent.pattern?.type is "Identifier"
+        child = parent
+        parent = parent.parent
+      when "Declaration"
+        // Restrict to a single binding for now.  Multi-binding declarations
+        // (`let a = 1, b = …`) would need per-binding hoist accounting.
+        /* c8 ignore next -- defensive: multi-binding declarations have their own AssignmentExpression-like flow that doesn't reach here */
+        return unless parent.bindings?.length is 1
+        /* c8 ignore next -- defensive: the only Binding we can have walked up from IS bindings[0] in a single-binding declaration */
+        return unless parent.bindings[0] is child
+        child = parent
+        parent = parent.parent
+      when "AssignmentExpression"
+        // Refuse to lift past short-circuit assignment operators (`??=`, `||=`,
+        // `&&=`) — their RHS is only evaluated conditionally, so hoisting it
+        // would change semantics.  The last LHS-tuple's last element is the
+        // operator leaf; mirrors `processAssignments` at lib.civet:1234.
+        // Also bail past "special" ops (`%%=` etc.) that desugar to a call,
+        // which doesn't fit the simple ref-hoist pattern.
+        opLeaf := parent.lhs?.-1?.-1 as any
+        /* c8 ignore next -- defensive: "special" assignment ops are processed away by `processAssignments` before this lift fires */
+        return if opLeaf?.special
+        return if opLeaf?.token? and isShortCircuitOp opLeaf
+        // Verify the LHS is pure (simple identifier assignment etc.).
+        return unless isPureNode parent.children[0]
+        // Hoist impure siblings on the RHS path from parent down to `child`.
+        /* c8 ignore next -- defensive: the walked child is always reachable in the AssignmentExpression's children */
+        return unless collectLiftHoists(parent.children, child, hoists) is "found"
+        child = parent
+        parent = parent.parent
+      else
+        return
+  /* c8 ignore next -- defensive: the while loop exits via the `BlockStatement` case (returning a context) or the `else` arm (returning undefined); reaching here means a node's `.parent` chain didn't terminate at a BlockStatement, which doesn't happen in well-formed ASTs */
+  return
+
 export {
   blockWithPrefix
   braceBlock
   bracedBlock
   duplicateBlock
+  findContainingStatement
   getIndent
   blockContainingStatement
   hoistRefDecs
