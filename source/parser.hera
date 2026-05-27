@@ -1444,11 +1444,11 @@ ClassBracedContent
 NestedClassElements
   PushIndent NestedClassElement*:elements TrailingNestedCommentLine*:trailing PopIndent ->
     return $skip unless elements# or trailing#
-    // Same-indent comment-only trailing lines (issue #832) stay inside the
-    // class body's braces.  Inline trailing comments on the last element
-    // continue to escape — those typically annotate the surrounding class,
-    // not a member.
-    return trailing# ? [...elements, ...trailing] : elements
+    // Standalone same-or-deeper-indent comment-only trailing lines (#832)
+    // stay inside the class body's braces.  Inline trailing comments on
+    // the last element continue to escape — those typically annotate the
+    // surrounding class, not a member.
+    trailing# ? [...elements, ...trailing] : elements
 
 NestedClassElement
   Nested ClassElement StatementDelimiter
@@ -3354,23 +3354,23 @@ PostfixedSingleLineNoCommaStatements
     }
 
 NestedBlockStatements
-  PushIndent NestedBlockStatement*:statements TrailingNestedComments?:trailing PopIndent ->
-    return $skip unless statements# or trailing?#
+  PushIndent NestedBlockStatement*:statements TrailingNestedComments:trailing PopIndent ->
+    return $skip unless statements# or trailing#
 
     // Each element of statements is a list of same-line statements. Flatten.
-    expressions: StatementTuple[] := statements.flat()
+    expressions := statements.flat() as StatementTuple[]
     // Trailing same-indent comments (issue #832) live in children, NOT in
     // expressions, so downstream walkers (assignResults / insertReturn / etc.)
     // still see the last real statement as expressions.-1.
     children: ASTNode[] := [expressions]
-    children.push(trailing) if trailing?#
+    children.push(trailing) if trailing#
 
     return {
       type: "BlockStatement",
       expressions,
       children,
       bare: true,
-      trailing: trailing?# ? trailing : undefined,
+      trailing: trailing# ? trailing : undefined,
     }
 
 NestedBlockStatement
@@ -3380,25 +3380,27 @@ NestedBlockStatement
       ...statements.slice(1).map (s) => ["", ...s],
     ]
 
-# Captures trailing `// ...` comments at the end of an indented block: an
-# optional inline comment on the last statement's line, plus any number of
-# standalone same-indent comment lines. The lookahead `&EOL` keeps these from
-# eating into content that belongs to the surrounding block. (issue #832)
+# Trailing `// ...` comments at the end of an indented block: an optional
+# inline comment on the last statement's line, plus any number of same-or-
+# deeper-indent standalone comment lines.  Always succeeds (possibly with
+# zero entries) so the caller can simply check `trailing#`. (issue #832)
 TrailingNestedComments
   TrailingInlineComment?:inline TrailingNestedCommentLine*:lines ->
-    return $skip unless inline or lines?#
     out := []
     out.push(inline) if inline
-    out.push(...lines) if lines?#
+    out.push(...lines) if lines#
     return out
 
+# Only fires when there's actually a `//` — otherwise backtracks so EOS
+# captures any leading whitespace / `/* */` as it normally would.
 TrailingInlineComment
-  _?:ws SingleLineComment:c &EOL ->
+  _?:ws SingleLineComment:c ->
     return [ws, c]
 
+# Can't reuse `Nested` here because its `EOS` would consume the comment.
 TrailingNestedCommentLine
-  EOL:eol Indent:indent SingleLineComment:c &EOL ->
-    return $skip unless indent.level is state.currentIndent.level
+  EOL:eol Indent:indent SingleLineComment:c ->
+    return $skip unless indent.level >= state.currentIndent.level
     return [eol, indent, c]
 
 BlockStatementPart
@@ -5658,13 +5660,15 @@ CaseClause
   When CaseExpressionList:cases IgnoreColon InsertOpenBrace ( ThenClause / BareBlock ):block InsertBreak:b InsertNewline InsertIndent InsertCloseBrace ::WhenClause ->
     // If the block ends with a `// ...` comment (issue #832), prefix the
     // inserted `;break;` with a newline so it isn't swallowed by the comment.
+    // Copy $0 rather than mutating in place — Hera may cache the match.
+    children .= $0
     if hasTrailingComment block
-      bIdx := $0.indexOf b
+      bIdx := children.indexOf b
       b = { ...b, token: "\n" + b.token }
-      $0[bIdx] = b
+      children = [...children.slice(0, bIdx), b, ...children.slice(bIdx + 1)]
     return {
       type: "WhenClause",
-      children: $0,
+      children,
       cases,
       block,
       break: b,
