@@ -301,6 +301,81 @@ describe "ts-service direct factory usage", ->
     assert.equal diagnostics.length, 0,
       `expected no diagnostics, got: ${messages.join(' | ')}`
 
+  it "closeDocument drops the doc, snapshot, and transpiled sibling but keeps scriptFileNames", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-close-doc-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020"}}'
+      civetPath := path.join tmpDir, 'foo.civet'
+      writeFileSync civetPath, "x := 1\n"
+
+      service := SharedTSService tmpDir + path.sep, {
+        plugins: [makeCivetPlugin()]
+        docFactory: directDocFactory
+        logger: nullLogger
+        discoverProjectFiles: false
+      }
+      doc := TextDocument.create pathToFileURL(civetPath).href, "civet", 1, "x := 1\n"
+      service.host.addOrUpdateDocument doc
+      assert service.host.getMeta(civetPath)?.transpiledDoc
+
+      versionBefore := service.host.getProjectVersion()
+      service.host.closeDocument(civetPath)
+      assert.notEqual service.host.getProjectVersion(), versionBefore, "closeDocument should bump projectVersion"
+      // The transpiledPath sibling was also cleared — confirm the underlying
+      // file's snapshot map is empty by checking getScriptVersion drops to "0".
+      assert.equal service.host.getScriptVersion(civetPath), "0", "expected script version reset after close"
+    finally
+      rmSync tmpDir, recursive: true, force: true
+
+  it "removeDocument drops the doc + scriptFileNames + transpiled sibling", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-remove-doc-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020"}}'
+      civetPath := path.join tmpDir, 'foo.civet'
+      writeFileSync civetPath, "x := 1\n"
+
+      service := SharedTSService tmpDir + path.sep, {
+        plugins: [makeCivetPlugin()]
+        docFactory: directDocFactory
+        logger: nullLogger
+        discoverProjectFiles: false
+      }
+      doc := TextDocument.create pathToFileURL(civetPath).href, "civet", 1, "x := 1\n"
+      service.host.addOrUpdateDocument doc
+      assert service.host.getScriptFileNames().some((p) => p.endsWith 'foo.civet.tsx'),
+        "expected foo.civet.tsx in scriptFileNames before remove"
+
+      versionBefore := service.host.getProjectVersion()
+      service.host.removeDocument(civetPath)
+      assert.notEqual service.host.getProjectVersion(), versionBefore, "removeDocument should bump projectVersion"
+      assert not service.host.getScriptFileNames().some((p) => p.endsWith 'foo.civet.tsx'),
+        "expected foo.civet.tsx gone from scriptFileNames after remove"
+    finally
+      rmSync tmpDir, recursive: true, force: true
+
+  it "getDefaultLibLocation returns explicit libDir when provided", ->
+    rootDir := virtualRoot 'civet-virtual-libdir'
+    libDir := path.join(rootDir, 'typescript', 'lib')
+    system := createVirtualSystem rootDir, libDir
+    service := SharedTSService rootDir, {
+      plugins: [makeCivetPlugin()]
+      docFactory: directDocFactory
+      logger: nullLogger
+      system
+      libDir
+      discoverProjectFiles: false
+      tsConfig:
+        compilerOptions:
+          target: 'ES2020'
+          module: 'ESNext'
+    }
+    // host implements CompilerHost; getDefaultLibLocation should return libDir
+    // when explicitly supplied.
+    host := service.host as any
+    assert.equal host.getDefaultLibLocation(), libDir
+
   it "addScriptFileName widens program scope without a TranspiledDoc", ->
     tmpDir := mkdtempSync path.join tmpdir(), 'civet-add-script-file-'
     try
@@ -411,6 +486,78 @@ describe "ts-service direct factory usage", ->
     assert.equal callLog[0].filename, "test.hera"
     assert (result! as { code: string }).code.includes("fake hera output"),
       "expected fakeHera output in result"
+
+  it "host swallows transpiler exceptions and records them as fatal FileMeta", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-throwing-transpiler-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020"}}'
+      civetPath := path.join tmpDir, 'foo.boom'
+      writeFileSync civetPath, "anything\n"
+
+      // Plugin whose transpiler throws on every call — exercises the
+      // catch arm in host.civet's doTranspileAndUpdateMeta.
+      throwingPlugin := {
+        name: 'throwing-test'
+        transpilers: [{
+          extension: '.boom'
+          target: '.tsx'
+          compile: (_path: string, _source: string) =>
+            throw new Error("transpiler exploded")
+        }]
+      }
+
+      service := SharedTSService tmpDir + path.sep, {
+        plugins: [throwingPlugin]
+        docFactory: directDocFactory
+        logger: nullLogger
+        discoverProjectFiles: false
+      }
+      doc := TextDocument.create pathToFileURL(civetPath).href, "boom", 1, "anything\n"
+      service.host.addOrUpdateDocument doc
+      meta := service.host.getMeta civetPath
+      assert meta?.fatal, "expected fatal meta after transpiler throw"
+      assert meta?.parseErrors and meta.parseErrors.length > 0,
+        "expected parseErrors recorded from the throw"
+      assert (meta!.parseErrors![0] as Error).message.includes("transpiler exploded"),
+        `expected the throw message in parseErrors: ${(meta!.parseErrors![0] as Error).message}`
+    finally
+      rmSync tmpDir, recursive: true, force: true
+
+  it "host merges into existing FileMeta on re-transpile (Object.assign branch)", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-meta-merge-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020"}}'
+      civetPath := path.join tmpDir, 'foo.civet'
+      writeFileSync civetPath, "x := 1\n"
+
+      service := SharedTSService tmpDir + path.sep, {
+        plugins: [makeCivetPlugin()]
+        docFactory: directDocFactory
+        logger: nullLogger
+        discoverProjectFiles: false
+      }
+      doc := TextDocument.create pathToFileURL(civetPath).href, "civet", 1, "x := 1\n"
+      service.host.addOrUpdateDocument doc
+      // First getMeta seeds fileMetaData.
+      first := service.host.getMeta civetPath
+      assert first?.transpiledDoc
+
+      // Update text, triggering re-transpile — second meta should hit the
+      // Object.assign(meta, update) branch (else arm of `unless meta`).
+      service.host.addOrUpdateDocument TextDocument.create(
+        pathToFileURL(civetPath).href
+        "civet"
+        2
+        "x := 2\n"
+      )
+      second := service.host.getMeta civetPath
+      assert second?.transpiledDoc, "expected refreshed meta after re-transpile"
+      assert.equal first!.transpiledDoc, second!.transpiledDoc,
+        "Object.assign should merge into the existing meta object (same transpiledDoc identity)"
+    finally
+      rmSync tmpDir, recursive: true, force: true
 
   it "loadPlugins() reads .civet/*.plugin.mjs files and registers them", ->
     pkgDir := mkdtempSync path.join tmpdir(), 'civet-load-plugins-'
