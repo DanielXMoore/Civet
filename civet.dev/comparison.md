@@ -107,8 +107,8 @@ symbol operators (`+`, `-`, etc.) need to be spaced consistently:
 * Comma operator is forbidden in some contexts, e.g.,
   array/object indexing.  If you run into this limitation, wrap in parentheses.
 * Ternary operator: `x?y:z` works snug, `x ?y :z` half-snug, and `x ? y : z`
-  spaced. Snug `x?y` alone is still optional chain `x?.y`; `x?` alone is
-  still the existential check `x != null`.
+  spaced. Snug `x?y` alone is optional chain `x?.y`; `x?` alone is the
+  existential check `x != null`.
 * Type parameters and arguments `<T>` cannot have spaces before `<`,
   and should not have spaces before `>` unless it's on a separate line.
 * Regular expression literals cannot start with a space.
