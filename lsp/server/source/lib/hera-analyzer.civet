@@ -1,0 +1,273 @@
+// Hera-grammar analyzer for the Civet LSP.  Parses `.hera` files with
+// `@danielx/hera` and answers grammar-level requests (rule definitions,
+// references, symbols, completions, hover) directly from the Hera AST —
+// bypassing the Hera→Civet→TS composed sourcemap, which only roundtrips
+// faithfully for handler-body code and lands at coarse rule-region
+// positions for grammar tokens.
+//
+// Adapted from the standalone Hera LSP (~/apps/Hera/lsp/source/util.civet)
+// with adjustments for: lazy `@danielx/hera` load (it's an optional peer);
+// the shared LSP server runs in both Node and browser, so `@danielx/hera`
+// can't be statically imported at value position — the browser bundle
+// excludes it.  Type-only imports are erased at build time and stay safe.
+
+{ type Position, type TextDocument } from vscode-languageserver-textdocument
+{
+  type CompletionItem
+  CompletionItemKind
+  type DocumentSymbol
+  type Hover
+  type Location
+  MarkupKind
+  SymbolKind
+} from vscode-languageserver
+
+// Locally-declared mirrors of @danielx/hera's Loc/Token shape.  A `type`-only
+// `from '@danielx/hera'` import leaves esbuild emitting an empty
+// `import {} from "@danielx/hera"` in the ESM browser bundle, which the
+// worker's data-URL eval treats as a syntax error.  Hera's shape is stable
+// across 0.9.x; inlining keeps the bundle clean.
+interface Loc
+  pos: number
+  length: number
+
+interface Token
+  type: string
+  children: (Token | string)[]
+  token: string
+  loc: Loc
+
+interface HeraModule
+  parseTokens(input: string): Token
+
+let heraMod: HeraModule | undefined
+let heraLoadAttempted = false
+
+async function ensureHera(): Promise<HeraModule | undefined>
+  return heraMod if heraLoadAttempted
+  heraLoadAttempted = true
+  try
+    mod := await import('@danielx/hera')
+    heraMod = mod as unknown as HeraModule
+  catch
+    heraMod = undefined
+  heraMod
+
+sourceCache := new Map<string, string>()
+declarationsCache := new Map<string, Map<string, Loc>>()
+referencesCache := new Map<string, Map<string, Location[]>>()
+symbolsCache := new Map<string, DocumentSymbol[]>()
+
+function* traverse(node: Token | (Token | string)[] | undefined): Generator<Token>
+  if Array.isArray(node)
+    for n of node
+      if typeof n !== 'string'
+        yield* traverse(n)
+    return
+  return unless node
+  yield node
+  yield* traverse((node as Token).children)
+
+function locToLocation(doc: TextDocument, loc: Loc): Location
+  uri: doc.uri
+  range:
+    start: doc.positionAt(loc.pos)
+    end: doc.positionAt(loc.pos + loc.length)
+
+function declarations(statements: (Token | string)[]): Map<string, Loc>
+  m := new Map<string, Loc>()
+  for stmt of statements
+    continue if typeof stmt is 'string'
+    rule := (stmt as Token).children?.[1]
+    continue if typeof rule is 'string'
+    continue unless rule?.type is 'Rule'
+    nameNode := rule.children?.[0]
+    continue if typeof nameNode is 'string'
+    continue unless nameNode
+    m.set String(nameNode.token), nameNode.loc
+  m
+
+function references(grammar: Token, doc: TextDocument): Map<string, Location[]>
+  m := new Map<string, Location[]>()
+  for node of traverse(grammar)
+    continue unless node.type is 'Name'
+    key := String(node.token)
+    list := m.get(key) ?? (() => {
+      l: Location[] := []
+      m.set key, l
+      l
+    })()
+    list.push locToLocation(doc, node.loc)
+  m
+
+function stringValue(literal: Token): string
+  s .= ''
+  for node of traverse(literal)
+    if typeof node.token is 'string'
+      s += node.token
+  s
+
+function* ruleSymbolChildren(doc: TextDocument, rule: Token): Generator<DocumentSymbol>
+  for child of traverse(rule)
+    range := locToLocation(doc, child.loc).range
+    switch child.type
+      when 'StringValue'
+        yield { name: stringValue(child), kind: SymbolKind.String, range, selectionRange: range } if Array.isArray(child.children)
+      when 'RegExpLiteral'
+        yield { name: stringValue(child), kind: SymbolKind.String, range, selectionRange: range }
+      when 'Name'
+        yield { name: stringValue(child), kind: SymbolKind.Variable, range, selectionRange: range }
+
+function symbols(doc: TextDocument, grammar: Token): DocumentSymbol[]
+  result: DocumentSymbol[] := []
+  for node of traverse(grammar)
+    continue unless node.type is 'Rule'
+    continue unless Array.isArray(node.children)
+    nameNode := node.children[0]
+    continue if typeof nameNode is 'string'
+    range := locToLocation(doc, node.loc).range
+    children := Array.from(ruleSymbolChildren(doc, node))
+      .filter (c) => c.range.start.line !== range.start.line
+    result.push {
+      name: String(nameNode.token)
+      kind: SymbolKind.Class
+      range
+      selectionRange: range
+      children
+    }
+  result
+
+export async function parseHeraDocument(doc: TextDocument): Promise<void>
+  hera := await ensureHera()
+  return unless hera
+  text := doc.getText()
+  try
+    tokens := hera.parseTokens(text)
+    sourceCache.set doc.uri, text
+    declarationsCache.set doc.uri, declarations(tokens.children)
+    referencesCache.set doc.uri, references(tokens, doc)
+    symbolsCache.set doc.uri, symbols(doc, tokens)
+  catch
+    // Parse failure: keep previous caches so editor features keep working
+    // while the user is typing.  Parse-error diagnostics flow separately
+    // through the hera plugin's `result.errors` path.
+    return
+
+export function clearHeraDocument(uri: string): void
+  sourceCache.delete uri
+  declarationsCache.delete uri
+  referencesCache.delete uri
+  symbolsCache.delete uri
+
+identCharRegex := /[A-Za-z0-9_]/
+
+export function wordAt(doc: TextDocument, pos: Position): string
+  text := doc.getText({
+    start: { line: pos.line, character: 0 }
+    end: { line: pos.line + 1, character: 0 }
+  })
+  start .= pos.character
+  while start > 0 and identCharRegex.test(text[start - 1]!)
+    start--
+  end .= pos.character
+  while end < text.length and identCharRegex.test(text[end]!)
+    end++
+  text.slice(start, end)
+
+export function getDeclarationFor(doc: TextDocument, pos: Position): Location?
+  lookup := declarationsCache.get(doc.uri)
+  return undefined unless lookup
+  id := wordAt(doc, pos)
+  return undefined unless id
+  loc := lookup.get(id)
+  return undefined unless loc
+  locToLocation doc, loc
+
+export function getReferencesFor(doc: TextDocument, pos: Position): Location[]?
+  id := wordAt(doc, pos)
+  return undefined unless id
+  referencesCache.get(doc.uri)?.get(id)
+
+export function getDocumentSymbols(doc: TextDocument): DocumentSymbol[]?
+  symbolsCache.get doc.uri
+
+export function getCompletionsFor(doc: TextDocument, _pos: Position): CompletionItem[]?
+  keys := declarationsCache.get(doc.uri)?.keys()
+  return undefined unless keys
+  Array.from keys, (label) => ({
+    label
+    kind: CompletionItemKind.Variable
+    data: { hera: true, uri: doc.uri }
+  })
+
+export function resolveHeraCompletion(item: CompletionItem): CompletionItem
+  data := item.data as { hera?: boolean, uri?: string } | undefined
+  return item unless data?.hera and data.uri
+  lookup := declarationsCache.get(data.uri)
+  source := sourceCache.get(data.uri)
+  loc := lookup?.get(item.label)
+  if loc and source
+    item.detail = item.label
+    item.documentation = {
+      kind: MarkupKind.Markdown
+      value: '```hera\n' + source.slice(loc.pos, loc.pos + loc.length) + '\n```'
+    }
+  item
+
+// -- Grammar/handler classification gate -------------------------------------
+//
+// Hera grammar lines are 0- or 2-space-indented; handler/embedded code is
+// always >= 4-space-indented or inside a ```…``` fenced block.  This lets us
+// decide whether to answer a request from the Hera analyzer (grammar) or
+// fall through to the TS service (handler) with a cheap text scan — no AST
+// walk, so the gate stays usable when the Hera parse is mid-flight.
+//
+// Edge case: inline handlers on a 2-space line like `Rule -> { code }`.  On
+// a `<=2`-indent line we clamp the grammar region to columns before the
+// first `{`, `->`, or `->>`.
+
+heraInlineHandlerStart := /\{|->>|->/
+
+export function isAtGrammarLevel(text: string, line: number, character: number): boolean
+  // (1) Fence scan: walk all lines before `line` counting ``` openers.
+  // Odd count → cursor is inside an open fenced block → handler.
+  fenceCount .= 0
+  cursor .= 0
+  l .= 0
+  while l < line and cursor < text.length
+    nl := text.indexOf '\n', cursor
+    lineEnd := if nl < 0 then text.length else nl
+    lineText := text.slice cursor, lineEnd
+    trimmed := lineText.trimStart()
+    fenceCount++ if trimmed.startsWith '```'
+    cursor = if nl < 0 then text.length else nl + 1
+    l++
+  return false if fenceCount % 2 is 1
+
+  // (2) Indent + inline-handler clamp on the click line itself.
+  // Pull the current line text out of the doc directly.
+  lineEnd := text.indexOf '\n', cursor
+  currentLine := text.slice cursor, (if lineEnd < 0 then text.length else lineEnd)
+  indent := /^[ \t]*/.exec(currentLine)?.[0].length ?? 0
+
+  return false if indent >= 4
+  return true if indent <= 2 and not heraInlineHandlerStart.test(currentLine)
+
+  // indent <= 2 with an inline handler somewhere: grammar only up to the
+  // first introducer.
+  if indent <= 2
+    introducer := heraInlineHandlerStart.exec(currentLine)
+    if introducer
+      return character < introducer.index
+  true
+
+export function getHoverFor(doc: TextDocument, pos: Position): Hover?
+  lookup := declarationsCache.get(doc.uri)
+  source := sourceCache.get(doc.uri)
+  return undefined unless lookup and source
+  id := wordAt(doc, pos)
+  loc := lookup.get(id)
+  return undefined unless loc
+  contents:
+    kind: MarkupKind.Markdown
+    value: '```hera\n' + source.slice(loc.pos, loc.pos + loc.length) + '\n```'
