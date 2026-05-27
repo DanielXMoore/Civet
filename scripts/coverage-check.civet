@@ -11,7 +11,7 @@
 //      direct source imports (see test/infra/ts-service-*.civet), so
 //      the standalone-only view is a clean gate.
 
-{ readFileSync, existsSync, mkdirSync, rmSync } from 'fs'
+{ readFileSync, existsSync, mkdirSync, rmSync, readdirSync, writeFileSync } from 'fs'
 { resolve, join } from 'path'
 { fileURLToPath } from 'url'
 { execFileSync } from 'child_process'
@@ -20,19 +20,35 @@ root := typeof __dirname !== "undefined" ?
   resolve __dirname, '..' :
   fileURLToPath new URL('..', import.meta.url)
 
-// Build the ts-service-only report from root mocha's v8 profiles.
+// Build the ts-service-only report from root mocha's v8 profiles, with
+// bundle-URL profiles stripped first.  Build tooling spawned by the lsp
+// suites (vite / rolldown) inherits NODE_V8_COVERAGE and writes v8
+// profiles for `dist/ts-service/index.mjs` into the same tmp dir; those
+// remap (via the bundle's coarser sourcemap) to source/ts-service/*
+// positions that don't align with the standalone .civet compilation's
+// fnMap entries, producing spurious uncovered statements/functions.
+// Discarding the bundle URLs leaves the standalone-only view.
 tsServiceTmp := join root, 'coverage', 'tmp'
 tsServiceReportDir := join root, 'coverage', 'ts-service'
+tsServiceFilteredTmp := join root, 'coverage', 'ts-service-tmp'
 if existsSync tsServiceTmp
   rmSync tsServiceReportDir, { recursive: true, force: true }
   mkdirSync tsServiceReportDir, { recursive: true }
+  rmSync tsServiceFilteredTmp, { recursive: true, force: true }
+  mkdirSync tsServiceFilteredTmp, { recursive: true }
+  for f of readdirSync tsServiceTmp
+    continue unless f.endsWith '.json'
+    raw := JSON.parse readFileSync join(tsServiceTmp, f), 'utf8'
+    raw.result = (raw.result ?? []).filter (r: any) =>
+      not (r.url and /\/dist\/ts-service\//.test r.url)
+    writeFileSync join(tsServiceFilteredTmp, f), JSON.stringify raw
   c8 := resolve root, 'node_modules/c8/bin/c8.js'
   execFileSync process.execPath, [
     c8, 'report'
     '--reporter', 'json-summary'
     '--reporter', 'json'
     '--report-dir', tsServiceReportDir
-    '--temp-directory', tsServiceTmp
+    '--temp-directory', tsServiceFilteredTmp
     '--allow-external'
     '--exclude-after-remap'
     '--extension', '.civet'
@@ -45,6 +61,7 @@ if existsSync tsServiceTmp
     '--include', '**/source/ts-service/**'
     '--exclude', '**/node_modules/**'
   ], { cwd: root, stdio: 'pipe' }
+  rmSync tsServiceFilteredTmp, { recursive: true, force: true }
 
 mergedSummary := JSON.parse readFileSync join(root, 'coverage', 'coverage-summary.json'), 'utf8'
 tsServiceSummary := if existsSync join(tsServiceReportDir, 'coverage-summary.json')

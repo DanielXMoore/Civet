@@ -327,6 +327,87 @@ describe "ts-service direct factory usage", ->
     assert.equal diagnostics.length, 0,
       `expected no diagnostics, got: ${messages.join(' | ')}`
 
+  it "addOrUpdateDocument stores non-transpilable docs in scriptFileNames", ->
+    // .ts docs don't match any transpiler, so the host's addOrUpdateDocument
+    // falls into the bottom arm (lines 188-189): scriptFileNames.set + pathMap.set
+    // without spinning up a transpiled sibling.
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-ts-doc-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020"}}'
+      tsPath := path.join tmpDir, 'plain.ts'
+      writeFileSync tsPath, 'export const x = 1\n'
+
+      service := SharedTSService tmpDir + path.sep, {
+        plugins: [makeCivetPlugin()]
+        docFactory: directDocFactory
+        logger: nullLogger
+        discoverProjectFiles: false
+      }
+      doc := TextDocument.create pathToFileURL(tsPath).href, "typescript", 1, "export const x = 1\n"
+      service.host.addOrUpdateDocument doc
+      assert service.host.getScriptFileNames().some((p) => p.endsWith 'plain.ts'),
+        "expected plain.ts in scriptFileNames after addOrUpdateDocument"
+      // Confirm no synthetic transpiled sibling appeared.
+      assert not service.host.getScriptFileNames().some((p) => p.endsWith 'plain.ts.tsx'),
+        "expected no plain.ts.tsx (not a transpilable extension)"
+    finally
+      rmSync tmpDir, recursive: true, force: true
+
+  it "getScriptSnapshot falls back to empty string when source has no content", ->
+    // getOrCreatePathSnapshot's tail arm (line 337) supplies `""` when
+    // getPathSource returns undefined (no doc + no on-disk file).
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-empty-snap-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020"}}'
+      service := SharedTSService tmpDir + path.sep, {
+        plugins: [makeCivetPlugin()]
+        docFactory: directDocFactory
+        logger: nullLogger
+        discoverProjectFiles: false
+      }
+      // Ask for a snapshot of a path that has no document AND no file on disk —
+      // forces the `?? ""` fallback in `Snap(getPathSource(p) ?? "")`.
+      ghostPath := path.join tmpDir, 'never-existed.ts'
+      snapshot := service.host.getScriptSnapshot ghostPath
+      assert snapshot
+      assert.equal snapshot.getText(0, snapshot.getLength()), ""
+    finally
+      rmSync tmpDir, recursive: true, force: true
+
+  it "remapFileName passes through transpiled extensions for which no transpiler is registered", ->
+    // Empty Map → remapFileName hits line 73's `return fileName unless transpiler`
+    // (extension parsed, but no transpiler claims it).
+    transpilers := new Map()
+    // file.civet.tsx parses to extension=.civet, target=.tsx — but the empty
+    // map has no entry for .civet, so the function returns the input unchanged.
+    assert.equal remapFileName('/workspace/file.civet.tsx', transpilers), '/workspace/file.civet.tsx'
+
+  it "getSourceFileName remaps transpiled siblings through the service object", ->
+    // service.getSourceFileName wraps remapFileName + getCanonicalFileName;
+    // lines 156-157 of service.civet are only reached when the service-level
+    // helper is called directly (the host's resolveModuleNames uses the
+    // underlying remapFileName directly).
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-svc-remap-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020"}}'
+      service := SharedTSService tmpDir + path.sep, {
+        plugins: [makeCivetPlugin()]
+        docFactory: directDocFactory
+        logger: nullLogger
+        discoverProjectFiles: false
+      }
+      // .civet.tsx → .civet, lowercased on case-insensitive systems.
+      remapped := service.getSourceFileName '/Workspace/file.civet.tsx'
+      assert remapped.endsWith('file.civet'), `expected file.civet suffix, got: ${remapped}`
+      // Passthrough for non-transpilable extensions.
+      passthrough := service.getSourceFileName '/Workspace/plain.ts'
+      assert passthrough.endsWith('plain.ts'), `expected plain.ts suffix, got: ${passthrough}`
+    finally
+      rmSync tmpDir, recursive: true, force: true
+
   it "closeDocument drops the doc, snapshot, and transpiled sibling but keeps scriptFileNames", ->
     tmpDir := mkdtempSync path.join tmpdir(), 'civet-close-doc-'
     try
@@ -523,6 +604,46 @@ describe "ts-service direct factory usage", ->
     second := t.compile "b.hera", "Rules\n  B\n\nB\n  \"B\"\n"
     assert first and second
 
+  it "makeHeraPlugin cache hit returns the cached transpile result", ->
+    // Two-shot: first compile populates the cache, second hits and
+    // reconstructs the result from the stored JSON.  Exercises the
+    // happy-path inside transpileHera's `if cacheKey ... if hit` block
+    // (lines 131-138 of plugins/hera.civet).
+    store := new Map<string, string>()
+    cache :=
+      get: (key: string) => store.get key
+      set: (key: string, value: string) => store.set key, value
+    plugin := makeHeraPlugin { cache }
+    [t] := plugin.transpilers!
+    grammar := "Rules\n  A\n\nA\n  \"A\"\n"
+    first := t.compile "h.hera", grammar
+    assert first, "first compile should produce a result"
+    assert store.size > 0, "first compile should have written a cache entry"
+    second := t.compile "h.hera", grammar
+    assert second, "second compile should return a result from cache"
+    assert.equal (second! as { code: string }).code, (first! as { code: string }).code,
+      "cache hit should reconstruct the same code"
+
+  it "makeHeraPlugin recovers from a corrupted cache entry by recompiling", ->
+    // Seeds the cache with garbage at the key the plugin would compute,
+    // then triggers a fresh compile that has to fall through the catch
+    // arm (line 138) of the cache-hit branch and overwrite.
+    store := new Map<string, string>()
+    cache :=
+      get: (key: string) => store.get key
+      set: (key: string, value: string) => store.set key, value
+    plugin := makeHeraPlugin { cache }
+    [t] := plugin.transpilers!
+    grammar := "Rules\n  B\n\nB\n  \"B\"\n"
+    // Prime the cache by doing one compile and replacing the value.
+    t.compile "h.hera", grammar
+    [key] := Array.from store.keys()
+    store.set key, "{not valid json"
+    result := t.compile "h.hera", grammar
+    assert result
+    assert.notEqual store.get(key), "{not valid json",
+      "recompile should overwrite the corrupted entry"
+
   it "makeHeraPlugin honors options.Hera override", ->
     callLog: { source: string, filename: string }[] := []
     fakeHera := {
@@ -717,3 +838,262 @@ describe "ts-service direct factory usage", ->
       assert hasNumberToString, `expected number→string mismatch, got: ${messages.join(' | ')}`
     finally
       rmSync pkgDir, { recursive: true, force: true }
+
+describe "ts-service host stub-driven branches", ->
+  // These tests poke at branches that would otherwise need c8-ignores —
+  // by feeding the host either a custom plugin (transpiler stub) or a
+  // partial System object that lacks methods our `?.`/`??` fallbacks
+  // were designed to handle.  Each exercises a single arm of a branch
+  // that the higher-level tests don't reach.
+
+  directDocFactory := {
+    create: (uri: string, languageId: string, version: number, text: string) =>
+      TextDocument.create uri, languageId, version, text
+    update: (doc: any, text: string, version: number) =>
+      TextDocument.update doc, [{ text }], version
+    uriToPath: (uri: string) => URI.parse(uri).fsPath
+    pathToUri: (p: string) => URI.file(p).toString()
+  }
+
+  it "host.writeFile is the no-op CompilerHost shim", ->
+    // Direct call on the bare TSHost — the override never fires in
+    // practice because all our callers pass an explicit writeFile to
+    // emit(), but the CompilerHost interface still requires it.
+    transpilers := new Map()
+    baseHost := ts.createCompilerHost({}, false)
+    host := TSHost { rootDir: '/tmp/civet-noop-write' }, [], baseHost, transpilers, directDocFactory
+    assert.doesNotThrow => host.writeFile('/tmp/civet-noop-write/out.js', 'noop')
+
+  // Stripped-down baseHost shim — strips directoryExists and
+  // getDefaultLibLocation so TSHost's `?.bind ?? => false` and
+  // `?? path.dirname(...)` fallbacks both fire when wired through it.
+  function makeBareHost(): ts.CompilerHost
+    full := ts.createCompilerHost({}, false)
+    (full as any).directoryExists = undefined
+    (full as any).getDefaultLibLocation = undefined
+    full
+
+  it "host.getDefaultLibLocation defers to baseHost.getDefaultLibLocation when present", ->
+    // ts.createCompilerHost provides getDefaultLibLocation; with no libDir,
+    // line 122's `baseHost.getDefaultLibLocation?()` evaluates to a real
+    // string and `??` skips the path.dirname fallback.
+    transpilers := new Map()
+    host := TSHost { rootDir: '/tmp/civet-base-libloc' }, [], ts.createCompilerHost({}, false), transpilers, directDocFactory
+    loc := (host as any).getDefaultLibLocation()
+    assert loc and typeof loc is "string"
+
+  it "host.getDefaultLibLocation falls back through path.dirname when baseHost lacks it", ->
+    // baseHost without getDefaultLibLocation forces the `?? path.dirname(...)`
+    // arm — confirms the host computes a sensible default lib dir.
+    transpilers := new Map()
+    host := TSHost { rootDir: '/tmp/civet-no-libdir' }, [], makeBareHost(), transpilers, directDocFactory
+    loc := (host as any).getDefaultLibLocation()
+    assert loc and typeof loc is "string"
+    // path.dirname(...) returns a non-empty directory string.
+    assert loc.length > 0, "expected a non-empty lib location from path.dirname fallback"
+
+  it "host.resolveModuleNames covers both arms of `containingSourceFile and …`", ->
+    // Build a real Program so the SourceFile has the parsed import structure
+    // that ts.getModeForResolutionAtIndex needs to index into.
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-rmn-arms-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"esnext","moduleResolution":"bundler"}}'
+      callerPath := path.join tmpDir, 'caller.ts'
+      writeFileSync callerPath, "import './missing';\n"
+
+      transpilers := new Map()
+      host := TSHost { rootDir: tmpDir }, [], ts.createCompilerHost({}, false), transpilers, directDocFactory
+
+      // Get a parsed SourceFile via ts.createProgram (gives a real, indexable import list).
+      program := ts.createProgram [callerPath], { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
+      srcFile := program.getSourceFile callerPath
+      assert srcFile, "expected program to load caller.ts"
+
+      // Arm 1: containingSourceFile undefined → short-circuit.
+      skipped := (host as any).resolveModuleNames(['./missing'], callerPath, undefined, undefined, { target: ts.ScriptTarget.ES2020 }, undefined)
+      assert.equal skipped.length, 1
+      assert.equal skipped[0], undefined
+
+      // Arm 2: real SourceFile → ts.getModeForResolutionAtIndex runs.
+      invoked := (host as any).resolveModuleNames(['./missing'], callerPath, undefined, undefined, { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }, srcFile)
+      assert.equal invoked.length, 1
+    finally
+      rmSync tmpDir, recursive: true, force: true
+
+  it "host.directoryExists falls back to `=> false` when baseHost lacks it", ->
+    // Pass a baseHost where directoryExists is undefined (NOT wrapped by
+    // createBaseHost — that one synthesizes a `=> false` of its own and
+    // hides the fallback we want to exercise).  TSHost's
+    // `?? => false` arrow becomes baseDirectoryExists; calling it
+    // exercises the arrow's body.
+    // Use a real Program to get an indexable SourceFile (createSourceFile alone
+    // doesn't populate the imports array the resolver needs).
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-bare-dirs-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","module":"esnext","moduleResolution":"bundler","allowNonTsExtensions":true}}'
+      callerPath := path.join tmpDir, 'caller.civet.tsx'
+      writeFileSync callerPath, "import './missing.civet';\n"
+
+      transpilers := new Map()
+      transpilers.set '.civet',
+        extension: '.civet'
+        target: '.tsx'
+        compile: (_path: string, _source: string) => code: ''
+      host := TSHost { rootDir: tmpDir }, [], makeBareHost(), transpilers, directDocFactory
+
+      program := ts.createProgram [callerPath], { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
+      srcFile := program.getSourceFile callerPath
+      assert srcFile
+
+      // resolveModuleNames → resolveTranspiledModuleName → directoryExists(...),
+      // which IS the `=> false` arrow on this code path.  Calling it returns
+      // false, executing the arrow body.
+      (host as any).resolveModuleNames(['./missing.civet'], callerPath, undefined, undefined, { target: ts.ScriptTarget.ES2020, allowNonTsExtensions: true }, srcFile)
+    finally
+      rmSync tmpDir, recursive: true, force: true
+
+  it "host.readFile returns text from an open in-editor doc (pathMap branch)", ->
+    // host.readFile → getPathSource → `return doc.getText() if doc`.
+    // Add a doc in-memory and read it back without touching the filesystem.
+    transpilers := new Map()
+    baseHost := ts.createCompilerHost({}, false)
+    host := TSHost { rootDir: '/tmp/civet-readfile-doc' }, [], baseHost, transpilers, directDocFactory
+    p := '/tmp/civet-readfile-doc/in-memory.ts'
+    host.addOrUpdateDocument TextDocument.create(
+      directDocFactory.pathToUri(p)
+      'typescript'
+      1
+      'export const memory = true\n'
+    )
+    assert.equal host.readFile(p), 'export const memory = true\n'
+
+  it "host.getScriptSnapshot returns the cached snapshot on a warm second call", ->
+    transpilers := new Map()
+    baseHost := ts.createCompilerHost({}, false)
+    host := TSHost { rootDir: '/tmp/civet-warm-snap' }, [], baseHost, transpilers, directDocFactory
+    p := '/tmp/civet-warm-snap/warm.ts'
+    host.addOrUpdateDocument TextDocument.create(
+      directDocFactory.pathToUri(p)
+      'typescript'
+      1
+      'export const warm = 1\n'
+    )
+    first := host.getScriptSnapshot p
+    second := host.getScriptSnapshot p
+    assert first
+    assert.strictEqual first, second, "second getScriptSnapshot should return the cached snapshot"
+
+  it "host swallows falsy transpiler results without crashing the snapshot path", ->
+    // doTranspileAndUpdateMeta's `return unless result` arm — plugin
+    // returns `undefined` for one call and a valid result for another.
+    returnEmpty .= true
+    flakyPlugin := {
+      name: 'flaky-test'
+      transpilers: [{
+        extension: '.flaky'
+        target: '.tsx'
+        compile: (_path: string, _source: string) =>
+          if returnEmpty then undefined else { code: 'export const ok = true\n' }
+      }]
+    }
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-flaky-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020"}}'
+      flakyPath := path.join tmpDir, 'sample.flaky'
+      writeFileSync flakyPath, "anything\n"
+      service := SharedTSService tmpDir + path.sep, {
+        plugins: [flakyPlugin]
+        docFactory: directDocFactory
+        logger: nullLogger
+        discoverProjectFiles: false
+      }
+      doc := TextDocument.create pathToFileURL(flakyPath).href, "flaky", 1, "anything\n"
+      service.host.addOrUpdateDocument doc
+      // First getScriptSnapshot with returnEmpty=true exercises the
+      // `return unless result` arm in doTranspileAndUpdateMeta.
+      snapshot := service.host.getScriptSnapshot(flakyPath + '.tsx')
+      assert snapshot, "expected a placeholder snapshot even on empty transpile"
+    finally
+      rmSync tmpDir, recursive: true, force: true
+
+describe "ts-service mocked compilers", ->
+  it "makeCivetPlugin uses the legacy pre-0.9.4 compile path", ->
+    // Mock the Civet module + version to force the major===0 && (minor<9 || ...)
+    // branch — the pre-SourceMap-API code path that goes Civet.compile with
+    // `sourceMap: true` in one call.
+    captured: { source: string, options: any }[] := []
+    fakeCivet :=
+      compile: (source: string, options: any) =>
+        captured.push { source, options }
+        { code: 'export const legacy = true\n', sourceMap: { lines: [[]] } }
+    plugin := makeCivetPlugin {
+      Civet: fakeCivet as any
+      CivetVersion: "0.9.3"
+    }
+    [t] := plugin.transpilers!
+    result := t.compile "legacy.civet", "x := 1\n"
+    assert result
+    assert.equal captured.length, 1, "legacy path makes one Civet.compile call"
+    assert.equal captured[0].options.sourceMap, true,
+      "legacy path passes sourceMap: true"
+    assert.equal (result! as { code: string }).code, 'export const legacy = true\n'
+
+  it "makeHeraPlugin reads sourceMap.data.lines for legacy Civet sourcemap shape", ->
+    // Mock Civet to return a sourceMap with the pre-0.9.4 shape (`.data.lines`)
+    // — exercises the `?? sm?.data?.lines` fallback inside transpileHera's
+    // cache-write block.
+    fakeCivet :=
+      compile: (_source: string, _options: any) =>
+        code: 'export const x = 1\n'
+        sourceMap:
+          data:
+            lines: [[[0, 0, 0, 0]]]
+    store := new Map<string, string>()
+    cache :=
+      get: (key: string) => store.get key
+      set: (key: string, value: string) => store.set key, value
+    plugin := makeHeraPlugin {
+      Civet: fakeCivet as any
+      CivetVersion: "0.9.3"
+      HeraVersion: "test"
+      cache
+    }
+    [t] := plugin.transpilers!
+    result := t.compile "x.hera", "Rules\n  A\n\nA\n  \"A\"\n"
+    assert result
+    // The fallback path stored the lines into the cache entry — pull them
+    // back out and assert they came from the .data.lines shape.
+    [key] := Array.from store.keys()
+    cached := JSON.parse store.get(key)!
+    assert.deepEqual cached.lines, [[[0, 0, 0, 0]]]
+
+describe "ts-service config recurse", ->
+  it "mogrifyPackageJsonImports recurses into nested objects, skipping non-object values", ->
+    // recurse(node) bails when node isn't an object — exercised when the
+    // imports map nests a truthy non-string non-object value (boolean).
+    { mogrifyPackageJsonImports, buildTranspilers } := await import "../../source/ts-service/config.civet"
+    transpilers := buildTranspilers ([
+      transpilers: [
+        extension: '.civet'
+        target: '.tsx'
+        compile: (_p: string, _s: string) => code: ''
+      ]
+    ] as any)
+    pkgJson := JSON.stringify {
+      name: 'recurse-fixture'
+      imports:
+        '#civet': './lib/index.civet'
+        '#truthy-non-object': true   // recurse sees this, bails (not "object")
+        '#nested':
+          '#deep': './lib/deep.civet'
+    }
+    result := mogrifyPackageJsonImports pkgJson, transpilers
+    parsed := JSON.parse result
+    // The .civet entries got rewritten to .civet.tsx.
+    assert.equal parsed.imports['#civet'], './lib/index.civet.tsx'
+    assert.equal parsed.imports['#nested']['#deep'], './lib/deep.civet.tsx'
+    // The boolean is untouched (recurse bailed on it).
+    assert.equal parsed.imports['#truthy-non-object'], true
