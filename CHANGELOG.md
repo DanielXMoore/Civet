@@ -4,6 +4,21 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.12 (2026-05-26, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.11...v0.11.12), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.12))
+* Fix Sublime support via JSON to XML conversion [[#2111](https://github.com/DanielXMoore/Civet/pull/2111)]
+* Fix crash on optional-chain LHS with custom `oper=` (#2109) [[#2113](https://github.com/DanielXMoore/Civet/pull/2113)]
+* Modernize docs for Sublime LSP setup [[#2116](https://github.com/DanielXMoore/Civet/pull/2116)]
+* Omit anonymous rest from destructure when unreferenced [[#2114](https://github.com/DanielXMoore/Civet/pull/2114)]
+* LSP: accept inline tsConfig in civetconfig (#379) [[#2108](https://github.com/DanielXMoore/Civet/pull/2108)]
+* Isolate CLI --typecheck tests from the project tsconfig [[#2121](https://github.com/DanielXMoore/Civet/pull/2121)]
+* Fix implicit extension and directory resolution when typechecking [[#2123](https://github.com/DanielXMoore/Civet/pull/2123)]
+* Docs: Wrap top-level yield in a generator before Prettier in the playground [[#2122](https://github.com/DanielXMoore/Civet/pull/2122)]
+* Switch declaration: bind directly to user-named identifier (#840) [[#2118](https://github.com/DanielXMoore/Civet/pull/2118)]
+* Polyfill private-field glob assignment (#966) [[#2117](https://github.com/DanielXMoore/Civet/pull/2117)]
+* Fix module resolution: TypeScript `paths`, old TS `resolveModuleNames` [[#2124](https://github.com/DanielXMoore/Civet/pull/2124)]
+* Cache side-effectful index in named-function assignment [[#2115](https://github.com/DanielXMoore/Civet/pull/2115)]
+* Grammar cleanup; `////`+ is a comment; fix empty heregex [[#2125](https://github.com/DanielXMoore/Civet/pull/2125)]
+
 ## 0.11.11 (2026-05-24, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.10...v0.11.11), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.11))
 * Dev: typecheck-diff in CI [[#2083](https://github.com/DanielXMoore/Civet/pull/2083)]
 * Add comptime Float16Array support [[#2084](https://github.com/DanielXMoore/Civet/pull/2084)]
