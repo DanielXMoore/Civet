@@ -56,8 +56,14 @@ async function ensureHera(): Promise<HeraModule | undefined>
   /* c8 ignore stop */
   heraMod
 
-sourceCache := new Map<string, string>()
-declarationsCache := new Map<string, Map<string, Loc>>()
+// A rule declaration: the name-token location (for go-to-definition) plus a
+// rendered grammar-surface signature (for hover / completion docs) — the rule
+// name and its productions, with handler code stripped.
+interface Declaration
+  nameLoc: Loc
+  signature: string
+
+declarationsCache := new Map<string, Map<string, Declaration>>()
 referencesCache := new Map<string, Map<string, Location[]>>()
 symbolsCache := new Map<string, DocumentSymbol[]>()
 
@@ -77,8 +83,24 @@ function locToLocation(doc: TextDocument, loc: Loc): Location
     start: doc.positionAt(loc.pos)
     end: doc.positionAt(loc.pos + loc.length)
 
-function declarations(statements: (Token | string)[]): Map<string, Loc>
-  m := new Map<string, Loc>()
+// Render a rule's grammar surface for hover / completion docs: the rule name
+// followed by each top-level production, one per line.  Each production is the
+// Choice's Sequence span (the matched grammar), so handler code — inline
+// `-> …` / `{ … }` or an indented body — is excluded.  RuleBody groups its
+// productions as `[Indent, Choice]` pairs, so flatten one level before
+// picking out the Choices.
+function ruleSignature(rule: Token, text: string): string
+  name := String((rule.children[0] as Token).token)
+  ruleBody := rule.children.find((c) => typeof c !== 'string' and (c as Token).type is 'RuleBody') as Token
+  choices := (ruleBody.children as (Token | string)[][]).flat()
+    .filter (c) => typeof c !== 'string' and (c as Token).type is 'Choice'
+  productions := choices.map (choice) =>
+    seq := (choice as Token).children.find((c) => typeof c !== 'string' and (c as Token).type is 'Sequence') as Token
+    text.slice(seq.loc.pos, seq.loc.pos + seq.loc.length).trimEnd()
+  name + productions.map((p) => `\n  ${p}`).join('')
+
+function declarations(statements: (Token | string)[], text: string): Map<string, Declaration>
+  m := new Map<string, Declaration>()
   for stmt of statements
     continue if typeof stmt is 'string'
     rule := (stmt as Token).children?.[1]
@@ -87,7 +109,7 @@ function declarations(statements: (Token | string)[]): Map<string, Loc>
     nameNode := rule.children?.[0]
     continue if typeof nameNode is 'string'
     continue unless nameNode
-    m.set String(nameNode.token), nameNode.loc
+    m.set String(nameNode.token), { nameLoc: nameNode.loc, signature: ruleSignature(rule, text) }
   m
 
 function references(grammar: Token, doc: TextDocument): Map<string, Location[]>
@@ -146,8 +168,7 @@ export async function parseHeraDocument(doc: TextDocument): Promise<void>
   text := doc.getText()
   try
     tokens := hera.parseTokens(text)
-    sourceCache.set doc.uri, text
-    declarationsCache.set doc.uri, declarations(tokens.children)
+    declarationsCache.set doc.uri, declarations(tokens.children, text)
     referencesCache.set doc.uri, references(tokens, doc)
     symbolsCache.set doc.uri, symbols(doc, tokens)
   catch
@@ -157,7 +178,6 @@ export async function parseHeraDocument(doc: TextDocument): Promise<void>
     return
 
 export function clearHeraDocument(uri: string): void
-  sourceCache.delete uri
   declarationsCache.delete uri
   referencesCache.delete uri
   symbolsCache.delete uri
@@ -182,9 +202,9 @@ export function getDeclarationFor(doc: TextDocument, pos: Position): Location?
   return undefined unless lookup
   id := wordAt(doc, pos)
   return undefined unless id
-  loc := lookup.get(id)
-  return undefined unless loc
-  locToLocation doc, loc
+  entry := lookup.get(id)
+  return undefined unless entry
+  locToLocation doc, entry.nameLoc
 
 export function getReferencesFor(doc: TextDocument, pos: Position): Location[]?
   id := wordAt(doc, pos)
@@ -206,14 +226,12 @@ export function getCompletionsFor(doc: TextDocument, _pos: Position): Completion
 export function resolveHeraCompletion(item: CompletionItem): CompletionItem
   data := item.data as { hera?: boolean, uri?: string } | undefined
   return item unless data?.hera and data.uri
-  lookup := declarationsCache.get(data.uri)
-  source := sourceCache.get(data.uri)
-  loc := lookup?.get(item.label)
-  if loc and source
+  entry := declarationsCache.get(data.uri)?.get(item.label)
+  if entry
     item.detail = item.label
     item.documentation = {
       kind: MarkupKind.Markdown
-      value: '```hera\n' + source.slice(loc.pos, loc.pos + loc.length) + '\n```'
+      value: '```hera\n' + entry.signature + '\n```'
     }
   item
 
@@ -268,11 +286,10 @@ export function isAtGrammarLevel(text: string, line: number, character: number):
 
 export function getHoverFor(doc: TextDocument, pos: Position): Hover?
   lookup := declarationsCache.get(doc.uri)
-  source := sourceCache.get(doc.uri)
-  return undefined unless lookup and source
+  return undefined unless lookup
   id := wordAt(doc, pos)
-  loc := lookup.get(id)
-  return undefined unless loc
+  entry := lookup.get(id)
+  return undefined unless entry
   contents:
     kind: MarkupKind.Markdown
-    value: '```hera\n' + source.slice(loc.pos, loc.pos + loc.length) + '\n```'
+    value: '```hera\n' + entry.signature + '\n```'
