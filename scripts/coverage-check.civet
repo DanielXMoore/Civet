@@ -31,18 +31,30 @@ root := typeof __dirname !== "undefined" ?
 tsServiceTmp := join root, 'coverage', 'tmp'
 tsServiceReportDir := join root, 'coverage', 'ts-service'
 tsServiceFilteredTmp := join root, 'coverage', 'ts-service-tmp'
-if existsSync tsServiceTmp
-  rmSync tsServiceReportDir, { recursive: true, force: true }
-  mkdirSync tsServiceReportDir, { recursive: true }
-  rmSync tsServiceFilteredTmp, { recursive: true, force: true }
-  mkdirSync tsServiceFilteredTmp, { recursive: true }
-  for f of readdirSync tsServiceTmp
-    continue unless f.endsWith '.json'
-    raw := JSON.parse readFileSync join(tsServiceTmp, f), 'utf8'
-    raw.result = (raw.result ?? []).filter (r: any) =>
-      not (r.url and /\/dist\/ts-service\//.test r.url)
-    writeFileSync join(tsServiceFilteredTmp, f), JSON.stringify raw
-  c8 := resolve root, 'node_modules/c8/bin/c8.js'
+// ts-service is excluded from the merged report (multi-compilation
+// sourcemap conflicts), so this on-demand report is the ONLY thing
+// gating it.  A missing coverage/tmp can't be a silent skip — it would
+// leave ts-service ungated and the gate falsely green — so fail loudly.
+unless existsSync tsServiceTmp
+  console.error `Coverage gate failed: ts-service coverage data not found at ${tsServiceTmp}.`
+  console.error `  ts-service is gated only from root mocha's v8 profiles — run \`pnpm coverage\` before \`pnpm coverage:check\`.`
+  process.exit 1
+
+rmSync tsServiceReportDir, { recursive: true, force: true }
+mkdirSync tsServiceReportDir, { recursive: true }
+rmSync tsServiceFilteredTmp, { recursive: true, force: true }
+mkdirSync tsServiceFilteredTmp, { recursive: true }
+for f of readdirSync tsServiceTmp
+  continue unless f.endsWith '.json'
+  raw := JSON.parse readFileSync join(tsServiceTmp, f), 'utf8'
+  raw.result = (raw.result ?? []).filter (r: any) =>
+    not (r.url and /\/dist\/ts-service\//.test r.url)
+  writeFileSync join(tsServiceFilteredTmp, f), JSON.stringify raw
+c8 := resolve root, 'node_modules/c8/bin/c8.js'
+// stderr is inherited so c8's own diagnostics reach the CI log when it
+// exits non-zero; stdio:'pipe' would bury them inside the thrown error
+// as a bare "Command failed".  stdout is unused, so drop it.
+try
   execFileSync process.execPath, [
     c8, 'report'
     '--reporter', 'json-summary'
@@ -60,14 +72,25 @@ if existsSync tsServiceTmp
     '--extension', '.ts'
     '--include', '**/source/ts-service/**'
     '--exclude', '**/node_modules/**'
-  ], { cwd: root, stdio: 'pipe' }
-  rmSync tsServiceFilteredTmp, { recursive: true, force: true }
+  ], { cwd: root, stdio: ['ignore', 'ignore', 'inherit'] }
+catch
+  console.error `Coverage gate failed: c8 could not build the ts-service report (see c8 output above).`
+  process.exit 1
+rmSync tsServiceFilteredTmp, { recursive: true, force: true }
 
 mergedSummary := JSON.parse readFileSync join(root, 'coverage', 'coverage-summary.json'), 'utf8'
-tsServiceSummary := if existsSync join(tsServiceReportDir, 'coverage-summary.json')
-  JSON.parse readFileSync join(tsServiceReportDir, 'coverage-summary.json'), 'utf8'
-else
-  { total: {} }
+tsServiceSummaryPath := join tsServiceReportDir, 'coverage-summary.json'
+unless existsSync tsServiceSummaryPath
+  console.error `Coverage gate failed: c8 produced no ts-service summary at ${tsServiceSummaryPath}.`
+  process.exit 1
+tsServiceSummary := JSON.parse readFileSync tsServiceSummaryPath, 'utf8'
+// A present-but-empty summary (no root profiles, or every profile
+// stripped as a bundle URL above) would pass the gate with ts-service
+// unmeasured — source/ts-service always has statements, so zero means
+// nothing was actually gated.
+unless tsServiceSummary.total?.statements?.total
+  console.error `Coverage gate failed: ts-service report is empty — coverage/tmp held no usable root mocha profiles for source/ts-service.`
+  process.exit 1
 
 // Sum two metric records (each `{ total, covered, pct }`).
 function combineMetric(a: any, b: any)
