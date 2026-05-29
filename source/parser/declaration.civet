@@ -503,18 +503,50 @@ function dynamizeFromClause(from: any)
     from.push ", {", assert.keyword, ":", assert.object, "}"
   ["(", ...from, ")"]
 
+// Drop the named-imports portion in JS mode when every specifier is
+// `type`-prefixed (otherwise per-spec stripping leaves `import {} from "x"`,
+// which is a runtime side-effect import esbuild faithfully preserves).
+// A specifier-less clause (`{ specifiers.length is 0 }`) is *not* all-type:
+// `import {} from "x"` is itself an intentional side-effect import we keep.
+function markAllTypeImports(decl: ImportDeclaration): ImportDeclaration
+  return decl if decl.ts
+  { imports } := decl
+  return decl unless imports
+
+  // Operator-import clauses share `type: "Declaration"` but never carry
+  // type-only specifiers, so they fall through the all-type check harmlessly.
+  i := imports as ImportClauseNode
+  // Standalone NamedImports: no default, no namespace — drop the whole decl.
+  if not i.binding and not i.star
+    specs := i.specifiers
+    return { ...decl, ts: true } if specs?.length and specs.every .ts
+    return decl
+
+  // Default + named (e.g. `import D, { type S } from "foo"`): ImportClause
+  // builds the clause as `[binding, ...rest]` with the named clause last, so
+  // drop only the trailing `, { type S }` by wrapping `rest` in a ts:true node.
+  children := imports.children!
+  namedSpecs := (children.at(-1)! as ImportClauseNode).specifiers
+  return decl unless namedSpecs?.length and namedSpecs.every .ts
+
+  [binding, ...rest] := children
+  newImportsChildren := [binding, { ts: true, children: rest }]
+  newImports := { ...imports, children: newImportsChildren }
+  newDeclChildren := decl.children!.map (c) => c is imports ? newImports : c
+  return { ...decl, imports: newImports, children: newDeclChildren }
+
 // Rewrite `import {…rest|nested}` to namespace import + const destructure.
 // Per-spec `type` imports get pulled into a separate native `import {type X}`
 // since a const-destructure can't bind types.
 function processStaticImport(decl: ImportDeclaration)
   { imports, from, children } := decl
   // `"rest" in imports` narrows the union — only ImportClauseNode declares it.
-  return decl unless imports and "rest" in imports
+  return markAllTypeImports decl unless imports and "rest" in imports
 
   namedImports := (imports.binding ? imports.children!.at(-1)! : imports) as ImportClauseNode
   allSpecs := namedImports.specifiers!
   // Rewrite only when native ESM can't express the shape: rest or pattern bindings.
-  return decl unless namedImports.rest or allSpecs.some (s) => s.pattern
+  return markAllTypeImports decl unless namedImports.rest or allSpecs.some (s) => s.pattern
 
   ref := makeRef "imports"
   star := { type: "Star", token: "*" }
