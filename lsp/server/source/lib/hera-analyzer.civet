@@ -83,20 +83,33 @@ function locToLocation(doc: TextDocument, loc: Loc): Location
     start: doc.positionAt(loc.pos)
     end: doc.positionAt(loc.pos + loc.length)
 
+// Collect a rule's top-level Choice nodes.  Hera nests RuleBody productions
+// differently across versions and pads `children` with nulls / EOS tokens, so
+// walk structurally and stop at each Choice rather than assuming a fixed shape
+// — descending past a Choice would also pick up nested `( … / … )` groups,
+// which aren't the rule's own alternatives.
+function* topLevelChoices(node: Token | (Token | string)[] | null | undefined): Generator<Token>
+  if Array.isArray node
+    for c of node
+      yield* topLevelChoices c
+    return
+  return if node == null or typeof node is 'string'
+  if (node as Token).type is 'Choice'
+    yield node as Token
+    return
+  yield* topLevelChoices (node as Token).children
+
 // Render a rule's grammar surface for hover / completion docs: the rule name
 // followed by each top-level production, one per line.  Each production is the
 // Choice's Sequence span (the matched grammar), so handler code — inline
-// `-> …` / `{ … }` or an indented body — is excluded.  RuleBody groups its
-// productions as `[Indent, Choice]` pairs, so flatten one level before
-// picking out the Choices.
+// `-> …` / `{ … }` or an indented body — is excluded.
 function ruleSignature(rule: Token, text: string): string
   name := String((rule.children[0] as Token).token)
-  ruleBody := rule.children.find((c) => typeof c !== 'string' and (c as Token).type is 'RuleBody') as Token
-  choices := (ruleBody.children as (Token | string)[][]).flat()
-    .filter (c) => typeof c !== 'string' and (c as Token).type is 'Choice'
-  productions := choices.map (choice) =>
-    seq := (choice as Token).children.find((c) => typeof c !== 'string' and (c as Token).type is 'Sequence') as Token
-    text.slice(seq.loc.pos, seq.loc.pos + seq.loc.length).trimEnd()
+  productions: string[] := []
+  for choice of topLevelChoices(rule.children)
+    seq := choice.children.find((c) => c != null and typeof c !== 'string' and (c as Token).type is 'Sequence') as Token?
+    continue unless seq
+    productions.push text.slice(seq.loc.pos, seq.loc.pos + seq.loc.length).trimEnd()
   name + productions.map((p) => `\n  ${p}`).join('')
 
 function declarations(statements: (Token | string)[], text: string): Map<string, Declaration>
