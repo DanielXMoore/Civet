@@ -10,6 +10,7 @@
 
 { spawnLspServer, docUri, type LspClient } from ./lsp-harness.civet
 { getCanonicalFileName } from ../source/lib/util.civet
+{ isAtGrammarLevel } from ../source/lib/hera-analyzer.civet
 { URI } from vscode-uri
 path from node:path
 fs from node:fs
@@ -1416,6 +1417,75 @@ describe "LSP features (shared project server)", ->
       docValue := resolved.documentation.value ?? resolved.documentation
       assert String(docValue).includes("Name"), "expected rule body in docs, got " + JSON.stringify(resolved.documentation)
 
+    it "hover on a rule reference shows the rule body", ->
+      uri := docUri path.join(projectRoot, "hera-hover.hera")
+      client.notify "textDocument/didOpen", {
+        textDocument: { uri, languageId: "hera", version: 1, text: grammarText }
+      }
+      await waitForDiag(client, (p) => p.uri is uri)
+
+      // Click mid-word inside `Greeting` (line 1, col 5): exercises both the
+      // grammar-level hover short-circuit and wordAt's backward scan.
+      result := await client.request "textDocument/hover", {
+        textDocument: { uri }
+        position: { line: 1, character: 5 }
+      }
+      assert result, "expected hover result, got " + JSON.stringify(result)
+      value := result.contents?.value ?? result.contents
+      assert String(value).includes("Greeting"),
+        "expected Greeting rule body in hover, got " + JSON.stringify(result.contents)
+
+    it "document symbols include regexp-literal rule bodies", ->
+      // The shared grammarText has no regexp; this one exercises the
+      // RegExpLiteral arm of ruleSymbolChildren.
+      uri := docUri path.join(projectRoot, "hera-regexp.hera")
+      text := """
+        Digits
+          /[0-9]+/
+
+        Word
+          "hi"
+
+      """
+      client.notify "textDocument/didOpen", {
+        textDocument: { uri, languageId: "hera", version: 1, text }
+      }
+      await waitForDiag(client, (p) => p.uri is uri)
+
+      syms := await client.request "textDocument/documentSymbol", {
+        textDocument: { uri }
+      }
+      assert Array.isArray(syms), "expected symbol array"
+      digits := (syms as any[]).find (s) => s.name is "Digits"
+      assert digits, "expected Digits rule; got " + JSON.stringify((syms as any[]).map (s) => s.name)
+      assert digits.children?.length, "expected the /[0-9]+/ body as a child symbol of Digits"
+
+    it "closing a .hera document clears its analyzer caches", ->
+      uri := docUri path.join(projectRoot, "hera-close.hera")
+      client.notify "textDocument/didOpen", {
+        textDocument: { uri, languageId: "hera", version: 1, text: grammarText }
+      }
+      await waitForDiag(client, (p) => p.uri is uri)
+
+      // Close routes through clearHeraDocument.  Messages are processed in
+      // order, so a follow-up document's diagnostics can't land until the
+      // close handler (and its cache clear) has run.
+      client.notify "textDocument/didClose", { textDocument: { uri } }
+      pingUri := docUri path.join(projectRoot, "hera-close-ping.civet")
+      client.notify "textDocument/didOpen", {
+        textDocument: { uri: pingUri, languageId: "civet", version: 1, text: 'console.log "ok"' }
+      }
+      await waitForDiag(client, (p) => p.uri is pingUri)
+
+    it "an unparseable .hera document keeps the server responsive", ->
+      // parseHeraDocument throws on a grammar Hera can't parse; the analyzer
+      // swallows it (keeping prior caches) and diagnostics still publish.
+      uri := docUri path.join(projectRoot, "hera-broken.hera")
+      client.notify "textDocument/didOpen", {
+        textDocument: { uri, languageId: "hera", version: 1, text: "@@@@@\n" }
+      }
+      await waitForDiag(client, (p) => p.uri is uri)
+
 // Tests below each need their own workspace / tsconfig / initialize, so they
 // spawn a dedicated server per test.  Keep this set small.
 describe "LSP features (isolated workspaces)", ->
@@ -1646,3 +1716,36 @@ describe "LSP features (isolated workspaces)", ->
     finally
       await client.stop()
       fs.rmSync(tmpDir, { recursive: true, force: true })
+
+// Direct unit tests for the grammar/handler classification gate.  These pin
+// the pure text-scan branches (fence parity, indent thresholds, inline-handler
+// clamp, EOF/no-trailing-newline) that are awkward to drive through the wire.
+describe "isAtGrammarLevel grammar/handler gate", ->
+  it "treats unindented and 2-indent lines as grammar", ->
+    text := "Start\n  Greeting\n"
+    assert.equal isAtGrammarLevel(text, 0, 0), true
+    assert.equal isAtGrammarLevel(text, 1, 2), true
+
+  it "treats lines indented 4+ as handler code", ->
+    text := "Rule\n    handlerCode()\n"
+    assert.equal isAtGrammarLevel(text, 1, 4), false
+
+  it "treats a 3-indent line (between the thresholds) as grammar", ->
+    text := "Rule\n   threeIndent\n"
+    assert.equal isAtGrammarLevel(text, 1, 3), true
+
+  it "clamps an inline handler on a grammar line at the introducer", ->
+    text := 'Start "a" -> $1\n'
+    introducer := text.indexOf "->"
+    assert.equal isAtGrammarLevel(text, 0, introducer - 1), true,
+      "position before -> should be grammar level"
+    assert.equal isAtGrammarLevel(text, 0, introducer + 1), false,
+      "position after -> should fall through to the handler"
+
+  it "treats a position inside an open ``` fence as handler", ->
+    text := "Rule\n  ```\n  code\n"
+    assert.equal isAtGrammarLevel(text, 2, 2), false
+
+  it "handles positions past EOF on text without a trailing newline", ->
+    text := "Start\n  Greeting"
+    assert.equal isAtGrammarLevel(text, 9, 0), true
