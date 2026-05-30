@@ -19,8 +19,10 @@ Source is written in Civet (`.civet`).  Beyond "match the surrounding code":
 - **Document functions/types with a concise `/** */`** doc comment — only JSDoc
   surfaces in LSP hover, so a one-line summary belongs there.  Reserve `//` for
   inline *why* notes; avoid multi-line `//` headers above functions.
-- **Semicolon trap:** never put `;` after a postfix `if`/`unless` or a concise
-  arrow body (`=> expr`) — it silently changes the meaning.
+- **Trailing `;` halts the implicit return** — `=> expr;` returns `void` (vs
+  `=> expr`), as does a `;` on a function's last expression; use it deliberately
+  to discard a value (e.g. a `() => void` callback).  The one hazard: don't put
+  `;` after a postfix `if`/`unless` (`doThing() unless x;`), which miscompiles.
 
 ## Parser
 
