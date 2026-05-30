@@ -122,6 +122,72 @@ describe "LSP protocol", ->
       (p) => p.uri is liveUri
     assert diagnostics, "server should continue producing diagnostics after no-op events"
 
+  it "answers textDocument/diagnostic pull requests with a full report", ->
+    pullPath := path.join(projectRoot, "proto-pull.civet")
+    uri := docUri pullPath
+
+    client.notify "textDocument/didOpen", {
+      textDocument: {
+        uri
+        languageId: "civet"
+        version: 1
+        text: 'x: number := "not a number"'
+      }
+    }
+
+    report := await client.request "textDocument/diagnostic", {
+      textDocument: { uri }
+    }
+
+    assert.equal report.kind, "full", "expected a full document diagnostic report"
+    assert report.items.some((d: any) => d.severity is 1),
+      `expected a TypeScript error in the pull report, got ${JSON.stringify report.items}`
+
+  it "returns an empty report for an empty document (no transpiler meta yet)", ->
+    // An empty .civet source produces no snapshot/meta, so computeDiagnostics
+    // hits the `no transpiledDoc` guard. Exercises that branch for real.
+    uri := docUri path.join(projectRoot, "proto-empty.civet")
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text: '' }
+    }
+    report := await client.request "textDocument/diagnostic", {
+      textDocument: { uri }
+    }
+    assert.equal report.kind, "full"
+    assert.equal report.items.length, 0
+
+  it "returns an empty full report when pulling on an unopened document", ->
+    // No didOpen: the server has no content to analyze, so it answers with a
+    // valid (empty) full report rather than erroring.
+    uri := docUri path.join(projectRoot, "proto-pull-unopened.civet")
+    report := await client.request "textDocument/diagnostic", {
+      textDocument: { uri }
+    }
+    assert.equal report.kind, "full"
+    assert.equal report.items.length, 0
+
+  it "reflects edits synchronously via textDocument/diagnostic (pull)", ->
+    // The core fix: a pull request recomputes against the current document
+    // state at request time, so an edit is reflected on the very next pull
+    // without racing the debounced push pipeline.
+    pullPath := path.join(projectRoot, "proto-pull-edit.civet")
+    uri := docUri pullPath
+
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text: 'x := 1' }
+    }
+    clean := await client.request "textDocument/diagnostic", { textDocument: { uri } }
+    assert.equal clean.items.filter((d: any) => d.severity is 1).length, 0,
+      `expected no errors for clean text, got ${JSON.stringify clean.items}`
+
+    client.notify "textDocument/didChange", {
+      textDocument: { uri, version: 2 }
+      contentChanges: [{ text: 'x: number := "nope"' }]
+    }
+    errored := await client.request "textDocument/diagnostic", { textDocument: { uri } }
+    assert errored.items.some((d: any) => d.severity is 1),
+      "expected the pull to reflect the edit's type error immediately"
+
   // Runs last: attaches a persistent `on` handler for publishDiagnostics that
   // only filters on its own (proto-race) uri, so even if the handler stays
   // installed past this test it's inert for later suites.
