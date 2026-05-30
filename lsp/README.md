@@ -19,8 +19,10 @@ Language server and editor integrations for Civet.
 The server transpiles and serves `.civet` files, and additionally answers
 grammar-level requests — go-to-definition, references, document symbols,
 completions, and hover — for Hera grammar files (`.hera`), parsed directly with
-the project's `@danielx/hera` rather than through the composed sourcemap. Zed
-routes `.hera` to the server and highlights it via `tree-sitter-hera/`.
+the project's `@danielx/hera` rather than through the composed sourcemap. The
+Zed and VS Code extensions route `.hera` to the server and provide `.hera`
+syntax highlighting (Zed via `tree-sitter-hera/`, VS Code via a TextMate
+grammar in `vscode/syntaxes/hera.json`).
 
 ## Setup
 
