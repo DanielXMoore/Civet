@@ -10,8 +10,8 @@ Source is written in Civet (`.civet`).  Beyond "match the surrounding code":
 
 - **Prefer idiomatic Civet** over the TS spelling: `is` / `and` / `or` / `not`;
   `typeof x === 'string'` → `x <? 'string'` (and `!<?`); `x != null` → `x?`;
-  `.length` → `#`; `for x of xs` with an indented body.  Single-param arrows
-  still need parens: `map((x) => …)`.
+  `T | undefined` → `T?`; `.length` → `#`; `for x of xs` with an indented body.
+  Single-param arrows still need parens: `map((x) => …)`.
 - **Drop call parens** for single- and simple multi-arg calls — `wordAt doc, pos`,
   `traverse grammar`.  Keep them when the result is chained (`f(x).y`,
   `m.get(k)?.keys()`), nested as another call's argument, or inside an object
