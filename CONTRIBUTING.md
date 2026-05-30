@@ -21,8 +21,7 @@ Source is written in Civet (`.civet`).  Beyond "match the surrounding code":
   inline *why* notes; avoid multi-line `//` headers above functions.
 - **Trailing `;` halts the implicit return** — `=> expr;` returns `void` (vs
   `=> expr`), as does a `;` on a function's last expression; use it deliberately
-  to discard a value (e.g. a `() => void` callback).  The one hazard: don't put
-  `;` after a postfix `if`/`unless` (`doThing() unless x;`), which miscompiles.
+  to discard a value (e.g. a `() => void` callback).
 
 ## Parser
 
