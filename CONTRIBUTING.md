@@ -123,6 +123,12 @@ return defaults if value is null
 The `-- <why>` part is required so the next reader can judge whether the
 ignore should be replaced with a test.
 
+Before reasoning about *why* something is or isn't covered — branch vs
+statement coverage, single-line conditionals, or whether a compiler change
+moves coverage — read [`notes/coverage-mechanics.md`](notes/coverage-mechanics.md).
+Verify claims against c8 output (`coverage/coverage-final.json`), not sourcemap
+segments or `remapPosition`.
+
 ### "Works locally, fails on CI" coverage divergence
 
 GitHub Actions on `pull_request` builds the **merge of HEAD onto base**, not
