@@ -12,11 +12,8 @@ reporting the branch correctly all along.
   at 100% on statements / branches / functions / lines (see
   `scripts/coverage-check.civet`). It is a global sum, not per-file — a few
   uncovered lines anywhere fail it.
-- Locally the gate is polluted by `.claude/worktrees/**` and
-  `lsp/zed/grammars/**` copies (near-0% coverage) that don't exist in CI's clean
-  checkout. **Don't trust the local pass/fail.** To judge one file, read its
-  entry in `coverage/coverage-final.json` directly (per-file `s`/`b`/`f` hit
-  maps) rather than the aggregate result.
+- To judge a single file, read its entry in `coverage/coverage-final.json`
+  directly (per-file `s`/`b`/`f` hit maps) rather than the aggregate pass/fail.
 
 ## Which compiler compiles what (this is the subtle one)
 
