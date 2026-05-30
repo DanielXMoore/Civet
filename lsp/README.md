@@ -11,7 +11,16 @@ Language server and editor integrations for Civet.
 | `vscode/` | `@danielx/civet-vscode` | VS Code extension |
 | `sublime/` | — | Sublime Text package |
 | `zed/` | — | Zed editor extension (Rust/WASM) |
-| `tree-sitter/` | — | Tree-sitter grammar for syntax highlighting |
+| `tree-sitter/` | — | Tree-sitter grammar for Civet syntax highlighting |
+| `tree-sitter-hera/` | — | Tree-sitter grammar for `.hera` syntax highlighting |
+
+## Languages
+
+The server transpiles and serves `.civet` files, and additionally answers
+grammar-level requests — go-to-definition, references, document symbols,
+completions, and hover — for Hera grammar files (`.hera`), parsed directly with
+the project's `@danielx/hera` rather than through the composed sourcemap. Zed
+routes `.hera` to the server and highlights it via `tree-sitter-hera/`.
 
 ## Setup
 

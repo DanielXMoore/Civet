@@ -1,11 +1,11 @@
 # Civet Zed Extension
 
-Zed editor extension that registers the Civet language and launches the Civet LSP server.
+Zed editor extension that registers the Civet and Hera languages and launches the Civet LSP server.
 
 ## Features
 
-- Syntax highlighting via the tree-sitter grammar in `../tree-sitter/`
-- LSP support via `civet-lsp` (diagnostics, completions, hover, go-to-definition)
+- Syntax highlighting via the tree-sitter grammars in `../tree-sitter/` (Civet) and `../tree-sitter-hera/` (`.hera` grammar files)
+- LSP support via `civet-lsp` for both `.civet` and `.hera` (diagnostics, completions, hover, go-to-definition), plus grammar-level navigation for `.hera` rules
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ npm install -g @danielx/civet-language-server
 
 ## Updating the grammar
 
-After any changes to `../tree-sitter/`:
+After any changes to `../tree-sitter/` or `../tree-sitter-hera/`:
 
 1. Commit the changes
 2. Update `rev` in `extension.toml` to the new commit SHA
