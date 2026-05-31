@@ -7,6 +7,7 @@ import type {
   ASTNode
   ASTNodeObject
   ASTRef
+  AtBindingProperty
   Binding
   BindingElement
   BindingIdentifier
@@ -23,6 +24,7 @@ import type {
   IterationExpression
   IterationFamily
   IterationStatement
+  ObjectBindingPattern
   Parameter
   ParametersNode
   PostRestBindingElements
@@ -1084,51 +1086,51 @@ function processParams(f: FunctionNode): void
   else
     indent = expressions[0][0]
 
-  // Infer types for @-params from corresponding class field declarations,
-  // so e.g. `class Foo; name: string; @(@name)` types `name1: string`.
+  // Infer types for @-params from matching class field declarations, so e.g.
+  // `class Foo; name: string; @(@name)` types the parameter as `name1: string`.
   {ancestor: enclosingClass} := findAncestor f, .type is "ClassExpression"
   if enclosingClass?
+    // Only the class's own fields apply — gather from its body, not its
+    // heritage clause (which may contain a same-named field from a base class).
     fieldTypes := new Map<string, TypeSuffix>
-    for each field of gatherRecursiveWithinFunction enclosingClass, .type is "FieldDefinition"
-      { id, typeSuffix } := field
-      continue unless typeSuffix?
-      continue unless id?.type is "Identifier"
-      fieldTypes.set id.name, typeSuffix
+    for each {id, typeSuffix} of gatherRecursiveWithinFunction enclosingClass.body, .type is "FieldDefinition"
+      if typeSuffix? and id?.type is "Identifier"
+        fieldTypes.set id.name, typeSuffix
     if fieldTypes.size
       for each parameter of gatherRecursive parameters, .type is "Parameter"
-        modifiedPatterns := new Set<ASTNodeObject>
+        // An explicit type on the whole parameter, including direct
+        // `@(@name: T)`, takes precedence over any inferred field type.
+        continue if parameter.typeSuffix?
+        inferredInPattern .= false
         for each binding of gatherRecursive parameter, .type is "AtBinding"
-          owner := binding.parent
-          continue unless owner?
-          continue if owner.typeSuffix?
+          // An @-binding's parent is the parameter itself (direct `@(@name)`),
+          // an AtBindingProperty (`@({@name})`), or a BindingElement (`@([@name])`).
+          owner := binding.parent as (Parameter | AtBindingProperty | BindingElement)?
+          assert owner, "@-binding has no parent"
           fieldType := fieldTypes.get binding.ref.id
           continue unless fieldType?
-          inferred := deepCopy fieldType
-          owner.typeSuffix = inferred
-          if owner is parameter
-            // For direct `@(@name)`: insert typeSuffix into Parameter.children
-            bIdx := owner.children.indexOf binding
-            if bIdx >= 0
-              owner.children[bIdx + 1] = inferred
-          else
-            // For `@({@name})` / `@([@name])`: mark enclosing pattern for re-aggregation
-            let p = owner.parent
-            while p?
-              if p.type is like "ObjectBindingPattern", "ArrayBindingPattern"
-                modifiedPatterns.add p
-                break
-              p = p.parent
+          owner.typeSuffix = deepCopy fieldType
           updateParentPointers owner
-        // Re-aggregate the typeSuffix of any modified patterns
-        for pattern of modifiedPatterns
+          if owner is parameter
+            // Direct `@(@name)`: the type goes straight into Parameter.children
+            i := owner.children.indexOf binding
+            assert.notEqual i, -1, "@-binding missing from parameter children"
+            owner.children[i + 1] = owner.typeSuffix
+          else
+            inferredInPattern = true
+        // Destructured `@({@name})` / `@([@name])`: rebuild the pattern's type
+        // from its now-typed members and surface it on the parameter.  When
+        // anything was inferred into a pattern, `parameter.binding` is that
+        // (object or array) pattern.
+        if inferredInPattern
+          pattern := parameter.binding as ObjectBindingPattern | ArrayBindingPattern
           pattern.typeSuffix = undefined
           gatherBindingPatternTypeSuffix pattern
-        // Propagate inferred binding pattern typeSuffix up to Parameter.children
-        if not parameter.typeSuffix? and parameter.binding?.typeSuffix?
-          parameter.typeSuffix = parameter.binding.typeSuffix
-          bIdx := parameter.children.indexOf parameter.binding
-          if bIdx >= 0
-            parameter.children[bIdx + 1] = parameter.typeSuffix
+          assert pattern.typeSuffix, "expected aggregated binding pattern type"
+          parameter.typeSuffix = pattern.typeSuffix
+          i := parameter.children.indexOf pattern
+          assert.notEqual i, -1, "binding pattern missing from parameter children"
+          parameter.children[i + 1] = parameter.typeSuffix
 
   [splices, thisAssignments] := gatherBindingCode parameters,
     injectParamProps: isConstructor
@@ -1138,15 +1140,15 @@ function processParams(f: FunctionNode): void
   simplifyBindingProperties subbindings
 
   // `@(@x: number)` adds `x: number` declaration to class body
+  // (reuses `enclosingClass` resolved above for @-param type inference)
   if isConstructor
-    {ancestor} := findAncestor f, .type is "ClassExpression"
-    if ancestor?
-      fields := gatherRecursiveWithinFunction ancestor, .type is "FieldDefinition"
+    if enclosingClass?
+      fields := gatherRecursiveWithinFunction enclosingClass, .type is "FieldDefinition"
       .map .id
       .filter (is like {type: "Identifier"})
       .map .name
       |> new Set
-      classExpressions := ancestor!.body.expressions
+      classExpressions := enclosingClass.body.expressions
       index .= findChildIndex classExpressions, f
       assert.notEqual index, -1, "Could not find constructor in class"
       // Put fields before all constructor overloads so they remain consecutive
