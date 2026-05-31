@@ -18,6 +18,10 @@
   type SymbolInformation
   TextEdit
   SemanticTokensRequest
+  DocumentDiagnosticRequest
+  DocumentDiagnosticReportKind
+  type DocumentDiagnosticParams
+  type DocumentDiagnosticReport
   FileChangeType
   type Connection
   type SignatureHelp
@@ -299,6 +303,11 @@ export function startServer(connection: Connection, dependencies: ServerDependen
             tokenTypes: semanticTokenTypes as! string[]
             tokenModifiers: semanticTokenModifiers as! string[]
           full: true
+        // Pull-model diagnostics (LSP 3.17). interFileDependencies: our
+        // results can change when other files do (cross-file TS types).
+        diagnosticProvider:
+          interFileDependencies: true
+          workspaceDiagnostics: false
 
       }
     }
@@ -1320,11 +1329,13 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     changeQueue.add(document)
     scheduleExecuteQueue()
 
-  // Both callers (executeQueue and updateProjectDiagnostics) pass a service
-  // explicitly after staging the document, so `service` is always provided and
-  // the doc is already staged when we arrive here.
-  function updateDiagnosticsForDoc(document: TextDocument, service: ResolvedService)
-    logger.log("Updating diagnostics for doc: " + document.uri)
+  /**
+   * Diagnostics for an already-staged document. Returns `[]` when there's
+   * nothing to report — either a clean source or no transpiler meta yet
+   * (e.g. an empty file with no snapshot).
+   */
+  function computeDiagnosticsForDoc(document: TextDocument, service: ResolvedService): Diagnostic[]
+    logger.log("Computing diagnostics for doc: " + document.uri)
     sourcePath := documentToSourcePath(document)
     assert sourcePath
 
@@ -1370,20 +1381,16 @@ export function startServer(connection: Connection, dependencies: ServerDependen
 
     // Non-transpiled
     if sourcePath.match tsSuffix
-      diagnostics := getTypeScriptDiagnostics(sourcePath, document)
+      return getTypeScriptDiagnostics(sourcePath, document)
 
-      return connection.sendDiagnostics {
-        uri: document.uri
-        version: document.version
-        diagnostics
-      }
-
-    // Transpiled file
+    // Transpiled file. No meta/transpiledDoc yet (e.g. an empty source that
+    // hasn't produced a snapshot) means there's nothing to report.
     meta := service.host.getMeta(sourcePath)
-    return logger.log `no meta for ${sourcePath}` unless meta
+    transpiledDoc := meta?.transpiledDoc
+    unless transpiledDoc
+      return []
 
-    { sourcemapLines, transpiledDoc, parseErrors, fatal } := meta
-    return logger.log `no transpiledDoc for ${sourcePath}` unless transpiledDoc
+    { sourcemapLines, parseErrors, fatal } := meta!
 
     transpiledPath := documentToSourcePath(transpiledDoc)
     diagnostics: Diagnostic[] := []
@@ -1397,13 +1404,15 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     unless fatal
       diagnostics.push(...getTypeScriptDiagnostics(transpiledPath, transpiledDoc, sourcemapLines))
 
+    return diagnostics
+
+  /** Compute and push diagnostics via `textDocument/publishDiagnostics`. */
+  function updateDiagnosticsForDoc(document: TextDocument, service: ResolvedService)
     connection.sendDiagnostics {
       uri: document.uri
       version: document.version
-      diagnostics
+      diagnostics: computeDiagnosticsForDoc(document, service)
     }
-
-    return
 
   // Using a cancellation token we prevent parallel executions of scheduleUpdateDiagnostics
   let runningDiagnosticsUpdate: { isCanceled: boolean } | undefined
@@ -1608,6 +1617,23 @@ export function startServer(connection: Connection, dependencies: ServerDependen
       tsConfigPath := path.join projectPath, 'tsconfig.json'
       await doReloadServiceForProject(projPath, tsConfigPath)
     return true
+
+  /**
+   * Pull-model diagnostics (LSP 3.17): computed against the current document
+   * at request time, so an edit shows on the next pull with no push race.
+   * Empty report when the doc isn't open (no content to analyze).
+   */
+  connection.onRequest DocumentDiagnosticRequest.type, (params: DocumentDiagnosticParams): Promise<DocumentDiagnosticReport> =>
+    document := documents.get params.textDocument.uri
+    return { kind: DocumentDiagnosticReportKind.Full, items: [] } unless document
+
+    sourcePath := documentToSourcePath params.textDocument
+    assert sourcePath
+    service := await ensureServiceForSourcePath sourcePath
+    await updating params.textDocument
+
+    items := computeDiagnosticsForDoc(document, service)
+    { kind: DocumentDiagnosticReportKind.Full, items }
 
   // Semantic tokens: use TypeScript's semantic classifications, remapped via sourcemap
   connection.onRequest SemanticTokensRequest.type, (params) =>
