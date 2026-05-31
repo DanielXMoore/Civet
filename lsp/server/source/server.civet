@@ -57,6 +57,17 @@
   parseErrorsToDiagnostics
   resolvePathAliasDir
 } from ./lib/completions.civet
+{
+  clearHeraDocument
+  getCompletionsFor as heraCompletionsFor
+  getDeclarationFor as heraDeclarationFor
+  getDocumentSymbols as heraDocumentSymbols
+  getHoverFor as heraHoverFor
+  getReferencesFor as heraReferencesFor
+  isAtGrammarLevel as isHeraGrammarLevel
+  parseHeraDocument
+  resolveHeraCompletion
+} from ./lib/hera-analyzer.civet
 assert from node:assert
 path from node:path
 ts, {
@@ -341,16 +352,31 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     return
 
   updating := (document: { uri: string }) => documentUpdateStatus.get(document.uri)?.promise
+
+  // True when a request targets a `.hera` grammar-level token (rule name/ref)
+  // rather than a handler body — answer from the Hera analyzer, else fall
+  // through to the TS service.
+  heraGrammarLevel := (doc: TextDocument, position: Position): boolean =>
+    doc.uri.endsWith('.hera') and isHeraGrammarLevel(doc.getText(), position.line, position.character)
+
   tsSuffix := /\.[cm]?[jt]s$|\.json|\.[jt]sx/
 
   connection.onHover ({ textDocument, position }) =>
     sourcePath := documentToSourcePath(textDocument)
     assert sourcePath
 
-    service := await ensureServiceForSourcePath(sourcePath)
-
     doc := documents.get(textDocument.uri)
     assert doc
+
+    // .hera grammar-level hover: answer from the Hera analyzer (rule body
+    // excerpt at the clicked rule name).  Handler-body positions fall
+    // through to the TS service below.
+    if heraGrammarLevel(doc, position)
+      await updating(textDocument)
+      hover := heraHoverFor(doc, position)
+      return hover if hover
+
+    service := await ensureServiceForSourcePath(sourcePath)
 
     let info
     await updating(textDocument)
@@ -459,6 +485,13 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     isLikelyImportContext := likelyImportContext(linePrefix)
     if context?.triggerCharacter is ' ' and not isLikelyImportContext
       return []
+
+    // .hera grammar-level completion: rule names from the grammar.
+    // Handler-body positions fall through to TS-driven completions.
+    if heraGrammarLevel(document, position)
+      await updating(textDocument)
+      if items := heraCompletionsFor(document, position)
+        return items
 
     await updating(textDocument)
 
@@ -576,6 +609,12 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     return items
 
   connection.onCompletionResolve (item) =>
+    // Hera-grammar completions carry `{ hera: true, uri }` in `data`; the
+    // analyzer fills in detail + rule-body documentation.
+    heraData := item.data as { hera?: boolean } | undefined
+    if heraData?.hera
+      return resolveHeraCompletion(item)
+
     { sourcePath, position, name, source, data } .= item.data
     service := await ensureServiceForSourcePath(sourcePath)
     return item unless service
@@ -686,6 +725,17 @@ export function startServer(connection: Connection, dependencies: ServerDependen
   connection.onDefinition ({ textDocument, position }) =>
     sourcePath := documentToSourcePath(textDocument)
     assert sourcePath
+
+    // .hera grammar-level go-to-definition: jump directly to the rule's
+    // name token in the .hera source — skips the Hera→Civet→TS composed
+    // sourcemap, which lands at coarse rule-region positions for
+    // grammar tokens.
+    doc := documents.get(textDocument.uri)
+    if doc and heraGrammarLevel(doc, position)
+      await updating(textDocument)
+      if hit := heraDeclarationFor(doc, position)
+        return [hit]
+
     service := await ensureServiceForSourcePath(sourcePath)
 
     let definitions
@@ -745,6 +795,15 @@ export function startServer(connection: Connection, dependencies: ServerDependen
   connection.onReferences ({ textDocument, position }) =>
     sourcePath := documentToSourcePath(textDocument)
     assert sourcePath
+
+    // .hera grammar-level references: enumerate every Name token in the
+    // grammar matching the clicked identifier.
+    doc := documents.get(textDocument.uri)
+    if doc and heraGrammarLevel(doc, position)
+      await updating(textDocument)
+      if refs := heraReferencesFor(doc, position)
+        return refs
+
     service := await ensureServiceForSourcePath(sourcePath)
     // TODO: same source mapping as onDefinition I think...
 
@@ -804,6 +863,16 @@ export function startServer(connection: Connection, dependencies: ServerDependen
   connection.onDocumentSymbol ({ textDocument }) =>
     sourcePath := documentToSourcePath(textDocument)
     assert sourcePath
+
+    // .hera outline: rules nested with their child string/regex/name
+    // terminals.  The TS view of a transpiled .hera file is generated
+    // helper functions and import bookkeeping — not what the author wrote.
+    if textDocument.uri.endsWith('.hera')
+      doc := documents.get(textDocument.uri)
+      if doc
+        await updating(textDocument)
+        if heraOutline := heraDocumentSymbols(doc)
+          return heraOutline
 
     service := await ensureServiceForSourcePath(sourcePath)
 
@@ -1256,6 +1325,8 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     projPath := getProjectPathFromSourcePath(sourcePath)
     service := projectPathToServiceMap.get(projPath)
     service?.host.closeDocument(sourcePath)
+    if document.uri.endsWith('.hera')
+      clearHeraDocument(document.uri)
     // Drop any pending in-flight change for this doc so the queue doesn't
     // re-add it to the host after close. The status resolver set by
     // onDidChangeContent can leak if close fires inside the debounce window
@@ -1299,6 +1370,13 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     for { service, docs } of docsByProject.values()
       // Phase 1: Stage all changes within this project.
       docs.forEach (doc) => service.host.addOrUpdateDocument(doc)
+
+      // Phase 1b: refresh the Hera-grammar analyzer cache for any .hera docs
+      // in this batch so grammar-level requests (definition, references,
+      // outline) see up-to-date data without waiting on the TS pipeline.
+      for doc of docs
+        if doc.uri.endsWith('.hera')
+          parseHeraDocument(doc, service.hera)
 
       // Phase 2: Analyze all staged documents within this project.
       for doc of docs

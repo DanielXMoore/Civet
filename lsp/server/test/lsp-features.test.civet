@@ -10,6 +10,8 @@
 
 { spawnLspServer, docUri, type LspClient } from ./lsp-harness.civet
 { getCanonicalFileName } from ../source/lib/util.civet
+{ isAtGrammarLevel, parseHeraDocument, getHoverFor } from ../source/lib/hera-analyzer.civet
+{ TextDocument } from vscode-languageserver-textdocument
 { URI } from vscode-uri
 path from node:path
 fs from node:fs
@@ -1316,6 +1318,162 @@ describe "LSP features (shared project server)", ->
       // written to disk — no on-disk cleanup needed.
       try fs.unlinkSync libPath
 
+  // -- .hera grammar-level features (analyzer short-circuit) --------------
+  // The Civet LSP transpiles Hera→Civet→TSX and answers most requests via
+  // the TS service on the composed sourcemap.  For grammar-level tokens
+  // (rule names) the composed map produces coarse positions, so a Hera-aware
+  // analyzer short-circuits those requests.  These tests pin the analyzer
+  // behavior at the LSP-protocol level.
+
+  describe ".hera grammar-level features", ->
+    grammarText := """
+      Start
+        Greeting
+
+      Greeting
+        "hello " Name
+
+      Name
+        "world"
+        "earth"
+
+    """
+
+    // Open a `.hera` doc and wait for its first diagnostics; returns the uri.
+    openHera := (name: string, text = grammarText): Promise<string> =>
+      uri := docUri path.join(projectRoot, name)
+      client.notify "textDocument/didOpen", {
+        textDocument: { uri, languageId: "hera", version: 1, text }
+      }
+      await waitForDiag(client, (p) => p.uri is uri)
+      uri
+
+    it "go-to-definition on a rule reference lands at the rule declaration", ->
+      uri := await openHera "hera-defs.hera"
+
+      // Click on `Greeting` at line 1, col 2 — a reference inside Start's body.
+      defs := await client.request "textDocument/definition", {
+        textDocument: { uri }
+        position: { line: 1, character: 2 }
+      }
+      assert Array.isArray(defs), "expected definition array, got " + JSON.stringify(defs)
+      assert defs.length is 1, "expected exactly one definition, got " + defs.length
+      // Greeting is declared at line 3, col 0, length 8.
+      assert.equal defs[0].uri, uri
+      assert.equal defs[0].range.start.line, 3
+      assert.equal defs[0].range.start.character, 0
+      assert.equal defs[0].range.end.character, 8
+
+    it "references list all occurrences of a rule name", ->
+      uri := await openHera "hera-refs.hera"
+
+      // Click on `Name` at line 4, col 11 — the reference inside Greeting's body.
+      refs := await client.request "textDocument/references", {
+        textDocument: { uri }
+        position: { line: 4, character: 11 }
+        context: { includeDeclaration: true }
+      }
+      assert Array.isArray(refs), "expected references array, got " + JSON.stringify(refs)
+      // Two Name tokens labelled "Name": the declaration on line 6 and the
+      // reference on line 4.
+      lines := (refs as any[]).map (r) => r.range.start.line
+      assert lines.includes(4), "expected reference on line 4, got " + JSON.stringify(lines)
+      assert lines.includes(6), "expected declaration on line 6, got " + JSON.stringify(lines)
+
+    it "document symbols emit a Hera-shaped outline", ->
+      uri := await openHera "hera-syms.hera"
+
+      syms := await client.request "textDocument/documentSymbol", {
+        textDocument: { uri }
+      }
+      assert Array.isArray(syms), "expected symbol array"
+      names := (syms as any[]).map (s) => s.name
+      assert names.includes("Start"), "expected Start in outline; got " + JSON.stringify(names)
+      assert names.includes("Greeting"), "expected Greeting in outline; got " + JSON.stringify(names)
+      assert names.includes("Name"), "expected Name in outline; got " + JSON.stringify(names)
+      // Outline entries are Class-kinded (5).
+      assert (syms as any[]).every (s) => s.kind is 5
+
+    it "completion at grammar level offers rule names with rule-body documentation", ->
+      uri := await openHera "hera-comp.hera"
+
+      // Cursor on line 1 ("  Greeting") at indent 2 — grammar level.
+      result := await client.request "textDocument/completion", {
+        textDocument: { uri }
+        position: { line: 1, character: 2 }
+      }
+      list := (result?.items ?? result) as any[]
+      assert Array.isArray(list), "expected completion list, got " + JSON.stringify(result)
+      labels := list.map (i) => i.label
+      assert labels.includes("Start"), "expected Start in completions; got " + JSON.stringify(labels)
+      assert labels.includes("Greeting"), "expected Greeting in completions; got " + JSON.stringify(labels)
+      assert labels.includes("Name"), "expected Name in completions; got " + JSON.stringify(labels)
+
+      // Resolve the Name item — should attach rule-body documentation.
+      nameItem := list.find (i) => i.label is "Name"
+      assert nameItem, "expected Name completion item"
+      resolved := await client.request "completionItem/resolve", nameItem
+      assert resolved, "expected resolved completion"
+      assert resolved.documentation, "expected documentation on resolved item"
+      docValue := String(resolved.documentation.value ?? resolved.documentation)
+      // Name is a two-choice rule: both productions on their own lines, and
+      // not just the bare identifier the user is already looking at.
+      assert.equal docValue, '```hera\nName\n  "world"\n  "earth"\n```'
+
+    it "hover on a rule reference shows the rule body", ->
+      uri := await openHera "hera-hover.hera"
+
+      // Click mid-word inside `Greeting` (line 1, col 5): exercises both the
+      // grammar-level hover short-circuit and wordAt's backward scan.
+      result := await client.request "textDocument/hover", {
+        textDocument: { uri }
+        position: { line: 1, character: 5 }
+      }
+      assert result, "expected hover result, got " + JSON.stringify(result)
+      value := String(result.contents?.value ?? result.contents)
+      // Greeting is a single-choice rule: exactly the name + one production
+      // line, no handler text.  Exact match also guards the single-choice
+      // tree shape (Hera keeps the [Indent, Choice] wrapper for one choice).
+      assert.equal value, '```hera\nGreeting\n  "hello " Name\n```'
+
+    it "document symbols include regexp-literal rule bodies", ->
+      // The shared grammarText has no regexp; this one exercises the
+      // RegExpLiteral arm of ruleSymbolChildren.
+      uri := await openHera "hera-regexp.hera", """
+        Digits
+          /[0-9]+/
+
+        Word
+          "hi"
+
+      """
+
+      syms := await client.request "textDocument/documentSymbol", {
+        textDocument: { uri }
+      }
+      assert Array.isArray(syms), "expected symbol array"
+      digits := (syms as any[]).find (s) => s.name is "Digits"
+      assert digits, "expected Digits rule; got " + JSON.stringify((syms as any[]).map (s) => s.name)
+      assert digits.children?.length, "expected the /[0-9]+/ body as a child symbol of Digits"
+
+    it "closing a .hera document clears its analyzer caches", ->
+      uri := await openHera "hera-close.hera"
+
+      // Close routes through clearHeraDocument.  Messages are processed in
+      // order, so a follow-up document's diagnostics can't land until the
+      // close handler (and its cache clear) has run.
+      client.notify "textDocument/didClose", { textDocument: { uri } }
+      pingUri := docUri path.join(projectRoot, "hera-close-ping.civet")
+      client.notify "textDocument/didOpen", {
+        textDocument: { uri: pingUri, languageId: "civet", version: 1, text: 'console.log "ok"' }
+      }
+      await waitForDiag(client, (p) => p.uri is pingUri)
+
+    it "an unparseable .hera document keeps the server responsive", ->
+      // parseHeraDocument throws on a grammar Hera can't parse; the analyzer
+      // swallows it (keeping prior caches) and diagnostics still publish.
+      await openHera "hera-broken.hera", "@@@@@\n"
+
 // Tests below each need their own workspace / tsconfig / initialize, so they
 // spawn a dedicated server per test.  Keep this set small.
 describe "LSP features (isolated workspaces)", ->
@@ -1546,3 +1704,47 @@ describe "LSP features (isolated workspaces)", ->
     finally
       await client.stop()
       fs.rmSync(tmpDir, { recursive: true, force: true })
+
+// Direct unit tests for the grammar/handler classification gate.  These pin
+// the pure text-scan branches (fence parity, indent thresholds, inline-handler
+// clamp, EOF/no-trailing-newline) that are awkward to drive through the wire.
+describe "isAtGrammarLevel grammar/handler gate", ->
+  it "treats unindented and 2-indent lines as grammar", ->
+    text := "Start\n  Greeting\n"
+    assert.equal isAtGrammarLevel(text, 0, 0), true
+    assert.equal isAtGrammarLevel(text, 1, 2), true
+
+  it "treats lines indented 4+ as handler code", ->
+    text := "Rule\n    handlerCode()\n"
+    assert.equal isAtGrammarLevel(text, 1, 4), false
+
+  it "treats a 3-indent line as handler (never valid grammar indentation)", ->
+    // A transient mid-edit 3-space line shouldn't fire the grammar analyzer
+    // with stale/absent cache; fall through to the TS service instead.
+    text := "Rule\n   threeIndent\n"
+    assert.equal isAtGrammarLevel(text, 1, 3), false
+
+  it "clamps an inline handler on a grammar line at the introducer", ->
+    text := 'Start "a" -> $1\n'
+    introducer := text.indexOf "->"
+    assert.equal isAtGrammarLevel(text, 0, introducer - 1), true,
+      "position before -> should be grammar level"
+    assert.equal isAtGrammarLevel(text, 0, introducer + 1), false,
+      "position after -> should fall through to the handler"
+
+  it "treats a position inside an open ``` fence as handler", ->
+    text := "Rule\n  ```\n  code\n"
+    assert.equal isAtGrammarLevel(text, 2, 2), false
+
+  it "handles positions past EOF on text without a trailing newline", ->
+    text := "Start\n  Greeting"
+    assert.equal isAtGrammarLevel(text, 9, 0), true
+
+describe "parseHeraDocument", ->
+  it "no-ops when the project has no Hera module", ->
+    // When the project doesn't resolve @danielx/hera the server passes
+    // undefined; the analyzer must skip parsing and leave caches empty so
+    // requests fall through to the TS service.
+    doc := TextDocument.create("file:///no-hera.hera", "hera", 1, "Rule\n  \"x\"\n")
+    parseHeraDocument doc, undefined
+    assert.equal getHoverFor(doc, { line: 0, character: 0 }), undefined

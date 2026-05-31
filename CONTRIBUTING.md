@@ -4,6 +4,25 @@ We welcome your contributions to Civet via pull requests!  Check out
 [issues marked "good first issue"](https://github.com/DanielXMoore/Civet/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 for some reasonable starting points.
 
+## Code Style
+
+Source is written in Civet (`.civet`).  Beyond "match the surrounding code":
+
+- **Prefer idiomatic Civet** over the TS spelling: `is` / `and` / `or` / `not`;
+  `typeof x === 'string'` → `x <? 'string'` (and `!<?`); `x != null` → `x?`;
+  `T | undefined` → `T?`; `.length` → `#`; `for x of xs` with an indented body.
+  Single-param arrows still need parens: `map((x) => …)`.
+- **Drop call parens** for single- and simple multi-arg calls — `wordAt doc, pos`,
+  `traverse grammar`.  Keep them when the result is chained (`f(x).y`,
+  `m.get(k)?.keys()`), nested as another call's argument, or inside an object
+  literal, where they'd be ambiguous.
+- **Document functions/types with a concise `/** */`** doc comment — only JSDoc
+  surfaces in LSP hover, so a one-line summary belongs there.  Reserve `//` for
+  inline *why* notes; avoid multi-line `//` headers above functions.
+- **Trailing `;` halts the implicit return** — `=> expr;` returns `void` (vs
+  `=> expr`), as does a `;` on a function's last expression; use it deliberately
+  to discard a value (e.g. a `() => void` callback).
+
 ## Parser
 
 The Civet parser and most of the transpiler is defined by

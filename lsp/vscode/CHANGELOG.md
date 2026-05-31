@@ -1,5 +1,10 @@
 # Civet VS Code Extension Changelog
 
+## 0.3.38 (2026-05-29)
+* LSP: Hera-aware grammar-level features for `.hera` — go-to-definition, references, outline, completions, and hover for grammar rules [[#2127](https://github.com/DanielXMoore/Civet/pull/2127)]
+* Syntax highlighting for `.hera` grammar files (handler bodies highlighted as Civet)
+* LSP: pull-model diagnostics (`textDocument/diagnostic`), computed against the current document so edits refresh without racing the push pipeline [[#2133](https://github.com/DanielXMoore/Civet/pull/2133)]
+
 ## 0.3.36 (2026-05-22)
 * Grammar: align `const`/`let`/`var` and template-expression scopes with JS [[#2094](https://github.com/DanielXMoore/Civet/pull/2094)]
 * Add `vscode-tmgrammar-test` harness for TextMate grammar regressions
