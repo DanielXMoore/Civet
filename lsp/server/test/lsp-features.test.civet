@@ -10,7 +10,7 @@
 
 { spawnLspServer, docUri, type LspClient } from ./lsp-harness.civet
 { getCanonicalFileName } from ../source/lib/util.civet
-{ isAtGrammarLevel, parseHeraDocument, getHoverFor } from ../source/lib/hera-analyzer.civet
+{ isAtGrammarLevel, parseHeraDocument, getHoverFor, getFoldingRanges as heraFoldingRanges, getSelectionRange as heraSelectionRange } from ../source/lib/hera-analyzer.civet
 { TextDocument } from vscode-languageserver-textdocument
 { URI } from vscode-uri
 path from node:path
@@ -1474,6 +1474,61 @@ describe "LSP features (shared project server)", ->
       // swallows it (keeping prior caches) and diagnostics still publish.
       await openHera "hera-broken.hera", "@@@@@\n"
 
+    it "folding ranges wrap each grammar rule and stay in source bounds", ->
+      // No trailing newline so the last rule's body sits *on* range.end.line
+      // (non-zero end character) — exercises both arms of the end-line clamp.
+      foldText := "Start\n  A B\n\nA\n  \"a\"\n\nB\n  \"b\""
+      uri := await openHera "hera-fold.hera", foldText
+      lineCount := foldText.split('\n')#
+
+      folds := await client.request "textDocument/foldingRange", {
+        textDocument: { uri }
+      }
+      assert Array.isArray(folds), "expected folding array, got " + JSON.stringify(folds)
+      // One fold per rule (Start, A, B), each spanning >= 1 line and — the
+      // regression guard — never past the document's last line.
+      assert.equal folds.length, 3, "expected one fold per rule, got " + JSON.stringify(folds)
+      for f of folds as any[]
+        assert f.startLine < f.endLine, "fold must span >= 1 line: " + JSON.stringify(f)
+        assert f.endLine < lineCount, `fold endLine ${f.endLine} exceeds source line count ${lineCount}`
+      starts := (folds as any[]).map (f) => f.startLine
+      assert.deepEqual starts, [0, 3, 6], "folds should start at each rule's name line"
+      // B is the last rule with content on its final line (no trailing blank).
+      bFold := (folds as any[]).find (f) => f.startLine is 6
+      assert.equal bFold.endLine, 7, "last rule's fold should reach its body line"
+
+    it "selection ranges widen terminal → rule → file", ->
+      uri := await openHera "hera-sel.hera"
+
+      result := await client.request "textDocument/selectionRange", {
+        textDocument: { uri }
+        positions: [
+          { line: 4, character: 11 }  // inside the `Name` reference in Greeting
+          { line: 6, character: 2 }   // on the `Name` rule's own name
+          { line: 99, character: 0 }  // past EOF — outside every rule
+        ]
+      }
+      assert Array.isArray(result) and result.length is 3, "expected 3 selection entries, got " + JSON.stringify(result)
+
+      // Terminal click: innermost = the token, then its rule (Greeting, line 3),
+      // then the whole file (line 0).
+      term := result[0]
+      assert.equal term.range.start.line, 4, "innermost should be the clicked terminal"
+      assert.equal term.parent.range.start.line, 3, "parent should be the Greeting rule"
+      assert.equal term.parent.parent.range.start.line, 0, "outer should be the whole file"
+      assert not term.parent.parent.parent, "file is the outermost range"
+
+      // Rule-name click: no enclosing terminal, so widen straight to rule → file.
+      ruleSel := result[1]
+      assert.equal ruleSel.range.start.line, 6, "should select the Name rule"
+      assert.equal ruleSel.parent.range.start.line, 0, "parent should be the whole file"
+      assert not ruleSel.parent.parent, "rule's parent is the file"
+
+      // Outside every rule: server falls back to a degenerate range at the position.
+      fallback := result[2]
+      assert.equal fallback.range.start.line, fallback.range.end.line, "fallback collapses to a point"
+      assert not fallback.parent, "fallback has no parent"
+
 // Tests below each need their own workspace / tsconfig / initialize, so they
 // spawn a dedicated server per test.  Keep this set small.
 describe "LSP features (isolated workspaces)", ->
@@ -1748,3 +1803,11 @@ describe "parseHeraDocument", ->
     doc := TextDocument.create("file:///no-hera.hera", "hera", 1, "Rule\n  \"x\"\n")
     parseHeraDocument doc, undefined
     assert.equal getHoverFor(doc, { line: 0, character: 0 }), undefined
+
+  it "folding and selection ranges return undefined without a symbol cache", ->
+    // No parse ran for this uri, so the analyzer has no rule spans and must
+    // signal "no answer" (undefined) so the caller falls through to the TS
+    // service instead of fabricating ranges.
+    doc := TextDocument.create("file:///unparsed.hera", "hera", 1, "Rule\n  \"x\"\n")
+    assert.equal heraFoldingRanges(doc), undefined
+    assert.equal heraSelectionRange(doc, { line: 1, character: 2 }), undefined

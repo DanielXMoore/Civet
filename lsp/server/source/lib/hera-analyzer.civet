@@ -10,9 +10,13 @@
   type CompletionItem
   CompletionItemKind
   type DocumentSymbol
+  type FoldingRange
+  FoldingRangeKind
   type Hover
   type Location
   MarkupKind
+  type Range
+  type SelectionRange
   SymbolKind
 } from vscode-languageserver
 
@@ -208,6 +212,46 @@ export function getHoverFor(doc: TextDocument, pos: Position): Hover?
 /** The cached outline for `doc`. */
 export function getDocumentSymbols(doc: TextDocument): DocumentSymbol[]?
   symbolsCache.get doc.uri
+
+/** One fold per grammar rule (name line → last body line) from the cached
+    rule symbols, so folds stay in grammar coordinates — unlike the TS-outline
+    path, which folds the transpiled parser and remaps out of range. */
+export function getFoldingRanges(doc: TextDocument): FoldingRange[]?
+  syms := symbolsCache.get doc.uri
+  return undefined unless syms
+  folds: FoldingRange[] := []
+  for sym of syms
+    startLine := sym.range.start.line
+    { line: endLine, character: endChar } := sym.range.end
+    // Range end is exclusive: char 0 ⇒ content ends on the previous line (next
+    // rule's header / trailing blank); non-zero ⇒ on range.end.line itself
+    // (last rule, no trailing newline).
+    lastLine := endChar is 0 ? endLine - 1 : endLine
+    /* c8 ignore next -- defensive: a parsed rule spans >= 2 lines, so this never trips */
+    continue unless lastLine > startLine
+    folds.push { startLine, endLine: lastLine, kind: FoldingRangeKind.Region }
+  folds
+
+/** Whether `pos` is inside `range` (start-inclusive, end-exclusive), by offset. */
+function rangeContains(doc: TextDocument, range: Range, pos: Position): boolean
+  offset := doc.offsetAt pos
+  offset >= doc.offsetAt(range.start) and offset < doc.offsetAt(range.end)
+
+/** Grammar-level selection for `pos`: widen terminal → rule → file from the
+    cached rule symbols.  Undefined when `pos` is in no rule, so the caller can
+    fall back. */
+export function getSelectionRange(doc: TextDocument, pos: Position): SelectionRange?
+  syms := symbolsCache.get doc.uri
+  return undefined unless syms
+  rule := syms.find (s) => rangeContains doc, s.range, pos
+  return undefined unless rule
+  fileSel: SelectionRange :=
+    range:
+      start: { line: 0, character: 0 }
+      end: doc.positionAt doc.getText()#
+  ruleSel: SelectionRange := { range: rule.range, parent: fileSel }
+  child := rule.children?.find (c) => rangeContains doc, c.range, pos
+  child ? { range: child.range, parent: ruleSel } : ruleSel
 
 /** Rule-name completions; each carries `{ hera, uri }` so resolveHeraCompletion
     can attach rule-body docs lazily. */
