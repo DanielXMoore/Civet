@@ -1,5 +1,8 @@
 # Civet VS Code Extension Changelog
 
+## Unreleased
+* LSP: grammar-level folding and selection ranges for `.hera`, fixing folds that landed in the transpiled parser's coordinates (past the source's last line)
+
 ## 0.3.38 (2026-05-29)
 * LSP: Hera-aware grammar-level features for `.hera` — go-to-definition, references, outline, completions, and hover for grammar rules [[#2127](https://github.com/DanielXMoore/Civet/pull/2127)]
 * Syntax highlighting for `.hera` grammar files (handler bodies highlighted as Civet)
