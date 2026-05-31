@@ -20,9 +20,11 @@ reporting the branch correctly all along.
 - The **register hook** (`build/register.js` → `build/cache-utils.js`) compiles
   `.civet`/`.hera` at test time with the package resolved from
   `./node_modules/@danielx/civet` — a pnpm symlink to the **installed previous
-  release**, NOT your `dist/` build. So a change to `source/parser/**` does
-  **not** affect the sourcemaps c8 sees for `source/**` in root coverage until
-  it's released and the dep is bumped.
+  release** of the compiler, NOT your `dist/` build. Coverage still measures
+  your **current source** (that's what gets compiled and run); what lags is the
+  *compiler*. So a change to how `source/parser/**` emits code or sourcemaps
+  won't affect the maps c8 sees for `source/**` in root coverage until that
+  change is released and the dep is bumped.
 - `lsp/server` is the exception: its build uses `../../dist/civet` (your build),
   so compiler changes *do* affect lsp/server coverage.
 - To run your **local** compiler through the register hook (e.g. to test a
@@ -55,7 +57,7 @@ A postfix `stmt unless cond` (also `if`/`while`/`for`) compiles to a single-line
 - Net for the 100% gate: an untested single-line consequent **passes**
   statement/line coverage but **fails** branch coverage. To satisfy the gate,
   either test the arm, or — for a genuinely unreachable defensive arm —
-  `/* c8 ignore … -- why */` it (see CLAUDE.md → Coverage).
+  `/* c8 ignore … -- why */` it (see CONTRIBUTING.md → Coverage).
 
 ## Verifying whether a *compiler* change affects coverage
 
