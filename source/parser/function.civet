@@ -1084,6 +1084,52 @@ function processParams(f: FunctionNode): void
   else
     indent = expressions[0][0]
 
+  // Infer types for @-params from corresponding class field declarations,
+  // so e.g. `class Foo; name: string; @(@name)` types `name1: string`.
+  {ancestor: enclosingClass} := findAncestor f, .type is "ClassExpression"
+  if enclosingClass?
+    fieldTypes := new Map<string, TypeSuffix>
+    for each field of gatherRecursiveWithinFunction enclosingClass, .type is "FieldDefinition"
+      { id, typeSuffix } := field
+      continue unless typeSuffix?
+      continue unless id?.type is "Identifier"
+      fieldTypes.set id.name, typeSuffix
+    if fieldTypes.size
+      for each parameter of gatherRecursive parameters, .type is "Parameter"
+        modifiedPatterns := new Set<ASTNodeObject>
+        for each binding of gatherRecursive parameter, .type is "AtBinding"
+          owner := binding.parent
+          continue unless owner?
+          continue if owner.typeSuffix?
+          fieldType := fieldTypes.get binding.ref.id
+          continue unless fieldType?
+          inferred := deepCopy fieldType
+          owner.typeSuffix = inferred
+          if owner is parameter
+            // For direct `@(@name)`: insert typeSuffix into Parameter.children
+            bIdx := owner.children.indexOf binding
+            if bIdx >= 0
+              owner.children[bIdx + 1] = inferred
+          else
+            // For `@({@name})` / `@([@name])`: mark enclosing pattern for re-aggregation
+            let p = owner.parent
+            while p?
+              if p.type is like "ObjectBindingPattern", "ArrayBindingPattern"
+                modifiedPatterns.add p
+                break
+              p = p.parent
+          updateParentPointers owner
+        // Re-aggregate the typeSuffix of any modified patterns
+        for pattern of modifiedPatterns
+          pattern.typeSuffix = undefined
+          gatherBindingPatternTypeSuffix pattern
+        // Propagate inferred binding pattern typeSuffix up to Parameter.children
+        if not parameter.typeSuffix? and parameter.binding?.typeSuffix?
+          parameter.typeSuffix = parameter.binding.typeSuffix
+          bIdx := parameter.children.indexOf parameter.binding
+          if bIdx >= 0
+            parameter.children[bIdx + 1] = parameter.typeSuffix
+
   [splices, thisAssignments] := gatherBindingCode parameters,
     injectParamProps: isConstructor
     assignPins: true
