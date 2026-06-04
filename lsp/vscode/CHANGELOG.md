@@ -1,6 +1,6 @@
 # Civet VS Code Extension Changelog
 
-## Unreleased
+## 0.3.39 (2026-06-04)
 * LSP: grammar-level folding and selection ranges for `.hera`, fixing folds that landed in the transpiled parser's coordinates (past the source's last line)
 
 ## 0.3.38 (2026-05-29)
