@@ -1233,6 +1233,70 @@ function findSuperCall(block: BlockStatement): number
   else
     -1
 
+/**
+ * Convert an arrow function whose body contains `yield` into a generator
+ * function expression, wrapped with `.bind(this)` so that `this` references
+ * inside the body still refer to the enclosing scope's `this` (matching the
+ * lexical-`this` semantics of the original arrow function).
+ *
+ * Issue #2140 / TC39 proposal for arrow generators.
+ *
+ *   => yield @x
+ *   ↓↓↓
+ *   (function*() { return (yield this.x) }).bind(this)
+ */
+function transformArrowFunctionWithYield(f: any): void
+  { block, parameters, returnType, async, signature } := f
+
+  // Preserve arrow's implicit-return semantics: if the body is a bare
+  // expression (`=> X`), insert an explicit return so the value still flows
+  // out as the generator's return value (matching TC39's proposal).
+  if block?.type is "BlockStatement" and block.implicitlyReturned
+    insertReturn block
+    block.implicitlyReturned = false
+
+  // Brace the block (it may have been bare for a single-expression body).
+  if block?.type is "BlockStatement" and block.bare and not block.root
+    block.children.unshift " {"
+    block.children.push "}"
+    block.bare = false
+
+  // Mark as generator and build new children using `function*` syntax
+  // instead of `=>`.
+  generator := ["*"]
+  signature.modifier ??= {}
+  signature.modifier.generator = true
+  signature.generator = generator
+  signature.children = [async, "function", generator, parameters, returnType]
+
+  f.type = "FunctionExpression"
+  f.generator = generator
+  f.children = [async, "function", generator, parameters, returnType, block]
+
+  // FunctionExpression at expression position needs parentheses (otherwise
+  // it would parse as a function declaration). If `this` is referenced
+  // lexically inside the original arrow body, additionally wrap with
+  // `.bind(this)` so the bound generator's `this` matches the enclosing
+  // scope (as the arrow promised).
+  // Capture the original parent BEFORE wrapping: makeLeftHandSideExpression
+  // invokes makeNode → updateParentPointers, which reassigns `f.parent` to
+  // the new ParenthesizedExpression. If we then asked replaceNode to use
+  // `f.parent`, we'd swap `f` for `newNode` inside `newNode` itself —
+  // producing a self-cycle.
+  originalParent := f.parent as ASTNodeObject?
+  lhs := makeLeftHandSideExpression f
+  newNode := if gatherRecursiveWithinFunction(block, (is like { token: "this" }))#
+    makeNode {
+      type: "CallExpression"
+      children: [lhs, ".bind(this)"]
+    }
+  else
+    lhs
+
+  if newNode !== f and originalParent?
+    replaceNode f, newNode, originalParent
+    updateParentPointers newNode, originalParent
+
 function processSignature(f: FunctionNode): void
   {block, signature} := f
 
@@ -1252,13 +1316,17 @@ function processSignature(f: FunctionNode): void
   if not f.generator?# and hasYield(block)
     if f.generator?
       addGenerator = true
+    else if f.type is "ArrowFunction"
+      // Allow `yield` inside `=>` arrow functions by transforming the arrow
+      // into a generator function expression bound to `this`.
+      transformArrowFunctionWithYield f
     else
       for each y of gatherRecursiveWithinFunction block, .type is "YieldExpression"
         i := y.children.findIndex (&: any).type is "Yield"
         // i+1 because after "yield" we have a consistent location in sourcemap
         y.children.splice i+1, 0,
           type: "Error"
-          message: `yield invalid in ${f.type is "ArrowFunction" ? "=> arrow function" : signature.modifier.get ? "getter" : signature.modifier.set ? "setter" : signature.name}` // name likely constructor
+          message: `yield invalid in ${signature.modifier.get ? "getter" : signature.modifier.set ? "setter" : signature.name}` // name likely constructor
 
   for each overload of [f, ...precedingOverloads f]
     if addAsync and overload.async? and not overload.async#
