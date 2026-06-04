@@ -4,6 +4,21 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.13 (2026-06-04, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.12...v0.11.13), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.13))
+* LSP: Don't indent after keyword property inside Object [[#2129](https://github.com/DanielXMoore/Civet/pull/2129)]
+* Move ts-service unit tests to root; gate coverage from single compile path [[#2130](https://github.com/DanielXMoore/Civet/pull/2130)]
+* Drop type-only named imports entirely in JS mode [[#2126](https://github.com/DanielXMoore/Civet/pull/2126)]
+* Fix postfix if/unless followed by ; emitting invalid JS [[#2132](https://github.com/DanielXMoore/Civet/pull/2132)]
+* docs: coverage mechanics guide for agents [[#2135](https://github.com/DanielXMoore/Civet/pull/2135)]
+* coverage: exclude sibling git worktrees from the gate [[#2136](https://github.com/DanielXMoore/Civet/pull/2136)]
+* LSP: pull-model diagnostics (`textDocument/diagnostic`) [[#2133](https://github.com/DanielXMoore/Civet/pull/2133)]
+* LSP: Hera-aware grammar-level features for `.hera` [[#2127](https://github.com/DanielXMoore/Civet/pull/2127)]
+* LSP: grammar-level folding and selection ranges for `.hera` [[#2138](https://github.com/DanielXMoore/Civet/pull/2138)]
+* feat: infer @-param types from class field declarations [[#2139](https://github.com/DanielXMoore/Civet/pull/2139)]
+* feat: allow yield in fat-arrow functions (#2140) [[#2143](https://github.com/DanielXMoore/Civet/pull/2143)]
+* esCompat: full ES-superset for statement-position braces and `=> expr;` [[#2142](https://github.com/DanielXMoore/Civet/pull/2142)]
+* Keep trailing comments inside indented blocks [[#2120](https://github.com/DanielXMoore/Civet/pull/2120)]
+
 ## 0.11.12 (2026-05-26, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.11...v0.11.12), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.12))
 * Fix Sublime support via JSON to XML conversion [[#2111](https://github.com/DanielXMoore/Civet/pull/2111)]
 * Fix crash on optional-chain LHS with custom `oper=` (#2109) [[#2113](https://github.com/DanielXMoore/Civet/pull/2113)]
