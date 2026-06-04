@@ -1448,9 +1448,13 @@ ClassBracedContent
     return stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
 
 NestedClassElements
-  PushIndent NestedClassElement*:elements PopIndent ->
-    return $skip unless elements#
-    return elements
+  PushIndent NestedClassElement*:elements TrailingNestedCommentLine*:trailing PopIndent ->
+    return $skip unless elements# or trailing#
+    // Standalone same-or-deeper-indent comment-only trailing lines (#832)
+    // stay inside the class body's braces.  Inline trailing comments on
+    // the last element continue to escape — those typically annotate the
+    // surrounding class, not a member.
+    trailing# ? [...elements, ...trailing] : elements
 
 NestedClassElement
   Nested ClassElement StatementDelimiter
@@ -3363,17 +3367,23 @@ PostfixedSingleLineNoCommaStatements
     }
 
 NestedBlockStatements
-  PushIndent NestedBlockStatement*:statements PopIndent ->
-    return $skip unless statements#
+  PushIndent NestedBlockStatement*:statements TrailingNestedComments:trailing PopIndent ->
+    return $skip unless statements# or trailing#
 
     // Each element of statements is a list of same-line statements. Flatten.
-    statements = statements.flat()
+    expressions := statements.flat() as StatementTuple[]
+    // Trailing same-indent comments (issue #832) live in children, NOT in
+    // expressions, so downstream walkers (assignResults / insertReturn / etc.)
+    // still see the last real statement as expressions.-1.
+    children: ASTNode[] := [expressions]
+    children.push(trailing) if trailing#
 
     return {
       type: "BlockStatement",
-      expressions: statements,
-      children: [statements],
+      expressions,
+      children,
       bare: true,
+      trailing: trailing# ? trailing : undefined,
     }
 
 NestedBlockStatement
@@ -3382,6 +3392,29 @@ NestedBlockStatement
       [nested, ...statements[0]],
       ...statements.slice(1).map (s) => ["", ...s],
     ]
+
+# Trailing `// ...` comments at the end of an indented block: an optional
+# inline comment on the last statement's line, plus any number of same-or-
+# deeper-indent standalone comment lines.  Always succeeds (possibly with
+# zero entries) so the caller can simply check `trailing#`. (issue #832)
+TrailingNestedComments
+  TrailingInlineComment?:inline TrailingNestedCommentLine*:lines ->
+    out := []
+    out.push(inline) if inline
+    out.push(...lines) if lines#
+    return out
+
+# Only fires when there's actually a `//` — otherwise backtracks so EOS
+# captures any leading whitespace / `/* */` as it normally would.
+TrailingInlineComment
+  _?:ws SingleLineComment:c ->
+    return [ws, c]
+
+# Can't reuse `Nested` here because its `EOS` would consume the comment.
+TrailingNestedCommentLine
+  EOL:eol Indent:indent SingleLineComment:c ->
+    return $skip unless indent.level >= state.currentIndent.level
+    return [eol, indent, c]
 
 BlockStatementPart
   # NOTE: !EOS forces semicolon after all but last statement, forbids leading __
@@ -5657,9 +5690,17 @@ CaseClause
   }
   # NOTE: Added "when" from CoffeeScript. `when` always inserts `break;`.
   When CaseExpressionList:cases IgnoreColon InsertOpenBrace ( ThenClause / BareBlock ):block InsertBreak:b InsertNewline InsertIndent InsertCloseBrace ::WhenClause ->
+    // If the block ends with a `// ...` comment (issue #832), prefix the
+    // inserted `;break;` with a newline so it isn't swallowed by the comment.
+    // Copy $0 rather than mutating in place — Hera may cache the match.
+    children .= $0
+    if hasTrailingComment block
+      bIdx := children.indexOf b
+      b = { ...b, token: "\n" + b.token }
+      children = [...children.slice(0, bIdx), b, ...children.slice(bIdx + 1)]
     return {
       type: "WhenClause",
-      children: $0,
+      children,
       cases,
       block,
       break: b,
@@ -9900,6 +9941,11 @@ PushIndent
   # TrackIndented pushes the indent level if it is deeper than the current level
   # it will skip if it is not deeper
   &( EOS TrackIndented )
+  # Fallback for comment-only block bodies (issue #832): `EOS` would have
+  # consumed the comment, leaving TrackIndented with only the dedented line
+  # beyond.  `EOL` stops at the first newline, so TrackIndented sees the
+  # comment line's own indent.
+  &( EOL TrackIndented )
 
 PopIndent
   "" ->
