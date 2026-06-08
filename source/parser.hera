@@ -86,6 +86,7 @@ import type {
   AssignmentExpression,
   ASTNode,
   ASTRef,
+  BinaryOpRHS,
   Binding,
   BindingRestElement,
   BlockStatement,
@@ -731,7 +732,7 @@ BinaryOpNotDedented
   !NewlineBinaryOpAllowed _? -> $2
   NewlineBinaryOpAllowed ( NestedBinaryOpAllowed / !Nested ) NotDedented -> $2
 
-BinaryOpRHS
+BinaryOpRHS ::BinaryOpRHS
   BinaryOpNotDedented:ws1 IsLike:op _?:ws2 PatternExpressionList:patterns ->
     return [ ws1, op, ws2, patterns ]
   # Snug binary ops a+b
@@ -4156,7 +4157,8 @@ PropertyDefinition
   # NOTE: Added `{x.y?.z()}` shorthand for `{z: x.y?.z()}`
   # NOTE: this needs to be at the bottom to prevent shadowing NamedProperty
   # NOTE: Prevent `.x` from expanding to `x: $ => $.x`
-  _?:ws !( EOS / "." ) UnaryOp*:pre CallExpression:value UnaryPostfix?:post ::unknown ->
+  # NOTE: Also allow unary prefix and/or unary/binary/pipeline postfix
+  _?:ws !( EOS / "." ) UnaryOp*:pre CallExpression:value UnaryPostfix?:post BinaryOpRHS*:rhs PipelineExpressionBodySameLine:pipeline ::ASTNode ->
     unless pre# or post
       switch value!.type
         // `{identifier}` remains `{identifier}`, the one shorthand JS supports
@@ -4217,7 +4219,7 @@ PropertyDefinition
     if name[0] is "#" then name = name.slice(1)
 
     // { y? } → { ...((y != null) && {y}) }
-    if not pre# and post?.token is "?" and value!.type is "Identifier"
+    if not (pre# or rhs# or pipeline#) and post?.token is "?" and value!.type is "Identifier"
       dots := { $loc, token: "..." }
       paren := parenthesizeExpression({ children: ["(", value, " != null) && {", name, "}"] })
       return {
@@ -4228,12 +4230,20 @@ PropertyDefinition
         value: paren,
       }
 
+    propValue: ASTNode .= processUnaryExpression pre, value, post
+    if rhs#
+      propValue = processBinaryOpExpression [propValue, rhs] 
+    if pipeline#
+      propValue =
+        type: "PipelineExpression"
+        children: [[], propValue, pipeline]
+
     return {
       type: "Property",
-      children: [ws, name, ": ", processUnaryExpression(pre, value, post)],
+      children: [ws, name, ": ", propValue],
       name,
       names: [],
-      value,
+      value: propValue,
       implicitName: true,
     }
   # NOTE: basic identifiers are now part of the rule above
