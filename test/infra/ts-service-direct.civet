@@ -286,21 +286,10 @@ describe "ts-service direct factory usage", ->
     assert.equal diagnostics.length, 0,
       `expected no diagnostics, got: ${messages.join(' | ')}`
 
-  it "preserves mixed-case script filenames on case-insensitive systems", ->
-    rootDir := virtualRoot 'civet-virtual-mixed-case'
-    libDir := path.join(rootDir, 'typescript', 'lib')
-    system := {
-      ...createVirtualSystem(rootDir, libDir)
-      useCaseSensitiveFileNames: false
-    }
-    service := SharedTSService rootDir, {
-      plugins: [makeCivetPlugin()]
-      docFactory: directDocFactory
-      logger: nullLogger
-      system
-      libDir
-      discoverProjectFiles: false
-      tsConfig:
+  it "normalizes imported root script casing on case-insensitive systems", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'CivetCase-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'), JSON.stringify
         compilerOptions:
           target: 'ES2020'
           module: 'ESNext'
@@ -308,23 +297,42 @@ describe "ts-service direct factory usage", ->
           strict: true
           jsx: 'preserve'
           noEmit: true
-          lib: ['ES2020']
+          forceConsistentCasingInFileNames: true
         include: ['**/*']
-    }
-    indexPath := path.join rootDir, 'Index.civet'
-    service.host.addOrUpdateDocument TextDocument.create(
-      URI.file(indexPath).toString()
-      'civet'
-      1
-      'export value := 1\n'
-    )
+      libPath := path.join tmpDir, 'lib.civet'
+      indexPath := path.join tmpDir, 'Index.hera'
+      writeFileSync libPath, 'export value := 1\n'
+      writeFileSync indexPath, """
+        ```
+        import { value } from "./lib.civet"
+        ```
+        Start ::number
+          "x" -> value
 
-    diagnostics := service.getSemanticDiagnostics directDocFactory.uriToPath(URI.file(indexPath).toString()) + '.tsx'
-    messages := diagnostics.map (d) => String d.messageText
-    assert !messages.some((message) => /case-insensitive/.test message),
-      `expected no mixed-case duplicate diagnostic, got: ${messages.join(' | ')}`
-    assert.equal diagnostics.length, 0,
-      `expected no diagnostics, got: ${messages.join(' | ')}`
+      """
+
+      service := SharedTSService tmpDir + path.sep, {
+        plugins: [makeCivetPlugin(), makeHeraPlugin()]
+        docFactory: directDocFactory
+        logger: nullLogger
+      }
+
+      indexUri := URI.file(indexPath.toLowerCase()).toString()
+      service.host.addOrUpdateDocument TextDocument.create(
+        indexUri
+        'hera'
+        1
+        fs.readFileSync(indexPath, 'utf8')
+      )
+
+      diagnostics := service.getSemanticDiagnostics directDocFactory.uriToPath(indexUri) + '.tsx'
+      messages := diagnostics.map (d) => ts.flattenDiagnosticMessageText(d.messageText, '\n')
+      assert !diagnostics.some((diagnostic) => diagnostic.code is 1261),
+        `expected no TS1261 casing diagnostic, got: ${messages.join(' | ')}`
+      assert !messages.some((message) => /differs from file name/.test message),
+        `expected no mixed-case duplicate diagnostic, got: ${messages.join(' | ')}`
+    finally
+      rmSync tmpDir, recursive: true, force: true
 
   it "addOrUpdateDocument stores non-transpilable docs in scriptFileNames", ->
     // .ts docs don't match any transpiler, so the host's addOrUpdateDocument
