@@ -84,6 +84,7 @@ import {
   inplaceInsertTrimmingSpace
   inplacePrepend
   insertTrimmingSpace
+  isASTNodeObject
   isComma
   isEmptyBareBlock
   isFunction
@@ -680,7 +681,7 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
     if glob?.type is "PropertyGlob"
       prefix .= children[...i]
       parts: ObjectProperty[] := []
-      let ref
+      let ref: ASTRef?
       // add ref to ensure object base evaluated only once
       if needsRef(prefix) and glob.object.properties# > 1
         // unwrap unnecessary parentheses in ref assignment
@@ -703,17 +704,34 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
           continue
         suppressPrefix .= false
         name .= if part.type is "Property" then part.name
-        rawValue := part.value ?? name
-        unless rawValue?.type and (
-          rawValue.type is in ["CallExpression", "MemberExpression", "Identifier", "StringLiteral", "ComputedPropertyName"] or
-          rawValue.type is "Literal" and rawValue.subtype is "StringLiteral"
+        rawValue .= part.value ?? name
+        callExpression .= if part.type is "Property" then part.callExpression
+        // Reinterpret LiveScript flag shorthand in globs as unary prefix
+        // shorthand, e.g. `obj.{!x}` → `{x: !obj.x}`.
+        if part.type is "Property" and part.flagToggle
+          flagName := part.name
+          flagNameLoc := (flagName as any).$loc
+          toggle := {
+            $loc: flagNameLoc
+            token: part.flagToggle
+          } as UnaryOpSymbolLeaf
+          rawValue =
+            type: "UnaryExpression"
+            children: [[toggle], flagName, undefined]
+            pre: [toggle]
+            expression: flagName
+          callExpression = flagName
+        callExpression ??= rawValue
+        unless callExpression?.type and (
+          callExpression.type is in ["CallExpression", "MemberExpression", "Identifier", "StringLiteral", "ComputedPropertyName"] or
+          callExpression.type is "Literal" and callExpression.subtype is "StringLiteral"
         )
           parts.push
             type: "Error"
             message: `Glob pattern must have call or member expression value, found ${JSON.stringify(rawValue)}`
           continue
-        value: ASTNodeObject | Children .= rawValue
-        wValue := getTrimmingSpace part.value
+
+        value: ASTNodeObject | Children .= callExpression
 
         // Capture private-field shorthand info before handleThisPrivateShorthands
         // strips the synthetic `this.` wrapper. Used in processAssignments to
@@ -757,7 +775,18 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
           if ref?
             prefix = [ ref ]
             prefixDot = [ ...prefix, glob.dot ]
-        if wValue
+
+        unless rawValue is callExpression
+          // The glob prefix was applied to an inner call expression; replace
+          // that original target inside any unary/binary/pipeline wrapper.
+          replaceNodes rawValue, (& is callExpression), (node, parent) =>
+            if isASTNodeObject parent
+              for key, child in parent as any
+                if child is node
+                  (parent as any)[key] = value
+            value
+          value = rawValue as ASTNodeObject
+        if wValue := getTrimmingSpace part.value
           if Array.isArray(value)
             value.unshift wValue
           else
