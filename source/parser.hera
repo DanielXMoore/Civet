@@ -566,9 +566,8 @@ ForbiddenImplicitCalls
   PostfixStatement NoBlock
   # `x ... y` is reserved for a range, but `x ...y` is an implicit call
   "... "
-  # Within a ternary "then" expression, `b :foo` would otherwise be parsed as a
-  # SymbolLiteral implicit-call argument `b(Symbol.for("foo"))`, swallowing the
-  # ternary colon.
+  # In a ternary "then", `b :foo` as `b(Symbol.for("foo"))` would swallow
+  # the ternary colon
   TernaryColonForbidden ":"
 
 # Binary operators that are reserved in that context
@@ -855,9 +854,8 @@ ParenthesizedAssignment
   InsertOpenParen ( ActualAssignment / ArrowFunction ) InsertCloseParen
 
 UnaryPostfix
-  # The `!( PropertyAccessContent ":" ![=:] )` lookahead reserves `a?b:c` for
-  # snug ternary (#1507); `a?` alone is still the existential check `a != null`.
-  QuestionMark:q !( PropertyAccessContent ":" ![=:] ) -> q
+  # Existential `a?`, unless a snug ternary `a?b:c` follows (#1507)
+  QuestionMark:q !SnugTernaryColonAhead -> q
   TypePostfix+
 
 TypePostfix
@@ -1109,17 +1107,14 @@ TernaryRest
   !CoffeeBinaryExistentialEnabled &[ \t] _ QuestionMark PushIndent (Nested Expression _ Colon Nested Expression)?:thenelse PopIndent ->
     return $skip unless thenelse
     return [$3, $4, ...thenelse]
-  # Snug ternary `a?b:c` (no whitespace before `?`). The "then" expression has
-  # both `ForbidTernaryColon` (so `b :c` doesn't become `b(Symbol.for("c"))`)
-  # and `ForbidInlineObjectLiteral` (so `b:c` doesn't become `{b:c}` and eat
-  # the ternary colon). The negative lookahead after `?` rules out optional
-  # chain/call/index (`?.`, `?(`, `?[`), `??`, `?=`, and whitespace (handled
-  # by the half-snug rule below).
+  # Snug ternary `a?b:c` (#1507). The lookahead after `?` rules out `?.`, `?(`,
+  # `?[`, `??`, `?=`, and whitespace. The then-expression forbids both the
+  # ternary colon (`b :c` as `b(Symbol.for("c"))`) and inline object literals
+  # (`b:c` as `{b:c}`), either of which would eat the ternary colon.
   !CoffeeBinaryExistentialEnabled QuestionMark:q !( "." / "(" / "[" / "?" / "=" / [ \t\r\n] ) ForbidSnugTernaryThen MaybeNestedExpression:thenE RestoreSnugTernaryThen __:ws Colon:colon MaybeNestedExpression:elseE ->
     return [q, thenE, ws, colon, elseE]
-  # Half-snug / spaced ternary `a ?b :c` or `a ? b : c`. Only ForbidTernaryColon
-  # (not InlineObjectLiteral) because the existing braceless-object form
-  # `x ? a: b : c: d` needs `a:b` and `c:d` to still parse as `{a:b}`/`{c:d}`.
+  # Half-snug `a ?b :c` or spaced `a ? b : c`. Inline objects stay enabled so
+  # `x ? a: b : c: d` still parses as `x ? {a: b} : {c: d}`.
   !CoffeeBinaryExistentialEnabled &[ \t] _:ws1 QuestionMark:q ForbidTernaryColon MaybeNestedExpression:thenE RestoreTernaryColon __:ws2 Colon:colon MaybeNestedExpression:elseE ->
     return [ws1, q, thenE, ws2, colon, elseE]
 
@@ -2023,11 +2018,8 @@ AccessStart ::AccessStart
       children: modifier ? [modifier, dot] : [dot],
       optional: modifier?.token === "?",
     }
-  # NOTE: ?x -> ?.x shorthand. The `!( PropertyAccessContent ":" ![=:] )`
-  # lookahead reserves `a?b:c` for snug ternary (#1507); `a?b` alone is still
-  # `a?.b`. Covers identifier, numeric, string, symbol, and negative-index
-  # access forms.
-  QuestionMark:modifier InsertDot:dot ![.\s] !( PropertyAccessContent ":" ![=:] ) ->
+  # NOTE: ?x -> ?.x shorthand, unless a snug ternary follows (#1507)
+  QuestionMark:modifier InsertDot:dot ![.\s] !SnugTernaryColonAhead ->
     return {
       type: "AccessStart",
       children: [modifier, dot],
@@ -2041,8 +2033,13 @@ AccessStart ::AccessStart
       optional: false,
     }
 
-# Mirrors the content forms a PropertyAccess accepts after AccessStart;
-# used in the snug-ternary lookahead in AccessStart above.
+# `id:expr` follows, so a `?` here can only start a snug ternary `a?b:c` (#1507).
+# `![=:]` keeps `:=` and `::` out.
+SnugTernaryColonAhead
+  PropertyAccessContent ":" ![=:]
+
+# Mirrors the content forms PropertyAccess accepts after AccessStart;
+# keep in sync if PropertyAccess gains a form.
 PropertyAccessContent
   TemplateLiteral
   AccessLiteral
@@ -4096,10 +4093,8 @@ ImplicitObjectPropertyDelimiter
 # NOTE: Inline object literals are intended for within expressions.
 # They can only go onto another line if there's a trailing comma.
 # They must start with a snug property, and all properties must have a colon.
-# Disabled in the "then" expression of a full-snug ternary (`a?b:c`) so the
-# inline object `{b:c}` doesn't swallow the ternary colon. Spaced ternary
-# `x ? a: b : c: d` still allows `{a:b}` and `{c:d}` because that rule doesn't
-# set this flag.
+# Disabled in the "then" of a snug ternary `a?b:c` so `{b:c}` doesn't
+# swallow the ternary colon.
 InlineObjectLiteral
   !InlineObjectLiteralForbidden InsertInlineOpenBrace:open SnugNamedProperty:first ( InlineObjectPropertyDelimiter NamedProperty )*:rest ( _? Comma &Dedented )?:trailing InsertCloseBrace:close ->
     return {
@@ -6133,11 +6128,8 @@ PipelineAllowed
       console.log("forbidPipeline:", state.forbidPipeline)
     return $skip if state.pipelineForbidden
 
-# forbidTernaryColon: set inside a ternary "then" expression where the next
-# `:` is reserved as the ternary colon, so `b :foo` mustn't grab `:foo` as an
-# implicit SymbolLiteral arg. (Named "forbid" for parallelism with the other
-# state flags; the reading is "this construct is forbidden in this context,"
-# not "ternary colons are forbidden".)
+# forbidTernaryColon: set in a ternary "then" expression, where the next `:`
+# is the ternary colon, so `b :foo` mustn't become `b(Symbol.for("foo"))`.
 AllowTernaryColon
   "" ->
     state.forbidTernaryColon.push(false);
@@ -6157,11 +6149,9 @@ TernaryColonForbidden
       console.log("forbidTernaryColon:", state.forbidTernaryColon)
     return $skip unless state.ternaryColonForbidden
 
-# forbidInlineObjectLiteral: set ONLY in a full-snug ternary `a?b:c` so the
-# then-expression `b:c` doesn't become `{b:c}` and eat the ternary colon. The
-# half-snug rule deliberately leaves InlineObjectLiteral enabled so the
-# documented braceless-object ternary `x ? a: b : c: d` ⇒ `x ? {a:b} : {c:d}`
-# keeps working — that's why this is a separate flag from forbidTernaryColon.
+# forbidInlineObjectLiteral: set only in a snug ternary `a?b:c` so the
+# then-expression `b:c` doesn't become `{b:c}`. A separate flag because
+# spaced ternaries keep inline objects (`x ? a: b : c: d`).
 AllowInlineObjectLiteral
   "" ->
     state.forbidInlineObjectLiteral.push(false);
@@ -6181,9 +6171,8 @@ InlineObjectLiteralForbidden
       console.log("forbidInlineObjectLiteral:", state.forbidInlineObjectLiteral)
     return $skip unless state.inlineObjectLiteralForbidden
 
-# Compound rules used by the snug-ternary "then" expression to set both flags
-# in one grammar slot (the rule has 11 elements otherwise, over the $S overload
-# limit of 10).
+# Set/restore both snug-ternary flags in one grammar slot (the snug ternary
+# rule would otherwise have 11 elements, over the $S overload limit of 10).
 ForbidSnugTernaryThen
   ForbidTernaryColon ForbidInlineObjectLiteral
 
