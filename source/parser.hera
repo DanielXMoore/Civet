@@ -84,8 +84,11 @@ import type {
   ArrayBindingPattern,
   ArrowFunction,
   AssignmentExpression,
+  ASTError,
   ASTNode,
   ASTRef,
+  BinaryOp,
+  BinaryOpRHS,
   Binding,
   BindingRestElement,
   BlockStatement,
@@ -96,31 +99,49 @@ import type {
   ComptimeStatement,
   Condition,
   Declaration,
+  DeclarationKind,
   DebuggerStatement,
   DefaultClause,
   DoStatement,
   ElseClause,
   EmptyCondition,
   EmptyStatement,
+  EnumDeclaration,
   ExpressionNode,
+  ForReduction,
+  ForControlDeclaration,
+  ForStatementControl,
   ForStatement,
+  FromClause,
   FunctionExpression,
   FunctionParameter,
   FunctionRestParameter,
   Identifier,
   IfStatement,
+  InterfaceDeclaration,
   ImportDeclaration,
+  ImportClause,
   Index,
   IterationExpression,
   IterationFamily,
   IterationStatement,
   Label,
   LabelledStatement,
+  LexicalDeclaration,
+  MethodDefinition,
+  MethodSignature,
+  MultiMethodDefinition,
   NamedBindingPattern,
   NamedImportElement,
   NamespaceDeclaration,
   NonNullAssertion,
   ObjectBindingPattern,
+  ObjectProperty,
+  OperatorBehavior,
+  OperatorDeclaration,
+  OperatorImportClause,
+  OperatorImportSpecifier,
+  OperatorSignature,
   Parameter,
   ParenthesizedExpression,
   PatternClause,
@@ -137,14 +158,20 @@ import type {
   ThisType,
   ThrowStatement,
   TryStatement,
+  ThisAssignments,
+  TypeDeclaration,
   TypeArgument,
+  TypeArgumentList,
   TypeFunction,
   TypeNode,
+  TypeTuple,
+  VoidType,
   WhenClause,
   WithClause,
   Yield,
   YieldExpression,
 } from "./parser/types.civet"
+
 /**
  * Globals
  */
@@ -272,7 +299,11 @@ Object.defineProperties(state, {
   },
 })
 
-function setOperatorBehavior(name: string, behavior: unknown)
+/**
+ * Register an operator. Undefined behavior means "blessed as an operator, with
+ * default precedence/associativity."
+ */
+function setOperatorBehavior(name: string, behavior: OperatorBehavior?)
   existing := state.operators.get(name)
   if existing and behavior // merge behaviors
     state.operators.set(name, {...existing, ...behavior})
@@ -752,7 +783,7 @@ BinaryOpNotDedented
   !NewlineBinaryOpAllowed _? -> $2
   NewlineBinaryOpAllowed ( NestedBinaryOpAllowed / !Nested ) NotDedented -> $2
 
-BinaryOpRHS
+BinaryOpRHS ::BinaryOpRHS
   BinaryOpNotDedented:ws1 IsLike:op _?:ws2 PatternExpressionList:patterns ->
     return [ ws1, op, ws2, patterns ]
   # Snug binary ops a+b
@@ -769,10 +800,10 @@ BinaryOpRHS
     // > operator needs to have space on both sides (or neither)
     return $skip if op[1].token is ">" and op[0].length is 0
     // NOTE: Flatten NotDedentedBinaryOp into whitespace and operator
-    return [...op, ...rhs]
+    return [...op, ...rhs] as BinaryOpRHS
   !NewlineBinaryOpAllowed SingleLineBinaryOpRHS -> $2
 
-IsLike
+IsLike ::BinaryOp
   Is _? ( OmittedNegation _? )?:negated Like ->
     return {
       type: "PatternTest",
@@ -790,7 +821,7 @@ WRHS
     return wrhs
   ( ( EOS __ ) / _ ) RHS
 
-SingleLineBinaryOpRHS
+SingleLineBinaryOpRHS ::BinaryOpRHS
   # NOTE: It's named single line but that's only for the operator, the RHS can be after a newline
   # This is to maintain compatibility with CoffeeScript conditions
   _?:ws1 BinaryOp:op ( ( EOS __ ) / _ ):ws2 RHS:rhs ->
@@ -2941,7 +2972,7 @@ FunctionExpression
     fn := makeAmpersandFunction({
       ref: refA,
       body: processBinaryOpExpression([refA, [
-        [ws1, op, ws2, rhs] // BinaryOpRHS
+        [ws1, op, ws2, rhs] satisfies BinaryOpRHS
       ]])
     })
     return {
@@ -2966,7 +2997,7 @@ FunctionExpression
     }
 
 # NOTE: Dynamic infix operators
-OperatorDeclaration
+OperatorDeclaration ::OperatorDeclaration
   # `operator {x, y} := ...` declaration while blessing
   Operator:op OperatorBehavior?:behavior _:w LexicalDeclaration:decl ->
     decl.names.forEach((name: string) => setOperatorBehavior(name, behavior))
@@ -2987,21 +3018,24 @@ OperatorDeclaration
   # `operator id` alone blesses `id` as an operator
   Operator:op _:w1 Identifier:id OperatorBehavior?:behavior ( CommaDelimiter _? Identifier OperatorBehavior? )*:ids ->
     children := []
+    names := [id.name]
     setOperatorBehavior(id.name, behavior)
     children.push(behavior.error) if behavior?.error
     ids.forEach [, , id2, behavior2] =>
+      names.push(id2.name)
       setOperatorBehavior(id2.name, behavior2)
       children.push(behavior2.error) if behavior2?.error
 
     return {
       id,
+      names,
       children,
     }
 
 # NOTE: Like FunctionSignature, but no async or star or @,
 # and parameters are required (to be useful).
 OperatorSignature
-  ( Async _ )?:async Operator:op ( _ Function )?:func ( _? Star )?:generator _:w1 Identifier:id OperatorBehavior?:behavior _?:w2 NonEmptyParameters:parameters ReturnTypeSuffix?:returnType ::FunctionSignature ->
+  ( Async _ )?:async Operator:op ( _ Function )?:func ( _? Star )?:generator _:w1 Identifier:id OperatorBehavior?:behavior _?:w2 NonEmptyParameters:parameters ReturnTypeSuffix?:returnType ::OperatorSignature ->
     async = [] unless async
     generator = [] unless generator
     // Add "function" (if not already one) to replace "operator"
@@ -3026,16 +3060,16 @@ OperatorSignature
       behavior,
     }
 
-OperatorBehavior
+OperatorBehavior ::OperatorBehavior
   OperatorPrecedence OperatorAssociativity? ->
     return { ...$1, ...$2 }
   OperatorAssociativity OperatorPrecedence? ->
     return { ...$1, ...$2 }
 
-OperatorPrecedence
+OperatorPrecedence ::OperatorBehavior
   # inspired by https://docs.raku.org/language/functions#Precedence
   _? ( "tighter" / "looser" / "same" ):mod NonIdContinue _? ( Identifier / ( OpenParen BinaryOp CloseParen ) ):op ->
-    let prec, error
+    let prec: number, error: ASTError?
     if op.type is "Identifier"
       if state.operators.has(op.name)
         prec = state.operators.get(op.name).prec
@@ -3045,7 +3079,6 @@ OperatorPrecedence
           type: "Error",
           message: `Precedence refers to unknown operator ${op.name}`,
         }
-
     else
       prec = getPrecedence((op as any)[1])
 
@@ -3059,7 +3092,7 @@ OperatorPrecedence
 
     return { prec, error }
 
-OperatorAssociativity
+OperatorAssociativity ::OperatorBehavior
   # inspired by https://docs.raku.org/language/functions#Associativity
   _? ( "left" / "right" / "non" / "relational" / "arguments" ):assoc NonIdContinue ->
     if assoc is "relational"
@@ -4164,6 +4197,7 @@ PropertyDefinition
         name: id,
         names: id.names,
         value,
+        flagToggle: toggle,
       }
 
     // `{ 😊 }` → `{ "😊": u$1F60A$ }`. PropertyName already rewrote `id`'s
@@ -4187,10 +4221,11 @@ PropertyDefinition
       implicitName: true,
     }
 
-  _?:ws MethodDefinition:def ::unknown ->
+  _?:ws MethodDefinition:def ::MethodDefinition | MultiMethodDefinition ->
     // Add commas between multiple method definitions (from globs)
     if def.type is "MultiMethodDefinition"
       return {
+        ...def,
         children: def.children.flatMap((c: any, i: number) => i ? [",", c] : [c])
       }
     // NOTE: Forbidding EmptyBlock in MethodDefinition to allow `foo()`
@@ -4209,8 +4244,9 @@ PropertyDefinition
   # NOTE: Added `{x.y?.z()}` shorthand for `{z: x.y?.z()}`
   # NOTE: this needs to be at the bottom to prevent shadowing NamedProperty
   # NOTE: Prevent `.x` from expanding to `x: $ => $.x`
-  _?:ws !( EOS / "." ) UnaryOp*:pre CallExpression:value UnaryPostfix?:post ::unknown ->
-    unless pre# or post
+  # NOTE: Also allow unary prefix and/or unary/binary/pipeline postfix
+  _?:ws !( EOS / "." ) UnaryOp*:pre CallExpression:value UnaryPostfix?:post BinaryOpRHS*:rhs PipelineExpressionBodySameLine:pipeline ::Identifier | ObjectProperty | ObjectProperty[] ->
+    unless pre# or post or rhs# or pipeline#
       switch value!.type
         // `{identifier}` remains `{identifier}`, the one shorthand JS supports
         case "Identifier":
@@ -4270,7 +4306,7 @@ PropertyDefinition
     if name[0] is "#" then name = name.slice(1)
 
     // { y? } → { ...((y != null) && {y}) }
-    if not pre# and post?.token is "?" and value!.type is "Identifier"
+    if not (pre# or rhs# or pipeline#) and post?.token is "?" and value!.type is "Identifier"
       dots := { $loc, token: "..." }
       paren := parenthesizeExpression({ children: ["(", value, " != null) && {", name, "}"] })
       return {
@@ -4281,13 +4317,22 @@ PropertyDefinition
         value: paren,
       }
 
+    propValue: ASTNode .= processUnaryExpression pre, value, post
+    if rhs#
+      propValue = processBinaryOpExpression [propValue, rhs]
+    if pipeline#
+      propValue =
+        type: "PipelineExpression"
+        children: [[], propValue, pipeline]
+
     return {
       type: "Property",
-      children: [ws, name, ": ", processUnaryExpression(pre, value, post)],
+      children: [ws, name, ": ", propValue],
       name,
       names: [],
-      value,
+      value: propValue,
       implicitName: true,
+      callExpression: value,
     }
   # NOTE: basic identifiers are now part of the rule above
   #_?:ws IdentifierReference:id ->
@@ -4399,7 +4444,7 @@ Decorators
     return $0
 
 # https://262.ecma-international.org/#prod-MethodDefinition
-MethodDefinition
+MethodDefinition ::MethodDefinition | MultiMethodDefinition
   Abstract __ MethodSignature:signature ->
     return {
       type: "MethodDefinition",
@@ -4523,7 +4568,7 @@ MethodModifier
       children: [ async, generator ],
     }
 
-MethodSignature
+MethodSignature ::MethodSignature
   ConstructorShorthand NonEmptyParameters:parameters ->
     return {
       type: "MethodSignature",
@@ -5369,59 +5414,61 @@ ForClause
       generator,
     }
 
-ForStatementControlWithWhen
+ForStatementControlWithWhen ::ForStatementControl
   ForStatementControlWithReduction:control WhenCondition?:condition ->
     return control unless condition
-    expressions := [["", {
+    expressions: StatementTuple[] := [["", {
       type: "ContinueStatement",
       children: ["continue"]
     }]]
-    block := {
+    block: BlockStatement := {
       type: "BlockStatement",
       expressions,
       children: [expressions],
       bare: true,
     }
+    blockPrefix: StatementTuple[] := [...control.blockPrefix ?? [],
+      ["", {
+        type: "IfStatement",
+        then: block,
+        children: ["if (!", makeLeftHandSideExpression(trimFirstSpace(condition)), ") ", block],
+        // & placeholders in the condition came from outside the for-body,
+        // so they should lift past it (otherwise `continue` ends up trapped
+        // inside an arrow function — issue #1788).
+        implicitLift: true,
+      }, ";"]
+    ]
     return {
       ...control,
-      blockPrefix: [...control.blockPrefix ?? [],
-        ["", {
-          type: "IfStatement",
-          then: block,
-          children: ["if (!", makeLeftHandSideExpression(trimFirstSpace(condition)), ") ", block],
-          // & placeholders in the condition came from outside the for-body,
-          // so they should lift past it (otherwise `continue` ends up trapped
-          // inside an arrow function — issue #1788).
-          implicitLift: true,
-        }, ";"]
-      ],
+      blockPrefix,
     }
 
-ForStatementControlWithReduction
+ForStatementControlWithReduction ::ForStatementControl
   # Try without reduction first, to allow sum/count/etc as variables
   ForStatementControl
   ForReduction:reduction ForStatementControl:control ->
     return { ...control, reduction }
 
-ForReduction
-  ( "some" / "every" / "count" / "first" / "sum" / "product" / "min" / "max" / "join" / "concat" ):subtype NonIdContinue __:ws ->
+ForReduction ::ForReduction
+  # Split so Hera's generated $C calls stay within typed overloads.
+  ( ( "some" / "every" / "count" / "first" / "sum" ) / ( "product" / "min" / "max" / "join" / "concat" ) ):subtype NonIdContinue __:ws ->
     return {
       type: "ForReduction",
       subtype,
       children: [ ws ],
     }
 
-ForStatementControl
+ForStatementControl ::ForStatementControl
   !CoffeeForLoopsEnabled ForStatementParameters -> $2
   CoffeeForLoopsEnabled CoffeeForStatementParameters -> $2
 
 WhenCondition
   __ When ExpressionWithObjectApplicationForbidden:exp -> exp
 
-CoffeeForStatementParameters
+CoffeeForStatementParameters ::ForStatementControl
   # NOTE: Coffee for loops can't have parens
   ( Await __ )? InsertOpenParen:open CoffeeForDeclaration:declaration CoffeeForIndex?:index __ ( In / Of / From ):kind ExpressionWithObjectApplicationForbidden:exp ( _? By ExpressionWithObjectApplicationForbidden )?:step InsertCloseParen:close ->
-    blockPrefix := []
+    blockPrefix: StatementTuple[] := []
     exp = trimFirstSpace(exp)
     declaration = trimFirstSpace(declaration)
 
@@ -5531,7 +5578,7 @@ CoffeeForStatementParameters
         type: "Declaration"
         children: forHeadChildren
         names: []
-      }
+      } satisfies ForControlDeclaration
 
       return {
         declaration: forHead,
@@ -5575,15 +5622,15 @@ CoffeeForDeclaration
       names: binding.names,
     }
 
-ForStatementParameters
+ForStatementParameters ::ForStatementControl
   # https://262.ecma-international.org/#prod-ForStatement
-  OpenParen __ ( LexicalDeclaration / VariableStatement / CommaExpression? ):declaration __ Semicolon CommaExpression? Semicolon CommaExpression? __ CloseParen ->
+  OpenParen __ ForStatementDeclaration:declaration __ Semicolon CommaExpression? Semicolon CommaExpression? __ CloseParen ->
     return {
       declaration,
       children: $0,
     }
   # NOTE: Added optional parens
-  InsertOpenParen __ ( LexicalDeclaration / VariableStatement / CommaExpression? ):declaration __ Semicolon CommaExpression? Semicolon (!EOS ExpressionWithIndentedApplicationForbidden)? InsertCloseParen ->
+  InsertOpenParen __ ForStatementDeclaration:declaration __ Semicolon CommaExpression? Semicolon (!EOS ExpressionWithIndentedApplicationForbidden)? InsertCloseParen ->
     increment := $8?[1]
     return {
       declaration,
@@ -5608,7 +5655,12 @@ ForStatementParameters
     return processForInOf($0)
   ForRangeParameters
 
-ForRangeParameters
+ForStatementDeclaration ::ASTNode
+  LexicalDeclaration
+  VariableStatement
+  CommaExpression?
+
+ForRangeParameters ::ForStatementControl
   # NOTE: CoffeeScript-style `for [start..end] by step` without declaration
   ( Await __ )? OpenParen:open OpenBracket RangeExpression:exp CloseBracket ( __ By ExpressionWithObjectApplicationForbidden )?:step CloseParen:close ->
     return forRange(open, null, exp, step, close)
@@ -6438,8 +6490,13 @@ ImportDeclaration ::ImportDeclaration
       pos: from[0]!.$loc.pos-1,
       length: from[0]!.$loc#+1,
     }
-    children := [i, t, imports, w, from]
-    return { type: "ImportDeclaration", ts: !!t, children, imports, from }
+    return {
+      type: "ImportDeclaration",
+      ts: !!t,
+      children: [i, t, imports, w, from],
+      imports,
+      from,
+    }
   # NOTE: from ... import ... reverse syntax
   FromClause:from SameLineOrIndentedFurther:fws Import:i SameLineOrIndentedFurther:iws Operator OperatorBehavior?:behavior SameLineOrIndentedFurther:ows OperatorNamedImports:imports ->
     errors := []
@@ -6469,7 +6526,7 @@ ImpliedImport
     return { $loc, token: "import " }
 
 # https://262.ecma-international.org/#prod-ImportClause
-ImportClause
+ImportClause ::ImportClause
   ImportedBinding:binding ( __ Comma __ ( NameSpaceImport / NamedImports ) )?:rest ->
     if rest
       // Spread to forward NamedImports/NameSpaceImport optional fields.
@@ -6492,7 +6549,7 @@ ImportClause
   NamedImports
 
 # https://262.ecma-international.org/#prod-NameSpaceImport
-NameSpaceImport
+NameSpaceImport ::ImportClause
   Star:star ImportAsToken __ ImportedBinding:binding ->
     return {
       type: "Declaration",
@@ -6503,7 +6560,7 @@ NameSpaceImport
     }
 
 # https://262.ecma-international.org/#prod-NamedImports
-NamedImports
+NamedImports ::ImportClause
   OpenBrace ( NamedImportRest / TypeAndImportSpecifier )*:items ( __ Comma )? __ CloseBrace ->
     // Rest can appear anywhere; reorder moves it to the tail.
     reordered := (reorderBindingRestProperty items).children as (NamedImportElement | { type: "Error", message: string })[]
@@ -6535,7 +6592,7 @@ NamedImportRest
       delim,
     }
 
-OperatorNamedImports
+OperatorNamedImports ::OperatorImportClause
   OpenBrace OperatorImportSpecifier*:specifiers __ CloseBrace ->
     names := specifiers.flatMap(({binding}) => binding.names)
 
@@ -6562,7 +6619,7 @@ DynamicImportContents
   Star
 
 # https://262.ecma-international.org/#prod-FromClause
-FromClause
+FromClause ::FromClause
   # NOTE: Robust parsing with missing module for better LSP completions
   From SameLineOrIndentedFurther ( ModuleSpecifier / UnclosedSingleLineStringLiteral )?:module ->
     module ??= [
@@ -6641,7 +6698,7 @@ ImportSpecifier
       children: [ws, binding, delim],
     }
 
-OperatorImportSpecifier
+OperatorImportSpecifier ::OperatorImportSpecifier
   __ ModuleExportName OperatorBehavior?:behavior ImportAsToken __ ImportedBinding:binding ObjectPropertyDelimiter ->
     return {
       binding,
@@ -6716,8 +6773,8 @@ UnquotedSpecifier
     return { $loc, token: `"${spec}"` }
 
 # https://262.ecma-international.org/#prod-ImportedBinding
-ImportedBinding
-  BindingIdentifier
+ImportedBinding ::Identifier
+  __:ws Identifier:id -> prepend(ws, id)
 
 # https://262.ecma-international.org/#prod-ExportDeclaration
 ExportDeclaration
@@ -6737,21 +6794,23 @@ ExportDeclaration
   # NOTE: Avoid matching `f := ->`, leaving that for the next rule.
   Decorators? Export __ Default __ !FunctionDeclaration ( LexicalDeclaration / VariableStatement / TypeAliasDeclaration / NamespaceDeclaration / EnumDeclaration / OperatorDeclaration ):declaration ->
     let id, error
-    if declaration.id
-      id = declaration.id
-    else
-      assert(declaration.names, "Could not find name of declaration in export default")
-      if declaration.names# !== 1
+    if declaration.type is "Declaration"
+      names := declaration.names
+      if names# !== 1
         error = {
           type: "Error",
-          message: `export default with ${declaration.names#} variable declaration (should be 1)`
+          message: `export default with ${names#} variable declaration (should be 1)`
         }
-      id = declaration.names[0]
+      id = names[0]
+    else
+      id = declaration.id
+    ts := declaration.type is "TypeDeclaration" or
+      declaration.type is "NamespaceDeclaration"
     return [
       declaration,
-      { children: [";"], ts: declaration.ts },
+      { children: [";"], ts },
       error ??
-      { type: "ExportDeclaration", declaration: id, ts: declaration.ts,
+      { type: "ExportDeclaration", declaration: id, ts,
         children: [ ...$0.slice(0, -2), id ] }
     ]
   # NOTE: This covers all forms that can be directly export defaulted in TS.
@@ -6759,12 +6818,12 @@ ExportDeclaration
   Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedPostfixedExpressionOrCommaLoop ):declaration ->
     return { type: "ExportDeclaration", declaration, ts: declaration.ts, children: $0 }
   Export __ ExportFromClause:exports __ FromClause ->
-    return { type: "ExportDeclaration", ts: exports.ts, children: $0 }
+    return { type: "ExportDeclaration", ts: "ts" in exports and exports.ts, children: $0 }
   # NOTE: from ... export ... reverse syntax
   FromClause:from __:fws Export:e __:ews ExportFromClause:exports ->
     return {
       type: "ExportDeclaration",
-      ts: exports.ts,
+      ts: "ts" in exports and exports.ts,
       children: [ e, ews, exports, " ", from, trimFirstSpace(fws) ],
     }
   # NOTE: Declaration and VariableStatement should come before NamedExports
@@ -6872,19 +6931,20 @@ HoistableDeclaration
   FunctionDeclaration
 
 # https://262.ecma-international.org/#prod-LexicalDeclaration
-LexicalDeclaration
+LexicalDeclaration ::LexicalDeclaration
   # NOTE: Eliminated left recursion
   LetOrConst:decl LexicalBinding:binding ( __ Comma __ LexicalBinding )*:tail ->
-    bindings := [binding].concat(tail.map(([,,,b]) => b))
+    bindings: Binding[] := [binding as Binding].concat(tail.map(([,,,b]) => b as Binding))
+    thisAssignments: ThisAssignments := bindings.flatMap((b) => b.thisAssignments)
 
     return {
       type: "Declaration",
-      children: $0,
+      children: $0 as Children,
       names: bindings.flatMap((b) => b.names),
       bindings,
-      decl,
+      decl: decl as DeclarationKind,
       splices: bindings.flatMap((b) => b.splices),
-      thisAssignments: bindings.flatMap((b) => b.thisAssignments),
+      thisAssignments,
     }
   # NOTE: Added const/let shorthands
   # NOTE: Using Expression to allow for If/SwitchExpressions
@@ -6946,7 +7006,7 @@ Initializer
   }
 
 # https://262.ecma-international.org/#prod-VariableStatement
-VariableStatement
+VariableStatement ::Declaration
   Var __ VariableDeclarationList ->
     return {
       ...$3,
@@ -8488,22 +8548,23 @@ JSXChildExpression
   # NOTE: Added lexical declaration, which gets hoisted,
   # converted into an assignment, and voided to avoid rendering.
   Whitespace? LexicalDeclaration:d ->
+    decl := d!
     // Add refs from thisAssignments to list of names
-    names .= d.names.concat(
-      d.thisAssignments.map((a: any) => a[1][1])
+    names .= decl.names.concat(
+      decl.thisAssignments!.map((a: any) => a[1][1])
     )
     // Remove duplicate names
     names.sort()
     names = names.filter((name: string, i: number) => i is 0 or name !== names[i-1])
     d = {
-      ...d,
+      ...decl,
       hoistDec: {
         type: "Declaration",
         children: [
           "let ",
           names.map((n: string, i: number) => i is 0 ? [n] : [",", n]).flat()
         ],
-      },
+      } as ASTNode,
       children: (d.children as any[]).slice(1),  // drop LetOrConst
     }
     if d.thisAssignments?#
@@ -8602,7 +8663,7 @@ TypeDeclaration
       type: "Declaration",
       ts: true,
       children: $0,
-      names: d.names ?? [],
+      names: "names" in d ? d.names : [],
     }
   ( Export _? )?:export_ ( Declare _? )?:declare TypeDeclarationRest:t ->
     return {
@@ -8620,7 +8681,7 @@ TypeDeclarationRest
   NamespaceDeclaration
   FunctionSignature
 
-TypeAliasDeclaration
+TypeAliasDeclaration ::TypeDeclaration
   # TODO: ( __ Type ) can be refined further to check for consistently nested binary ops, etc.
   TypeKeyword _? IdentifierName:id TypeParameters? OptionalEquals ( MaybeNestedType / ( __ Type ) ) ->
     return {
@@ -8638,7 +8699,7 @@ TypeAliasDeclaration
       ts: true,
     }
 
-InterfaceDeclaration
+InterfaceDeclaration ::InterfaceDeclaration
   Interface _? IdentifierName:id TypeParameters? InterfaceExtendsClause? InterfaceOrEmptyBlock ->
     return {
       type: "InterfaceDeclaration",
@@ -8785,10 +8846,10 @@ NestedDeclareElement
 # NOTE: Variation on TypeDeclaration where Declare already applied.
 DeclareElement ::ASTNode
   Decorators? Export __ Default __ ( Identifier / ClassSignature / InterfaceDeclaration ):declaration
-  Decorators? ( Export _? )? TypeLexicalDeclaration -> { ts: true, children: $0 }
-  ( Export _? )? TypeDeclarationRest -> { ts: true, children: $0 }
+  Decorators? ( Export _? )? TypeLexicalDeclaration -> { ts: true, children: $0 } as ASTNode
+  ( Export _? )? TypeDeclarationRest -> { ts: true, children: $0 } as ASTNode
 
-EnumDeclaration
+EnumDeclaration ::EnumDeclaration
   ( Const _ )?:_isConst Enum _? IdentifierName:id EnumBlock:block ->
     ts := {
       ts: true,
@@ -8978,8 +9039,8 @@ MaybeNestedTypeUnary
     return $2
   NotDedented TypeUnary
 
-ReturnTypeSuffix
-  _? QuestionMark?:optional _? Colon ReturnType:t ::ASTNode ->
+ReturnTypeSuffix ::ReturnTypeAnnotation
+  _? QuestionMark?:optional _? Colon ReturnType:t ->
     return {
       ...t,
       optional,
@@ -8989,29 +9050,30 @@ ReturnTypeSuffix
 ReturnType
   ( __ "asserts" NonIdContinue )?:asserts ForbidIndentedApplication TypePredicate?:t RestoreIndentedApplication ::ReturnTypeAnnotation ->
     return $skip unless t
+    returnType: TypeNode .= t
     if asserts
-      t = {
+      returnType = {
         type: "TypeAsserts",
         t,
         children: [asserts[0], asserts[1], t],
         ts: true,
-      }
+      } satisfies TypeNode
     return {
       type: "ReturnTypeAnnotation",
-      children: [t],
-      t,
+      children: [returnType],
+      t: returnType,
       ts: true,
     }
 
-TypePredicate
+TypePredicate ::TypeNode
   MaybeNestedType:lhs ( __ Is Type )?:rhs ->
     return lhs unless rhs
     return {
       type: "TypePredicate",
-      lhs,
-      rhs: rhs[3],
-      children: [lhs, ...rhs],
-    }
+      lhs: lhs as ASTNode,
+      rhs: rhs[3] as ASTNode,
+      children: [lhs as ASTNode, ...rhs as ASTNode[]],
+    } as TypeNode
 
 Type
   TypeWithPostfix
@@ -9043,7 +9105,7 @@ TypeUnary
       suffix,
       t,
       // omit empty prefix for trimming space
-      children: prefix# ? $0 : [t, suffix],
+      children: (prefix# ? $0 : [t, suffix]) as Children,
     }
 
 TypeUnarySuffix
@@ -9187,12 +9249,12 @@ TypeElementList ::ASTNode[]
       append(first, delim)
     ].concat(
       rest.map(([_, e], i) =>
-        nextDelim := rest[i+1] and [rest[i+1][0][0], rest[i+1][0][1]]
+        nextDelim := rest[i+1] ? [rest[i+1][0][0], rest[i+1][0][1]] : undefined
         append(e, nextDelim)
       )
     )
 
-TypeElement
+TypeElement ::ASTNode
   # NOTE: Allow for postfix splat like CoffeeScript
   # NOTE: Match named form first, to avoid matching `foo: bar,` as Type
   # and then DotDotDot from next entry.
@@ -9260,7 +9322,7 @@ NestedTypeBulletedTuple
 
 # NOTE: Bulleted tuple intended for beginning of lines,
 # when leading indentation has already been consumed.
-TypeBulletedTuple
+TypeBulletedTuple ::TypeNode
   InsertOpenBracket:open ( TypeBullet NestedTypeBullet* )?:content InsertCloseBracket:close ->
     return $skip unless content
     content = [
@@ -9278,6 +9340,7 @@ TypeBulletedTuple
 
     return {
       type: "TypeTuple",
+      ts: true,
       children: [open, ...content!, close],
     }
 
@@ -9309,8 +9372,8 @@ TypeConditional ::ASTNode
   _? /(?=if|unless)/ TypeIfThenElse ->
     return prepend($1, expressionizeTypeIf($3))
   TypeCondition NotDedented QuestionMark __ Type __ Colon __ Type ->
-    return [ $1, $2, $3, $4, $9, $6, $7, $8, $5 ] if $1.negated
-    return $0
+    return [ $1, $2, $3, $4, $9, $6, $7, $8, $5 ] as ASTNode if $1.negated
+    return $0 as ASTNode
   TypeBinary
 
 TypeCondition
@@ -9412,7 +9475,7 @@ TypeFunction
       }
     // Implicit void return type
     if "token" in returnType and returnType.$loc and returnType.token is ""
-      t := {
+      t: VoidType := {
         type: "VoidType",
         $loc: returnType.$loc,
         token: "void",
@@ -9445,13 +9508,13 @@ TypeFunctionArrow
 
 TypeArguments
   OpenAngleBracket:open ( __ TypeArgumentDelimited )+:args __:ws CloseAngleBracket:close ::TypeArguments ->
-    args = args.flatMap(([ws, [arg, delim]]) => [prepend(ws, arg), delim])
-    args.pop() // remove last delimiter
+    flatArgs := args.flatMap(([ws, [arg, delim]]) => [prepend(ws, arg), delim]) as TypeArgumentList
+    flatArgs.pop() // remove last delimiter
     return {
       type: "TypeArguments",
       ts: true,
-      args,
-      children: [ open, args, ws, close ],
+      args: flatArgs,
+      children: [ open, flatArgs, ws, close ],
     }
 
 ImplicitTypeArguments
@@ -9986,7 +10049,7 @@ Reset
             if behavior and typeof behavior is not "object"
               throw new Error("operators configuration object must have string or object values")
 
-            setOperatorBehavior(name, behavior)
+            setOperatorBehavior(name, behavior as OperatorBehavior?)
 
         return
       }
@@ -10004,7 +10067,7 @@ Init
         Object.assign(config, directive.config)
 
     if config.strict
-      $0 = [...$0, '"use strict";\n']
+      return [...$0, '"use strict";\n']
     return $0
 
 Prologue

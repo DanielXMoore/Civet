@@ -4,10 +4,14 @@ import type {
   ASTNodeObject
   ASTLeaf
   ASTError
+  Binding
   Children
+  ForControlDeclaration
   ForDeclaration
+  ForStatementControl
   RangeDots
   RangeExpression
+  StatementTuple
   Whitespace
 } from ./types.civet
 
@@ -157,7 +161,7 @@ function forRange(
   range: RangeExpression
   stepExp: ASTNode
   close: ASTLeaf
-)
+): ForStatementControl
   { start, end, left, right, increasing } .= range
 
   counterRef := makeRef("i")
@@ -219,7 +223,8 @@ function forRange(
       . " + "
       . stepRef
 
-  let varAssign: ASTNode[] = [], varLetAssign = varAssign, varLet = varAssign, blockPrefix
+  let varAssign: ASTNode[] = [], varLetAssign = varAssign, varLet = varAssign
+  let blockPrefix: StatementTuple[]?
   let names: string[] = forDeclaration?.names ?? []
   if forDeclaration?
     if forDeclaration.type is "AssignmentExpression" // Coffee-style for loop
@@ -281,7 +286,7 @@ function processForInOf($0: [
   exp: ASTNodeObject
   step: [Whitespace, ASTLeaf, ASTNode]
   close: ASTLeaf
-])
+]): ForStatementControl
   [awaits, eachOwn, open, declaration, declaration2, ws, inOf, exp, step, close] .= $0
   // Hera 0.9.0: `&ForInOfDeclaration` assertion now yields `true` in the eachOwn slot.
   eachOwn = undefined if eachOwn <? "boolean"
@@ -307,7 +312,8 @@ function processForInOf($0: [
     throw new Error("for..of/in cannot use 'by' except with range literals")
 
   let eachOwnError: ASTError?
-  let hoistDec, blockPrefix: ASTNode[] = []
+  let hoistDec: ASTNode?
+  blockPrefix: StatementTuple[] := []
 
   // for each item[, index] of array
   if eachOwn and eachOwn[0].token is "each"
@@ -339,11 +345,12 @@ function processForInOf($0: [
       }, ";"]
 
       eachDeclaration := declaration
-      declaration =
+      declaration = {
         type: "Declaration"
         children: ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", trimFirstSpace(expRef), ".length"]
         decl: "let"
         names: []
+      } satisfies ForControlDeclaration
 
       condition := [counterRef, " < ", lenRef, "; "]
       children := [open, declaration, "; ", condition, counterRef, increment, close]
@@ -377,11 +384,11 @@ function processForInOf($0: [
     inOf.token is "in" and declaration2 and pattern.type is not "Identifier"
   )
     itemRef := makeRef if inOf.token is "in" then "key" else "item"
-    blockPrefix.push ["", {
+    blockPrefix.push(["", {
       type: "Declaration"
       children: [declaration, " = ", itemRef]
       names: declaration!.names
-    }, ";"]
+    } satisfies ForControlDeclaration, ";"])
     declaration =
       type: "ForDeclaration"
       binding: {
@@ -389,8 +396,11 @@ function processForInOf($0: [
         pattern: itemRef
         children: [ itemRef ]
         names: []
-      }
+        splices: []
+        thisAssignments: []
+      } as unknown as Binding
       children: ["const ", itemRef]
+      decl: "const"
       names: []
     unless pattern.type is "Identifier"
       pattern = itemRef
@@ -413,24 +423,25 @@ function processForInOf($0: [
         children: ["let ", counterRef, " = 0"]
         decl: "let"
         names: []
-      }
-      blockPrefix.push ["", {
+      } satisfies ForControlDeclaration
+      blockPrefix.push(["", {
         type: "Declaration"
         children: [trimFirstSpace(ws2), decl2, " = ", counterRef, "++"]
         names: decl2!.names
         decl: decl2!.decl
-      }, ";"]
+      } satisfies ForControlDeclaration, ";"])
 
     // grammar guarantees inOf.token is "of" or "in" only
     when "in" // for key, value in object
       // First, wrap object in ref if complex expression
       expRef := maybeRef exp
       unless expRef is exp
-        hoistDec =
+        hoistDec = {
           type: "Declaration"
           children: ["let ", expRef]
           names: []
           decl: "let"
+        } satisfies ForControlDeclaration
         exp =
           type: "AssignmentExpression"
           children: [" ", expRef, " =", exp]

@@ -8,7 +8,6 @@
 
 import type {
   AccessStart
-  ASTError
   ASTLeaf
   ASTNode
   ASTNodeObject
@@ -32,7 +31,6 @@ import type {
   CoffeeClassPrototype
   ExpressionNode
   ForStatement
-  FunctionSignature
   IfStatement
   Index
   Initializer
@@ -41,16 +39,16 @@ import type {
   Label
   LabelledStatement
   Literal
-  LiteralContentNode
   MemberExpression
   MethodDefinition
+  MethodSignature
   NormalCatchParameter
   ObjectExpression
+  ObjectProperty
   ParametersNode
   ParenthesizedExpression
   Placeholder
   Property
-  SpreadProperty
   StatementTuple
   SwitchStatement
   TypeArgument
@@ -86,6 +84,7 @@ import {
   inplaceInsertTrimmingSpace
   inplacePrepend
   insertTrimmingSpace
+  isASTNodeObject
   isComma
   isEmptyBareBlock
   isFunction
@@ -681,8 +680,8 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
   for each glob, i of children
     if glob?.type is "PropertyGlob"
       prefix .= children[...i]
-      parts := []
-      let ref
+      parts: ObjectProperty[] := []
+      let ref: ASTRef?
       // add ref to ensure object base evaluated only once
       if needsRef(prefix) and glob.object.properties# > 1
         // unwrap unnecessary parentheses in ref assignment
@@ -698,60 +697,101 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
         if part.type is "Error"
           parts.push part
           continue
-        if part.type is "MethodDefinition"
+        if part.type is "MethodDefinition" or part.type is "MultiMethodDefinition"
           parts.push
             type: "Error"
             message: "Glob pattern cannot have method definition"
           continue
-        if part.value and part.value.type is not in ["CallExpression", "MemberExpression", "Identifier", "StringLiteral", "ComputedPropertyName"] as (string?)[]
+        suppressPrefix .= false
+        name .= if part.type is "Property" then part.name
+        rawValue .= part.value ?? name
+        callExpression .= if part.type is "Property" then part.callExpression
+        // Reinterpret LiveScript flag shorthand in globs as unary prefix
+        // shorthand, e.g. `obj.{!x}` → `{x: !obj.x}`.
+        if part.type is "Property" and part.flagToggle
+          flagName := part.name
+          flagNameLoc := (flagName as any).$loc
+          toggle := {
+            $loc: flagNameLoc
+            token: part.flagToggle
+          } as UnaryOpSymbolLeaf
+          rawValue =
+            type: "UnaryExpression"
+            children: [[toggle], flagName, undefined]
+            pre: [toggle]
+            expression: flagName
+          callExpression = flagName
+        callExpression ??= rawValue
+        unless callExpression?.type and (
+          callExpression.type is in ["CallExpression", "MemberExpression", "Identifier", "StringLiteral", "ComputedPropertyName"] or
+          callExpression.type is "Literal" and callExpression.subtype is "StringLiteral"
+        )
           parts.push
             type: "Error"
-            message: `Glob pattern must have call or member expression value, found ${JSON.stringify(part.value)}`
+            message: `Glob pattern must have call or member expression value, found ${JSON.stringify(rawValue)}`
           continue
 
-        suppressPrefix .= false
-        name .= part.name
-        value .= part.value ?? name
-        wValue := getTrimmingSpace part.value
+        value: ASTNodeObject | Children .= callExpression
 
         // Capture private-field shorthand info before handleThisPrivateShorthands
         // strips the synthetic `this.` wrapper. Used in processAssignments to
         // polyfill `obj.{#x} = src` as `obj.#x = src.#x` since JS destructuring
         // can't target private fields.
-        privateField .= undefined as string?
-        if value?.privateShorthand
+        let privateField: string?
+        if value.type is "MemberExpression" and value.privateShorthand
           privateField = value.privateId?.name
 
-        [value, suppressPrefix] = handleThisPrivateShorthands value
+        [value, suppressPrefix] =
+          handleThisPrivateShorthands(value) as [typeof value, boolean]
 
-        // Not yet needed:
+        // Synthetic dynamic import declarations use reversed globs to map
+        // module-side property names to local binding names.
         [name, value] = [value, name] if glob.reversed
 
         unless suppressPrefix // Don't prefix @ shorthand
-          if value.type is "StringLiteral"
+          if value is like {type: "StringLiteral"}, {type: "Literal", subtype: "StringLiteral"}
+            expression := trimFirstSpace(value)
             value = [ ...prefix,
-              type: "Index"
-              children: [ "[", trimFirstSpace(value), "]" ]
-            ]
+              makeNode {
+                type: "Index"
+                expression
+                children: [ "[", expression, "]" ]
+              }
+            ] as Children
           else if value.type is "ComputedPropertyName"
             value = [ ...prefix,
               type: "Index"
               children: [ trimFirstSpace value ]
-            ]
+            ] as Children
           else if value.type is "Identifier" and value.unicode?
             // Unicode identifier: dot access of mangled `u$…$` is the wrong
             // property — use bracket access with the source name.
             value = [ ...prefix,
               type: "Index"
               children: [ "[", propertyKey(value), "]" ]
-            ]
+            ] as Children
           else
-            value = [ ...prefixDot, trimFirstSpace value ]
+            value = [ ...prefixDot, trimFirstSpace value ] as Children
           // Switch from refAssignment to ref
           if ref?
             prefix = [ ref ]
             prefixDot = [ ...prefix, glob.dot ]
-        if (wValue) value.unshift wValue
+
+        unless rawValue is callExpression
+          // The glob prefix was applied to an inner call expression; replace
+          // that original target inside any unary/binary/pipeline wrapper.
+          replaceNodes rawValue, (& is callExpression), (node, parent) =>
+            if isASTNodeObject parent
+              for key, child in parent as any
+                if child is node
+                  (parent as any)[key] = value
+            value
+          value = rawValue as ASTNodeObject
+        if wValue := getTrimmingSpace part.value
+          if Array.isArray(value)
+            value.unshift wValue
+          else
+            value = [wValue, value] as Children
         if part.type is "SpreadProperty"
           parts.push {
             type: part.type
@@ -766,7 +806,7 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
         else
           parts.push {
             type: part.type
-            name
+            name! // Property always has name
             value
             privateField
             delim: part.delim
@@ -783,6 +823,7 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
           }
       object: ObjectExpression :=
         type: "ObjectExpression"
+        names: glob.object.names
         children: [
           glob.object.children.0 // {
           ...parts
@@ -1000,7 +1041,13 @@ function convertFunctionToMethod(id: any, exp: any)
     ...exp,
     type: "MethodDefinition",
     name: id.name,
-    signature: { ...exp.signature, id, name: id.name },
+    signature: {
+      ...exp.signature
+      type: "MethodSignature"
+      id
+      id.name
+      exp.parameters
+    },
     children
   }
 
@@ -1012,7 +1059,13 @@ function convertArrowFunctionToMethod(id: any, exp: any)
     ...exp,
     type: "MethodDefinition",
     name: id.name,
-    signature: { ...exp.signature, id, name: id.name },
+    signature: {
+      ...exp.signature
+      type: "MethodSignature"
+      id
+      id.name
+      exp.parameters
+    },
     block,
     children,
     autoBind: true
@@ -1062,7 +1115,7 @@ function convertObjectToJSXAttributes(obj: ObjectExpression)
   parts := [] // JSX attributes
   rest := []  // parts that need to be in {...rest} form
   for part, i of obj.properties
-    if part.usesRef
+    if "usesRef" in part and part.usesRef
       rest.push part
       continue
     if (i > 0) parts.push(' ')
@@ -1139,6 +1192,7 @@ function makeGetterMethod(name: ASTNode, ws: ASTNode, value: ASTNode, returnType
       }
       name
       returnType
+      parameters
     }
     block
     parameters
@@ -1347,7 +1401,7 @@ function processAssignments(statements: ASTNode): void
     // Expand to comma-separated direct assignments: `(obj.#x = src.#x, obj.#y = src.#y)`.
     if $1.length is 1
       [, soleLhs, , soleOp] := $1[0]
-      isPrivateGlobProp := (p: Property | SpreadProperty | MethodDefinition | ASTError): p is Property =>
+      isPrivateGlobProp := (p: ObjectProperty): p is Property =>
         p?.type is "Property" and !!p.privateField
       if soleOp.token is "=" and soleLhs.type is "ObjectExpression" and
          soleLhs.properties?.some(isPrivateGlobProp) and
@@ -1868,9 +1922,10 @@ function processCoffeeClasses(statements: StatementTuple[]): void
           children: [parametersList]
           parameters: parametersList
           names: []
-        signature: FunctionSignature := {}
+        signature: MethodSignature := {}
           type: "MethodSignature"
           children: [ "constructor(", parameters, ")" ]
+          name: "constructor"
           parameters
           modifier: {}
           returnType: undefined
@@ -1883,6 +1938,8 @@ function processCoffeeClasses(statements: StatementTuple[]): void
           signature
           children: [ ...signature.children, block ]
         expressions.unshift [indent, construct]
+      /* c8 ignore next -- existing constructors are only selected when they have blocks, and synthesized constructors always get makeEmptyBlock(). */
+      throw new Error("Expected constructor block for autobind") unless construct.block
       index := findSuperCall construct.block
       construct.block.expressions.splice index+1, 0,
         ...for each [, a] of autoBinds

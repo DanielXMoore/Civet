@@ -155,14 +155,17 @@ obj :=
 ### Braced Literals
 
 With braces, the `{x}` shorthand generalizes to any
-sequence of member accesses and/or calls and/or unary operators:
+sequence of member accesses and/or calls and/or unary operators
+and/or trailing binary operators:
 
 <Playground>
 another := {person.name, obj?.c?.x}
 computed := {foo(), bar()}
 named := {lookup[x+y]}
-cast := {value as T}
 bool := {!!available}
+cast := {value as T}
+fallback := {person.name ?? "Anonymous"}
+pipeline := {value |> String}
 </Playground>
 
 To avoid the trailing `}` in a braced object literal, you can use `{}`
@@ -215,6 +218,8 @@ point = data.{x,y}
 point.{x,y} = data
 point3D = { point.{x,y}, z: 0 }
 complex := obj.{x:a, b.c()?.y}
+fallback := obj.{x ?? 0, y ?? 0}
+pipeline := obj.{x |> String, y |> String}
 merged := data.{...global, ...user}
 data.{a, b, ...rest} = result
 </Playground>
