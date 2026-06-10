@@ -232,11 +232,11 @@ interface PluginOptions {
 
 - `emitDeclaration`: Whether to generate `.d.ts` type definition files from the Civet source, which is useful for building libraries. (Requires installing `typescript`.) Default: `false`.
 - `declarationExtension`: Output filename extension for `.d.ts` files. Default: `".civet.d.ts"`.
-- `typecheck`: Whether to run type checking on the generated code. (Requires installing `typescript`.) Default: `false`.
+- `typecheck`: Whether to run type checking on the project. (Requires installing `typescript`.) Default: `false`.
   - Specifying `true` aborts the build (with an error code) on TypeScript errors.
   - Alternatively, you can specify a string with any combination of `error`, `warning`, `suggestion`, or `message` to specify which diagnostics abort the build. For example, `"none"` ignores all diagnostics, `"error+warning"` aborts on errors and warnings, and `"all"` aborts on all diagnostics.
+  - `typecheck` works in mixed projects too: it will check `.ts` and `.civet` files, according to your `tsconfig.json`'s `include`/`exclude` patterns.
 - `implicitExtension`: Whether to allow importing `filename.civet` via `import "filename"`. Default: `true`.
-  - *Note*: Incompatible with `typecheck: true` (TypeScript needs an explicit `.civet` extension)
 - `outputExtension`: JavaScript or TypeScript extension to append to `.civet` for internal purposes. Default: `".jsx"`, or `".tsx"` if `ts` is `"preserve"`.
 - `ts`: Mode for transpiling TypeScript features into JavaScript. Default: `"civet"`. Options:
   - `"civet"`: Use Civet's JS mode. (Not all TS features supported.)

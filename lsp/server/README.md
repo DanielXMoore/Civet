@@ -1,6 +1,9 @@
 # Civet Language Server
 
 Standalone, editor-agnostic Language Server Protocol implementation for Civet.
+It also answers grammar-level requests (definition, references, document
+symbols, completions, hover) for Hera grammar files (`.hera`), parsed with the
+project's `@danielx/hera`.
 
 ## Install
 

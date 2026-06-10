@@ -1,0 +1,315 @@
+// Hera-grammar analyzer for the Civet LSP.  Answers grammar-level requests —
+// rule definition, references, symbols, completions, hover — for `.hera` files
+// straight from the Hera AST, bypassing the Hera→Civet→TS composed sourcemap
+// (which maps grammar tokens only to coarse rule-region positions).  Hera is
+// supplied by the caller (the project's install) so parsing matches the
+// project's build; see `parseHeraDocument`.
+
+{ type Position, type TextDocument } from vscode-languageserver-textdocument
+{
+  type CompletionItem
+  CompletionItemKind
+  type DocumentSymbol
+  type FoldingRange
+  FoldingRangeKind
+  type Hover
+  type Location
+  MarkupKind
+  type Range
+  type SelectionRange
+  SymbolKind
+} from vscode-languageserver
+
+{ type Loc, type Token } from @danielx/hera
+
+export interface HeraModule
+  parseTokens(input: string): Token
+
+/** A rule's definition site (`nameLoc`, for go-to-definition) and rendered
+    grammar surface (`signature` — name + productions, handler code stripped,
+    for hover / completion docs). */
+interface Declaration
+  nameLoc: Loc
+  signature: string
+
+declarationsCache := new Map<string, Map<string, Declaration>>()
+referencesCache := new Map<string, Map<string, Location[]>>()
+symbolsCache := new Map<string, DocumentSymbol[]>()
+
+/** Depth-first generator over every Token node, skipping string leaves. */
+function* traverse(node: Token | (Token | string)[] | undefined): Generator<Token>
+  if Array.isArray node
+    for n of node
+      yield* traverse n unless n <? 'string'
+    return
+  return unless node
+  yield node
+  yield* traverse node.children
+
+/** A Hera source span as an LSP Location in `doc`. */
+function locToLocation(doc: TextDocument, loc: Loc): Location
+  uri: doc.uri
+  range:
+    start: doc.positionAt(loc.pos)
+    end: doc.positionAt(loc.pos + loc.length)
+
+/** A rule's top-level Choice nodes.  Walks structurally and stops at each
+    Choice: Hera nests RuleBody productions differently across versions (and
+    pads with nulls / EOS), and descending into a Choice would wrongly pick up
+    nested `( … / … )` groups. */
+function* topLevelChoices(node: Token | string | (Token | string)[] | null | undefined): Generator<Token>
+  if Array.isArray node
+    for c of node
+      yield* topLevelChoices c
+    return
+  return if node == null or node <? 'string'
+  if node.type is 'Choice'
+    yield node
+    return
+  yield* topLevelChoices node.children
+
+/** A rule's grammar surface for hover / completion docs: the rule name then
+    each top-level production (the Choice's Sequence span), one per line, with
+    handler code excluded. */
+function ruleSignature(rule: Token, text: string): string
+  name := String((rule.children[0] as Token).token)
+  productions: string[] := []
+  for choice of topLevelChoices rule.children
+    seq := choice.children.find((c) => c? and c !<? 'string' and c.type is 'Sequence') as Token?
+    continue unless seq
+    productions.push text.slice(seq.loc.pos, seq.loc.pos + seq.loc.length).trimEnd()
+  name + productions.map((p) => `\n  ${p}`).join('')
+
+/** Map each rule name to its definition site + signature.  A Statement's
+    children are `[eos?, Rule]`; a Rule's first child is its name token. */
+function declarations(statements: (Token | string)[], text: string): Map<string, Declaration>
+  m := new Map<string, Declaration>()
+  for stmt of statements
+    continue if stmt <? 'string'
+    rule := stmt.children?.[1]
+    continue if rule <? 'string'
+    continue unless rule?.type is 'Rule'
+    nameNode := rule.children?.[0]
+    continue if nameNode <? 'string'
+    continue unless nameNode
+    m.set String(nameNode.token), { nameLoc: nameNode.loc, signature: ruleSignature(rule, text) }
+  m
+
+/** Map every rule-name occurrence (declaration and uses) to its locations. */
+function references(grammar: Token, doc: TextDocument): Map<string, Location[]>
+  m := new Map<string, Location[]>()
+  for node of traverse grammar
+    continue unless node.type is 'Name'
+    key := String(node.token)
+    m.set key, [] unless m.has key
+    m.get(key)!.push locToLocation(doc, node.loc)
+  m
+
+/** Concatenate a literal's string leaves into its text (e.g. a StringValue). */
+function stringValue(literal: Token): string
+  s .= ''
+  for node of traverse literal
+    s += node.token if node.token <? 'string'
+  s
+
+/** Outline symbols for a rule's terminals: string / regex literals and name references. */
+function* ruleSymbolChildren(doc: TextDocument, rule: Token): Generator<DocumentSymbol>
+  for child of traverse rule
+    kind := switch child.type
+      when 'StringValue', 'RegExpLiteral' then SymbolKind.String
+      when 'Name' then SymbolKind.Variable
+    continue unless kind?
+    range := locToLocation(doc, child.loc).range
+    yield { name: stringValue(child), kind, range, selectionRange: range }
+
+/** Top-level rules as Class symbols, each with its terminals as children. */
+function symbols(doc: TextDocument, grammar: Token): DocumentSymbol[]
+  result: DocumentSymbol[] := []
+  for node of traverse grammar
+    continue unless node.type is 'Rule'
+    continue unless Array.isArray node.children
+    nameNode := node.children[0]
+    continue if nameNode <? 'string'
+    range := locToLocation(doc, node.loc).range
+    children := Array.from(ruleSymbolChildren(doc, node))
+      // Drop the rule's own name token, which shares the rule's start line.
+      .filter (c) => c.range.start.line !== range.start.line
+    result.push {
+      name: String(nameNode.token)
+      kind: SymbolKind.Class
+      range
+      selectionRange: range
+      children
+    }
+  result
+
+/** (Re)build `doc`'s caches using the project's Hera.  Undefined `hera` (no
+    Hera installed) no-ops, leaving caches empty so requests fall through to
+    the TS service. */
+export function parseHeraDocument(doc: TextDocument, hera: HeraModule | undefined): void
+  return unless hera
+  text := doc.getText()
+  try
+    tokens := hera.parseTokens(text)
+    declarationsCache.set doc.uri, declarations(tokens.children, text)
+    referencesCache.set doc.uri, references(tokens, doc)
+    symbolsCache.set doc.uri, symbols(doc, tokens)
+  catch
+    // Parse failure: keep previous caches so editor features keep working
+    // while the user is typing.  Parse-error diagnostics flow separately
+    // through the hera plugin's `result.errors` path.
+    return
+
+/** Drop all cached analysis for `uri` (on document close). */
+export function clearHeraDocument(uri: string): void
+  declarationsCache.delete uri
+  referencesCache.delete uri
+  symbolsCache.delete uri
+
+identCharRegex := /[A-Za-z0-9_]/
+
+/** The identifier under `pos`, scanned out to identifier-char boundaries. */
+export function wordAt(doc: TextDocument, pos: Position): string
+  text := doc.getText({
+    start: { line: pos.line, character: 0 }
+    end: { line: pos.line + 1, character: 0 }
+  })
+  start .= pos.character
+  while start > 0 and identCharRegex.test(text[start - 1]!)
+    start--
+  end .= pos.character
+  while end < text# and identCharRegex.test(text[end]!)
+    end++
+  text.slice(start, end)
+
+/** The rule declaration whose name is under `pos`, for go-to-definition. */
+export function getDeclarationFor(doc: TextDocument, pos: Position): Location?
+  lookup := declarationsCache.get doc.uri
+  return undefined unless lookup
+  id := wordAt doc, pos
+  return undefined unless id
+  entry := lookup.get id
+  return undefined unless entry
+  locToLocation doc, entry.nameLoc
+
+/** All locations of the rule name under `pos`. */
+export function getReferencesFor(doc: TextDocument, pos: Position): Location[]?
+  id := wordAt doc, pos
+  return undefined unless id
+  referencesCache.get(doc.uri)?.get(id)
+
+/** Hover doc (rule name + productions) for the rule under `pos`. */
+export function getHoverFor(doc: TextDocument, pos: Position): Hover?
+  lookup := declarationsCache.get doc.uri
+  return undefined unless lookup
+  id := wordAt doc, pos
+  entry := lookup.get id
+  return undefined unless entry
+  contents:
+    kind: MarkupKind.Markdown
+    value: '```hera\n' + entry.signature + '\n```'
+
+/** The cached outline for `doc`. */
+export function getDocumentSymbols(doc: TextDocument): DocumentSymbol[]?
+  symbolsCache.get doc.uri
+
+/** One fold per grammar rule (name line → last body line) from the cached
+    rule symbols, so folds stay in grammar coordinates — unlike the TS-outline
+    path, which folds the transpiled parser and remaps out of range. */
+export function getFoldingRanges(doc: TextDocument): FoldingRange[]?
+  syms := symbolsCache.get doc.uri
+  return undefined unless syms
+  folds: FoldingRange[] := []
+  for sym of syms
+    startLine := sym.range.start.line
+    { line: endLine, character: endChar } := sym.range.end
+    // Range end is exclusive: char 0 ⇒ content ends on the previous line (next
+    // rule's header / trailing blank); non-zero ⇒ on range.end.line itself
+    // (last rule, no trailing newline).
+    lastLine := endChar is 0 ? endLine - 1 : endLine
+    /* c8 ignore next -- defensive: a parsed rule spans >= 2 lines, so this never trips */
+    continue unless lastLine > startLine
+    folds.push { startLine, endLine: lastLine, kind: FoldingRangeKind.Region }
+  folds
+
+/** Whether `pos` is inside `range` (start-inclusive, end-exclusive), by offset. */
+function rangeContains(doc: TextDocument, range: Range, pos: Position): boolean
+  offset := doc.offsetAt pos
+  offset >= doc.offsetAt(range.start) and offset < doc.offsetAt(range.end)
+
+/** Grammar-level selection for `pos`: widen terminal → rule → file from the
+    cached rule symbols.  Undefined when `pos` is in no rule, so the caller can
+    fall back. */
+export function getSelectionRange(doc: TextDocument, pos: Position): SelectionRange?
+  syms := symbolsCache.get doc.uri
+  return undefined unless syms
+  rule := syms.find (s) => rangeContains doc, s.range, pos
+  return undefined unless rule
+  fileSel: SelectionRange :=
+    range:
+      start: { line: 0, character: 0 }
+      end: doc.positionAt doc.getText()#
+  ruleSel: SelectionRange := { range: rule.range, parent: fileSel }
+  child := rule.children?.find (c) => rangeContains doc, c.range, pos
+  child ? { range: child.range, parent: ruleSel } : ruleSel
+
+/** Rule-name completions; each carries `{ hera, uri }` so resolveHeraCompletion
+    can attach rule-body docs lazily. */
+export function getCompletionsFor(doc: TextDocument, _pos: Position): CompletionItem[]?
+  keys := declarationsCache.get(doc.uri)?.keys()
+  return undefined unless keys
+  Array.from keys, (label) => ({
+    label
+    kind: CompletionItemKind.Variable
+    data: { hera: true, uri: doc.uri }
+  })
+
+/** Fill a Hera completion's detail + rule-body docs on resolve. */
+export function resolveHeraCompletion(item: CompletionItem): CompletionItem
+  data := item.data as { hera?: boolean, uri?: string } | undefined
+  return item unless data?.hera and data.uri
+  entry := declarationsCache.get(data.uri)?.get(item.label)
+  if entry
+    item.detail = item.label
+    item.documentation = {
+      kind: MarkupKind.Markdown
+      value: '```hera\n' + entry.signature + '\n```'
+    }
+  item
+
+heraInlineHandlerStart := /\{|->/
+
+/** Whether `(line, character)` in `text` is at grammar level (answer from the
+    analyzer) vs a handler body / fenced block (fall through to TS).  Grammar
+    lines are 0–2 spaces; 3+ is handler (a transient mid-edit 3-space line
+    included, so we don't answer from a stale cache); an inline `Rule -> …` is
+    grammar only up to the first `{` / `->`.  Pure text scan, no AST — so it
+    holds up while a parse is in flight. */
+export function isAtGrammarLevel(text: string, line: number, character: number): boolean
+  // Fence scan: an odd number of ``` openers before `line` puts the cursor
+  // inside a fenced (handler) block.
+  fenceCount .= 0
+  cursor .= 0
+  l .= 0
+  while l < line and cursor < text#
+    nl := text.indexOf '\n', cursor
+    lineEnd := if nl < 0 then text# else nl
+    trimmed := text.slice(cursor, lineEnd).trimStart()
+    fenceCount++ if trimmed.startsWith '```'
+    cursor = if nl < 0 then text# else nl + 1
+    l++
+  return false if fenceCount % 2 is 1
+
+  // Indent + inline-handler clamp on the click line.
+  lineEnd := text.indexOf '\n', cursor
+  currentLine := text.slice cursor, (if lineEnd < 0 then text# else lineEnd)
+  // `/^[ \t]*/` is anchored and matches zero-or-more, so exec is never null and
+  // group 0 is always present — no fallback branch needed.
+  indent := /^[ \t]*/.exec(currentLine)![0].length
+
+  return false if indent >= 3
+
+  // Clamp at the inline handler's introducer, if any.
+  introducer := heraInlineHandlerStart.exec currentLine
+  return true unless introducer
+  character < introducer.index

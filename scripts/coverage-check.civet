@@ -1,22 +1,117 @@
-// Gate the merged coverage report at 100% on every c8 metric.
-// Reads `coverage/coverage-summary.json` (written by `pnpm coverage:merge`)
-// and exits 1 with a per-metric breakdown if any falls short.
+// Gate the coverage reports at 100% on every c8 metric.
+//
+// Two reports are gated, then their totals combined:
+//   1. The merged report at `coverage/coverage-summary.json` (root +
+//      lsp/server + lsp/monaco + e2e). Excludes `source/ts-service/**`
+//      because the bundle + standalone compilation paths attribute
+//      hits via differently-shaped sourcemaps, producing phantom
+//      branchMap entries c8 can't reconcile.
+//   2. A root-only ts-service report computed on demand from
+//      `coverage/tmp/`. Every suite's tests exercise ts-service via
+//      direct source imports (see test/infra/ts-service-*.civet), so
+//      the standalone-only view is a clean gate.
 
-{ readFileSync } from 'fs'
+{ readFileSync, existsSync, mkdirSync, rmSync, readdirSync, writeFileSync } from 'fs'
 { resolve, join } from 'path'
 { fileURLToPath } from 'url'
+{ execFileSync } from 'child_process'
 
 root := typeof __dirname !== "undefined" ?
   resolve __dirname, '..' :
   fileURLToPath new URL('..', import.meta.url)
 
-summary := JSON.parse readFileSync join(root, 'coverage', 'coverage-summary.json'), 'utf8'
-total := summary.total as Record<string, { pct: number, total: number, covered: number }>
+// Build the ts-service-only report from root mocha's v8 profiles, with
+// bundle-URL profiles stripped first.  Build tooling spawned by the lsp
+// suites (vite / rolldown) inherits NODE_V8_COVERAGE and writes v8
+// profiles for `dist/ts-service/index.mjs` into the same tmp dir; those
+// remap (via the bundle's coarser sourcemap) to source/ts-service/*
+// positions that don't align with the standalone .civet compilation's
+// fnMap entries, producing spurious uncovered statements/functions.
+// Discarding the bundle URLs leaves the standalone-only view.
+tsServiceTmp := join root, 'coverage', 'tmp'
+tsServiceReportDir := join root, 'coverage', 'ts-service'
+tsServiceFilteredTmp := join root, 'coverage', 'ts-service-tmp'
+// ts-service is excluded from the merged report (multi-compilation
+// sourcemap conflicts), so this on-demand report is the ONLY thing
+// gating it.  A missing coverage/tmp can't be a silent skip — it would
+// leave ts-service ungated and the gate falsely green — so fail loudly.
+unless existsSync tsServiceTmp
+  console.error `Coverage gate failed: ts-service coverage data not found at ${tsServiceTmp}.`
+  console.error `  ts-service is gated only from root mocha's v8 profiles — run \`pnpm coverage\` before \`pnpm coverage:check\`.`
+  process.exit 1
+
+rmSync tsServiceReportDir, { recursive: true, force: true }
+mkdirSync tsServiceReportDir, { recursive: true }
+rmSync tsServiceFilteredTmp, { recursive: true, force: true }
+mkdirSync tsServiceFilteredTmp, { recursive: true }
+for f of readdirSync tsServiceTmp
+  continue unless f.endsWith '.json'
+  raw := JSON.parse readFileSync join(tsServiceTmp, f), 'utf8'
+  raw.result = (raw.result ?? []).filter (r: any) =>
+    not (r.url and /\/dist\/ts-service\//.test r.url)
+  writeFileSync join(tsServiceFilteredTmp, f), JSON.stringify raw
+c8 := resolve root, 'node_modules/c8/bin/c8.js'
+// stderr is inherited so c8's own diagnostics reach the CI log when it
+// exits non-zero; stdio:'pipe' would bury them inside the thrown error
+// as a bare "Command failed".  stdout is unused, so drop it.
+try
+  execFileSync process.execPath, [
+    c8, 'report'
+    '--reporter', 'json-summary'
+    '--reporter', 'json'
+    '--report-dir', tsServiceReportDir
+    '--temp-directory', tsServiceFilteredTmp
+    '--allow-external'
+    '--exclude-after-remap'
+    '--extension', '.civet'
+    '--extension', '.coffee'
+    '--extension', '.hera'
+    '--extension', '.js'
+    '--extension', '.mjs'
+    '--extension', '.mts'
+    '--extension', '.ts'
+    '--include', '**/source/ts-service/**'
+    '--exclude', '**/node_modules/**'
+    // Same rationale as coverage-merge.civet: keep sibling worktree copies and
+    // the vendored zed grammar out of the on-demand ts-service report.
+    '--exclude', '**/.claude/**'
+    '--exclude', '**/lsp/zed/grammars/**'
+  ], { cwd: root, stdio: ['ignore', 'ignore', 'inherit'] }
+catch
+  console.error `Coverage gate failed: c8 could not build the ts-service report (see c8 output above).`
+  process.exit 1
+rmSync tsServiceFilteredTmp, { recursive: true, force: true }
+
+mergedSummary := JSON.parse readFileSync join(root, 'coverage', 'coverage-summary.json'), 'utf8'
+tsServiceSummaryPath := join tsServiceReportDir, 'coverage-summary.json'
+unless existsSync tsServiceSummaryPath
+  console.error `Coverage gate failed: c8 produced no ts-service summary at ${tsServiceSummaryPath}.`
+  process.exit 1
+tsServiceSummary := JSON.parse readFileSync tsServiceSummaryPath, 'utf8'
+// A present-but-empty summary (no root profiles, or every profile
+// stripped as a bundle URL above) would pass the gate with ts-service
+// unmeasured — source/ts-service always has statements, so zero means
+// nothing was actually gated.
+unless tsServiceSummary.total?.statements?.total
+  console.error `Coverage gate failed: ts-service report is empty — coverage/tmp held no usable root mocha profiles for source/ts-service.`
+  process.exit 1
+
+// Sum two metric records (each `{ total, covered, pct }`).
+function combineMetric(a: any, b: any)
+  return a unless b?
+  return b unless a?
+  total := (a.total ?? 0) + (b.total ?? 0)
+  covered := (a.covered ?? 0) + (b.covered ?? 0)
+  { total, covered, pct: total ? (covered / total * 100) : 100 }
+
+total: Record<string, { pct: number, total: number, covered: number }> := {}
+for metric of ['statements', 'branches', 'functions', 'lines']
+  total[metric] = combineMetric mergedSummary.total?[metric], tsServiceSummary.total?[metric]
 
 failed: string[] := []
 for metric of ['statements', 'branches', 'functions', 'lines']
   m := total[metric]
-  failed.push `${metric}: ${m.covered}/${m.total} (${m.pct}%)` if m.pct < 100
+  failed.push `${metric}: ${m.covered}/${m.total} (${m.pct.toFixed 2}%)` if m.pct < 100
 
 if failed.length
   console.error `Coverage gate failed — every metric must be 100%:`
@@ -24,29 +119,32 @@ if failed.length
   // Dump per-file partials + missing branch arms from coverage-final.json
   // so the CI log alone tells you what to investigate (no need to re-run
   // coverage:show locally).
-  finalPath := join root, 'coverage', 'coverage-final.json'
-  final := JSON.parse readFileSync(finalPath, 'utf8')
-  for [path, file] of Object.entries(summary)
-    continue if path is "total"
-    f := file as Record<string, { pct: number, total: number, covered: number }>
-    rawMetrics := for metric of ['statements', 'branches', 'functions', 'lines']
-      m := f[metric]
-      `${metric} ${m.covered}/${m.total}` if m.pct < 100
-    metricLines := rawMetrics.filter Boolean
-    continue unless metricLines.length
-    console.error `\n  ${path}`
-    metricLines.forEach (line) => console.error `    ${line}`
-    fileData := final[path]
-    continue unless fileData
-    bm: Record<string, any> := fileData.branchMap ?? {}
-    bHits: Record<string, number[]> := fileData.b ?? {}
-    for [id, arms] of Object.entries(bHits)
-      missed: number[] := []
-      arms.forEach (count, i) => missed.push i if count is 0
-      continue unless missed.length
-      m := bm[id]
-      ln := m?.line ?? m?.loc?.start?.line ?? "?"
-      console.error `    branch ${id} line ${ln} (${m?.type ?? '?'}) arms ${JSON.stringify arms} missed [${missed.join ','}]`
+  dumpPartials := (summary: any, finalPath: string) =>
+    return unless existsSync finalPath
+    final := JSON.parse readFileSync(finalPath, 'utf8')
+    for [path, file] of Object.entries(summary)
+      continue if path is "total"
+      f := file as Record<string, { pct: number, total: number, covered: number }>
+      rawMetrics := for metric of ['statements', 'branches', 'functions', 'lines']
+        m := f[metric]
+        `${metric} ${m.covered}/${m.total}` if m.pct < 100
+      metricLines := rawMetrics.filter Boolean
+      continue unless metricLines.length
+      console.error `\n  ${path}`
+      metricLines.forEach (line) => console.error `    ${line}`
+      fileData := final[path]
+      continue unless fileData
+      bm: Record<string, any> := fileData.branchMap ?? {}
+      bHits: Record<string, number[]> := fileData.b ?? {}
+      for [id, arms] of Object.entries(bHits)
+        missed: number[] := []
+        arms.forEach (count, i) => missed.push i if count is 0
+        continue unless missed.length
+        m := bm[id]
+        ln := m?.line ?? m?.loc?.start?.line ?? "?"
+        console.error `    branch ${id} line ${ln} (${m?.type ?? '?'}) arms ${JSON.stringify arms} missed [${missed.join ','}]`
+  dumpPartials mergedSummary, join(root, 'coverage', 'coverage-final.json')
+  dumpPartials tsServiceSummary, join(tsServiceReportDir, 'coverage-final.json')
   process.exit(1)
 
 console.log `Coverage gate passed: 100% statements / branches / functions / lines.`

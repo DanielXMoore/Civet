@@ -8,6 +8,7 @@
 
 import type {
   AccessStart
+  ASTError
   ASTLeaf
   ASTNode
   ASTNodeObject
@@ -33,6 +34,7 @@ import type {
   ForStatement
   FunctionSignature
   IfStatement
+  Index
   Initializer
   IterationExpression
   IterationStatement
@@ -47,6 +49,8 @@ import type {
   ParametersNode
   ParenthesizedExpression
   Placeholder
+  Property
+  SpreadProperty
   StatementTuple
   SwitchStatement
   TypeArgument
@@ -400,6 +404,12 @@ function expressionizeIfStatement(statement: IfStatement): ASTNode
     children.push ":void 0"
   children.push closeParen
 
+  // Trailing `//` comments captured inside the then/else blocks (#832) get
+  // dropped when those blocks collapse to ternary operands; hoist them out
+  // after the close paren so they survive the conversion.
+  children.push b.trailing if b.trailing?#
+  children.push e.block.trailing if e?.block.trailing?#
+
   makeNode {
     type: "IfExpression"
     children
@@ -704,6 +714,14 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
         value .= part.value ?? name
         wValue := getTrimmingSpace part.value
 
+        // Capture private-field shorthand info before handleThisPrivateShorthands
+        // strips the synthetic `this.` wrapper. Used in processAssignments to
+        // polyfill `obj.{#x} = src` as `obj.#x = src.#x` since JS destructuring
+        // can't target private fields.
+        privateField .= undefined as string?
+        if value?.privateShorthand
+          privateField = value.privateId?.name
+
         [value, suppressPrefix] = handleThisPrivateShorthands value
 
         // Not yet needed:
@@ -750,6 +768,7 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
             type: part.type
             name
             value
+            privateField
             delim: part.delim
             names: part.names
             children: [
@@ -1280,13 +1299,85 @@ function processAssignments(statements: ASTNode): void
     if $1.some((x: any) => x.-1.special)
       [, lhs, , op] := $1[0]
       { call, omitLhs } := op
+      callLhs .= lhs
+      // For non-omitLhs operators (e.g. `min=`, `xor=`), `lhs` is referenced
+      // twice (assignment target and inside the call). Cache every
+      // side-effectful Index expression so each runs once. Critical for
+      // `arr[?]` (Math.random) and for `obj[i++]` / `obj[f()][g()]`. Non-
+      // Index children (base Identifier, PropertyAccess) are shared by
+      // reference between the two `lhs` occurrences — pre-existing
+      // limitation if the base itself has side effects.
+      if not omitLhs and (lhs as MemberExpression).type is "MemberExpression"
+        memberLhs := lhs as MemberExpression
+        { children: memberChildren } := memberLhs
+        mutated .= false
+        callChildren := memberChildren.map (child) =>
+          return child unless child?.type is "Index"
+          indexNode := child as Index
+          { ref, refAssignment } := maybeRefAssignment indexNode.expression
+          return child unless refAssignment
+          mutated = true
+          // Assignment-target side: inline `ref = idx` in the Index —
+          // runs first as part of evaluating the LHS reference.
+          // replaceNode also updates `indexNode.expression` since it
+          // aliases `indexNode.children[1]`.
+          replaceNode indexNode.expression, refAssignment, indexNode
+          // Call-side copy: new Index with bare ref.
+          makeNode {
+            type: "Index"
+            children: ["[", ref, "]"]
+            expression: ref
+          }
+        if mutated
+          callLhs = makeNode {
+            ...memberLhs
+            children: callChildren
+          }
       // Wrap right-hand side with call
       index := exp.children.indexOf($2)
       assert.notEqual index, -1, "processAssignments: $2 must be directly in exp.children"
       exp.children.splice index, 1,
-        exp.expression = $2 = [call, "(", lhs, ", ", $2, ")"]
+        exp.expression = $2 = [call, "(", callLhs, ", ", $2, ")"]
       if omitLhs
         replaceNode exp, $2
+        continue
+
+    // Polyfill private-field glob assignment: `obj.{#x, #y} = src` cannot use
+    // JS destructuring because private fields aren't valid destructuring targets.
+    // Expand to comma-separated direct assignments: `(obj.#x = src.#x, obj.#y = src.#y)`.
+    if $1.length is 1
+      [, soleLhs, , soleOp] := $1[0]
+      isPrivateGlobProp := (p: Property | SpreadProperty | MethodDefinition | ASTError): p is Property =>
+        p?.type is "Property" and !!p.privateField
+      if soleOp.token is "=" and soleLhs.type is "ObjectExpression" and
+         soleLhs.properties?.some(isPrivateGlobProp) and
+         not soleLhs.properties.some((p) => p?.type is "SpreadProperty")
+        properties := soleLhs.properties.filter (p): p is Property => p?.type is "Property"
+        // Use a ref for the source if there are multiple properties and it
+        // has side effects, so we don't re-evaluate it for each assignment.
+        let prefix: ASTNode[], sourceExpr: ASTNode
+        if properties.length > 1 and needsRef $2
+          srcRef := makeRef()
+          prefix = [srcRef, " = ", $2, ", "]
+          sourceExpr = srcRef
+          // Hoist `let ref` declaration; nothing else sets `exp.hoistDec`
+          // before this point and we `continue` past everything that would.
+          exp.hoistDec = {
+            type: "Declaration"
+            children: ["let ", srcRef]
+            names: []
+            bindings: []
+            decl: "let"
+          }
+        else
+          prefix = []
+          sourceExpr = $2
+        assignments := properties.map (prop) =>
+          sourceName := prop.privateField ?? prop.name
+          [prop.value, " = ", sourceExpr, ".", sourceName]
+        joined := assignments.flatMap (a, idx) => idx ? [", ", a] : [a]
+        exp.children = [["(", prefix, joined, ")"]]
+        exp.names = []
         continue
 
     // Force parens around destructuring object assignments
@@ -1973,7 +2064,7 @@ function processRepl(root: BlockStatement, rootIIFE: ASTNode): void
     continue unless decl.names?# // skip 'let ref'
     if decl.parent is topBlock or decl.decl is "var"
       decl.children.shift() // remove const/let/var
-      if decl.bindings.0?.pattern?.type is "ObjectBindingPattern"
+      if decl.bindings!.0?.pattern?.type is "ObjectBindingPattern"
         // If first pattern is braced, need to wrap in parens
         decl.children.unshift "("
         decl.children.push ")"

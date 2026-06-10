@@ -18,6 +18,10 @@
   type SymbolInformation
   TextEdit
   SemanticTokensRequest
+  DocumentDiagnosticRequest
+  DocumentDiagnosticReportKind
+  type DocumentDiagnosticParams
+  type DocumentDiagnosticReport
   FileChangeType
   type Connection
   type SignatureHelp
@@ -53,6 +57,19 @@
   parseErrorsToDiagnostics
   resolvePathAliasDir
 } from ./lib/completions.civet
+{
+  clearHeraDocument
+  getCompletionsFor as heraCompletionsFor
+  getDeclarationFor as heraDeclarationFor
+  getDocumentSymbols as heraDocumentSymbols
+  getFoldingRanges as heraFoldingRanges
+  getHoverFor as heraHoverFor
+  getReferencesFor as heraReferencesFor
+  getSelectionRange as heraSelectionRange
+  isAtGrammarLevel as isHeraGrammarLevel
+  parseHeraDocument
+  resolveHeraCompletion
+} from ./lib/hera-analyzer.civet
 assert from node:assert
 path from node:path
 ts, {
@@ -299,6 +316,11 @@ export function startServer(connection: Connection, dependencies: ServerDependen
             tokenTypes: semanticTokenTypes as! string[]
             tokenModifiers: semanticTokenModifiers as! string[]
           full: true
+        // Pull-model diagnostics (LSP 3.17). interFileDependencies: our
+        // results can change when other files do (cross-file TS types).
+        diagnosticProvider:
+          interFileDependencies: true
+          workspaceDiagnostics: false
 
       }
     }
@@ -332,16 +354,31 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     return
 
   updating := (document: { uri: string }) => documentUpdateStatus.get(document.uri)?.promise
+
+  // True when a request targets a `.hera` grammar-level token (rule name/ref)
+  // rather than a handler body — answer from the Hera analyzer, else fall
+  // through to the TS service.
+  heraGrammarLevel := (doc: TextDocument, position: Position): boolean =>
+    doc.uri.endsWith('.hera') and isHeraGrammarLevel(doc.getText(), position.line, position.character)
+
   tsSuffix := /\.[cm]?[jt]s$|\.json|\.[jt]sx/
 
   connection.onHover ({ textDocument, position }) =>
     sourcePath := documentToSourcePath(textDocument)
     assert sourcePath
 
-    service := await ensureServiceForSourcePath(sourcePath)
-
     doc := documents.get(textDocument.uri)
     assert doc
+
+    // .hera grammar-level hover: answer from the Hera analyzer (rule body
+    // excerpt at the clicked rule name).  Handler-body positions fall
+    // through to the TS service below.
+    if heraGrammarLevel(doc, position)
+      await updating(textDocument)
+      hover := heraHoverFor(doc, position)
+      return hover if hover
+
+    service := await ensureServiceForSourcePath(sourcePath)
 
     let info
     await updating(textDocument)
@@ -450,6 +487,13 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     isLikelyImportContext := likelyImportContext(linePrefix)
     if context?.triggerCharacter is ' ' and not isLikelyImportContext
       return []
+
+    // .hera grammar-level completion: rule names from the grammar.
+    // Handler-body positions fall through to TS-driven completions.
+    if heraGrammarLevel(document, position)
+      await updating(textDocument)
+      if items := heraCompletionsFor(document, position)
+        return items
 
     await updating(textDocument)
 
@@ -567,6 +611,12 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     return items
 
   connection.onCompletionResolve (item) =>
+    // Hera-grammar completions carry `{ hera: true, uri }` in `data`; the
+    // analyzer fills in detail + rule-body documentation.
+    heraData := item.data as { hera?: boolean } | undefined
+    if heraData?.hera
+      return resolveHeraCompletion(item)
+
     { sourcePath, position, name, source, data } .= item.data
     service := await ensureServiceForSourcePath(sourcePath)
     return item unless service
@@ -677,6 +727,17 @@ export function startServer(connection: Connection, dependencies: ServerDependen
   connection.onDefinition ({ textDocument, position }) =>
     sourcePath := documentToSourcePath(textDocument)
     assert sourcePath
+
+    // .hera grammar-level go-to-definition: jump directly to the rule's
+    // name token in the .hera source — skips the Hera→Civet→TS composed
+    // sourcemap, which lands at coarse rule-region positions for
+    // grammar tokens.
+    doc := documents.get(textDocument.uri)
+    if doc and heraGrammarLevel(doc, position)
+      await updating(textDocument)
+      if hit := heraDeclarationFor(doc, position)
+        return [hit]
+
     service := await ensureServiceForSourcePath(sourcePath)
 
     let definitions
@@ -736,6 +797,15 @@ export function startServer(connection: Connection, dependencies: ServerDependen
   connection.onReferences ({ textDocument, position }) =>
     sourcePath := documentToSourcePath(textDocument)
     assert sourcePath
+
+    // .hera grammar-level references: enumerate every Name token in the
+    // grammar matching the clicked identifier.
+    doc := documents.get(textDocument.uri)
+    if doc and heraGrammarLevel(doc, position)
+      await updating(textDocument)
+      if refs := heraReferencesFor(doc, position)
+        return refs
+
     service := await ensureServiceForSourcePath(sourcePath)
     // TODO: same source mapping as onDefinition I think...
 
@@ -795,6 +865,16 @@ export function startServer(connection: Connection, dependencies: ServerDependen
   connection.onDocumentSymbol ({ textDocument }) =>
     sourcePath := documentToSourcePath(textDocument)
     assert sourcePath
+
+    // .hera outline: rules nested with their child string/regex/name
+    // terminals.  The TS view of a transpiled .hera file is generated
+    // helper functions and import bookkeeping — not what the author wrote.
+    if textDocument.uri.endsWith('.hera')
+      doc := documents.get(textDocument.uri)
+      if doc
+        await updating(textDocument)
+        if heraOutline := heraDocumentSymbols(doc)
+          return heraOutline
 
     service := await ensureServiceForSourcePath(sourcePath)
 
@@ -1085,6 +1165,16 @@ export function startServer(connection: Connection, dependencies: ServerDependen
   connection.onFoldingRanges ({ textDocument }) =>
     sourcePath := documentToSourcePath(textDocument)
     assert sourcePath
+
+    // .hera folds wrap grammar rules; the transpiled path folds the generated
+    // parser and remaps out of the source's coordinate space.
+    if textDocument.uri.endsWith('.hera')
+      doc := documents.get(textDocument.uri)
+      if doc
+        await updating(textDocument)
+        if folds := heraFoldingRanges(doc)
+          return folds
+
     service := await ensureServiceForSourcePath(sourcePath)
     await updating(textDocument)
 
@@ -1124,6 +1214,17 @@ export function startServer(connection: Connection, dependencies: ServerDependen
   connection.onSelectionRanges ({ textDocument, positions }) =>
     sourcePath := documentToSourcePath(textDocument)
     assert sourcePath
+
+    // .hera selections widen terminal → rule → file in grammar coordinates.
+    // Gate on the grammar having parsed; fall back per out-of-rule position.
+    if textDocument.uri.endsWith('.hera')
+      doc := documents.get(textDocument.uri)
+      if doc
+        await updating(textDocument)
+        if heraDocumentSymbols(doc)
+          return positions.map (pos) =>
+            heraSelectionRange(doc, pos) ?? { range: { start: pos, end: pos } }
+
     service := await ensureServiceForSourcePath(sourcePath)
     await updating(textDocument)
 
@@ -1247,6 +1348,8 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     projPath := getProjectPathFromSourcePath(sourcePath)
     service := projectPathToServiceMap.get(projPath)
     service?.host.closeDocument(sourcePath)
+    if document.uri.endsWith('.hera')
+      clearHeraDocument(document.uri)
     // Drop any pending in-flight change for this doc so the queue doesn't
     // re-add it to the host after close. The status resolver set by
     // onDidChangeContent can leak if close fires inside the debounce window
@@ -1291,6 +1394,13 @@ export function startServer(connection: Connection, dependencies: ServerDependen
       // Phase 1: Stage all changes within this project.
       docs.forEach (doc) => service.host.addOrUpdateDocument(doc)
 
+      // Phase 1b: refresh the Hera-grammar analyzer cache for any .hera docs
+      // in this batch so grammar-level requests (definition, references,
+      // outline) see up-to-date data without waiting on the TS pipeline.
+      for doc of docs
+        if doc.uri.endsWith('.hera')
+          parseHeraDocument(doc, service.hera)
+
       // Phase 2: Analyze all staged documents within this project.
       for doc of docs
         await updateDiagnosticsForDoc(doc, service)
@@ -1320,11 +1430,13 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     changeQueue.add(document)
     scheduleExecuteQueue()
 
-  // Both callers (executeQueue and updateProjectDiagnostics) pass a service
-  // explicitly after staging the document, so `service` is always provided and
-  // the doc is already staged when we arrive here.
-  function updateDiagnosticsForDoc(document: TextDocument, service: ResolvedService)
-    logger.log("Updating diagnostics for doc: " + document.uri)
+  /**
+   * Diagnostics for an already-staged document. Returns `[]` when there's
+   * nothing to report — either a clean source or no transpiler meta yet
+   * (e.g. an empty file with no snapshot).
+   */
+  function computeDiagnosticsForDoc(document: TextDocument, service: ResolvedService): Diagnostic[]
+    logger.log("Computing diagnostics for doc: " + document.uri)
     sourcePath := documentToSourcePath(document)
     assert sourcePath
 
@@ -1370,20 +1482,16 @@ export function startServer(connection: Connection, dependencies: ServerDependen
 
     // Non-transpiled
     if sourcePath.match tsSuffix
-      diagnostics := getTypeScriptDiagnostics(sourcePath, document)
+      return getTypeScriptDiagnostics(sourcePath, document)
 
-      return connection.sendDiagnostics {
-        uri: document.uri
-        version: document.version
-        diagnostics
-      }
-
-    // Transpiled file
+    // Transpiled file. No meta/transpiledDoc yet (e.g. an empty source that
+    // hasn't produced a snapshot) means there's nothing to report.
     meta := service.host.getMeta(sourcePath)
-    return logger.log `no meta for ${sourcePath}` unless meta
+    transpiledDoc := meta?.transpiledDoc
+    unless transpiledDoc
+      return []
 
-    { sourcemapLines, transpiledDoc, parseErrors, fatal } := meta
-    return logger.log `no transpiledDoc for ${sourcePath}` unless transpiledDoc
+    { sourcemapLines, parseErrors, fatal } := meta!
 
     transpiledPath := documentToSourcePath(transpiledDoc)
     diagnostics: Diagnostic[] := []
@@ -1397,13 +1505,15 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     unless fatal
       diagnostics.push(...getTypeScriptDiagnostics(transpiledPath, transpiledDoc, sourcemapLines))
 
+    return diagnostics
+
+  /** Compute and push diagnostics via `textDocument/publishDiagnostics`. */
+  function updateDiagnosticsForDoc(document: TextDocument, service: ResolvedService)
     connection.sendDiagnostics {
       uri: document.uri
       version: document.version
-      diagnostics
+      diagnostics: computeDiagnosticsForDoc(document, service)
     }
-
-    return
 
   // Using a cancellation token we prevent parallel executions of scheduleUpdateDiagnostics
   let runningDiagnosticsUpdate: { isCanceled: boolean } | undefined
@@ -1608,6 +1718,23 @@ export function startServer(connection: Connection, dependencies: ServerDependen
       tsConfigPath := path.join projectPath, 'tsconfig.json'
       await doReloadServiceForProject(projPath, tsConfigPath)
     return true
+
+  /**
+   * Pull-model diagnostics (LSP 3.17): computed against the current document
+   * at request time, so an edit shows on the next pull with no push race.
+   * Empty report when the doc isn't open (no content to analyze).
+   */
+  connection.onRequest DocumentDiagnosticRequest.type, (params: DocumentDiagnosticParams): Promise<DocumentDiagnosticReport> =>
+    document := documents.get params.textDocument.uri
+    return { kind: DocumentDiagnosticReportKind.Full, items: [] } unless document
+
+    sourcePath := documentToSourcePath params.textDocument
+    assert sourcePath
+    service := await ensureServiceForSourcePath sourcePath
+    await updating params.textDocument
+
+    items := computeDiagnosticsForDoc(document, service)
+    { kind: DocumentDiagnosticReportKind.Full, items }
 
   // Semantic tokens: use TypeScript's semantic classifications, remapped via sourcemap
   connection.onRequest SemanticTokensRequest.type, (params) =>

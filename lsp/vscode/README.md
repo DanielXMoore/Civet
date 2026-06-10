@@ -19,6 +19,7 @@ Features
 - Symbols outline
 - Diagnostics
 - Custom transpiler plugins
+- Hera grammar (`.hera`) syntax highlighting and grammar-level navigation (definition, references, outline, completion, hover for rules)
 
 Type Checking
 ---

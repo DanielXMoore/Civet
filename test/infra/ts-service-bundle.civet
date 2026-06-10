@@ -1,0 +1,347 @@
+// Unit tests for the ts-service public surface exposed via
+// `source/ts-service/index.civet` (and re-exported as
+// `@danielx/civet/ts-service`).  Lives in root mocha so coverage of
+// `source/ts-service/**` comes from a single compilation path — the
+// standalone .civet require hook — which keeps c8's merged branchMap
+// free of phantom entries that the esbuild bundle's coarser sourcemap
+// would otherwise introduce.  See scripts/coverage-merge.civet for the
+// gating split.
+
+{ describe, it } from mocha
+assert from assert
+
+* as path from node:path
+ts from typescript
+
+{
+  createInMemoryDocFactory
+  makeCivetPlugin
+  makeIncrementalTypecheckProgram
+} from "../../source/ts-service/index.civet"
+{ makeHeraPlugin } from "../../source/ts-service/plugins/hera.civet"
+{ mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs"
+{ tmpdir } from "os"
+
+describe "ts-service plugin factories", ->
+  // makeCivetPlugin / makeHeraPlugin are exposed as part of the public
+  // @danielx/civet/ts-service API; the LSP and unplugin always pass an
+  // explicit Civet module + config, but standalone consumers (CLI typecheck,
+  // ad-hoc scripts) can call the factories with no arguments and rely on
+  // the bundled Civet/Hera defaults.
+
+  it "makeCivetPlugin() with no options uses bundled defaults", ->
+    plugin := makeCivetPlugin()
+    assert plugin.transpilers, "expected transpilers"
+    [t] := plugin.transpilers!
+    assert.equal t.extension, ".civet"
+    assert.equal t.target, ".tsx"
+    result := t.compile("inline.civet", "x := 5\nconsole.log x\n")
+    assert result, "expected compile result"
+    assert (result! as { code: string }).code.includes("const x"), "expected `const x = 5` in output"
+
+  it "makeHeraPlugin() with no options uses bundled defaults", ->
+    plugin := makeHeraPlugin()
+    assert plugin.transpilers, "expected transpilers"
+    [t] := plugin.transpilers!
+    assert.equal t.extension, ".hera"
+    assert.equal t.target, ".tsx"
+    grammar := "Rules\n  A\n\nA\n  \"A\"\n"
+    result := t.compile("inline.hera", grammar)
+    assert result, "expected compile result"
+    assert (result! as { code: string }).code.length > 0, "expected non-empty compiled output"
+
+  it "makeHeraPlugin() reports parse errors via the result.errors array", ->
+    // Malformed grammar — Hera throws a ParseError, which the plugin's
+    // catch block converts into a result with empty code and a populated
+    // errors array (so consumers can surface diagnostics rather than crash).
+    plugin := makeHeraPlugin()
+    [t] := plugin.transpilers!
+    result := t.compile("bad.hera", "this is not a hera grammar :=:=:=\n")
+    assert result, "expected compile result"
+    typed := result! as { code: string, errors?: Error[] }
+    assert.equal typed.code, "", "expected empty code on parse failure"
+    assert typed.errors and typed.errors.length > 0, "expected at least one error"
+
+describe "createInMemoryDocFactory", ->
+  // Shared in-memory factory used by typecheck.civet and unplugin (any
+  // consumer that doesn't need vscode-languageserver-textdocument).
+  factory := createInMemoryDocFactory()
+
+  it "create() produces a doc satisfying TranspiledDoc", ->
+    doc := factory.create "file:///x/y.civet", "civet", 3, "hello"
+    assert.equal doc.uri, "file:///x/y.civet"
+    assert.equal doc.version, 3
+    assert.equal doc.getText(), "hello"
+
+  it "update() mutates text + version in place", ->
+    doc := factory.create "file:///x/y.civet", "civet", 0, "first"
+    factory.update doc, "second", 5
+    assert.equal doc.version, 5
+    assert.equal doc.getText(), "second"
+
+  it "uriToPath / pathToUri round-trip a path", ->
+    p := path.resolve "./source/parser.hera"
+    uri := factory.pathToUri p
+    assert uri.startsWith "file://"
+    assert.equal factory.uriToPath(uri), p
+
+describe "makeIncrementalTypecheckProgram", ->
+  // The incremental typecheck path bypasses LanguageService; these
+  // tests stand it up against a tiny on-disk project so the
+  // CompilerHost overrides (getSourceFile / fileExists /
+  // resolveModuleNameLiterals) and the BuilderProgram cache flow are
+  // covered without depending on `civet --typecheck` running in CI.
+
+  it "compiles a clean project to an EmitAndSemanticDiagnosticsBuilderProgram", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-clean-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","strict":true,"jsx":"preserve"},"include":["**/*.civet"]}'
+      civetPath := path.join tmpDir, 'main.civet'
+      writeFileSync civetPath, "x: number := 5\nconsole.log x\n"
+
+      { builder, getMeta, configErrors } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      assert.equal configErrors.length, 0, "tsconfig should parse cleanly"
+
+      program := builder.getProgram()
+      civetTsx := program.getSourceFiles().find (sf) => sf.fileName.endsWith 'main.civet.tsx'
+      assert civetTsx, "program should include the synthetic .civet.tsx sibling"
+
+      diagnostics := builder.getSemanticDiagnostics civetTsx
+      assert.equal diagnostics.length, 0, `expected no diagnostics, got: ${diagnostics.map(.messageText).join(' | ')}`
+
+      meta := getMeta civetPath
+      assert meta?.sourcemapLines, "getMeta should return sourcemap lines for the .civet source"
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "captures parse errors as fatal FileMeta (sourceFile undefined)", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-parse-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","strict":true,"jsx":"preserve"},"include":["**/*.civet"]}'
+      civetPath := path.join tmpDir, 'broken.civet'
+      // Malformed civet that fails to parse (unbalanced quote).
+      writeFileSync civetPath, "x := 'unterminated\n"
+
+      { getMeta } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      meta := getMeta civetPath
+      assert meta?.fatal or (meta?.parseErrors and meta.parseErrors.length > 0),
+        `expected fatal/parseErrors meta for broken.civet, got: ${JSON.stringify meta}`
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "surfaces type errors from civet sources via per-file diagnostics", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-errors-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","strict":true,"jsx":"preserve"},"include":["**/*.civet"]}'
+      civetPath := path.join tmpDir, 'bad.civet'
+      writeFileSync civetPath, "x: number := 'wrong type'\n"
+
+      { builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      program := builder.getProgram()
+      target := program.getSourceFiles().find (sf) => sf.fileName.endsWith 'bad.civet.tsx'
+      assert target
+      diagnostics := builder.getSemanticDiagnostics target
+      assert diagnostics.length > 0,
+        "expected at least one type error from `x: number := 'wrong type'`"
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "resolves cross-file civet imports via resolveModuleNameLiterals", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-imports-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","strict":true,"jsx":"preserve"},"include":["**/*.civet"]}'
+      writeFileSync path.join(tmpDir, 'dep.civet'), "export answer := 42\n"
+      consumerPath := path.join tmpDir, 'consumer.civet'
+      writeFileSync consumerPath, "{ answer } from ./dep.civet\nconsole.log answer\n"
+
+      { builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      program := builder.getProgram()
+      depTsx := program.getSourceFiles().find (sf) => sf.fileName.endsWith 'dep.civet.tsx'
+      assert depTsx, "expected dep.civet.tsx to be in the program (resolveModuleNameLiterals)"
+
+      consumer := program.getSourceFiles().find (sf) => sf.fileName.endsWith 'consumer.civet.tsx'
+      assert consumer
+      diagnostics := builder.getSemanticDiagnostics consumer
+      assert.equal diagnostics.length, 0,
+        `expected no diagnostics on the consumer, got: ${diagnostics.map(.messageText).join(' | ')}`
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "fileExists override redirects synthetic .civet.tsx to the on-disk .civet source", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-fileexists-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","strict":true,"jsx":"preserve"},"include":["**/*.civet"]}'
+      civetPath := path.join tmpDir, 'main.civet'
+      writeFileSync civetPath, "x: number := 1\n"
+
+      { host } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      assert.equal host.fileExists(civetPath + '.tsx'), true
+      assert.equal host.fileExists(path.join(tmpDir, 'missing.civet.tsx')), false
+      assert.equal host.fileExists(path.join(tmpDir, 'something.foo.bar')), false
+      assert.equal host.fileExists(path.join(tmpDir, 'tsconfig.json')), true
+      assert.equal host.fileExists(path.join(tmpDir, 'no-such-file.json')), false
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "falls back to ts.resolveModuleName for non-civet imports", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-resolve-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","strict":true,"jsx":"preserve","allowJs":true,"module":"esnext","moduleResolution":"bundler"},"include":["**/*.civet","**/*.ts"]}'
+      writeFileSync path.join(tmpDir, 'sibling.ts'),
+        'export const greeting: string = "hello";\n'
+      civetPath := path.join tmpDir, 'main.civet'
+      writeFileSync civetPath, '{ greeting } from ./sibling\nconsole.log greeting\n'
+
+      { builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      program := builder.getProgram()
+      consumer := program.getSourceFiles().find (sf) => sf.fileName.endsWith 'main.civet.tsx'
+      assert consumer
+      diagnostics := builder.getSemanticDiagnostics consumer
+      assert.equal diagnostics.length, 0,
+        `expected the .ts import to resolve cleanly, got: ${diagnostics.map(.messageText).join(' | ')}`
+      assert program.getSourceFiles().some((sf) => sf.fileName.endsWith 'sibling.ts'),
+        "expected sibling.ts in program after resolveModuleName fallback"
+    finally
+      rmSync tmpDir, { recursive: true, force: true }
+
+  it "wires through tsconfig.references into IncrementalProgramOptions.projectReferences", ->
+    // Project references force the conditional assignment on the
+    // programOptions builder (line 197 of typecheck.civet).
+    refRoot := mkdtempSync path.join tmpdir(), 'civet-refs-'
+    try
+      depDir := path.join refRoot, 'dep'
+      mainDir := path.join refRoot, 'main'
+      mkdirSync depDir, recursive: true
+      mkdirSync mainDir, recursive: true
+      writeFileSync path.join(depDir, 'tsconfig.json'), JSON.stringify
+        compilerOptions:
+          target: 'es2020'
+          composite: true
+          outDir: 'out'
+          declaration: true
+          declarationMap: false
+        include: ['*.ts']
+      writeFileSync path.join(depDir, 'dep.ts'), 'export const dep = 1\n'
+      writeFileSync path.join(mainDir, 'tsconfig.json'), JSON.stringify
+        compilerOptions:
+          target: 'es2020'
+          strict: true
+        include: ['*.civet']
+        references: [{ path: '../dep' }]
+      writeFileSync path.join(mainDir, 'main.civet'), "console.log 1\n"
+
+      { builder, configErrors } := makeIncrementalTypecheckProgram mainDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      assert.equal configErrors.length, 0, "main tsconfig should parse"
+      // Just instantiating the program with projectReferences set is enough
+      // to walk the assignment branch; assert the builder loaded.
+      assert builder.getProgram().getSourceFiles().length > 0
+    finally
+      rmSync refRoot, recursive: true, force: true
+
+  it "treats a transpiler returning empty/falsy code as no SourceFile", ->
+    // typecheck.civet's getSourceFile override: `return undefined unless
+    // result and result.code` — exercised with a plugin whose compile
+    // returns a result without code.
+    emptyPlugin := {
+      name: 'empty-result-test'
+      transpilers: [{
+        extension: '.empty'
+        target: ts.Extension.Tsx
+        compile: (_path: string, _source: string) =>
+          // Truthy result, but code is the empty string — falls through.
+          code: ''
+      }]
+    }
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-empty-result-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","jsx":"preserve"},"include":["**/*.empty"]}'
+      writeFileSync path.join(tmpDir, 'main.empty'), "anything\n"
+      { builder } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [emptyPlugin]
+      }
+      program := builder.getProgram()
+      // No .empty.tsx in the program because getSourceFile returned undefined.
+      assert not program.getSourceFiles().some((sf) => sf.fileName.endsWith 'main.empty.tsx'),
+        "expected no synthetic main.empty.tsx (empty code returned undefined SourceFile)"
+    finally
+      rmSync tmpDir, recursive: true, force: true
+
+  it "TS<5 resolveModuleNames hook resolves transpiled siblings", ->
+    // Modern TS uses resolveModuleNameLiterals, but typecheck.civet also
+    // installs resolveModuleNames for TS 4.x compat.  Call it directly off
+    // the returned host to exercise its body (line 173-187 of typecheck.civet).
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-rmn-direct-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","jsx":"preserve","allowNonTsExtensions":true},"include":["**/*.civet"]}'
+      writeFileSync path.join(tmpDir, 'dep.civet'), "export answer := 42\n"
+      consumerPath := path.join tmpDir, 'consumer.civet'
+      writeFileSync consumerPath, "{ answer } from ./dep.civet\nconsole.log answer\n"
+
+      { builder, host } := makeIncrementalTypecheckProgram tmpDir, {
+        plugins: [makeCivetPlugin()]
+      }
+      // Arm 1: with a real containingSourceFile (pull from the program so
+      // the imports array is populated for ts.getModeForResolutionAtIndex).
+      srcFile := builder.getProgram().getSourceFile consumerPath + '.tsx'
+      assert srcFile, "expected the consumer .tsx in the program"
+      resolvedWith := (host as any).resolveModuleNames(['./dep.civet'], consumerPath + '.tsx', undefined, undefined, { target: ts.ScriptTarget.ES2020, allowNonTsExtensions: true }, srcFile)
+      assert.equal resolvedWith.length, 1
+      // Arm 2: containingSourceFile undefined → short-circuit arm.
+      resolvedWithout := (host as any).resolveModuleNames(['./dep.civet'], consumerPath + '.tsx', undefined, undefined, { target: ts.ScriptTarget.ES2020, allowNonTsExtensions: true }, undefined)
+      assert.equal resolvedWithout.length, 1
+    finally
+      rmSync tmpDir, recursive: true, force: true
+
+  it "writes tsbuildinfo and skips affected work on a warm rerun", ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-incremental-warm-'
+    try
+      writeFileSync path.join(tmpDir, 'tsconfig.json'),
+        '{"compilerOptions":{"target":"es2020","strict":true,"jsx":"preserve"},"include":["**/*.civet"]}'
+      writeFileSync path.join(tmpDir, 'main.civet'), "x: number := 5\nconsole.log x\n"
+      tsbi := path.join tmpDir, '.tsbuildinfo'
+
+      runOnce := =>
+        { builder } := makeIncrementalTypecheckProgram tmpDir, {
+          plugins: [makeCivetPlugin()]
+          extraCompilerOptions: { incremental: true, tsBuildInfoFile: tsbi, noEmit: false }
+        }
+        affected .= 0
+        loop
+          r := builder.getSemanticDiagnosticsOfNextAffectedFile()
+          break unless r
+          affected++
+        builder.emit undefined, ((fn, data) =>
+          writeFileSync fn, data if fn is tsbi
+        ), undefined, false
+        affected
+
+      firstAffected := runOnce()
+      assert firstAffected > 0, "first run should re-check at least one file"
+
+      secondAffected := runOnce()
+      assert.equal secondAffected, 0,
+        `warm rerun should skip every file; got ${secondAffected} affected`
+    finally
+      rmSync tmpDir, { recursive: true, force: true }

@@ -163,3 +163,4 @@ hx --health civet
 ## Tooling
 
 - [YavaScript](https://github.com/suchipi/yavascript) is a standalone script runner supporting Civet (no Node required)
+- [mcp-language-server](https://github.com/STRd6/mcp-language-server) exposes `civet-lsp` to AI agents over the Model Context Protocol (diagnostics, hover, go-to-definition, references, edits)
