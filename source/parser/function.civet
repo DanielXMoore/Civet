@@ -8,6 +8,7 @@ import type {
   ASTNodeObject
   ASTNodeParent
   ASTRef
+  AssignmentExpression
   AtBindingProperty
   Binding
   BindingElement
@@ -277,11 +278,39 @@ function processReturnValue(func: FunctionNode)
         makeNode wrapTypeInApplication returnType.t, "Awaited"
         returnType
 
+  // If return.value is assigned exactly once, by a plain `=` assignment at the
+  // top level of the function body that precedes any other use, merge the
+  // declaration into that assignment as `const` so output satisfies eslint's
+  // prefer-const (#1487)
+  merged .= false
+  unless declaration
+    valueSet := new Set<ASTNode> values
+    let writeExp: AssignmentExpression?
+    writeCount .= 0
+    for each exp of gatherRecursiveAll block, .type is "AssignmentExpression"
+      for each [, lhs, , op] of exp.lhs ?? []
+        continue unless valueSet.has lhs
+        writeCount++
+        if exp.lhs# is 1 and op.token is "="
+          writeExp = exp
+    for each exp of gatherRecursiveAll block, .type is "UpdateExpression"
+      writeCount++ if valueSet.has exp.assigned
+    if writeCount is 1 and writeExp? and
+       block.expressions.some(([, s]) => s is writeExp) and
+       // No use of return.value (including bare `return`, which becomes
+       // `return ret`) may precede the write
+       gatherRecursiveWithinFunction(block, (n) =>
+         n.type is "ReturnValue" or (n.type is "ReturnStatement" and not n.expression)
+       )[0] is writeExp.lhs[0][1]
+      writeExp.children.unshift "const "
+      writeExp.lhs[0][1].children = [ref, returnType] if returnType
+      merged = true
+
   // Modify existing declaration, or add declaration of return.value after {
   if declaration
     unless declaration.typeSuffix?
       declaration.children![1] = declaration.typeSuffix = returnType
-  else
+  else if not merged
     block.expressions.unshift [
       getIndent block.expressions[0]
       makeNode
