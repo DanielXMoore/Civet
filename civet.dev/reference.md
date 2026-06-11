@@ -1198,9 +1198,11 @@ function greet() console.log "Hello"
 function f sideEffect()
 </Playground>
 
-An identifier immediately after `function` is treated as the
-function's name, so an anonymous one-liner whose body starts with
-an identifier needs `do` to mark where the body begins.
+Only the first identifier after `function` is treated as the
+function's name; everything after the name is the body, never a
+parameter list (parameters always need parentheses).
+An anonymous one-liner whose body starts with an identifier
+therefore needs `do` to mark where the body begins.
 You can also write `do` after any function header for clarity:
 
 <Playground>
