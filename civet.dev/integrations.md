@@ -145,9 +145,9 @@ hx --health civet
 
 ## Starter Templates
 
-- [Astro, esbuild, NextJS, Farm, Rolldown, Rollup, Vite, and Webpack](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin-examples)
+- [Astro, esbuild, NextJS, Farm, Rolldown, Rollup, SolidStart, Vite, and Webpack](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin-examples)
 - [Solid](https://github.com/edemaine/civet-solid-vite-template) ([older](https://github.com/orenelbaum/solid-civet-template))
-- [SolidStart](https://github.com/orenelbaum/solid-start-civet-template)
+- [SolidStart](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin-examples/solid-start) ([older](https://github.com/orenelbaum/solid-start-civet-template))
 - [p5.js](https://codesandbox.io/p/sandbox/drawing-points-civet-2tk4jq)
 
 ## Linters

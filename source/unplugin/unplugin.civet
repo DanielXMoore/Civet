@@ -9,6 +9,9 @@ import {
   // is the one published to npm, not the one in the repo
 } from '@danielx/civet/ts-diagnostic'
 import * as fs from 'fs'
+// Mutable fs module object (the `import * as` namespace is read-only in ESM);
+// patchVinxiFsRouter temporarily swaps readFileSync on it.
+import nodeFs from 'fs'
 import path from 'path'
 import { pathToFileURL } from 'url'
 import type {
@@ -89,6 +92,20 @@ type CacheEntry
   mtime: number
   result?: TransformResult
   promise?: Promise<void>
+
+// vinxi (the framework underlying SolidStart and similar) attaches its
+// router schema to each router's vite config.  Filesystem routers analyze
+// route modules for exports by reading the file off disk and parsing it
+// with esbuild's tsx loader (vinxi/lib/fs-router.js `analyzeModule`),
+// which cannot parse Civet source.  See patchVinxiFsRouter below.
+type VinxiFsRouter
+  toRoute: (src: string) => unknown
+type VinxiRouterSchema
+  internals?: { routes?: VinxiFsRouter | undefined }
+type VinxiViteConfig
+  router?: VinxiRouterSchema
+
+patchedVinxiRouters := new WeakSet<VinxiFsRouter>
 
 queryPostfixRE := /\?.*$/s
 escapedHashRE := /\0#/g
@@ -236,22 +253,77 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
 
   cache := new Map<string, CacheEntry> unless options.cache is false
 
+  loadCompileOptions := async (): Promise<CompileOptions> =>
+    civetConfigPath .= options.config
+    if civetConfigPath is undefined
+      civetConfigPath = await findInDir process.cwd()
+    loaded: CompileOptions .= {}
+    if civetConfigPath
+      loaded = await loadConfig civetConfigPath
+    // Merge parseOptions, with plugin options taking priority
+    loaded.parseOptions = {
+      ...loaded.parseOptions
+      ...options.parseOptions
+    }
+    loaded
+
+  // Whether we're running inside a vinxi app (SolidStart etc.)
+  vinxi .= false
+  let vinxiCompileOptions: Promise<CompileOptions>?
+
+  // vinxi's filesystem routers enumerate a route module's exports with
+  // `analyzeModule`, which reads the file synchronously off disk and
+  // parses it as TSX — failing on raw Civet source and silently dropping
+  // the route (#1319).  Wrap toRoute so `.civet` routes hand the analyzer
+  // compiled TSX instead.  Runs from the vite `config` hook: `enforce:
+  // 'pre'` puts it before vinxi's own config hooks that first materialize
+  // routes, and before buildStart (hence the separate lazy config load).
+  function patchVinxiFsRouter(router: VinxiViteConfig['router']): void
+    routes := router?.internals?.routes
+    return unless routes? and typeof routes.toRoute is 'function'
+    return if patchedVinxiRouters.has routes
+    patchedVinxiRouters.add routes
+    originalToRoute := routes.toRoute
+    routes.toRoute = async (src: string) =>
+      return originalToRoute.call routes, src unless src.endsWith civetSuffix
+      rawSource := decode await fs.promises.readFile src
+      vinxiCompileOptions ??= loadCompileOptions()
+      compiled: string := await civet.compile rawSource, {
+        ...await vinxiCompileOptions
+        filename: src
+        js: false
+      }
+      // Substitute the compiled TSX while the original toRoute runs its
+      // readFileSync + esbuild analysis on `src`.
+      realReadFileSync := nodeFs.readFileSync
+      nodeFs.readFileSync = ((file: unknown, ...args: unknown[]) =>
+        file is src ? compiled : (realReadFileSync as any).call(nodeFs, file, ...args)
+      ) as typeof nodeFs.readFileSync
+      try
+        await originalToRoute.call routes, src
+      finally
+        nodeFs.readFileSync = realReadFileSync
+
+  // Patch vinxi filesystem routers as soon as the app exists.  `vinxi
+  // build` builds each router in a subprocess, while the parent process
+  // also materializes routes (for the nitro route manifest) without ever
+  // running a vite hook — so the vite `config` hook below can't cover it.
+  // Plugin construction happens while the app config module evaluates;
+  // by the first microtask vinxi's createApp has stored the app on
+  // globalThis (in the parent and in each subprocess alike).
+  queueMicrotask =>
+    routers := (globalThis as {app?: {config?: {routers?: VinxiRouterSchema[]}}}).app?.config?.routers
+    return unless Array.isArray routers
+    for each router of routers
+      patchVinxiFsRouter router
+
   plugin := {
     name: 'unplugin-civet'
     enforce: 'pre'
 
     buildStart(): Promise<void>
       pluginResolvedIds.clear()
-      civetConfigPath .= options.config
-      if civetConfigPath is undefined
-        civetConfigPath = await findInDir process.cwd()
-      if civetConfigPath
-        compileOptions = await loadConfig civetConfigPath
-      // Merge parseOptions, with plugin options taking priority
-      compileOptions.parseOptions = {
-        ...compileOptions.parseOptions
-        ...options.parseOptions
-      }
+      compileOptions = await loadCompileOptions()
       compileOptions.threads = options.threads if options.threads?
 
       if transformTS or ts is "tsc"
@@ -694,7 +766,12 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
       // (we set the loader explicitly instead).  Keeping the .jsx/.tsx suffix
       // would cause esbuild to use it as the filename in diagnostics, producing
       // confusing messages like "main.civet.jsx" instead of "main.civet".
-      return resolved + (meta.framework is 'esbuild' ? '' : outExt) + postfix
+      // For vinxi, route chunks are looked up in vite's build manifest by the
+      // original `.civet` path, so a rewritten id breaks that correspondence;
+      // downstream JSX transforms key off the configured route extensions
+      // (e.g. SolidStart forwards `extensions` to vite-plugin-solid) instead
+      // of the id suffix.
+      return resolved + (meta.framework is 'esbuild' or vinxi ? '' : outExt) + postfix
 
     loadInclude(id)
       {filename, postfix} := extractCivetFilename id, outExt
@@ -866,6 +943,14 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
     }
     vite: {
       config(config: UserConfig): void
+        // vinxi-based frameworks (e.g. SolidStart) run a vite build per
+        // router and attach the router schema to its vite config.
+        if (config as VinxiViteConfig).router
+          vinxi = true
+          patchVinxiFsRouter (config as VinxiViteConfig).router
+          if ts is 'preserve'
+            console.log 'WARNING: `ts: "preserve"` is not supported with vinxi-based frameworks; TypeScript syntax would reach the bundler untransformed. Use `ts: "civet"`, `"esbuild"`, or `"tsc"` instead.'
+
         // Vite 7 requires us to skip processing ?worker
         // and instead process a followup request for ?worker_file
         // Luckily, Vite 7 introduced @meta.viteVersion for detection
@@ -901,7 +986,7 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         // so for our case it should end with .civet extension
         return unless file.endsWith '.civet'
         // Convert into path as would be output by `resolveId`
-        resolvedId := slash path.resolve(file) + outExt
+        resolvedId := slash path.resolve(file) + (vinxi ? '' : outExt)
         // Check for modules for this file
         if fileModules := server.moduleGraph.getModulesByFile resolvedId
           // Invalidate modules depending on this one
