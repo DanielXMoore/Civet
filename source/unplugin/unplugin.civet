@@ -107,6 +107,25 @@ type VinxiViteConfig
 
 patchedVinxiRouters := new WeakSet<VinxiFsRouter>
 
+// Active analysis substitutions: route file path → compiled TSX.  A single
+// permanent readFileSync intercept consults this map rather than each
+// analysis swapping the function pointer — concurrent toRoute calls (e.g.
+// two routers analyzing in dev) would race a save/restore pattern, since
+// restoring brackets an await.  set/delete are synchronous around the
+// analyzer's synchronous read, so entries can't leak across calls.
+vinxiAnalysisSubstitutions := new Map<string, string>()
+vinxiReadFileSyncPatched .= false
+function installVinxiReadFileSyncIntercept(): void
+  return if vinxiReadFileSyncPatched
+  vinxiReadFileSyncPatched = true
+  realReadFileSync := nodeFs.readFileSync
+  nodeFs.readFileSync = ((file: unknown, ...args: unknown[]) =>
+    if vinxiAnalysisSubstitutions.has file as string
+      vinxiAnalysisSubstitutions.get(file as string)!
+    else
+      (realReadFileSync as any).call nodeFs, file, ...args
+  ) as typeof nodeFs.readFileSync
+
 queryPostfixRE := /\?.*$/s
 escapedHashRE := /\0#/g
 isWindows := os.platform() is 'win32'
@@ -295,14 +314,12 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
       }
       // Substitute the compiled TSX while the original toRoute runs its
       // readFileSync + esbuild analysis on `src`.
-      realReadFileSync := nodeFs.readFileSync
-      nodeFs.readFileSync = ((file: unknown, ...args: unknown[]) =>
-        file is src ? compiled : (realReadFileSync as any).call(nodeFs, file, ...args)
-      ) as typeof nodeFs.readFileSync
+      installVinxiReadFileSyncIntercept()
+      vinxiAnalysisSubstitutions.set src, compiled
       try
         await originalToRoute.call routes, src
       finally
-        nodeFs.readFileSync = realReadFileSync
+        vinxiAnalysisSubstitutions.delete src
 
   // Patch vinxi filesystem routers as soon as the app exists.  `vinxi
   // build` builds each router in a subprocess, while the parent process
