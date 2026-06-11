@@ -1193,6 +1193,17 @@ function count()
 ### One-Line Functions
 
 <Playground>
+function f(x) console.log x
+function greet() console.log "Hello"
+function f sideEffect()
+</Playground>
+
+An identifier immediately after `function` is treated as the
+function's name, so an anonymous one-liner whose body starts with
+an identifier needs `do` to mark where the body begins.
+You can also write `do` after any function header for clarity:
+
+<Playground>
 function do console.log "Anonymous"
 function f do console.log "Named"
 function f(x) do console.log x
