@@ -3272,6 +3272,51 @@ export a, b, c from "./cool.js"
 export x = 3
 </Playground>
 
+### Export Renaming
+
+In export braces, `:` renames with object semantics: the key is the
+public (exported) name and the value is the local binding it refers to,
+mirroring `module.exports = {publicName: localValue}`.
+With `from`, the value is the name in the source module instead:
+
+<Playground>
+export { s: t }
+export { s: t } from "./stuff"
+export { type S: T }
+export { "string name": x }
+</Playground>
+
+::: info
+Imports and exports are duals: import braces act like *destructuring*
+(`import { s: t }` binds local `t` from the module's `s`), while export
+braces act like *constructing* the module's interface object.
+Either way, the key is the name in the module being imported from or
+exported, and the value is the local side.
+:::
+
+### Object-Construction Exports
+
+Extending the object analogy, a value in export braces can be an object
+literal built from local bindings, exported under the key's name:
+
+<Playground>
+export { a: {b, c} }
+</Playground>
+
+With `from`, the values name exports of the source module,
+which get imported first (nesting works too):
+
+<Playground>
+export { a: {b, c} } from "./m"
+export { a: {b}, d } from "./m"
+export { a: {b: {c}} } from "./m"
+</Playground>
+
+::: info
+Constructed exports are built once at module load, so unlike plain
+re-exports they are snapshots rather than live bindings.
+:::
+
 ### Export Default Shorthand
 
 Most declarations can also be `export default`:
