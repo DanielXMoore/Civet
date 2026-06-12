@@ -214,6 +214,8 @@ describe "unplugin: buildStart()", ->
     plugin := rawPlugin { ts: 'civet', config: false }, minMeta
 
     await plugin.buildStart()
+    // Second buildStart reuses the already-loaded compile options
+    await plugin.buildStart()
 
   it "accepts parseOptions merged in during buildStart", ->
     plugin := rawPlugin { ts: 'civet', config: false, parseOptions: { autoLet: true } }, minMeta
@@ -1545,12 +1547,49 @@ describe "unplugin: vinxi (SolidStart) support", ->
     plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
     raw := "x := 1\n"
     civetFile := await makeCivetRoute raw
+    original := fsSync.readFileSync
     { routes, router } := makeVinxiRouter()
     //@ts-expect-error vinxi vite config
     plugin.vite.config { router, build: {} }
     await routes.toRoute civetFile
+    assert.equal fsSync.readFileSync, original,
+      "the original readFileSync should be reinstalled once idle"
     assert.equal fsSync.readFileSync(civetFile, 'utf8'), raw,
       "reads outside toRoute should see the raw source again"
+
+  it "keeps the intercept installed across overlapping analyses", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    fileA := await makeCivetRoute "a := 1\nexport default -> a\n"
+    fileB := await makeCivetRoute "b := 2\nexport default -> b\n"
+    original := fsSync.readFileSync
+    reads: string[] := []
+    let releaseA: (() => void)?
+    gate := new Promise<void> (resolve) => releaseA = resolve
+    routes := {
+      toRoute: async (src: string) ->
+        reads.push fsSync.readFileSync src, 'utf8'
+        await gate if src is fileA
+        reads.push fsSync.readFileSync src, 'utf8'
+        { path: '/', src }
+    }
+    //@ts-expect-error vinxi vite config
+    plugin.vite.config { router: { internals: { routes } }, build: {} }
+    pA := routes.toRoute fileA
+    // Wait until A's analysis is in flight (holding the gate)
+    while reads# is 0
+      await new Promise (r) => setTimeout r, 1
+    assert.notEqual fsSync.readFileSync, original,
+      "intercept installed during analysis"
+    await routes.toRoute fileB
+    assert.notEqual fsSync.readFileSync, original,
+      "intercept stays installed while A is still in flight"
+    releaseA!()
+    await pA
+    assert.equal fsSync.readFileSync, original,
+      "original restored once the last analysis finishes"
+    assert.equal reads.length, 4
+    assert reads.every((r) => !r.includes(':=')),
+      `analysis saw raw Civet: ${JSON.stringify reads}`
 
   it "leaves non-civet routes alone", ->
     plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
