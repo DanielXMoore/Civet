@@ -12,6 +12,7 @@ import type {
   ASTNode
   ASTNodeObject
   ASTRef
+  AssignmentExpression
   BlockStatement
   BreakStatement
   Call
@@ -57,6 +58,7 @@ import type {
   TypeSuffix
   Loc
   UnaryOpSymbolLeaf
+  UpdateExpression
   WSNode
 } from ./types.civet
 
@@ -469,6 +471,29 @@ function handleThisPrivateShorthands(value: any): [any, any]
 
   return [value, value.thisShorthand]
 
+/**
+ * Do any of the given names get reassigned (via assignment or update
+ * expression) within the given subtree? Conservative: a write to a
+ * shadowing redeclaration of the same name also counts as a reassignment.
+ */
+function isReassignedIn(names: string[], node: ASTNode): boolean
+  nameSet := new Set names
+  gatherRecursiveAll node, (n): n is AssignmentExpression | UpdateExpression =>
+    n.type is like "AssignmentExpression", "UpdateExpression"
+  .some (exp) =>
+    targets :=
+      if exp.type is "AssignmentExpression"
+        // Parse-time AssignmentExpressions always carry lhs; only ref
+        // assignments synthesized by later passes omit it
+        exp.lhs.flatMap ([, lhs]) => assignedNamesOf lhs as ASTNodeObject
+      else
+        assignedNamesOf exp.assigned as ASTNodeObject
+    targets.some (name) => nameSet.has name
+
+/** Variable names a node rebinds when used as an assignment target. */
+function assignedNamesOf(node: ASTNodeObject): string[]
+  if "names" in node and Array.isArray node.names then node.names else []
+
 function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause[], ElseClause?, FinallyClause?])
   [t, , b, cs, e, f] .= $0
 
@@ -500,6 +525,9 @@ function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause[],
           assert.equal parameter.type, "CatchParameter",
             `Invalid catch parameter ${parameter.type}`
           { binding: pattern, typeSuffix } := parameter as NormalCatchParameter
+          // `catch` bindings are assignable, but use `const` when never
+          // reassigned so output satisfies eslint's prefer-const (#1487)
+          decl := if isReassignedIn pattern.names, clause.block then "let" else "const"
           initializer: Initializer :=
             type: "Initializer"
             expression: ref
@@ -516,10 +544,10 @@ function processTryBlock($0: [ASTLeaf, undefined, BlockStatement, CatchClause[],
           }]
           clause.block.expressions.unshift ["", {
             type: "Declaration"
-            children: ["let", " ", bindings]
+            children: [decl, " ", bindings]
             bindings
             names: bindings[0].names
-            decl: "let"
+            decl
           }, ";"]
 
         type: "DefaultClause"
