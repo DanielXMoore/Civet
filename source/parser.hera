@@ -57,6 +57,8 @@ import {
   processAssignmentDeclaration,
   processBinaryOpExpression,
   processCallMemberExpression,
+  processConstructedExport,
+  processConstructedExportFrom,
   processCoffeeDo,
   processCoffeeInterpolation,
   processForInOf,
@@ -98,6 +100,7 @@ import type {
   CommentNode,
   ComptimeStatement,
   Condition,
+  ConstructedExportSpecifier,
   Declaration,
   DeclarationKind,
   DebuggerStatement,
@@ -133,6 +136,7 @@ import type {
   MultiMethodDefinition,
   NamedBindingPattern,
   NamedImportElement,
+  NamedExports,
   NamespaceDeclaration,
   NonNullAssertion,
   ObjectBindingPattern,
@@ -6818,18 +6822,26 @@ ExportDeclaration
   Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedPostfixedExpressionOrCommaLoop ):declaration ->
     return { type: "ExportDeclaration", declaration, ts: declaration.ts, children: $0 }
   Export __ ExportFromClause:exports __ FromClause ->
+    if desugared := processConstructedExportFrom($0, exports, $5)
+      return desugared
     return { type: "ExportDeclaration", ts: "ts" in exports and exports.ts, children: $0 }
   # NOTE: from ... export ... reverse syntax
   FromClause:from __:fws Export:e __:ews ExportFromClause:exports ->
+    children := [ e, ews, exports, " ", from, trimFirstSpace(fws) ]
+    if desugared := processConstructedExportFrom(children, exports, from)
+      return desugared
     return {
       type: "ExportDeclaration",
       ts: "ts" in exports and exports.ts,
-      children: [ e, ews, exports, " ", from, trimFirstSpace(fws) ],
+      children,
     }
   # NOTE: Declaration and VariableStatement should come before NamedExports
   # so that NamedExports doesn't grab function, async, type, var, etc.
   # NOTE: TS decorators come before `export` keyword but TC39 stage 3 decorators proposal come after
   Decorators?:dec Export __ ( Declaration / VariableStatement / TypeAndNamedExports / ExportVarDec ):declaration ->
+    // `export { a: {b, c} }` → `const a = {b, c}; export { a as a }` (#1092)
+    if desugared := processConstructedExport($0, declaration)
+      return desugared
     // `export 😊 := 3` → `const u$…$ = 3; export { u$…$ as "😊" }`
     // (JS forbids string-named exports inside `export const`).
     splitClause := buildExportSplitClause(declaration)
@@ -6872,26 +6884,50 @@ TypeAndNamedExports
 
 # https://262.ecma-international.org/#prod-NamedExports
 NamedExports
-  OpenBrace ExportSpecifier* (__ Comma )? __ CloseBrace
+  OpenBrace ExportSpecifier*:specifiers (__ Comma )? __ CloseBrace ::NamedExports ->
+    return {
+      type: "NamedExports"
+      children: $0
+      specifiers
+      constructed: specifiers.filter (s) => s?.type is "ConstructedExportSpecifier"
+    }
   # Unbraced version: export x, y
   InsertInlineOpenBrace:open ImplicitExportSpecifier:first ( ImplicitObjectPropertyDelimiter ImplicitExportSpecifier )*:rest InsertCloseBrace:close &( StatementDelimiter / ( __ From )) ->
     return [open, first, ...rest, close]
 
 # https://262.ecma-international.org/#prod-ExportSpecifier
-# ImportAsToken allows `:` as shorthand for `as` (#1092), matching imports.
 ExportSpecifier
-  __:ws1 ( TypeKeyword __ )?:ts ModuleExportName:local ( ImportAsToken __ ModuleExportName )?:rename ObjectPropertyDelimiter:delim ->
+  __:ws1 ( TypeKeyword __ )?:ts ModuleExportName:local ( __ As __ ModuleExportName )?:rename ObjectPropertyDelimiter:delim ->
     // Local stays mangled (JS variable ref); external side uses propertyKey
     // so the exported name is the user-visible source.
     children :=
       if rename
-        [ws1, ts, local, rename[0], rename[1], propertyKey(rename[2]), delim]
+        [ws1, ts, local, rename[0], rename[1], rename[2], propertyKey(rename[3]), delim]
       else if local.unicode
         [ws1, ts, local, " as ", propertyKey(local), delim]
       else
         [ws1, ts, local, delim]
     return children unless ts
     return { ts: true, children }
+  # `exported: local` — object semantics (#1092): the key is the public name,
+  # like `module.exports = { publicName: localValue }`.  With `from`, the
+  # value side is the name in the source module.
+  __:ws1 ( TypeKeyword __ )?:ts ModuleExportName:exported __:ws2 Colon __:ws3 ModuleExportName:local ObjectPropertyDelimiter:delim ->
+    children := [ws1, ts, ws2, trimFirstSpace(ws3), local, " as ", propertyKey(exported), delim]
+    return children unless ts
+    return { ts: true, children }
+  # `exported: {…}` — construct an object and export it under the key (#1092).
+  # Desugared at the ExportDeclaration level by processConstructedExport /
+  # processConstructedExportFrom; children stay empty until then.
+  __:ws1 ModuleExportName:exported __:ws2 Colon __:ws3 BracedObjectLiteral:value ObjectPropertyDelimiter:delim ::ConstructedExportSpecifier ->
+    return {
+      type: "ConstructedExportSpecifier"
+      exported
+      value
+      ws: ws1
+      delim
+      children: []
+    }
 
 ImplicitExportSpecifier
   !Default ModuleExportName:local ( __ As __ ModuleExportName )?:rename ->
