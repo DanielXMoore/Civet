@@ -3203,7 +3203,11 @@ fs from fs/promises
 metadata from ./package.json with type: 'json'
 </Playground>
 
-### Import-Like Object Destructuring
+### Object-Destructuring Import
+
+Import braces act like object destructuring: the key is the name in the
+module and the value is the local binding (the dual of
+[Object-Constructing Export](#object-constructing-export)).
 
 <Playground>
 import {X: LocalX, Y: LocalY} from "./util"
@@ -3272,11 +3276,12 @@ export a, b, c from "./cool.js"
 export x = 3
 </Playground>
 
-### Export Renaming
+### Object-Constructing Export
 
-In export braces, `:` renames with object semantics: the key is the
-public (exported) name and the value is the local binding it refers to,
-mirroring `module.exports = {publicName: localValue}`.
+The dual of [Object-Destructuring Import](#object-destructuring-import):
+export braces act like constructing the module's interface object. `:`
+renames, where the key is the public (exported) name and the value is the
+local binding, mirroring `module.exports = {publicName: localValue}`.
 With `from`, the value is the name in the source module instead:
 
 <Playground>
@@ -3286,18 +3291,8 @@ export { type S: T }
 export { "string name": x }
 </Playground>
 
-::: info
-Imports and exports are duals: import braces act like *destructuring*
-(`import { s: t }` binds local `t` from the module's `s`), while export
-braces act like *constructing* the module's interface object.
-Either way, the key is the name in the module being imported from or
-exported, and the value is the local side.
-:::
-
-### Object-Construction Exports
-
-Extending the object analogy, a value in export braces can be an object
-literal built from local bindings, exported under the key's name:
+Extending the object analogy, a value can be an object literal built from
+local bindings, exported under the key's name:
 
 <Playground>
 export { a: {b, c} }
