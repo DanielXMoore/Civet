@@ -3203,7 +3203,11 @@ fs from fs/promises
 metadata from ./package.json with type: 'json'
 </Playground>
 
-### Import-Like Object Destructuring
+### Object-Destructuring Import
+
+Import braces act like object destructuring: the key is the name in the
+module and the value is the local binding (the dual of
+[Object-Constructing Export](#object-constructing-export)).
 
 <Playground>
 import {X: LocalX, Y: LocalY} from "./util"
@@ -3271,6 +3275,42 @@ Foo := import default from Foo
 export a, b, c from "./cool.js"
 export x = 3
 </Playground>
+
+### Object-Constructing Export
+
+The dual of [Object-Destructuring Import](#object-destructuring-import):
+export braces act like constructing the module's interface object. `:`
+renames, where the key is the public (exported) name and the value is the
+local binding, mirroring `module.exports = {publicName: localValue}`.
+With `from`, the value is the name in the source module instead:
+
+<Playground>
+export { s: t }
+export { s: t } from "./stuff"
+export { type S: T }
+export { "string name": x }
+</Playground>
+
+Extending the object analogy, a value can be an object literal built from
+local bindings, exported under the key's name:
+
+<Playground>
+export { a: {b, c} }
+</Playground>
+
+With `from`, the values name exports of the source module,
+which get imported first (nesting works too):
+
+<Playground>
+export { a: {b, c} } from "./m"
+export { a: {b}, d } from "./m"
+export { a: {b: {c}} } from "./m"
+</Playground>
+
+::: info
+Constructed exports are built once at module load, so unlike plain
+re-exports they are snapshots rather than live bindings.
+:::
 
 ### Export Default Shorthand
 

@@ -57,6 +57,8 @@ import {
   processAssignmentDeclaration,
   processBinaryOpExpression,
   processCallMemberExpression,
+  processConstructedExport,
+  processConstructedExportFrom,
   processCoffeeDo,
   processCoffeeInterpolation,
   processForInOf,
@@ -98,6 +100,7 @@ import type {
   CommentNode,
   ComptimeStatement,
   Condition,
+  ConstructedExportSpecifier,
   Declaration,
   DeclarationKind,
   DebuggerStatement,
@@ -133,9 +136,11 @@ import type {
   MultiMethodDefinition,
   NamedBindingPattern,
   NamedImportElement,
+  NamedExports,
   NamespaceDeclaration,
   NonNullAssertion,
   ObjectBindingPattern,
+  ObjectExpression,
   ObjectProperty,
   OperatorBehavior,
   OperatorDeclaration,
@@ -2484,8 +2489,8 @@ NWBindingIdentifier
     return { children: [$1], names: [] }
 
 AtIdentifierRef ::ASTRef
-  ReservedWord:r ->
-    return makeRef(`_${r}`, r)
+  # `@is`, `@loop`, etc. fall through to IdentifierName; makeRef +
+  # populateRefs keep the binding valid and unshadowed (see #1092 discussion).
   IdentifierName:id ->
     ref := makeRef(id.name)
     // Propagate so the binding side can emit `this["X"]` matching `@X`.
@@ -4004,7 +4009,7 @@ ObjectLiteral
   NestedImplicitObjectLiteral
   InlineObjectLiteral
 
-BracedObjectLiteral
+BracedObjectLiteral ::ObjectExpression
   # NOTE: Added {} followed by properties
   OpenBrace:open CloseBrace:close ApplicationStart AllowAll ( NestedPropertyDefinitions / SingleLineObjectProperties )?:properties RestoreAll ->
     return $skip unless properties?#
@@ -6834,18 +6839,26 @@ ExportDeclaration
   Decorators? Export __ Default __ ( HoistableDeclaration / ClassDeclaration / InterfaceDeclaration / MaybeNestedPostfixedExpressionOrCommaLoop ):declaration ->
     return { type: "ExportDeclaration", declaration, ts: declaration.ts, children: $0 }
   Export __ ExportFromClause:exports __ FromClause ->
+    if desugared := processConstructedExportFrom($0, exports, $5)
+      return desugared
     return { type: "ExportDeclaration", ts: "ts" in exports and exports.ts, children: $0 }
   # NOTE: from ... export ... reverse syntax
   FromClause:from __:fws Export:e __:ews ExportFromClause:exports ->
+    children := [ e, ews, exports, " ", from, trimFirstSpace(fws) ]
+    if desugared := processConstructedExportFrom(children, exports, from)
+      return desugared
     return {
       type: "ExportDeclaration",
       ts: "ts" in exports and exports.ts,
-      children: [ e, ews, exports, " ", from, trimFirstSpace(fws) ],
+      children,
     }
   # NOTE: Declaration and VariableStatement should come before NamedExports
   # so that NamedExports doesn't grab function, async, type, var, etc.
   # NOTE: TS decorators come before `export` keyword but TC39 stage 3 decorators proposal come after
   Decorators?:dec Export __ ( Declaration / VariableStatement / TypeAndNamedExports / ExportVarDec ):declaration ->
+    // `export { a: {b, c} }` → `const a = {b, c}; export { a as a }` (#1092)
+    if desugared := processConstructedExport($0, declaration)
+      return desugared
     // `export 😊 := 3` → `const u$…$ = 3; export { u$…$ as "😊" }`
     // (JS forbids string-named exports inside `export const`).
     splitClause := buildExportSplitClause(declaration)
@@ -6888,7 +6901,13 @@ TypeAndNamedExports
 
 # https://262.ecma-international.org/#prod-NamedExports
 NamedExports
-  OpenBrace ExportSpecifier* (__ Comma )? __ CloseBrace
+  OpenBrace ExportSpecifier*:specifiers (__ Comma )? __ CloseBrace ::NamedExports ->
+    return {
+      type: "NamedExports"
+      children: $0
+      specifiers
+      constructed: specifiers.filter (s): s is ConstructedExportSpecifier => not Array.isArray(s) and s?.type is "ConstructedExportSpecifier"
+    }
   # Unbraced version: export x, y
   InsertInlineOpenBrace:open ImplicitExportSpecifier:first ( ImplicitObjectPropertyDelimiter ImplicitExportSpecifier )*:rest InsertCloseBrace:close &( StatementDelimiter / ( __ From )) ->
     return [open, first, ...rest, close]
@@ -6907,6 +6926,30 @@ ExportSpecifier
         [ws1, ts, local, delim]
     return children unless ts
     return { ts: true, children }
+  # `exported: local` — object semantics (#1092): the key is the public name,
+  # like `module.exports = { publicName: localValue }`.  With `from`, the
+  # value side is the name in the source module.
+  __:ws1 ( TypeKeyword __ )?:ts ModuleExportName:exported __:ws2 Colon __:ws3 ModuleExportName:local ObjectPropertyDelimiter:delim ->
+    children := [ws1, ts, ws2, trimFirstSpace(ws3), local, " as ", propertyKey(exported), delim]
+    return children unless ts
+    return { ts: true, children }
+  # `exported: {…}` — construct an object and export it under the key (#1092).
+  # Desugared at the ExportDeclaration level by processConstructedExport /
+  # processConstructedExportFrom; children stay empty until then.
+  # `!Colon` keeps `type` usable as the export name (`export { type: {b} }`);
+  # an actual TypeKeyword prefix parses so the type-only error is clear.
+  __:ws1 ( TypeKeyword __ !Colon )?:ts ModuleExportName:exported __:ws2 Colon __:ws3 BracedObjectLiteral:value ObjectPropertyDelimiter:delim ::ConstructedExportSpecifier ->
+    return {
+      type: "ConstructedExportSpecifier"
+      exported
+      value
+      ts: !!ts
+      ws: ws1
+      ws2
+      ws3
+      delim
+      children: []
+    }
 
 ImplicitExportSpecifier
   !Default ModuleExportName:local ( __ As __ ModuleExportName )?:rename ->
@@ -10079,7 +10122,7 @@ Reset
 Init
   Shebang? Prologue:directives ->
     directives.forEach (directive) =>
-      if directive.type is "CivetPrologue"
+      if not Array.isArray(directive) and directive.type is "CivetPrologue"
         Object.assign(config, directive.config)
 
     if config.strict

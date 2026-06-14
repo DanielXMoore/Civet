@@ -2,21 +2,28 @@ import type {
   AccessStart
   ASTLeaf
   ASTNode
+  ASTNodeObject
   ASTNodeParent
   ASTRef
   AwaitExpression
   Binding
   BlockStatement
+  Children
+  ConstructedExportSpecifier
   Declaration
+  ExportDeclaration
   ExpressionNode
+  Identifier
   IfStatement
   ImportClause
   ImportDeclaration
   Initializer
   IterationStatement
   LexicalDeclaration
+  ObjectExpression
   ParenthesizedExpression
   StatementTuple
+  StringLiteral
   SwitchStatement
   ThisAssignments
   TypeSuffix
@@ -37,8 +44,11 @@ import {
 import {
   findAncestor
   findChildIndex
+  gatherRecursive
   gatherRecursiveAll
 } from ./traversal.civet
+
+import { propertyKey } from ./identifier.civet
 
 import {
   getPatternBlockPrefix
@@ -49,6 +59,7 @@ import {
   append
   assert
   convertOptionalType
+  getTrimmingSpace
   insertTrimmingSpace
   isExit
   isWhitespaceOrEmpty
@@ -776,6 +787,124 @@ function convertWithClause(withClause: WithClause, extendsClause?: [ASTLeaf, WSN
   // Ensure at least one space after extends token
   return [ extendsToken, insertTrimmingSpace(ws, " "), wrapped ]
 
+// Base the ref on the public name so unconflicted output reads naturally
+// (`const a = {b, c}; export { a as a }`).
+function constructedExportRef(spec: ConstructedExportSpecifier): ASTRef
+  makeRef spec.exported.type is "Identifier" ? spec.exported.name : "ref"
+
+// Output node for the public name in `… as <name>` position.  Plain
+// identifiers emit their raw token so populateRefs doesn't count the public
+// name as a taken binding (which would needlessly bump the ref to `a1`);
+// unicode and string names emit quoted.
+function exportedName(exported: Identifier | StringLiteral): ASTNode
+  if exported.type is "Identifier"
+    return propertyKey(exported) if exported.unicode
+    return exported.children[0]
+  exported
+
+/**
+ * Object-construction exports (#1092): `export { a: {b, c} }` reads as an
+ * object literal defining the module interface — the key is the public name,
+ * the value an object built from local bindings.  Desugars to
+ * `const a = {b, c}; export { a as a }`.  Returns undefined when the export
+ * declaration has no ConstructedExportSpecifier.
+ */
+function processConstructedExport(children: ASTNode[], declaration: ASTNode): ASTNode[] | undefined
+  constructed := gatherRecursive declaration, .type is "ConstructedExportSpecifier"
+  return unless constructed#
+  statements: ASTNode[] := []
+  // Error but don't short-circuit: the LSP renders this to TSX, so desugaring
+  // anyway gives tsserver real symbols. The Error node still flags it.
+  if (declaration as! {ts?: boolean}).ts or constructed.some .ts
+    statements.push {
+      type: "Error"
+      message: "Object-construction exports cannot be type-only"
+    }
+  for each spec of constructed
+    ref := constructedExportRef spec
+    statements.push "const ", ref, " = ", trimFirstSpace(spec.ws3), spec.value, ";"
+    spec.children = [spec.ws, trimFirstSpace(spec.ws2), ref, " as ", exportedName(spec.exported), spec.delim] as Children
+  statements.push { type: "ExportDeclaration", children } as ExportDeclaration
+  statements
+
+/**
+ * `export { a: {b, c} } from "./m"` — construction from a module (#1092):
+ * leaf identifier values name exports of the source module.  Desugars to
+ * `import { b as b1, c as c1 } from "./m"; const a = {b: b1, c: c1};
+ * export { a as a }`, keeping any simple specifiers as a static re-export.
+ * Returns undefined when the clause has no ConstructedExportSpecifier.
+ */
+function processConstructedExportFrom(children: ASTNode[], exports: ASTNode, from: ASTNode): ASTNode[] | undefined
+  constructed := gatherRecursive exports, .type is "ConstructedExportSpecifier"
+  return unless constructed#
+  statements: ASTNode[] := []
+  // Error but don't short-circuit (see processConstructedExport).
+  if (exports as! {ts?: boolean}).ts or constructed.some .ts
+    statements.push {
+      type: "Error"
+      message: "Object-construction exports cannot be type-only"
+    }
+  // Leaf identifier values inside the construction are names in the source
+  // module; rewrite them to refs and import them (deduped) under those refs.
+  imports := new Map<string, [ASTNode, ASTRef]>()
+  for each spec of constructed
+    importizeConstructedValue spec.value, imports, statements
+  importSpecs: ASTNode[] := []
+  for [source, ref] of imports.values()
+    importSpecs.push ", " if importSpecs#
+    importSpecs.push source, " as ", ref
+  statements.push "import { ", importSpecs, " } ", from, ";"
+  exportSpecs: ASTNode[] := []
+  for each spec of constructed
+    ref := constructedExportRef spec
+    statements.push "const ", ref, " = ", trimFirstSpace(spec.ws3), spec.value, ";"
+    exportSpecs.push ", " if exportSpecs#
+    exportSpecs.push trimFirstSpace(spec.ws), trimFirstSpace(spec.ws2), ref, " as ", exportedName(spec.exported)
+  statements.push "export { ", exportSpecs, " }"
+  // Simple specifiers (if any) stay as a static re-export; the constructed
+  // specifiers have empty children so they vanish from `children`.
+  named := gatherRecursive(exports, .type is "NamedExports")[0]
+  if named.specifiers# > constructed#
+    statements.push ";", { type: "ExportDeclaration", children } as ExportDeclaration
+  statements
+
+function importizeConstructedValue(value: ObjectExpression, imports: Map<string, [ASTNode, ASTRef]>, statements: ASTNode[]): void
+  for each prop of value.properties
+    unless prop.type is "Property"
+      statements.push {
+        type: "Error"
+        message: `Unsupported ${prop.type} in object-construction export from a module`
+      }
+      continue
+    { value: v } := prop
+    switch (v as ASTNodeObject?)?.type
+      when "ObjectExpression"
+        importizeConstructedValue v as ObjectExpression, imports, statements
+      when "Identifier"
+        id := v as Identifier
+        entry .= imports.get id.name
+        unless entry
+          // The value node may carry leading whitespace (`{b: c}`) — trim it
+          // for the import specifier, keep it in the object via the ref swap.
+          entry = [trimFirstSpace(propertyKey(id)), makeRef(id.name)]
+          imports.set id.name, entry
+        ref := entry[1]
+        refWithSpace := [getTrimmingSpace(id), ref]
+        if prop.implicitName
+          // `{b}` shorthand: keep the key; the value becomes the imported
+          // ref.  Splice right after the name — a trailing delim may follow.
+          expanded := [...prop.children]
+          expanded.splice expanded.indexOf(id) + 1, 0, ": ", ref
+          prop.children = expanded as Children
+        else
+          prop.children = prop.children.map((c) => c is id ? refWithSpace : c) as Children
+        prop.value = ref
+      else
+        statements.push {
+          type: "Error"
+          message: "Values in an object-construction export from a module must be identifiers or nested object literals"
+        }
+
 export {
   convertWithClause
   processStaticImport
@@ -783,6 +912,8 @@ export {
   dynamizeImportDeclarationExpression
   prependStatementExpressionBlock
   processAssignmentDeclaration
+  processConstructedExport
+  processConstructedExportFrom
   processDeclarationConditions
   processDeclarations
 }
