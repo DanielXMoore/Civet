@@ -77,6 +77,32 @@ export default defineConfig({
 })
 ```
 
+### SolidStart
+
+```ts
+// app.config.ts
+import { defineConfig } from '@solidjs/start/config'
+import civetVitePlugin from '@danielx/civet/vite'
+
+export default defineConfig({
+  // Include .civet files in the filesystem router's route scan
+  extensions: ['civet'],
+  vite: {
+    plugins: [
+      civetVitePlugin({
+        ts: 'civet', // or 'esbuild' / 'tsc'; 'preserve' is not supported here
+      }),
+    ],
+  },
+})
+```
+
+The plugin detects vinxi (the framework underlying SolidStart) and
+compiles `.civet` route modules for the filesystem router's route
+analysis.  `vite-plugin-solid` compiles the JSX in the output, keyed off
+the `extensions` option above, so the plugin's `ts` option must be a mode
+that strips other TypeScript syntax (any mode but `'preserve'`).
+
 ### ESBuild
 
 ```ts
@@ -269,4 +295,5 @@ interface PluginOptions {
 ## Examples
 
 See also [full examples of unplugin](../../integration/unplugin-examples)
-in Astro, esbuild, NextJS, Farm, Rolldown, Rollup, Vite, and Webpack.
+in Astro, esbuild, NextJS, Farm, Rolldown, Rollup, SolidStart, Vite, and
+Webpack.

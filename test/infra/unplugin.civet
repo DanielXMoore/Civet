@@ -7,6 +7,10 @@ esbuildCivetPlugin from ../../source/unplugin/esbuild.civet
 viteCivetPlugin from ../../source/unplugin/vite.civet
 { slash, rawPlugin, type PluginOptions } from ../../source/unplugin/unplugin.civet
 { readFile, readdir, writeFile, mkdir, rm } from fs/promises
+// Default import: the same mutable module object whose readFileSync the
+// plugin's vinxi support substitutes during route analysis.  Call it via
+// property access (fsSync.readFileSync) so the swap is visible.
+fsSync from "fs"
 path from "path"
 { tmpdir } from "os"
 
@@ -209,6 +213,8 @@ describe "unplugin: buildStart()", ->
   it "runs without a config file (config: false)", ->
     plugin := rawPlugin { ts: 'civet', config: false }, minMeta
 
+    await plugin.buildStart()
+    // Second buildStart reuses the already-loaded compile options
     await plugin.buildStart()
 
   it "accepts parseOptions merged in during buildStart", ->
@@ -1442,6 +1448,216 @@ describe "unplugin: tsc string typecheck", ->
     finally
       console.error = origError
     assert errored, "build should have aborted from .ts file type error"
+
+describe "unplugin: vinxi (SolidStart) support", ->
+  let tmpDirVinxi: string
+  fileNumVinxi .= 0
+  before ->
+    tmpDirVinxi = path.join tmpdir(), "civet-unplugin-vinxi-" + Math.random().toString(36).substring(2)
+    await mkdir tmpDirVinxi, { recursive: true }
+  after ->
+    await rm tmpDirVinxi, { recursive: true, force: true }
+
+  function makeCivetRoute(content: string)
+    filePath := path.join tmpDirVinxi, `route-${fileNumVinxi++}.civet`
+    await writeFile filePath, content
+    filePath
+
+  // Mimics a vinxi BaseFileSystemRouter subclass: toRoute reads the route
+  // file synchronously (like vinxi's analyzeModule) and records what it saw.
+  function makeVinxiRouter()
+    reads: string[] := []
+    routes := {
+      toRoute: (src: string) ->
+        reads.push fsSync.readFileSync src, 'utf8'
+        { path: '/', src }
+    }
+    { reads, routes, router: { internals: { routes } } }
+
+  it "vite.config with a vinxi router stops appending the output extension", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    await plugin.buildStart()
+    civetFile := await makeCivetRoute "x := 1\n"
+    //@ts-expect-error vinxi vite config
+    plugin.vite.config { router: {}, build: {} }
+    // Routers without a usable toRoute (e.g. handler-only) are skipped
+    //@ts-expect-error vinxi vite config
+    plugin.vite.config { router: { internals: { routes: {} } }, build: {} }
+    //@ts-expect-error build context
+    result := plugin.resolveId civetFile, undefined, {}
+    assert result, "resolveId should resolve the file"
+    assert result.endsWith('.civet'),
+      `expected plain .civet id (vinxi manifest keys use it), got: ${result}`
+
+  it "patches toRoute so route analysis sees compiled TSX", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    civetFile := await makeCivetRoute "count := 42\nexport default -> count\n"
+    { reads, routes, router } := makeVinxiRouter()
+    //@ts-expect-error vinxi vite config
+    plugin.vite.config { router, build: {} }
+    route := await routes.toRoute civetFile
+    assert.deepEqual route, { path: '/', src: civetFile }
+    assert.equal reads.length, 1, "analysis read the route once"
+    assert reads[0].includes('export default'), "compiled output keeps the export"
+    assert !reads[0].includes(':='), `analysis saw raw Civet: ${reads[0]}`
+    // Second route on the same plugin instance reuses the cached config load
+    civetFile2 := await makeCivetRoute "export default -> 'two'\n"
+    await routes.toRoute civetFile2
+    assert.equal reads.length, 2
+    assert !reads[1].includes(':='), `analysis saw raw Civet: ${reads[1]}`
+
+  it "passes through reads of other files during analysis", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    civetFile := await makeCivetRoute "x := 1\n"
+    sibling := path.join tmpDirVinxi, "sibling.json"
+    await writeFile sibling, '{"answer": 42}'
+    reads: string[] := []
+    routes := {
+      toRoute: (src: string) ->
+        reads.push fsSync.readFileSync src, 'utf8'
+        reads.push fsSync.readFileSync sibling, 'utf8'
+        { path: '/', src }
+    }
+    //@ts-expect-error vinxi vite config
+    plugin.vite.config { router: { internals: { routes } }, build: {} }
+    await routes.toRoute civetFile
+    assert !reads[0].includes(':='), "route read sees compiled output"
+    assert.equal reads[1], '{"answer": 42}',
+      "reads of other files during analysis are untouched"
+
+  it "handles concurrent route analyses safely", ->
+    // Two overlapping toRoute calls share the global fs object; the
+    // substitution map keeps each analysis isolated and nothing leaks.
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    fileA := await makeCivetRoute "a := 1\nexport default -> a\n"
+    fileB := await makeCivetRoute "b := 2\nexport default -> b\n"
+    { reads, routes, router } := makeVinxiRouter()
+    //@ts-expect-error vinxi vite config
+    plugin.vite.config { router, build: {} }
+    await Promise.all [routes.toRoute(fileA), routes.toRoute(fileB)]
+    assert.equal reads.length, 2
+    assert reads.every((r) => !r.includes(':=')),
+      `analysis saw raw Civet: ${JSON.stringify reads}`
+    assert fsSync.readFileSync(fileA, 'utf8').includes(':='),
+      "raw source visible again after analysis"
+    assert fsSync.readFileSync(fileB, 'utf8').includes(':='),
+      "raw source visible again after analysis"
+
+  it "restores fs.readFileSync after analysis", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    raw := "x := 1\n"
+    civetFile := await makeCivetRoute raw
+    original := fsSync.readFileSync
+    { routes, router } := makeVinxiRouter()
+    //@ts-expect-error vinxi vite config
+    plugin.vite.config { router, build: {} }
+    await routes.toRoute civetFile
+    assert.equal fsSync.readFileSync, original,
+      "the original readFileSync should be reinstalled once idle"
+    assert.equal fsSync.readFileSync(civetFile, 'utf8'), raw,
+      "reads outside toRoute should see the raw source again"
+
+  it "keeps the intercept installed across overlapping analyses", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    fileA := await makeCivetRoute "a := 1\nexport default -> a\n"
+    fileB := await makeCivetRoute "b := 2\nexport default -> b\n"
+    original := fsSync.readFileSync
+    reads: string[] := []
+    let releaseA: (() => void)?
+    gate := new Promise<void> (resolve) => releaseA = resolve
+    routes := {
+      toRoute: async (src: string) ->
+        reads.push fsSync.readFileSync src, 'utf8'
+        await gate if src is fileA
+        reads.push fsSync.readFileSync src, 'utf8'
+        { path: '/', src }
+    }
+    //@ts-expect-error vinxi vite config
+    plugin.vite.config { router: { internals: { routes } }, build: {} }
+    pA := routes.toRoute fileA
+    // Wait until A's analysis is in flight (holding the gate)
+    while reads# is 0
+      await new Promise (r) => setTimeout r, 1
+    assert.notEqual fsSync.readFileSync, original,
+      "intercept installed during analysis"
+    await routes.toRoute fileB
+    assert.notEqual fsSync.readFileSync, original,
+      "intercept stays installed while A is still in flight"
+    releaseA!()
+    await pA
+    assert.equal fsSync.readFileSync, original,
+      "original restored once the last analysis finishes"
+    assert.equal reads.length, 4
+    assert reads.every((r) => !r.includes(':=')),
+      `analysis saw raw Civet: ${JSON.stringify reads}`
+
+  it "leaves non-civet routes alone", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    tsxFile := path.join tmpDirVinxi, "plain.tsx"
+    raw := "export default () => 1\n"
+    await writeFile tsxFile, raw
+    { reads, routes, router } := makeVinxiRouter()
+    //@ts-expect-error vinxi vite config
+    plugin.vite.config { router, build: {} }
+    await routes.toRoute tsxFile
+    assert.equal reads[0], raw, "non-civet routes pass through unchanged"
+
+  it "only patches a router once", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    { routes, router } := makeVinxiRouter()
+    //@ts-expect-error vinxi vite config
+    plugin.vite.config { router, build: {} }
+    patched := routes.toRoute
+    //@ts-expect-error vinxi vite config
+    plugin.vite.config { router, build: {} }
+    assert.equal routes.toRoute, patched, "second config call should not re-wrap"
+
+  it "patches routers found on globalThis.app at construction", ->
+    // `vinxi build` materializes routes in the parent process without
+    // running any vite hook; the plugin patches via globalThis.app on the
+    // first microtask after construction.
+    { reads, routes, router } := makeVinxiRouter()
+    original := routes.toRoute
+    (globalThis as any).app = { config: { routers: [{ name: 'static' }, router] } }
+    try
+      rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+      await Promise.resolve()
+      assert.notEqual routes.toRoute, original, "toRoute should be wrapped"
+      civetFile := await makeCivetRoute "y := 2\n"
+      await routes.toRoute civetFile
+      assert !reads[0].includes(':='), `analysis saw raw Civet: ${reads[0]}`
+    finally
+      delete (globalThis as any).app
+
+  it "warns when ts: 'preserve' is used with vinxi", ->
+    logCalls: string[] := []
+    orig := console.log
+    console.log = (msg: string) => logCalls.push(msg)
+    try
+      plugin := rawPlugin { ts: 'preserve', config: false }, { framework: 'vite' }
+      //@ts-expect-error vinxi vite config
+      plugin.vite.config { router: {}, build: {} }
+      assert logCalls.some((m) => /WARNING.*preserve.*vinxi/i.test(m)),
+        `expected ts:'preserve' warning, got: ${JSON.stringify logCalls}`
+    finally
+      console.log = orig
+
+  it "handleHotUpdate matches vinxi ids without output extension", ->
+    plugin := rawPlugin { ts: 'civet', config: false }, { framework: 'vite' }
+    //@ts-expect-error vinxi vite config
+    plugin.vite.config { router: {}, build: {} }
+    let askedFor: string?
+    server: any :=
+      moduleGraph:
+        getModulesByFile: (id: string) ->
+          askedFor = id
+          null
+        onFileChange: ->
+    handleHotUpdate := plugin.vite.handleHotUpdate as (ctx: { file: string, server: unknown, modules: unknown[] }) => unknown
+    handleHotUpdate { file: '/app/main.civet', server, modules: [] }
+    assert askedFor, "getModulesByFile should be queried"
+    assert askedFor!.endsWith('/main.civet'),
+      `expected extensionless vinxi id, got: ${askedFor}`
 
 describe "unplugin: emitDeclaration without esbuild outdir", ->
   it "buildEnd throws if emitDeclaration is true and esbuild outdir is not set", ->
