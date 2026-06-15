@@ -309,6 +309,7 @@ function processForInOf($0: [
   [awaits, eachOwn, open, declarations, ws, inOf, exps, step, close] .= $0
   // Hera 0.9.0: `&ForInOfDeclaration` assertion now yields `true` in the eachOwn slot.
   eachOwn = undefined if eachOwn <? "boolean"
+  each := eachOwn and eachOwn[0].token is "each"
 
   // ForInOfDeclaration is either ForDeclaration or LeftHandSideExpression
   // In the latter case, check valid LHS
@@ -363,6 +364,8 @@ function processForInOf($0: [
       return = initializer.expression
 
   defaultValues := itemDeclarations.map zipPaddingDefault
+  cycles := itemDeclarations.map (decl) =>
+    if decl.type is "ForDeclaration" then decl.binding.cycle
   if exps# is 1 and defaultValues[0]? is not "undefined"
     errors.push
       type: "Error"
@@ -371,6 +374,14 @@ function processForInOf($0: [
     errors.push
       type: "Error"
       message: "zip iteration index cannot have a default"
+  if indexDeclaration?.type is "ForDeclaration" and indexDeclaration.binding.cycle
+    errors.push
+      type: "Error"
+      message: "zip iteration index cannot be cyclic"
+  if cycles.some(&?) and not (each and inOf.token is "of")
+    errors.push
+      type: "Error"
+      message: "cyclic zip iteration is only supported in for each..of loops"
 
   // ensure space after in/of
   for each exp, i of exps
@@ -439,7 +450,7 @@ function processForInOf($0: [
 
   // for each item[, index] of array
   // for each item1, item2[, index] of array1, array2
-  if eachOwn and eachOwn[0].token is "each"
+  if each
     if inOf.token is "of"
       counterRef := makeRef "i"
       endRef := makeRef exps# > 1 ? "end" : "len"
@@ -452,24 +463,29 @@ function processForInOf($0: [
       lengthRefs: ASTNode[] := []
       for each defaultValue, i of defaultValues
         // `?` defaults to `undefined`, which out-of-bounds indexing already returns.
-        // Other defaults need a cached length for the bounds check.
-        if defaultValue? is not "undefined"
+        // Cyclic iterands and other defaults need a cached length.
+        if cycles[i]? or defaultValue? is not "undefined"
           lengthRefs[i] = makeRef "len"
           expRefDecs.push trimFirstSpace(lengthRefs[i]), " = ", trimFirstSpace(expRefs[i]), ".length, "
         else
           lengthRefs[i] = [trimFirstSpace(expRefs[i]), ".length"]
 
-      // If some iterand has no default, then we take min of their lengths.
+      // If there is a length-defining iterand (no default and no cycle),
+      // then we take min of their lengths.
       lengthFunction .= "Math.min"
       lenIndices .=
-        for each defaultValue, i of defaultValues when not defaultValue?
+        for each defaultValue, i of defaultValues when not defaultValue? and not cycles[i]?
           i
-      // Otherwise, we take the max of all lengths.
-      unless lenIndices# // all optional
+      // Otherwise, we take the max of all non-cyclic lengths (if any).
+      unless lenIndices#
         lengthFunction = "Math.max"
-        lenIndices = [0..<expRefs#]
-      lenExp :=
-        if lenIndices# is 1
+        lenIndices =
+          for each cycle, i of cycles when not cycle?
+            i
+      endExp :=
+        if not lenIndices#
+          undefined
+        else if lenIndices# is 1
           lengthRefs[lenIndices[0]]
         else
           . lengthFunction
@@ -479,24 +495,26 @@ function processForInOf($0: [
 
       declaration: ForControlDeclaration :=
         type: "Declaration"
-        children:
-          if exps# > 1
-            ["let ", ...expRefDecs, endRef, " = ", lenExp, ", ", counterRef, " = 0"]
-          else
-            ["let ", ...expRefDecs, counterRef, " = 0, ", endRef, " = ", lenExp]
+        children: [
+          "let ", ...expRefDecs
+          counterRef, " = 0"
+          ...if lenIndices# then [", ", endRef, " = ", endExp] else []
+        ]
         decl: "let"
         names: []
 
       for each decl, i of itemDeclarations
-        itemValue := [trimFirstSpace(expRefs[i]), "[", counterRef, "]"]
-        value := defaultValues[i]? is not "undefined"
+        itemValue := cycles[i]
+          ? [trimFirstSpace(expRefs[i]), "[", counterRef, cycles[i], lengthRefs[i], "]"]
+          : [trimFirstSpace(expRefs[i]), "[", counterRef, "]"]
+        value := not cycles[i]? and defaultValues[i]? is not "undefined"
           ? [counterRef, " < ", lengthRefs[i], " ? ", itemValue, " : ", trimFirstSpace(defaultValues[i])]
           : itemValue
         pushBlockDeclaration decl, value, true
       if indexDeclaration
         pushBlockDeclaration indexDeclaration, counterRef, true
 
-      condition := [counterRef, " < ", endRef, "; "]
+      condition := lenIndices# ? [counterRef, " < ", endRef, "; "] : ["; "]
       children := [...errors, open, declaration, "; ", condition, counterRef, "++", close]
       return { declaration, iterand, children, blockPrefix }
     else
