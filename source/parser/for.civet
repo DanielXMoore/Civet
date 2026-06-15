@@ -16,6 +16,7 @@ import type {
 
 import {
   checkValidLHS
+  convertOptionalType
   isBigIntLiteral
   literalValue
   makeLeftHandSideExpression
@@ -23,6 +24,7 @@ import {
   makeNumericLiteral
   namesOf
   prepend
+  replaceNode
   startsWith
   trimFirstSpace
 } from ./util.civet
@@ -338,6 +340,38 @@ function processForInOf($0: [
   if declarations# > exps#
     [...itemDeclarations, indexDeclaration] = declarations
 
+  /**
+   * Normalize zip padding syntax on a declaration and return the padding value.
+   * `?` pads with `undefined`; `= value` overrides that padding value.
+   */
+  function zipPaddingDefault(decl: ASTNode): ASTNode
+    return unless decl?.type is "ForDeclaration"
+    { binding } := decl
+    // `?` after iterand declaration means pad with `undefined`
+    // `?: T` also converts declaration to `: undefined | T`, like `let x?: T`
+    typeSuffix := binding.typeSuffix
+    if typeSuffix?.type is "TypeSuffix" and typeSuffix.optional
+      // Remove `?` from declaration and convert `: T` to `: undefined | T`
+      if typeSuffix.t
+        convertOptionalType typeSuffix
+      else
+        replaceNode typeSuffix, undefined, binding
+        binding.typeSuffix = undefined
+      return = "undefined"
+    if initializer := binding.initializer
+      replaceNode initializer, undefined, binding
+      return = initializer.expression
+
+  defaultValues := itemDeclarations.map zipPaddingDefault
+  if exps# is 1 and defaultValues[0]? is not "undefined"
+    errors.push
+      type: "Error"
+      message: "zip iteration defaults need multiple iterands"
+  if zipPaddingDefault(indexDeclaration)?
+    errors.push
+      type: "Error"
+      message: "zip iteration index cannot have a default"
+
   // ensure space after in/of
   for each exp, i of exps
     unless startsWith exp, /^\s/
@@ -408,36 +442,61 @@ function processForInOf($0: [
   if eachOwn and eachOwn[0].token is "each"
     if inOf.token is "of"
       counterRef := makeRef "i"
-      lenRef := makeRef "len"
+      endRef := makeRef exps# > 1 ? "end" : "len"
 
       expRefs := exps.map maybeRef .
       expRefDecs: ASTNode[] := []
       for each expRef, i of expRefs
         unless expRef is exps[i]
           expRefDecs.push trimFirstSpace(expRef), " = ", trimFirstSpace(exps[i]), ", "
-
-      lenExp :=
-        if exps# > 1
-          . "Math.min("
-          . ...expRefs.flatMap (expRef, i) =>
-              [i ? ", " : "", trimFirstSpace(expRef), ".length"]
-          . ")"
+      lengthRefs: ASTNode[] := []
+      for each defaultValue, i of defaultValues
+        // `?` defaults to `undefined`, which out-of-bounds indexing already returns.
+        // Other defaults need a cached length for the bounds check.
+        if defaultValue? is not "undefined"
+          lengthRefs[i] = makeRef "len"
+          expRefDecs.push trimFirstSpace(lengthRefs[i]), " = ", trimFirstSpace(expRefs[i]), ".length, "
         else
-          [trimFirstSpace(expRefs[0]), ".length"]
+          lengthRefs[i] = [trimFirstSpace(expRefs[i]), ".length"]
+
+      // If some iterand has no default, then we take min of their lengths.
+      lengthFunction .= "Math.min"
+      lenIndices .=
+        for each defaultValue, i of defaultValues when not defaultValue?
+          i
+      // Otherwise, we take the max of all lengths.
+      unless lenIndices# // all optional
+        lengthFunction = "Math.max"
+        lenIndices = [0..<expRefs#]
+      lenExp :=
+        if lenIndices# is 1
+          lengthRefs[lenIndices[0]]
+        else
+          . lengthFunction
+          . "("
+          . ...lenIndices.flatMap (i, j) => [j ? ", " : "", lengthRefs[i]]
+          . ")"
 
       declaration: ForControlDeclaration :=
         type: "Declaration"
-        children: ["let ", ...expRefDecs, counterRef, " = 0, ", lenRef, " = ", lenExp]
+        children:
+          if exps# > 1
+            ["let ", ...expRefDecs, endRef, " = ", lenExp, ", ", counterRef, " = 0"]
+          else
+            ["let ", ...expRefDecs, counterRef, " = 0, ", endRef, " = ", lenExp]
         decl: "let"
         names: []
 
       for each decl, i of itemDeclarations
-        value := [trimFirstSpace(expRefs[i]), "[", counterRef, "]"]
+        itemValue := [trimFirstSpace(expRefs[i]), "[", counterRef, "]"]
+        value := defaultValues[i]? is not "undefined"
+          ? [counterRef, " < ", lengthRefs[i], " ? ", itemValue, " : ", trimFirstSpace(defaultValues[i])]
+          : itemValue
         pushBlockDeclaration decl, value, true
       if indexDeclaration
         pushBlockDeclaration indexDeclaration, counterRef, true
 
-      condition := [counterRef, " < ", lenRef, "; "]
+      condition := [counterRef, " < ", endRef, "; "]
       children := [...errors, open, declaration, "; ", condition, counterRef, "++", close]
       return { declaration, iterand, children, blockPrefix }
     else
@@ -462,6 +521,8 @@ function processForInOf($0: [
     iteratorInits: ASTNode[] := []
     for each exp, i of exps
       iteratorInits.push i ? ", " : "", iterRefs[i], " = ", trimFirstSpace(exp), "[Symbol.iterator]()"
+    for each nextRef of nextRefs
+      iteratorInits.push ", ", nextRef
     if counterRef
       iteratorInits.push ", ", counterRef, " = 0"
 
@@ -472,21 +533,27 @@ function processForInOf($0: [
       names: []
     } satisfies ForControlDeclaration
 
-    blockPrefix.push ["", {
-      type: "Declaration"
-      children: ["const ", ...nextRefs.flatMap((nextRef, i) =>
-        [i ? ", " : "", nextRef, " = ", iterRefs[i], ".next()"]
-      )]
-      decl: "const"
-      names: []
-    }, ";"]
-    blockPrefix.push ["", [
-      "if ("
-      ...nextRefs.flatMap (nextRef, i) => [i ? " || " : "", nextRef, ".done"]
-      ") break"
-    ], ";"]
+    // If some iterand has no default, then we stop when any of them is done.
+    doneJoin .= " || "
+    doneIndices .=
+      for each defaultValue, i of defaultValues when not defaultValue?
+        i
+    // Otherwise, we stop when all iterands are done.
+    unless doneIndices#
+      doneJoin = " && "
+      doneIndices = [0..<nextRefs#]
+    condition := [
+      ...nextRefs.flatMap((nextRef, i) =>
+        [nextRef, " = ", iterRefs[i], ".next()", ", "]
+      )
+      "!("
+      ...doneIndices.flatMap (i, j) => [j ? doneJoin : "", nextRefs[i], "?.done"]
+      ")"
+    ]
     for each decl, i of itemDeclarations
-      pushBlockDeclaration decl, [nextRefs[i], ".value"]
+      value .= [nextRefs[i], "?.value"]
+      value = [nextRefs[i], "?.done ? ", trimFirstSpace(defaultValues[i]), " : ", ...value] if defaultValues[i]?
+      pushBlockDeclaration decl, value
     if indexDeclaration
       pushBlockDeclaration indexDeclaration, counterRef
 
@@ -494,7 +561,8 @@ function processForInOf($0: [
       declaration
       iterand
       blockPrefix
-      children: [awaits, ...errors, open, declaration, "; ;", counterRef ? [counterRef, "++"] : undefined, close]
+      hoistDec
+      children: [awaits, ...errors, open, declaration, "; ", condition, ";", counterRef ? [counterRef, "++"] : undefined, close]
     }
 
   // At this point, we should have dealt with all valid zip iterations,
