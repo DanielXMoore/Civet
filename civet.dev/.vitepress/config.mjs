@@ -46,8 +46,17 @@ function tsLibPlugin() {
   };
 }
 
-export default async function vitePressConfig() {
+export default async function vitePressConfig({ command } = {}) {
   const highlighter = await getHighlighter();
+  const isDev = command === 'serve';
+  const devFallback = (label, fallback) => (error) => {
+    console.warn(
+      `[vitepress] Failed to load ${label}; using empty data in dev mode: ${
+        error?.message ?? error
+      }`
+    );
+    return fallback;
+  };
   return defineConfig({
     lang: 'en-US',
     title: 'Civet - A Programming Language for the New Millennium',
@@ -57,8 +66,18 @@ export default async function vitePressConfig() {
     cleanUrls: 'with-subfolders',
     appearance: 'dark',
     themeConfig: {
-      contributors: await getContributors(),
-      openCollective: await getOpenCollectiveInfo(),
+      contributors: await (
+        isDev
+          ? getContributors().catch(devFallback('contributors', []))
+          : getContributors()
+      ),
+      openCollective: await (
+        isDev
+          ? getOpenCollectiveInfo().catch(
+            devFallback('OpenCollective info', { sponsors: [], backers: [] })
+          )
+          : getOpenCollectiveInfo()
+      ),
       logo: 'https://user-images.githubusercontent.com/13007891/210392977-03a3b140-ec63-4ce9-b6e3-0a0f7cac6cbe.png',
       siteTitle: 'Civet',
       nav: [
