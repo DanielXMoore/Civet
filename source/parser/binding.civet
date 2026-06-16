@@ -1,5 +1,8 @@
 import type {
   ArrayBindingPattern
+  ArrayBindingPatternContent
+  ArrayBindingPatternElement
+  ASTError
   ASTNode
   ASTNodeObject
   BindingIdentifier
@@ -9,6 +12,7 @@ import type {
   Children
   HasSubbinding
   ObjectBindingPattern
+  PostRestBindingElements
   ThisAssignments
 } from ./types.civet
 
@@ -21,6 +25,9 @@ import {
 } from ./ref.civet
 
 import {
+  assert
+  isComma
+  namesOf
   parenthesizeType
   trimFirstSpace
   updateParentPointers
@@ -56,11 +63,17 @@ function adjustAtBindings(statements: ASTNode, asThis = false): void
       unless ref.names![0] is ref.base
         binding.children.unshift(ref.base, ": ")
 
-function adjustBindingElements(elements: ASTNodeObject[])
-  names := elements.flatMap .names or []
+function adjustBindingElements(elements: ArrayBindingPatternContent): {
+  children: ArrayBindingPatternContent
+  names: string[]
+  blockPrefix: PostRestBindingElements?
+  omittedRest?: BindingRestElement
+  length: number
+}
+  names := elements.flatMap namesOf
   { length } := elements
 
-  let blockPrefix,
+  let blockPrefix: PostRestBindingElements?,
     restIndex = -1,
     restCount = 0
 
@@ -72,7 +85,6 @@ function adjustBindingElements(elements: ASTNodeObject[])
   if restCount is 0
     return {
       children: elements
-      elements: undefined
       names
       blockPrefix
       length
@@ -96,8 +108,8 @@ function adjustBindingElements(elements: ASTNodeObject[])
         type: "PostRestBindingElements"
         elements
         children: ["[", elements, "] = ", restIdentifier, ".splice(-", l.toString(), ")"]
-        names: after.flatMap((p) => p.names)
-      }
+        names: after.flatMap namesOf
+      } satisfies PostRestBindingElements
 
     restTrimmed := {
       ...rest
@@ -105,20 +117,16 @@ function adjustBindingElements(elements: ASTNodeObject[])
     }
     // Omit anonymous rest from the emitted destructure when nothing references it
     // (`[x, ...] = a` becomes `[x] = a` so TS doesn't flag an unused binding).
-    // `elements` keeps the rest so pattern matching still sees `rest: true`
-    // and emits `length >= n` instead of an exact-length check.
+    // `omittedRest` keeps the rest visible to pattern matching and type inference.
     if rest.binding.type is "EmptyBinding" and not l
       preceding := elements.slice(0, restIndex)
       last := preceding.-1
       if last and arrayElementHasTrailingComma last
-        preceding[preceding# - 1] = {
-          ...last
-          children: (last.children as ASTNode[]).slice(0, -1)
-        } as ASTNodeObject
+        preceding.-1 = trimArrayElementTrailingComma last
       return {
         names
         children: preceding
-        elements: [...preceding, restTrimmed] as ASTNodeObject[]
+        omittedRest: restTrimmed
         blockPrefix
         length
       }
@@ -126,19 +134,17 @@ function adjustBindingElements(elements: ASTNodeObject[])
     return {
       names
       children: [...elements.slice(0, restIndex), restTrimmed]
-      elements: undefined
       blockPrefix
       length
     }
 
-  err :=
+  err: ASTError :=
     type: "Error"
-    children: ["Multiple rest elements in array pattern"]
+    message: "Multiple rest elements in array pattern"
 
   return {
     names
     children: [...elements, err]
-    elements: undefined
     blockPrefix
     length
   }
@@ -155,6 +161,47 @@ function gatherSubbindings(node: ASTNode, subbindings: ASTNode[] = []): ASTNode[
   subbindings
 
 /**
+Return the source-level elements represented by an array binding pattern.
+Post-rest bindings like `[...rest, last]` are parsed into a JS-compatible
+prefix rest binding plus a `blockPrefix` splice for trailing elements; callers
+that derive values or bindings from the pattern need this reconstructed view.
+Anonymous `...` is omitted because it is not a source-level binding.
+*/
+function arrayPatternValueElements(pattern: ArrayBindingPattern): ArrayBindingPatternContent
+  { elements } := pattern
+  if postRest := pattern.blockPrefix
+    restIndex := elements.findIndex .type is "BindingRestElement"
+    valueElements: ArrayBindingPatternContent := [...elements[..<restIndex]]
+    rest := elements[restIndex]
+    if rest?.type is "BindingRestElement" and rest.binding.type is not "EmptyBinding"
+      assert not arrayElementHasTrailingComma(rest),
+        "named post-rest value element should have trimmed trailing comma"
+      valueElements.push {
+        ...rest
+        children: [
+          ...rest.children
+          ", "
+        ]
+      }
+    else if valueElements# and postRest.elements#
+      previous := valueElements.-1
+      switch previous.type
+        when "BindingElement", "BindingRestElement", "ElisionElement"
+          assert arrayElementHasTrailingComma(previous),
+            "anonymous post-rest preceding element should keep trailing comma"
+          valueElements.-1 = {
+            ...previous
+            children: [
+              ...previous.children
+              " "
+            ]
+          }
+    valueElements.push ...postRest.elements
+    return valueElements
+
+  elements
+
+/**
 Find all bound variables in a pattern and return as an array
 Example: {x: [, y], z} -> [y, z]
 */
@@ -166,7 +213,7 @@ function patternBindings(pattern: ASTNodeObject): BindingIdentifier[]
   function recurse(pattern: ASTNodeObject): void
     switch pattern.type
       when "ArrayBindingPattern"
-        for each element of pattern.elements
+        for each element of arrayPatternValueElements pattern
           recurse element
       when "ObjectBindingPattern"
         for each property of pattern.properties
@@ -266,9 +313,18 @@ function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: bool
 
   return [splices, thisAssignments] as const
 
-function arrayElementHasTrailingComma(elementNode: any): boolean
-  const lastChild = elementNode.children.-1
-  return lastChild and lastChild[lastChild.length - 1]?.token is ","
+function arrayElementHasTrailingComma(elementNode: ArrayBindingPatternElement): boolean
+  /* c8 ignore next -- defensive: current parser call sites don't pass ASTError here */
+  return false if elementNode.type is "Error"
+  Boolean isComma elementNode.children.-1
+
+function trimArrayElementTrailingComma(elementNode: ArrayBindingPatternElement): ArrayBindingPatternElement
+  /* c8 ignore next -- defensive: current parser call sites don't pass ASTError here */
+  return elementNode if elementNode.type is "Error"
+  {
+    ...elementNode
+    children: (elementNode.children as ASTNode[]).slice(0, -1)
+  }
 
 // If an Array or ObjectBindingPattern doesn't have a typeSuffix, this function
 // extracts one from typeSuffixes for the binding properties (if present).
@@ -276,13 +332,24 @@ function gatherBindingPatternTypeSuffix(pattern: ArrayBindingPattern | ObjectBin
   count .= 0
   switch pattern.type
     when "ArrayBindingPattern"
+      allElements := if pattern.omittedRest then [...pattern.elements, pattern.omittedRest] else pattern.elements
+      elements: Exclude<ArrayBindingPatternElement, ASTError>[] := []
+      for elem of allElements
+        switch elem.type
+          when "BindingElement", "BindingRestElement", "ElisionElement"
+            elements.push elem
       types: ASTNode[] :=
-        for each elem of pattern.elements
+        for each elem of elements
           { typeSuffix, initializer } .= elem
-          typeSuffix ??= elem.binding?.typeSuffix
+          switch elem.type
+            when "BindingElement", "BindingRestElement"
+              typeSuffix ??= elem.binding?.typeSuffix
           count++ if typeSuffix
           typeSuffix ?= typeSuffixForExpression trimFirstSpace initializer.expression if initializer?
-          typeElement .= [ typeSuffix?.t, elem.delim ]
+          let delim: ASTNode?
+          if elem.type is "BindingElement"
+            delim = elem.delim
+          typeElement .= [ typeSuffix?.t, delim ]
           if typeSuffix?.optional
             typeElement[0] = parenthesizeType typeElement[0]
             typeElement.unshift "undefined |"
@@ -305,7 +372,9 @@ function gatherBindingPatternTypeSuffix(pattern: ArrayBindingPattern | ObjectBin
       types: ASTNode[] :=
         for each prop of pattern.properties
           { typeSuffix, initializer } .= prop
-          typeSuffix ??= prop.value?.typeSuffix
+          if value := prop.value
+            if "typeSuffix" in value
+              typeSuffix ??= value.typeSuffix
           count++ if typeSuffix
           typeSuffix ?= typeSuffixForExpression trimFirstSpace initializer.expression if initializer?
           typeSuffix ??=
@@ -338,6 +407,7 @@ function gatherBindingPatternTypeSuffix(pattern: ArrayBindingPattern | ObjectBin
 export {
   adjustAtBindings
   adjustBindingElements
+  arrayPatternValueElements
   gatherSubbindings
   gatherBindingCode
   gatherBindingPatternTypeSuffix
