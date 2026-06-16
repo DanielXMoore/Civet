@@ -72,6 +72,7 @@ import {
   rewriteDynamicImportCall,
   rewriteModuleSpecifier,
   reorderBindingRestProperty,
+  replaceNode,
   replaceNodes,
   skipImplicitArguments,
   stripTrailingImplicitComma,
@@ -2333,6 +2334,25 @@ Parameters
       implicit: true,
     }
 
+# NOTE: Added bare/parenless function parameters, e.g. `function f x, y`.
+# NOTE: Not allowed in arrow functions or methods given ambiguities.
+FunctionParameters
+  TypeParameters?:tp Loc:p Parameter+:parameters ::ParametersNode ->
+    return $skip unless parameters#
+    // Strip the space between type parameters and the first bare parameter.
+    parameters = trimFirstSpace(parameters) if tp
+    lastParameter := parameters.-1
+    if lastParameter.delim?.implicit
+      replaceNode(lastParameter.delim, undefined, lastParameter)
+    return {
+      type: "Parameters",
+      children: [tp, {p.$loc, token: "("}, parameters, ")"],
+      tp,
+      parameters,
+      bare: true,
+    }
+  Parameters
+
 # Allow for [a, b] => ... or {a, b} -> ...
 ShortArrowParameters
   ( ObjectBindingPattern / ArrayBindingPattern ):binding ->
@@ -2452,6 +2472,8 @@ ParameterElement
 
 ParameterElementDelimiter
   _? Comma
+  # `::` stops arguments, to enable `function f arg, arg :: returnType`
+  &( _? DoubleColon ) -> undefined
   &( __ [)\]}] ) -> undefined
   &EOS InsertComma -> $2
 
@@ -2866,9 +2888,10 @@ FunctionDeclaration
 
 FunctionSignature
   # NOTE: Merged in async and generator with optionals
-  ( Async _ )?:async Function:func ( _? Star )?:generator ( _? NWBindingIdentifier )?:wid _?:w Parameters:parameters ReturnTypeSuffix?:returnType ->
+  ( Async _ )?:async Function:func ( _? Star )?:generator ( _? NWBindingIdentifier )?:wid _?:ws FunctionParameters:parameters ReturnTypeSuffix?:returnType ->
     async = [] unless async
     generator = [] unless generator
+    ws = trimFirstSpace(ws) if parameters.bare and ws
 
     id := wid?.[1]
     return {
@@ -2885,9 +2908,9 @@ FunctionSignature
       },
       block: null,
       children: !parameters.implicit
-        ? [ async, func, generator, wid, w, parameters, returnType ]
-        : [ async, func, generator, wid, parameters, w, returnType ],
-          // move whitespace w to after implicit () in parameters
+        ? [ async, func, generator, wid, ws, parameters, returnType ]
+        : [ async, func, generator, wid, parameters, ws, returnType ]
+          // move whitespace ws to after implicit () in parameters
     }
 
 # https://262.ecma-international.org/#prod-FunctionExpression
@@ -9105,11 +9128,11 @@ MaybeNestedTypeUnary
   NotDedented TypeUnary
 
 ReturnTypeSuffix ::ReturnTypeAnnotation
-  _? QuestionMark?:optional _? Colon ReturnType:t ->
+  _? QuestionMark?:optional _? ( Colon / DoubleColonAsColon ):colon ReturnType:t ->
     return {
       ...t,
       optional,
-      children: [ $1, optional, $3, $4, ...t.children ]
+      children: [ $1, optional, $3, colon, ...t.children ]
     }
 
 ReturnType
