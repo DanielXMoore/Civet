@@ -1,14 +1,13 @@
 import type {
-  AssignmentExpression
   ASTNode
-  ASTNodeObject
   ASTLeaf
   ASTError
   Binding
   Children
+  Declaration
   ForControlDeclaration
-  ForDeclaration
   ForStatementControl
+  NonNullASTNode
   RangeDots
   RangeExpression
   StatementTuple
@@ -17,12 +16,15 @@ import type {
 
 import {
   checkValidLHS
+  convertOptionalType
   isBigIntLiteral
   literalValue
   makeLeftHandSideExpression
   makeNode
   makeNumericLiteral
+  namesOf
   prepend
+  replaceNode
   startsWith
   trimFirstSpace
 } from ./util.civet
@@ -154,10 +156,25 @@ function processRangeExpression(start: ASTNode, ws1: ASTNode, range: RangeDots, 
     increasing: range.increasing
   }
 
+/**
+ * The "main iterand" of the loop is used for the implicit body.
+ * This helper handles one declaration, not zip iterations.
+ */
+function declarationIterand(decl: ASTNode): ASTNode
+  if decl?.type is "ForDeclaration"
+    { pattern } := decl.binding
+    pattern
+  else if decl?.type is "AssignmentExpression" and decl.assigned?
+    decl.assigned
+  else if decl?.type is "Placeholder"
+    undefined
+  else
+    decl
+
 // Construct for loop from RangeLiteral
 function forRange(
   open: ASTLeaf
-  forDeclaration: ForDeclaration | AssignmentExpression
+  forDeclaration: ASTNode
   range: RangeExpression
   stepExp: ASTNode
   close: ASTLeaf
@@ -225,22 +242,22 @@ function forRange(
 
   let varAssign: ASTNode[] = [], varLetAssign = varAssign, varLet = varAssign
   let blockPrefix: StatementTuple[]?
-  let names: string[] = forDeclaration?.names ?? []
+  names .= namesOf forDeclaration
   if forDeclaration?
     if forDeclaration.type is "AssignmentExpression" // Coffee-style for loop
       varAssign = varLetAssign = [forDeclaration, " = "]
       names = [] // assigned but not declared
-    else if forDeclaration.decl is "let" // let: declare within loop
+    else if forDeclaration is like {type: "ForDeclaration", decl: "let"} // let: declare within loop
       varName := forDeclaration.children.splice(1)  // strip let
       varAssign = [...trimFirstSpace(varName) as ASTNode[], " = "]
       varLet = [",", ...varName, " = ", counterRef]
     else // const or var or assignment like `for x[y] of z`: put inside loop
-      value := "StringLiteral" is start?.subtype ? ["String.fromCharCode(", counterRef, ")"] : counterRef
+      value := start?.type is "Literal" and start.subtype is "StringLiteral" ? ["String.fromCharCode(", counterRef, ")"] : counterRef
       blockPrefix = [
         ["", [forDeclaration, " = ", value], ";"]
       ]
 
-  declaration := {
+  declaration: Declaration := {
     type: "Declaration"
     children: ["let ", ...startRefDec, ...endRefDec, counterRef, " = ", ...varLetAssign, startRef, ...varLet, ...ascDec]
     names
@@ -271,6 +288,7 @@ function forRange(
     // This declaration doesn't always appear in the output,
     // but it's still helpful for determining the primary loop variable
     declaration: forDeclaration
+    iterand: declarationIterand forDeclaration
     children: [range.error, open, declaration, "; ", ...condition, "; ", ...increment, close]
     blockPrefix
   }
@@ -279,115 +297,309 @@ function processForInOf($0: [
   awaits: ASTNode
   eachOwn: [ASTLeaf, ASTNode] | boolean | undefined
   open: ASTLeaf
-  declaration: ASTNode
-  declaration2: [ws1: ASTNode, comma: ASTLeaf, ws2: ASTNode, decl2: ASTNode]
+  /** Declarations before in/of, with commas removed. */
+  declarations: NonNullASTNode[]
   ws: ASTNode
   inOf: ASTLeaf
-  exp: ASTNodeObject
+  /** Expressions after in/of, with commas removed. */
+  exps: NonNullASTNode[]
   step: [Whitespace, ASTLeaf, ASTNode]
   close: ASTLeaf
 ]): ForStatementControl
-  [awaits, eachOwn, open, declaration, declaration2, ws, inOf, exp, step, close] .= $0
+  [awaits, eachOwn, open, declarations, ws, inOf, exps, step, close] .= $0
   // Hera 0.9.0: `&ForInOfDeclaration` assertion now yields `true` in the eachOwn slot.
   eachOwn = undefined if eachOwn <? "boolean"
+  each := eachOwn and eachOwn[0].token is "each"
 
   // ForInOfDeclaration is either ForDeclaration or LeftHandSideExpression
   // In the latter case, check valid LHS
-  for each decl of [declaration, declaration2?.-1]
-    continue unless decl?
+  for each decl of declarations
     unless decl.type is "ForDeclaration"
       checkValidLHS decl
 
-  // ensure space after in/of
-  unless startsWith exp, /^\s/
-    exp = prepend(" ", exp)
+  errors: ASTError[] := []
+  if exps# > 1 and inOf.token is not "of"
+    errors.push
+      type: "Error"
+      message: "zip iteration is only supported in for..of loops"
+    exps = exps[..<1]
+    declarations = declarations[..<2]
+  unless exps# <= declarations# <= exps# + 1
+    errors.push
+      type: "Error"
+      message: "zip iteration needs one declaration per iterand, plus an optional index"
+    if declarations# < exps#
+      exps = exps[..<declarations#]
+    else
+      declarations = declarations[..<exps# + 1]
 
-  if exp.type is "RangeExpression" and inOf.token is "of" and not declaration2
-    // TODO: add support for `declaration2` to efficient `forRange`
+  // If there are more declarations than expressions (by 1), then
+  // the last declaration is for the (optional) index.
+  itemDeclarations .= declarations
+  indexDeclaration: ASTNode .= undefined
+  if declarations# > exps#
+    [...itemDeclarations, indexDeclaration] = declarations
+
+  /**
+   * Normalize zip padding syntax on a declaration and return the padding value.
+   * `?` pads with `undefined`; `= value` overrides that padding value.
+   */
+  function zipPaddingDefault(decl: ASTNode): ASTNode
+    return unless decl?.type is "ForDeclaration"
+    { binding } := decl
+    // `?` after iterand declaration means pad with `undefined`
+    // `?: T` also converts declaration to `: undefined | T`, like `let x?: T`
+    typeSuffix := binding.typeSuffix
+    if typeSuffix?.type is "TypeSuffix" and typeSuffix.optional
+      // Remove `?` from declaration and convert `: T` to `: undefined | T`
+      if typeSuffix.t
+        convertOptionalType typeSuffix
+      else
+        replaceNode typeSuffix, undefined, binding
+        binding.typeSuffix = undefined
+      return = "undefined"
+    if initializer := binding.initializer
+      replaceNode initializer, undefined, binding
+      return = initializer.expression
+
+  defaultValues := itemDeclarations.map zipPaddingDefault
+  cycles := itemDeclarations.map (decl) =>
+    if decl.type is "ForDeclaration" then decl.binding.cycle
+  if exps# is 1 and defaultValues[0]? is not "undefined"
+    errors.push
+      type: "Error"
+      message: "zip iteration defaults need multiple iterands"
+  if zipPaddingDefault(indexDeclaration)?
+    errors.push
+      type: "Error"
+      message: "zip iteration index cannot have a default"
+  if indexDeclaration?.type is "ForDeclaration" and indexDeclaration.binding.cycle
+    errors.push
+      type: "Error"
+      message: "zip iteration index cannot be cyclic"
+  if cycles.some(&?) and not (each and inOf.token is "of")
+    errors.push
+      type: "Error"
+      message: "cyclic zip iteration is only supported in for each..of loops"
+
+  // ensure space after in/of
+  for each exp, i of exps
+    unless startsWith exp, /^\s/
+      exps[i] = prepend(" ", exp)
+
+  // `for item, index of [a..b]` without constructing `[a..b]` array
+  if exps[0].type is "RangeExpression" and inOf.token is "of" and declarations# is exps# is 1
+    // TODO: add support for `indexDeclaration` to efficient `forRange`
     return forRange
-      open, declaration, exp
+      open, declarations[0], exps[0]
       step and prepend(trimFirstSpace(step[0]), trimFirstSpace(step[2])) // omit "by" token
       close
   else if step
     throw new Error("for..of/in cannot use 'by' except with range literals")
 
-  let eachOwnError: ASTError?
+  // The "main iterand" of the loop is used for the implicit body.
+  iterand: ASTNode? .=
+    if itemDeclarations# is 1
+      declarationIterand itemDeclarations[0]
+    else // for zip iteration, tuple of the non-index iterands
+      type: "ArrayExpression"
+      children: [
+        "["
+        ...itemDeclarations.flatMap (decl, i) =>
+          [i ? ", " : "", declarationIterand decl]
+        "]"
+      ]
+      names: itemDeclarations.flatMap namesOf
+
   let hoistDec: ASTNode?
   blockPrefix: StatementTuple[] := []
 
-  // for each item[, index] of array
-  if eachOwn and eachOwn[0].token is "each"
-    if inOf.token is "of"
-      counterRef := makeRef("i")
-      lenRef := makeRef("len")
-      expRef := maybeRef(exp)
-
-      const increment = "++"
-      let assignmentNames = [...declaration!.names]
-
-      if declaration2
-        [, , ws2, decl2] := declaration2  // strip __ Comma __
-        blockPrefix.push(["", [
-          trimFirstSpace(ws2), decl2, " = ", counterRef
-        ], ";"])
-        assignmentNames.push(...decl2!.names)
-
-      expRefDec := (expRef !== exp)
-        // Trim a single leading space if present
-        ? [trimFirstSpace(expRef), " = ", trimFirstSpace(exp), ", "]
-        : []
-
+  /** Add a loop-body declaration, appending to the previous one if it has the same var/const/let kind. */
+  function pushBlockDeclaration(
+    decl: NonNullASTNode
+    value: ASTNode
+    implicitLift = false
+  ): void
+    unless decl.type is "ForDeclaration" // assignment like `for x.y of ...` - no declaration
+      blockPrefix.push ["", [trimFirstSpace(decl), " = ", value], ";"]
+      return
+    binding := trimFirstSpace decl.binding // portion of decl to use when appending to previous
+    previous := blockPrefix.-1?[1]
+    previousImplicitLift := previous? and "implicitLift" in previous and previous.implicitLift
+    if previous?.type is "Declaration" and Boolean(previousImplicitLift) is implicitLift and previous.decl is decl.decl
+      previous.children.push ", ", binding, " = ", value
+      previous.names.push ...namesOf(decl)
+    else
       blockPrefix.push ["", {
         type: "Declaration"
-        children: [declaration, " = ", trimFirstSpace(expRef), "[", counterRef, "]"]
-        names: assignmentNames
-        implicitLift: true
+        children: [decl, " = ", value]
+        decl.decl
+        // names may get mutated by future pushBlockDeclaration, so duplicate
+        names: [...namesOf(decl)]
+        implicitLift
       }, ";"]
 
-      eachDeclaration := declaration
-      declaration = {
+  // for each item[, index] of array
+  // for each item1, item2[, index] of array1, array2
+  if each
+    if inOf.token is "of"
+      counterRef := makeRef "i"
+      endRef := makeRef exps# > 1 ? "end" : "len"
+
+      expRefs := exps.map maybeRef .
+      expRefDecs: ASTNode[] := []
+      for each expRef, i of expRefs
+        unless expRef is exps[i]
+          expRefDecs.push trimFirstSpace(expRef), " = ", trimFirstSpace(exps[i]), ", "
+      lengthRefs: ASTNode[] := []
+      for each defaultValue, i of defaultValues
+        // `?` defaults to `undefined`, which out-of-bounds indexing already returns.
+        // Cyclic iterands and other defaults need a cached length.
+        if cycles[i]? or defaultValue? is not "undefined"
+          lengthRefs[i] = makeRef "len"
+          expRefDecs.push trimFirstSpace(lengthRefs[i]), " = ", trimFirstSpace(expRefs[i]), ".length, "
+        else
+          lengthRefs[i] = [trimFirstSpace(expRefs[i]), ".length"]
+
+      // If there is a length-defining iterand (no default and no cycle),
+      // then we take min of their lengths.
+      lengthFunction .= "Math.min"
+      lenIndices .=
+        for each defaultValue, i of defaultValues when not defaultValue? and not cycles[i]?
+          i
+      // Otherwise, we take the max of all non-cyclic lengths (if any).
+      unless lenIndices#
+        lengthFunction = "Math.max"
+        lenIndices =
+          for each cycle, i of cycles when not cycle?
+            i
+      endExp :=
+        if not lenIndices#
+          undefined
+        else if lenIndices# is 1
+          lengthRefs[lenIndices[0]]
+        else
+          . lengthFunction
+          . "("
+          . ...lenIndices.flatMap (i, j) => [j ? ", " : "", lengthRefs[i]]
+          . ")"
+
+      declaration: ForControlDeclaration :=
         type: "Declaration"
-        children: ["let ", ...expRefDec, counterRef, " = 0, ", lenRef, " = ", trimFirstSpace(expRef), ".length"]
+        children: [
+          "let ", ...expRefDecs
+          counterRef, " = 0"
+          ...if lenIndices# then [", ", endRef, " = ", endExp] else []
+        ]
         decl: "let"
         names: []
-      } satisfies ForControlDeclaration
 
-      condition := [counterRef, " < ", lenRef, "; "]
-      children := [open, declaration, "; ", condition, counterRef, increment, close]
-      return { declaration, eachDeclaration, children, blockPrefix }
+      for each decl, i of itemDeclarations
+        itemValue := cycles[i]
+          ? [trimFirstSpace(expRefs[i]), "[", counterRef, cycles[i], lengthRefs[i], "]"]
+          : [trimFirstSpace(expRefs[i]), "[", counterRef, "]"]
+        value := not cycles[i]? and defaultValues[i]? is not "undefined"
+          ? [counterRef, " < ", lengthRefs[i], " ? ", itemValue, " : ", trimFirstSpace(defaultValues[i])]
+          : itemValue
+        pushBlockDeclaration decl, value, true
+      if indexDeclaration
+        pushBlockDeclaration indexDeclaration, counterRef, true
+
+      condition := lenIndices# ? [counterRef, " < ", endRef, "; "] : ["; "]
+      children := [...errors, open, declaration, "; ", condition, counterRef, "++", close]
+      return { declaration, iterand, children, blockPrefix }
     else
-      eachOwnError =
-        type: "Error",
-        message: "'each' is only meaningful in for..of loops",
+      errors.push
+        type: "Error"
+        message: "'each' is only meaningful in for..of loops"
 
   // for own..in
   own .= eachOwn and eachOwn[0].token is "own"
   let expRef: ASTNode?
   if own and inOf.token is not "in"
     own = false
-    eachOwnError =
+    errors.push
       type: "Error"
       message: "'own' is only meaningful in for..in loops"
+
+  // Iterator zip: for item1, item2[, index] of array1, array2
+  if exps# > 1 and inOf.token is "of"
+    iterRefs := exps.map => makeRef "iter"
+    nextRefs := exps.map => makeRef "next"
+    counterRef := if indexDeclaration then makeRef "i"
+    iteratorInits: ASTNode[] := []
+    for each exp, i of exps
+      iteratorInits.push i ? ", " : "", iterRefs[i], " = ", trimFirstSpace(exp), "[Symbol.iterator]()"
+    for each nextRef of nextRefs
+      iteratorInits.push ", ", nextRef
+    if counterRef
+      iteratorInits.push ", ", counterRef, " = 0"
+
+    declaration: ForControlDeclaration := {
+      type: "Declaration"
+      children: ["let ", ...iteratorInits]
+      decl: "let"
+      names: []
+    } satisfies ForControlDeclaration
+
+    // If some iterand has no default, then we stop when any of them is done.
+    doneJoin .= " || "
+    doneIndices .=
+      for each defaultValue, i of defaultValues when not defaultValue?
+        i
+    // Otherwise, we stop when all iterands are done.
+    unless doneIndices#
+      doneJoin = " && "
+      doneIndices = [0..<nextRefs#]
+    condition := [
+      ...nextRefs.flatMap((nextRef, i) =>
+        [nextRef, " = ", iterRefs[i], ".next()", ", "]
+      )
+      "!("
+      ...doneIndices.flatMap (i, j) => [j ? doneJoin : "", nextRefs[i], "?.done"]
+      ")"
+    ]
+    for each decl, i of itemDeclarations
+      value .= [nextRefs[i], "?.value"]
+      value = [nextRefs[i], "?.done ? ", trimFirstSpace(defaultValues[i]), " : ", ...value] if defaultValues[i]?
+      pushBlockDeclaration decl, value
+    if indexDeclaration
+      pushBlockDeclaration indexDeclaration, counterRef
+
+    return {
+      declaration
+      iterand
+      blockPrefix
+      hoistDec
+      children: [awaits, ...errors, open, declaration, "; ", condition, ";", counterRef ? [counterRef, "++"] : undefined, close]
+    }
+
+  // At this point, we should have dealt with all valid zip iterations,
+  // so there should be one main declaration and expression,
+  // plus an optional indexDeclaration.
+  declaration: NonNullASTNode .= itemDeclarations[0]
+  exp: NonNullASTNode .= exps[0]
 
   // TypeScript doesn't support typed declarations in for loops,
   // so pull such declarations inside the loop:
   //   for var x: T of y -> for (const x1 of y) {var x: T = x1;
   // for..in loops need a similar ref-based declaration
   // for dereferencing to get the associated value.
-  { binding } := declaration
-  pattern .= binding?.pattern
+  binding := declaration.type is "ForDeclaration" ? declaration.binding : undefined
+  pattern: ASTNode .= binding?.pattern
   // Unwrap NamedBindingPattern to correctly detect "Identifier" and
   // avoid double subbinding
   if pattern?.type is "NamedBindingPattern"
     pattern = pattern.binding
+
   if binding?.typeSuffix or (
-    inOf.token is "in" and declaration2 and pattern.type is not "Identifier"
+    inOf.token is "in" and indexDeclaration and pattern?.type is not "Identifier"
   )
     itemRef := makeRef if inOf.token is "in" then "key" else "item"
     blockPrefix.push(["", {
       type: "Declaration"
       children: [declaration, " = ", itemRef]
-      names: declaration!.names
+      names: namesOf declaration
     } satisfies ForControlDeclaration, ";"])
     declaration =
       type: "ForDeclaration"
@@ -402,18 +614,16 @@ function processForInOf($0: [
       children: ["const ", itemRef]
       decl: "const"
       names: []
-    unless pattern.type is "Identifier"
+    unless pattern?.type is "Identifier"
       pattern = itemRef
 
-  unless declaration2 or own
+  unless indexDeclaration or own
     return {
       declaration
+      iterand
       blockPrefix
-      children: [awaits, eachOwnError, open, declaration, ws, inOf, expRef ?? exp, close] // omit declaration2, replace eachOwn with eachOwnError, replace exp with expRef
+      children: [awaits, ...errors, open, declaration, ws, inOf, expRef ?? exp, close] // omit indexDeclaration, replace eachOwn with errors, replace exp with expRef
     }
-
-  let ws2: ASTNode?, decl2: ASTNode?
-  if (declaration2) [, , ws2, decl2] = declaration2  // strip __ Comma __
 
   switch inOf.token
     when "of" // for item, index of iter
@@ -424,12 +634,18 @@ function processForInOf($0: [
         decl: "let"
         names: []
       } satisfies ForControlDeclaration
-      blockPrefix.push(["", {
-        type: "Declaration"
-        children: [trimFirstSpace(ws2), decl2, " = ", counterRef, "++"]
-        names: decl2!.names
-        decl: decl2!.decl
-      } satisfies ForControlDeclaration, ";"])
+      indexDecl := indexDeclaration!
+      indexAssignment: ASTNode :=
+        if indexDecl.type is "ForDeclaration"
+          {
+            type: "Declaration"
+            children: [trimFirstSpace(indexDecl), " = ", counterRef, "++"]
+            indexDecl.names
+            decl: indexDecl.decl
+          } satisfies ForControlDeclaration
+        else
+          [trimFirstSpace(indexDecl), " = ", counterRef, "++"]
+      blockPrefix.push(["", indexAssignment, ";"])
 
     // grammar guarantees inOf.token is "of" or "in" only
     when "in" // for key, value in object
@@ -449,7 +665,7 @@ function processForInOf($0: [
       if own
         hasPropRef := getHelperRef("hasProp")
         blockPrefix.push ["", ["if (!", hasPropRef, "(", trimFirstSpace(expRef), ", ", trimFirstSpace(pattern), ")) continue"], ";"]
-      if decl2
+      if indexDeclaration
         trimmedPattern := trimFirstSpace pattern
         expression := makeNode
           type: "MemberExpression"
@@ -460,8 +676,8 @@ function processForInOf($0: [
                 expression: trimmedPattern
                 children: [ "[", trimmedPattern, "]" ]
         blockPrefix.push ["",
-          if decl2.type is "ForDeclaration"
-            { binding, children } := decl2
+          if indexDeclaration.type is "ForDeclaration"
+            { binding, children } := indexDeclaration
             binding.children.push binding.initializer = makeNode {}
               type: "Initializer"
               expression
@@ -469,33 +685,29 @@ function processForInOf($0: [
             makeNode
               type: "Declaration"
               children: [
-                trimFirstSpace(ws2)
-                ...children
+                ...trimFirstSpace(children) as ASTNode[]
               ]
-              bindings: [decl2.binding]
-              decl: decl2.decl
-              names: decl2.names
+              bindings: [indexDeclaration.binding]
+              decl: indexDeclaration.decl
+              names: indexDeclaration.names
           else
-            makeNode {}
-              type: "AssignmentExpression"
-              children: [
-                trimFirstSpace(ws2), decl2, " = "
-                trimFirstSpace(expRef)
-                "[", trimFirstSpace(pattern), "]"
-              ]
-              names: decl2.names
-              lhs: decl2
-              assigned: decl2
+            [
+              trimFirstSpace(indexDeclaration), " = "
+              trimFirstSpace(expRef)
+              "[", trimFirstSpace(pattern), "]"
+            ]
           ";"]
 
   return {
     declaration,
-    children: [awaits, eachOwnError, open, declaration, ws, inOf, exp, close], // omit declaration2, replace each with eachOwnError
+    iterand,
+    children: [awaits, ...errors, open, declaration, ws, inOf, exp, close], // omit indexDeclaration, replace each with errors
     blockPrefix,
     hoistDec,
   }
 
 export {
+  declarationIterand
   forRange
   processForInOf
   processRangeExpression

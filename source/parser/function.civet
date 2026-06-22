@@ -11,7 +11,6 @@ import type {
   AtBindingProperty
   Binding
   BindingElement
-  BindingIdentifier
   BlockStatement
   BreakStatement
   CallExpression
@@ -53,6 +52,7 @@ import {
   gatherSubbindings
   gatherBindingCode
   gatherBindingPatternTypeSuffix
+  patternBindings
   simplifyBindingProperties
 } from ./binding.civet
 
@@ -84,6 +84,7 @@ import {
   hasTrailingComment
   hasYield
   inplacePrepend
+  isASTNodeObject
   isEmptyBareBlock
   isExit
   isFunction
@@ -363,31 +364,36 @@ function patternAsValue(pattern: ASTNodeObject): ASTNode
       pattern
 
 /**
-Find all bound variables in a pattern and return as an array
-Example: {x: [, y], z} -> [y, z]
+Convert a loop iterand pattern into the value used for an implicit body.
+When `firstBinding` is true, destructuring patterns use only their first
+binding, warning about the rest; reductions use this to reduce a single value.
 */
-function patternBindings(pattern: ASTNodeObject): BindingIdentifier[]
-  bindings: BindingIdentifier[] := []
-  recurse pattern
-  return bindings
+function iterandAsValue(iterand: ASTNode, firstBinding = false): ASTNode
+  return iterand unless isASTNodeObject iterand
+  // ArrayExpression iterands are zip tuples like `[a, b]`; recurse into
+  // elements but preserve the tuple itself as the implicit value.
+  if iterand.type is "ArrayExpression"
+    children: ASTNode[] := iterand.children.map (child): ASTNode =>
+      iterandAsValue child, firstBinding
+    return {
+      ...iterand
+      children
+    } as ASTNode
 
-  function recurse(pattern: ASTNodeObject): void
-    switch pattern.type
-      when "ArrayBindingPattern"
-        for each element of pattern.elements
-          recurse element
-      when "ObjectBindingPattern"
-        for each property of pattern.properties
-          recurse property
-      when "BindingElement"
-        recurse pattern.binding
-      when "BindingProperty"
-        recurse pattern.value ?? pattern.name
-      /* c8 ignore next 2 -- defensive: Binding nodes unwrap to .pattern before reaching here in practice */
-      when "Binding"
-        recurse pattern.pattern
-      when "Identifier", "AtBinding"
-        bindings.push pattern
+  return patternAsValue iterand unless firstBinding
+
+  bindings := patternBindings iterand
+  if bindings#
+    for binding of bindings[1..]
+      binding.children.unshift
+        type: "Error"
+        subtype: "Warning"
+        message: "Ignored binding in loop with implicit body"
+    pattern := bindings[0]
+    patternAsValue pattern
+  else
+    type: "Error"
+    message: "Empty binding pattern in loop with implicit body"
 
 // Ensure an `abstract class` expression has a name, generating a ref if it
 // doesn't, so it can be emitted as a class declaration. Returns the
@@ -901,28 +907,9 @@ function iterationDefaultBody(statement: IterationStatement | ForStatement): boo
         braceBlock block
         return true
 
-  if statement.type is "ForStatement"
-    declaration := statement.eachDeclaration ?? statement.declaration
-    if declaration?.type is "ForDeclaration"
-      // For regular loops and object comprehensions, use entire pattern
-      // For reductions, use the first binding
-      if reduction
-        bindings := patternBindings declaration.binding.pattern
-        if bindings#
-          fillBlock [ "", bindings[0] ]
-          for binding of bindings[1..]
-            binding.children.unshift
-              type: "Error"
-              subtype: "Warning"
-              message: "Ignored binding in reduction loop with implicit body"
-        else
-          fillBlock [ "",
-            type: "Error"
-            message: "Empty binding pattern in reduction loop with implicit body"
-          ]
-      else
-        fillBlock [ "", patternAsValue declaration.binding.pattern ]
-      block.empty = false
+  if statement.type is "ForStatement" and statement.iterand
+    fillBlock [ "", iterandAsValue(statement.iterand, Boolean(reduction)) ]
+    block.empty = false
 
   return false
 

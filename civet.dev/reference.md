@@ -1995,6 +1995,71 @@ for key: keyof typeof object, value in object
   process key, value
 </Playground>
 
+### Zip Loops
+
+`for..of` and `for each..of` loops can iterate over multiple iterables/arrays
+in lockstep, like
+[Python's `zip`](https://docs.python.org/3/library/functions.html#zip):
+
+<Playground>
+for each item1, item2 of list1, list2
+  console.log item1, item2
+</Playground>
+
+<Playground>
+for item1, item2 of list1, list2
+  console.log item1, item2
+</Playground>
+
+By default, the `for` loop stops when any of the iterands stops, so that all
+items are always defined. You can instead specify some of the declarations
+as optional via `?` (default value of `undefined`) or with an explicit default
+value via `=`. If some iterands are not optional, they will define the length;
+otherwise, the length is the maximum of all iterands (like Python's
+[itertools.zip_longest](https://docs.python.org/3/library/itertools.html#itertools.zip_longest)).
+
+<Playground>
+for each item1, item2? of list1, list2
+  console.log item1, item2
+</Playground>
+
+<Playground>
+for item1 = 0, item2 = 0 of list1, list2
+  console.log item1 + item2
+</Playground>
+
+When combined with types, `?` acts like [optional types](#optional-types):
+
+<Playground>
+for each name?: Name, val?: Val of names, vals
+  console.log name, val
+</Playground>
+
+With `for each`, you can also request iterands to cycle around after reaching
+the end of an array, via `%`. These arrays are also ignored when determining
+the length.
+
+<Playground>
+for each item, color% of list, palette
+  console.log item, color
+</Playground>
+
+::: warning
+If all iterands are cyclic, then the loop will be infinite!
+:::
+
+You can access the loop index by listing one more variable before `of`:
+
+<Playground>
+for each item1, item2, index of list1, list2
+  console.log item1, item2, index
+</Playground>
+
+<Playground>
+for item1, item2, index of list1, list2
+  console.log item1, item2, index
+</Playground>
+
 ### Loop Expressions
 
 If needed, loops automatically assemble an array of the last value
@@ -2055,6 +2120,13 @@ coordinates := for {x, y} of objects
 keys := for key in object
 </Playground>
 
+With [zip loops](#zip-loops), the implicit body is a tuple:
+
+<Playground>
+function zip(list1, list2)
+  for item1, item2 of list1, list2
+</Playground>
+
 Loops that use `await` automatically get `await`ed.
 If you'd rather obtain the promise for the results so you can `await` them
 yourself, use `async for`.
@@ -2099,6 +2171,13 @@ Use `...x` to yield all items from another iterable `x` via `yield*`:
 function concatIter(iters)
   for* iter of iters
     ...iter
+</Playground>
+
+With [zip loops](#zip-loops):
+
+<Playground>
+function zip(list1, list2)
+  for* item1, item2 of list1, list2
 </Playground>
 
 ### Postfix Loop
@@ -2260,6 +2339,8 @@ If there is no body, it uses the item being looped over.
 <Playground>
 function flat1<T>(arrays: T[][]): T[]
   for concat array of arrays
+function alternating(list1, list2)
+  for concat each item1, item2 of list1, list2
 </Playground>
 
 Implicit bodies in `for sum/product/min/max/join/concat` reductions
@@ -2335,6 +2416,16 @@ i .= 0
 loop
   i++
   break if i > 5
+</Playground>
+
+`for each..of` loops are also infinite if all iterands are cyclic
+(as described in [zip loops](#zip-loops)):
+
+<Playground>
+for each message% of ['Thinking', 'Pondering']
+  console.log message, '...'
+  await sleep()
+  break if done()
 </Playground>
 
 ### Range Loop

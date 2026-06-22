@@ -27,6 +27,7 @@ import {
   dynamizeImportDeclarationExpression,
   escapeIdentifier,
   expressionizeTypeIf,
+  declarationIterand,
   forRange,
   gatherBindingCode,
   gatherBindingPatternTypeSuffix,
@@ -48,6 +49,7 @@ import {
   maybeRef,
   maybeRefAssignment,
   modifyString,
+  namesOf,
   negateCondition,
   parenthesizeExpression,
   precedenceCustomDefault,
@@ -111,8 +113,12 @@ import type {
   EmptyStatement,
   EnumDeclaration,
   ExpressionNode,
+  Extends,
+  CoffeeForBindingAssignment,
+  CoffeeForDeclaration as CoffeeForDeclarationType,
   ForReduction,
   ForControlDeclaration,
+  ForDeclaration,
   ForStatementControl,
   ForStatement,
   FromClause,
@@ -121,6 +127,7 @@ import type {
   FunctionRestParameter,
   Identifier,
   IfStatement,
+  Initializer,
   InterfaceDeclaration,
   ImportDeclaration,
   ImportClause,
@@ -139,6 +146,7 @@ import type {
   NamedExports,
   NamespaceDeclaration,
   NonNullAssertion,
+  NonNullASTNode,
   ObjectBindingPattern,
   ObjectExpression,
   ObjectProperty,
@@ -153,17 +161,19 @@ import type {
   PinPattern,
   Property,
   RangeEnd,
+  RangeExpression,
   ReturnTypeAnnotation,
   ReturnValue,
   SpreadProperty,
   StatementExpression,
-  StatementNode,
   StatementTuple,
   SwitchStatement,
   ThisType,
   ThrowStatement,
   TryStatement,
   ThisAssignments,
+  TypeConditional,
+  TypeCondition,
   TypeDeclaration,
   TypeArgument,
   TypeArgumentList,
@@ -506,7 +516,7 @@ AssignmentExpressionSpread
       type: "SpreadElement",
       children: $0,
       expression,
-      names: expression!.names,
+      names: namesOf(expression),
     }
   AssignmentExpression:expression ( _? DotDotDot )? ->
     return $1 unless $2
@@ -514,14 +524,14 @@ AssignmentExpressionSpread
       type: "SpreadElement",
       children: [ ...$2, $1 ],
       expression,
-      names: expression!.names,
+      names: namesOf(expression),
     }
   _? DotDotDot AssignmentExpression:expression ->
     return {
       type: "SpreadElement",
       children: $0,
       expression,
-      names: expression!.names,
+      names: namesOf(expression),
     }
   AssignmentExpression:expression ( _? DotDotDot )? ->
     return $1 unless $2
@@ -529,7 +539,7 @@ AssignmentExpressionSpread
       type: "SpreadElement",
       children: [ ...$2, $1 ],
       expression,
-      names: expression!.names,
+      names: namesOf(expression),
     }
 
 # https://262.ecma-international.org/#prod-Arguments
@@ -1397,7 +1407,7 @@ WithClause ::WithClause
       targets: [[ws, t], ...rest.map(([ws1, _comma, ws2, target]) => [prepend(ws1, ws2), target])] as WithClause["targets"],
     }
 
-ExtendsToken
+ExtendsToken ::Extends
   # NOTE: Added "<" extends shorthand
   NotDedented:ws InsertSpace:s ExtendsShorthand:t " "? ->
     return {
@@ -1417,7 +1427,7 @@ ExtendsShorthand
   "<" ->
     return { $loc, token: "extends " }
 
-NotExtendsToken
+NotExtendsToken ::Extends
   Loc:l _?:ws1 OmittedNegation:ws2 ExtendsShorthand:t " "? ->
     // `!<` is eaten by NonNullable before reaching this rule, so ws1 and ws2
     // are never both falsy; the `{ ..., token: " " }` fallback is unreachable
@@ -3701,7 +3711,7 @@ _ArrayLiteral
     return {
       type: "ArrayExpression",
       children: [open, ...content, close],
-      names: content.flatMap((c) => c?.names || [])
+      names: content.flatMap(namesOf)
     }
   OpenBracket:open AllowAll ( ArrayLiteralContent __ CloseBracket )? RestoreAll ->
     return $skip unless $3
@@ -3714,7 +3724,7 @@ _ArrayLiteral
     children := [open, ...(content as any), ...ws, close]
 
     // Gather names when ArrayLiteral is used as a destructuring pattern
-    names := children.flatMap((c: any) => c?.names || [])
+    names := children.flatMap(namesOf)
 
     return {
       type: "ArrayExpression",
@@ -3755,9 +3765,9 @@ RangeDots
       children: [ws1, ws2]
     }
 
-OptionalRangeEnd
+OptionalRangeEnd ::RangeEnd
   RangeEnd
-  "" -> { increasing: undefined, inclusive: true, raw: "" }
+  "" -> { inclusive: true, raw: "" }
 
 RangeEnd
   /([<>])(=?)|([≤≥])/ ::RangeEnd ->
@@ -3776,7 +3786,7 @@ RangeEnd
       raw: $0,
     }
 
-RangeExpression
+RangeExpression ::RangeExpression
   Expression:start __:ws RangeDots:range Expression:end ->
     return processRangeExpression(start, ws, range, end)
 
@@ -4024,7 +4034,7 @@ BracedObjectLiteral ::ObjectExpression
     return {
       type: "ObjectExpression",
       children: [open, properties, close],
-      names: properties.flatMap((c: any) => c.names || []),
+      names: properties.flatMap(namesOf),
       properties,
     }
   OpenBrace:open AllowAll ( BracedObjectLiteralContent __ CloseBrace )? RestoreAll ->
@@ -4034,7 +4044,7 @@ BracedObjectLiteral ::ObjectExpression
     return {
       type: "ObjectExpression",
       children: [open, properties, close],
-      names: properties.flatMap((c: any) => c.names || []),
+      names: properties.flatMap(namesOf),
       properties,
     }
 
@@ -4370,7 +4380,7 @@ NamedProperty
     return {
       type: "SpreadProperty",
       children: [dots, paren],
-      names: exp!.names || [],
+      names: namesOf(exp),
       dots,
       value: paren,
     }
@@ -4381,7 +4391,7 @@ NamedProperty
       type: "Property",
       children: $0,
       name: name,
-      names: exp!.names || [],
+      names: namesOf(exp),
       value: exp,
     }
 
@@ -4397,7 +4407,7 @@ SnugNamedProperty
       type: "Property",
       children: [name, colon, expression],
       name,
-      names: (expression as any).names || [],
+      names: namesOf(expression),
     }
 
 PropertyName
@@ -5602,15 +5612,17 @@ CoffeeForStatementParameters ::ForStatementControl
       } satisfies ForControlDeclaration
 
       return {
-        declaration: forHead,
-        children: [$1, open, forHead, "; ", ...condition, counterRef, increment, close],
-        blockPrefix,
+        declaration: forHead
+        iterand: declarationIterand declaration
+        children: [$1, open, forHead, "; ", ...condition, counterRef, increment, close]
+        blockPrefix
       }
 
     return {
-      declaration,
-      children: [$1, open, declaration, $5, kind, " ", exp, close],
-      blockPrefix,
+      declaration
+      iterand: declarationIterand declaration
+      children: [$1, open, declaration, $5, kind, " ", exp, close]
+      blockPrefix
     }
   ForRangeParameters
 
@@ -5623,7 +5635,7 @@ CoffeeForIndex
       children: [...ws1 || [], ...ws2 || [], ...id.children]
     }
 
-CoffeeForDeclaration
+CoffeeForDeclaration ::CoffeeForDeclarationType | CoffeeForBindingAssignment
   # NOTE: Coffee doesn't allow expression bindings like `for a.x in b`
   ( __ Own )?:own ( __ LetOrConstOrVar )?:kind ForBinding:binding ->
     if kind
@@ -5641,6 +5653,9 @@ CoffeeForDeclaration
       own: Boolean(own),
       children: [binding],
       names: binding.names,
+      lhs: [],
+      assigned: binding,
+      expression: binding,
     }
 
 ForStatementParameters ::ForStatementControl
@@ -5662,17 +5677,17 @@ ForStatementParameters ::ForStatementControl
   # NOTE: Consolidated declarations
   # NOTE: Consolidated optional 'await'
   # NOTE: &OpenParen is to fill the spot normally taken by each/own
-  ( Await __ )? &OpenParen ( OpenParen __ ) ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? ( __ CloseParen ) ->
+  ( Await __ )? &OpenParen ( OpenParen __ ) ForInOfDeclarations __ ( In / Of ) ForInOfExpressions ( __ By ExpressionWithObjectApplicationForbidden )? ( __ CloseParen ) ->
     return processForInOf($0)
   # NOTE: Added optional each/own modifiers,
   # which are tried second to allow them to still work as identifiers
-  ( Await __ )? ( (Each / Own) __ )? ( OpenParen __ ) ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? ( __ CloseParen ) ->
+  ( Await __ )? ( (Each / Own) __ )? ( OpenParen __ ) ForInOfDeclarations __ ( In / Of ) ForInOfExpressions ( __ By ExpressionWithObjectApplicationForbidden )? ( __ CloseParen ) ->
     return processForInOf($0)
   # NOTE: Added optional parens
   # NOTE: &ForInOfDeclaration is to fill the spot normally taken by each/own
-  ( Await __ )? &ForInOfDeclaration InsertOpenParen ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? InsertCloseParen ->
+  ( Await __ )? &ForInOfDeclaration InsertOpenParen ForInOfDeclarations __ ( In / Of ) ForInOfExpressions ( __ By ExpressionWithObjectApplicationForbidden )? InsertCloseParen ->
     return processForInOf($0)
-  ( Await __ )? ( (Each / Own) __ )? InsertOpenParen ForInOfDeclaration ( __ Comma __ ForInOfDeclaration )? __ ( In / Of ) ExpressionWithObjectApplicationForbidden ( __ By ExpressionWithObjectApplicationForbidden )? InsertCloseParen ->
+  ( Await __ )? ( (Each / Own) __ )? InsertOpenParen ForInOfDeclarations __ ( In / Of ) ForInOfExpressions ( __ By ExpressionWithObjectApplicationForbidden )? InsertCloseParen ->
     return processForInOf($0)
   ForRangeParameters
 
@@ -5684,17 +5699,25 @@ ForStatementDeclaration ::ASTNode
 ForRangeParameters ::ForStatementControl
   # NOTE: CoffeeScript-style `for [start..end] by step` without declaration
   ( Await __ )? OpenParen:open OpenBracket RangeExpression:exp CloseBracket ( __ By ExpressionWithObjectApplicationForbidden )?:step CloseParen:close ->
-    return forRange(open, null, exp, step, close)
+    return forRange(open, undefined, exp, step, close)
   ( Await __ )? InsertOpenParen:open OpenBracket RangeExpression:exp CloseBracket ( __ By ExpressionWithObjectApplicationForbidden )?:step InsertCloseParen:close ->
-    return forRange(open, null, exp, step, close)
+    return forRange(open, undefined, exp, step, close)
 
 # NOTE: Consolidated declarations
-ForInOfDeclaration
+ForInOfDeclarations ::NonNullASTNode[]
+  ForInOfDeclaration:first ( __ Comma __ ForInOfDeclaration )*:rest ->
+    return [first, ...rest.map [, , ws, decl] => prepend(ws, decl)]
+
+ForInOfDeclaration ::NonNullASTNode
   ForDeclaration
   LeftHandSideExpression
 
+ForInOfExpressions ::NonNullASTNode[]
+  ExpressionWithObjectApplicationForbidden:first ( __ Comma __ ExpressionWithObjectApplicationForbidden )*:rest ->
+    return [first, ...rest.map [, , , exp] => exp]
+
 # https://262.ecma-international.org/#prod-ForDeclaration
-ForDeclaration
+ForDeclaration ::ForDeclaration
   LetOrConstOrVar:c ForBinding:binding ->
     return {
       type: "ForDeclaration",
@@ -5715,20 +5738,22 @@ ForDeclaration
     return {
       type: "ForDeclaration",
       children: [c, binding],
-      decl: c.token.trimEnd(),
+      decl: "const",
       binding,
       names: binding.names,
     }
 
 # https://262.ecma-international.org/#prod-ForBinding
 ForBinding
-  ( BindingPattern / BindingIdentifier ):pattern TypeSuffix?:typeSuffix ::Binding ->
+  ( BindingPattern / BindingIdentifier ):pattern (_? "%")?:cycle TypeSuffix?:typeSuffix Initializer?:initializer ::Binding ->
     return {
       type: "Binding",
-      children: [ pattern, typeSuffix ?? pattern.typeSuffix ],
+      children: [ pattern, typeSuffix ?? pattern.typeSuffix, initializer ],
       names: pattern.names,
       pattern,
+      cycle,
       typeSuffix: typeSuffix ?? pattern.typeSuffix,
+      initializer,
       splices: [],
       thisAssignments: [],
     }
@@ -6384,7 +6409,7 @@ MaybeNestedPostfixedExpression
   # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
   # the second case, where they get checked by PrimaryExpression,
   # which then allows for trailing binary operators etc.
-  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested PostfixedExpression )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ::unknown ->
+  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested PostfixedExpression )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ::ASTNode ->
     return $skip unless expression
     return expression unless trailing
     return [ expression, trailing ]
@@ -7004,7 +7029,7 @@ LexicalDeclaration ::LexicalDeclaration
 
     return {
       type: "Declaration",
-      children: $0 as Children,
+      children: $0,
       names: bindings.flatMap((b) => b.names),
       bindings,
       decl: decl as DeclarationKind,
@@ -7063,7 +7088,7 @@ LexicalBinding
     }
 
 # https://262.ecma-international.org/#prod-Initializer
-Initializer
+Initializer ::Initializer
   __ Equals MaybeNestedPostfixedExpression:expression -> {
     type: "Initializer",
     expression,
@@ -8728,7 +8753,7 @@ TypeDeclaration
       type: "Declaration",
       ts: true,
       children: $0,
-      names: "names" in d ? d.names : [],
+      names: namesOf(d),
     }
   ( Export _? )?:export_ ( Declare _? )?:declare TypeDeclarationRest:t ->
     return {
@@ -8769,7 +8794,7 @@ InterfaceDeclaration ::InterfaceDeclaration
     return {
       type: "InterfaceDeclaration",
       id,
-      children: $0,
+      children: $0 as Children,
       ts: true,
     }
 
@@ -9044,7 +9069,7 @@ TypeSuffix
     colon,
     children: $0,
   }
-  _? QuestionMark:optional _? ::unknown -> {
+  _? QuestionMark:optional ::unknown -> {
     type: "TypeSuffix",
     ts: true,
     optional,
@@ -9324,7 +9349,7 @@ TypeElement ::ASTNode
   # NOTE: Match named form first, to avoid matching `foo: bar,` as Type
   # and then DotDotDot from next entry.
   __:ws ( DotDotDot __ )?:dots1 IdentifierName:name ( _? DotDotDot )?:dots2 (__ (QuestionMark _?)? Colon __):colon Type:type ->
-    dots .= dots1 or (dots2 and [dots2[1], dots2[0]] /* space at end */)
+    dots: ASTNode .= dots1 or (dots2 and [dots2[1], dots2[0]] /* space at end */)
     if dots1 and dots2
       dots = [dots, {
         type: "Error",
@@ -9434,21 +9459,25 @@ TypeWithPostfix
       expressionizeTypeIf([ ...postfix[1], $1, undefined ]))
 
 TypeConditional ::ASTNode
-  _? /(?=if|unless)/ TypeIfThenElse ->
+  _? /(?=if|unless)/ TypeIfThenElse ::TypeConditional ->
     return prepend($1, expressionizeTypeIf($3))
-  TypeCondition NotDedented QuestionMark __ Type __ Colon __ Type ->
-    return [ $1, $2, $3, $4, $9, $6, $7, $8, $5 ] as ASTNode if $1.negated
-    return $0 as ASTNode
+  TypeCondition NotDedented QuestionMark __ Type __ Colon __ Type ::TypeConditional ->
+    children: Children := $1.negated ? [ $1, $2, $3, $4, $9, $6, $7, $8, $5 ] : $0
+    return {
+      type: "TypeConditional"
+      ts: true
+      children
+    }
   TypeBinary
 
-TypeCondition
+TypeCondition ::TypeCondition
   # NOTE: Type after `extends` needs to forbid TypePostfix,
   # or it could end up matching the "then" clause of an if/then/else
   TypeBinary IndentedFurther? ( ExtendsToken / NotExtendsToken ) TypeConditional ->
     return {
       type: "TypeCondition",
       negated: $3.negated,
-      children: $0,
+      children: $0 as Children,
     }
 
 TypeIfThenElse
