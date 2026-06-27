@@ -4,6 +4,21 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.14 (2026-06-27, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.13...v0.11.14), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.14))
+* LSP: sublime improvements [[#2144](https://github.com/DanielXMoore/Civet/pull/2144)]
+* VSCode extension: Load project's Hera, fix Windows casing [[#2146](https://github.com/DanielXMoore/Civet/pull/2146)]
+* Snug ternaries `a?b:c` and `a ?b :c` [[#2119](https://github.com/DanielXMoore/Civet/pull/2119)]
+* Trailing binary ops and pipelines in braced object literals and globs [[#2145](https://github.com/DanielXMoore/Civet/pull/2145)]
+* Improve `if..else` comment placement, avoid eating punctuation [[#2147](https://github.com/DanielXMoore/Civet/pull/2147)]
+* Add LICENSE to Zed extension directory [[#2155](https://github.com/DanielXMoore/Civet/pull/2155)]
+* Bun loader: text import so `--watch` tracks plugin-loaded files [[#2156](https://github.com/DanielXMoore/Civet/pull/2156)]
+* unplugin: support SolidStart / vinxi filesystem routers [[#2148](https://github.com/DanielXMoore/Civet/pull/2148)]
+* Allow semicolon-separated class members on one line [[#2149](https://github.com/DanielXMoore/Civet/pull/2149)]
+* Object semantics for `:` in export specifiers; object-construction exports [[#2152](https://github.com/DanielXMoore/Civet/pull/2152)]
+* Fix dropped comments before later pattern/catch clauses [[#2159](https://github.com/DanielXMoore/Civet/pull/2159)]
+* Zip iteration: `for [each] a, b of x, y` [[#2160](https://github.com/DanielXMoore/Civet/pull/2160)]
+* Fix pattern-to-value conversion with anonymous `...` [[#2161](https://github.com/DanielXMoore/Civet/pull/2161)]
+
 ## 0.11.13 (2026-06-04, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.12...v0.11.13), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.13))
 * LSP: Don't indent after keyword property inside Object [[#2129](https://github.com/DanielXMoore/Civet/pull/2129)]
 * Move ts-service unit tests to root; gate coverage from single compile path [[#2130](https://github.com/DanielXMoore/Civet/pull/2130)]
