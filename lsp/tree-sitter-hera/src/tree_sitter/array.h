@@ -208,10 +208,12 @@ static inline void *_array__reserve(void *contents, uint32_t *capacity,
                                   size_t element_size, uint32_t new_capacity) {
   void *new_contents = contents;
   if (new_capacity > *capacity) {
+    assert(element_size == 0 || (size_t)new_capacity <= SIZE_MAX / element_size);
+    size_t alloc_size = (size_t)new_capacity * element_size;
     if (contents) {
-      new_contents = ts_realloc(contents, new_capacity * element_size);
+      new_contents = ts_realloc(contents, alloc_size);
     } else {
-      new_contents = ts_malloc(new_capacity * element_size);
+      new_contents = ts_malloc(alloc_size);
     }
     *capacity = new_capacity;
   }
