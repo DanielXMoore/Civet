@@ -401,6 +401,7 @@ function expressionizeIfStatement(statement: IfStatement): ASTNode
   // to the operand they came from so following generated syntax stays live.
   if b.trailing?#
     children.push b.trailing
+  implicitElse .= undefined
   if e
     e2 := expressionizeBlock(e.block)
     unless e2
@@ -414,12 +415,13 @@ function expressionizeIfStatement(statement: IfStatement): ASTNode
     children.push ...e.children[3..]
   else
     children.push "\n" if b.trailing?#
-    children.push ":void 0"
+    children.push implicitElse = ":void 0"
   children.push closeParen
 
   makeNode {
     type: "IfExpression"
     children
+    implicitElse
   }
 
 function expressionizeTypeIf([ifOp, condition, t, e]: [any, any, any, any]): TypeConditional
@@ -1768,6 +1770,23 @@ function processTypes(node: ASTNode)
           suffixIndex--
 
 /**
+Rewrite auto-generated `:void 0` fallbacks to `:[]` in `IfExpression`s that
+are the direct expression of a `SpreadElement` inside an `ArrayExpression`,
+so that `[...if cond then arr]` yields `[]` (not a TypeError) when `cond`
+is falsy.
+*/
+function processArraySpreadIfFallback(statements: StatementTuple[]): void
+  for each spread of gatherRecursiveAll statements, .type is "SpreadElement"
+    continue unless spread.parent?.type is "ArrayExpression"
+    // Prefix `...if`/`...unless` wraps the IfExpression in a StatementExpression;
+    // postfix `...a if x` places the IfExpression directly under the spread.
+    exp .= spread.expression as any
+    if exp?.type is "StatementExpression"
+      exp = exp.statement
+    continue unless exp?.type is "IfExpression" and exp.implicitElse
+    replaceNode exp.implicitElse, ":[]", exp
+
+/**
 Wrap any remaining statement expressions in IIFE.
 */
 function processStatementExpressions(statements: StatementTuple[]): void
@@ -2074,6 +2093,7 @@ function processProgram(root: BlockStatement): void
   processDeclarations(statements)
   processAssignments(statements)
   processStatementExpressions(statements)
+  processArraySpreadIfFallback(statements)
   processPatternMatching(statements)
   processIterationExpressions(statements, !!(config.iife or config.repl))
   processFinallyClauses(statements)
