@@ -1650,16 +1650,13 @@ implicitly being `undefined`:
 </Playground>
 
 Spread array items with a postfix (or prefix) `if`/`unless`
-fall back to an empty array (`[]`) instead of `undefined`,
-so the surrounding array literal doesn't throw when the
-condition is false:
+fall back to an empty array instead of `undefined`:
 
 <Playground>
 [
   ...a if c
   ...b unless c
   ...if c then a
-  ...if c then a else b
 ]
 </Playground>
 
