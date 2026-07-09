@@ -1649,6 +1649,20 @@ implicitly being `undefined`:
 [a, b if c, d unless e]
 </Playground>
 
+Spread array items with a postfix (or prefix) `if`/`unless`
+fall back to an empty array (`[]`) instead of `undefined`,
+so the surrounding array literal doesn't throw when the
+condition is false:
+
+<Playground>
+[
+  ...a if c
+  ...b unless c
+  ...if c then a
+  ...if c then a else b
+]
+</Playground>
+
 Function arguments that are either parenthesized or indented
 can have a postfix `if`:
 
