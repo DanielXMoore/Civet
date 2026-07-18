@@ -180,6 +180,7 @@ import type {
   TypeArgumentList,
   TypeFunction,
   TypeNode,
+  TypeSuffix,
   TypeTuple,
   VoidType,
   WhenClause,
@@ -2674,7 +2675,16 @@ BindingProperty
 
   # NOTE: Allow ::T type suffix before value
   # NOTE: name^ means we should bind name despite having a value
-  _?:ws1 PropertyName:name Caret?:bind _?:ws2 Colon:colon _?:ws3 ( BindingPattern / BindingIdentifier ):value BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
+  _?:ws1 PropertyName:name QuestionMarkTypeSuffix?:optional Caret?:bind _?:ws2 Colon:colon _?:ws3 ( BindingPattern / BindingIdentifier ):value BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
+    if optional // merge into typeSuffix
+      if typeSuffix and not typeSuffix.optional
+        typeSuffix = {
+          ...typeSuffix
+          optional.optional
+          children: [optional.optional, ...typeSuffix.children]
+        }
+      else
+        typeSuffix ?= optional
     // Convert `name^: pattern` into `name: name^pattern`
     if bind
       // For unicode `name`, PropertyName rewrote it to render as `"src"`.
@@ -2736,7 +2746,7 @@ BindingProperty
     }
 
   # NOTE: name^ means we should bind name, but we do anyway, so allow but ignore
-  _?:ws BindingIdentifier:binding Caret?:_bind BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
+  _?:ws BindingIdentifier:binding Caret?:_bind BindingPropertyTypeSuffix?:typeSuffix Initializer?:initializer ->
     children .= [ws, binding, initializer]  // omit bind, typeSuffix
 
     if binding.type is "AtBinding"
@@ -2785,7 +2795,7 @@ BindingRestProperty
       children: [...(ws || []), dots, ...(id.children as any)],
     }
 
-BindingTypeSuffix
+BindingTypeSuffix ::TypeSuffix
   _? QuestionMark?:optional _? DoubleColonAsColon:colon MaybeNestedType:t ->
     return {
       type: "TypeSuffix",
@@ -2794,6 +2804,10 @@ BindingTypeSuffix
       t,
       children: $0,
     }
+
+BindingPropertyTypeSuffix ::TypeSuffix
+  BindingTypeSuffix
+  QuestionMarkTypeSuffix
 
 NestedBindingElements
   PushIndent NestedBindingElementList*:elements PopIndent ->
@@ -9078,13 +9092,7 @@ TypeSuffix
     colon,
     children: $0,
   }
-  _? QuestionMark:optional ::unknown -> {
-    type: "TypeSuffix",
-    ts: true,
-    optional,
-    colon: undefined,
-    children: $0,
-  }
+  QuestionMarkTypeSuffix
   # TypeScript has a special error for ! without : ("Declarations with definite
   # assignment assertions must also have type annotations.") but we parse it
   # so that the user can get this more useful error message.
@@ -9098,6 +9106,15 @@ TypeSuffix
       colon,
       children: [ $1, $2, colon, t ],
     }
+
+QuestionMarkTypeSuffix
+  _? QuestionMark:optional ::TypeSuffix -> {
+    type: "TypeSuffix"
+    ts: true
+    optional
+    colon: undefined
+    children: $0
+  }
 
 MaybeNestedType
   NestedTypeBulletedTuple
@@ -9400,7 +9417,7 @@ NestedTypeElement
     })
 
 # NOTE: Nested bulleted tuple starts with an indentation.
-NestedTypeBulletedTuple
+NestedTypeBulletedTuple ::TypeTuple
   ( InsertSpace InsertOpenBracket ):open PushIndent NestedTypeBullet*:content InsertCloseBracket:close PopIndent ->
     return $skip unless content#
     content = content.flat() // combine bullets into one array
@@ -9416,6 +9433,7 @@ NestedTypeBulletedTuple
 
     return {
       type: "TypeTuple",
+      ts: true,
       children: [...open, ...content, close],
     }
 

@@ -1748,10 +1748,21 @@ switch a
     console.log "not array"
 </Playground>
 
-::: info
-Array patterns are exact; object patterns allow unmatched properties
-(similar to TypeScript types).
-:::
+Like TypeScript tuple types (but unlike JavaScript array destructuring),
+array patterns are exact, requiring a specific length;
+use `...` or `...rest` to allow extra elements.
+Like TypeScript object types and JavaScript object destructuring,
+object patterns are inexact:
+the object can have more properties than those listed in the pattern.
+
+Object pattern properties are required by default. Add `?` to make a
+property optional (with its binding `undefined` when absent):
+
+<Playground>
+switch user
+  {name, nickname?}
+    console.log name, nickname
+</Playground>
 
 <Playground>
 switch x
