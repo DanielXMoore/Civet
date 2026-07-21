@@ -4,6 +4,14 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.15 (2026-07-20, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.14...v0.11.15), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.15))
+* Fix one-line then/else swallowing surrounding comma [[#2158](https://github.com/DanielXMoore/Civet/pull/2158)]
+* LSP: Fix sourcemapping of trimmed spaces and `#` length shorthand [[#2164](https://github.com/DanielXMoore/Civet/pull/2164)]
+* Fix missing comma in `::` typed array destructuring with elision [[#2168](https://github.com/DanielXMoore/Civet/pull/2168)]
+* Use `[]` fallback for `...if`/`...unless` inside array literals [[#2171](https://github.com/DanielXMoore/Civet/pull/2171)]
+* Fix named destructuring `name^` hoisting [[#2173](https://github.com/DanielXMoore/Civet/pull/2173)]
+* Optional properties `{x?}` in patterns [[#2174](https://github.com/DanielXMoore/Civet/pull/2174)]
+
 ## 0.11.14 (2026-06-27, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.13...v0.11.14), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.14))
 * LSP: sublime improvements [[#2144](https://github.com/DanielXMoore/Civet/pull/2144)]
 * VSCode extension: Load project's Hera, fix Windows casing [[#2146](https://github.com/DanielXMoore/Civet/pull/2146)]
