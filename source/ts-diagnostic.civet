@@ -39,12 +39,13 @@ export function remapPosition(
   sourcemapLines?: SourcemapLines
 ): Position
   return position unless sourcemapLines
-  return remapPositionStrict(position, sourcemapLines) ?? walkBack(position, sourcemapLines) ?? position
+  return remapPositionOnLine(position, sourcemapLines, false) ?? walkBack(position, sourcemapLines) ?? position
 
 /**
  * Like `remapPosition`, but returns `undefined` when `position` has no
- * direct source mapping on the queried line — i.e. the generated line
- * has no 4-tuple mapping at or before `position.character`.  Does NOT
+ * direct source mapping on the queried line — i.e. the generated position
+ * is not covered by a 4-tuple mapping.  A 1-tuple starts an explicitly
+ * unmapped generated span and clears any preceding source mapping.  Does NOT
  * walk back to preceding lines; for that, use `remapPosition`.
  *
  * This narrow semantics lets the semantic-tokens path drop tokens in
@@ -54,7 +55,22 @@ export function remapPosition(
 export function remapPositionStrict(
   position: Position,
   sourcemapLines: SourcemapLines
-): Position | undefined
+): Position?
+  remapPositionOnLine position, sourcemapLines, true
+
+/**
+ * Find the source mapping that covers a generated position on the same line.
+ *
+ * In strict mode, a generated-only 1-tuple ends the preceding mapped span;
+ * this lets semantic-token callers drop compiler-generated tokens.  Loose
+ * mode preserves `remapPosition`'s historical interpolation across such
+ * segments so diagnostics and navigation retain a best-effort source anchor.
+ */
+function remapPositionOnLine(
+  position: Position
+  sourcemapLines: SourcemapLines
+  strict: boolean
+): Position?
   { line, character } := position
 
   textLine := sourcemapLines[line]
@@ -70,9 +86,20 @@ export function remapPositionStrict(
     mapping := textLine[i]!
     p += mapping[0]!
 
+    if strict
+      // This segment starts after the queried position, so the preceding
+      // segment still covers it.  In particular, do not let a later unmapped
+      // segment clear a valid mapping immediately before its boundary.
+      break if p > character
+
     if mapping.length === 4
       lastMapping = mapping
       lastMappingPosition = p
+    else if strict
+      // A generated-only segment terminates the preceding mapped span.
+      // Keeping `lastMapping` here would interpolate compiler-inserted text
+      // such as `results.push(` onto unrelated source identifiers (#2176).
+      lastMapping = undefined
 
     if p >= character
       break

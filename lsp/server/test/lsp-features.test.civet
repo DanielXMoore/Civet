@@ -144,6 +144,71 @@ describe "LSP features (shared project server)", ->
     assert Array.isArray(tokens.data), "expected tokens.data to be an array"
     assert tokens.data.length > 0, "expected at least one token"
 
+  it "semantic tokens skip generated wrappers around JSX loop values", ->
+    // Regression test for #2176: collecting a loop value wraps its final
+    // expression in `results.push(...)`.  Semantic tokens for that generated
+    // wrapper must not be projected onto the source JSX.
+    uri := docUri path.join(projectRoot, "semtok-jsx-loop.civet")
+    text := """
+      // @ts-nocheck
+
+      function ForLoop
+        for foo in bar
+          <BazComponent attr />
+
+      function ForLoopOneNotReturned
+        for foo in bar
+          <BazComponent attr />
+        for foo in bar
+          <BazComponent attr />
+
+      function ForLoopNotBeingReturned: void
+        for foo in bar
+          <BazComponent attr />
+
+      function ForLoopBeingAssigned
+        x := for foo in bar
+          <BazComponent attr />
+        null
+    """
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    tokens := await client.request "textDocument/semanticTokens/full", {
+      textDocument: { uri }
+    }
+    assert tokens, "expected semantic tokens response"
+
+    decoded: { line: number, character: number, length: number, tokenType: number }[] := []
+    line .= 0
+    char .= 0
+    for i of [0...tokens.data.length] by 5
+      deltaLine := tokens.data[i]
+      deltaChar := tokens.data[i + 1]
+      length := tokens.data[i + 2]
+      tokenType := tokens.data[i + 3]
+      if deltaLine > 0
+        line += deltaLine
+        char = deltaChar
+      else
+        char += deltaChar
+      decoded.push { line, character: char, length, tokenType }
+
+    jsxLines := text.split("\n")
+      .map((source, line) => ({ source, line }))
+      .filter(({ source }) => source.includes("<BazComponent"))
+    assert.equal jsxLines.length, 5
+
+    // TypeScript does not classify this unresolved JSX name.  In particular,
+    // tokens for compiler-generated `results` and `push` must not be projected
+    // onto any part of the source JSX line.
+    for { line } of jsxLines
+      phantom := decoded.find (token) => token.line is line
+      assert.equal phantom, undefined,
+        `expected no phantom token on JSX line ${line}; got ${JSON.stringify phantom}`
+
   it "semantic tokens cover names in destructured imports", ->
     uri := docUri path.join(projectRoot, "semtok-destruct-import.civet")
     text := """
