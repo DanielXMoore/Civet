@@ -35,6 +35,7 @@ let y: number = 2
 var z: string = "3"
 x := 1 // const x = 1
 y .= 2 // let y = 2
+x |> f |> g =: out // const out = g(f(x))
 
 // Destructuring
 [ a, b ] := x
@@ -58,6 +59,9 @@ f x // f(x)
 f a, b, c // f(a, b, c)
 f g x // f(g(x))
 f a, b c // f(a, b(c))
+f
+  a
+  b c // f(a, b(c))
 
 ```
 
@@ -340,10 +344,10 @@ and [non-identifier Unicode codepoints in identifiers](/reference#unicode-identi
 | `*` | Multiplication `x * y`; exponentiation `x ** y`; generators `function*`, `*method()`, `for*`, `yield*`; comments `/* x */` |
 | `/` | Division `x / y`; integer division `x %/ y` (`x // y` with `coffeeDiv`); comments `// x`, `/* x */`; regular expressions `/x/`, `///x///`; TypeScript triple-slash directive `/// <reference/>` |
 | `\` | String escape `"\""`; regular expression escape `/\//` |
-| `=` | Assignment `x = y`, `x op= y`; comparisons `x == y`, `x === y`, `x != y`, `x !== y`; declaration shorthand `x .= y`, `x := y`; type shorthand `T ::= x`; function arrows `=>` |
+| `=` | Assignment `x = y`, `x op= y`; comparisons `x == y`, `x === y`, `x != y`, `x !== y`; declaration shorthand `x .= y`, `x := y`, `y =. x`, `y =: x`; type shorthand `T ::= x`; function arrows `=>` |
 | `~` | Binary NOT `~x` |
-| `.` | Property access `x.y`; property access function `.x`; argument placeholder `f(x, .)`; bulleted list `. x` (after indentation); let shorthand `x .= y`; range literals `[x..y]`; spreads `...x` |
-| `:` | Labels `:x`; symbols `:x`; object properties `x: y`, `{x: y}`; TypeScript types `let x: T`, `(x: T) =>`; property typing `{x:: T}`, `[x:: T]`; if/then/else ternary `x ? y : z`; const shorthand `x := y`; type shorthand `T ::= x`; implements shorthand `class A <: B`; prototype shorthand `x::`, `x::y` with `coffeePrototype` |
+| `.` | Property access `x.y`; property access function `.x`; argument placeholder `f(x, .)`; bulleted list `. x` (after indentation); let shorthands `x .= y`, `y =. x`; range literals `[x..y]`; spreads `...x` |
+| `:` | Labels `:x`; symbols `:x`; object properties `x: y`, `{x: y}`; TypeScript types `let x: T`, `(x: T) =>`; property typing `{x:: T}`, `[x:: T]`; if/then/else ternary `x ? y : z`; const shorthands `x := y`, `y =: x`; type shorthand `T ::= x`; implements shorthand `class A <: B`; prototype shorthand `x::`, `x::y` with `coffeePrototype` |
 | `;` | Statement separator `x; y` |
 | `,` | Argument separator `f x, y`; element separator `[x, y]`; property separator `{x, y}`; comma operator `x, y` |
 | `'` | Strings `'x'`, `'''x'''`; tagged template literals `tag'x'`; property access `x's y`; directives `'civet coffeeCompat'` |

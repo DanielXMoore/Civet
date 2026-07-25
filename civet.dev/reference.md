@@ -31,7 +31,15 @@ let d: boolean
 var v: any
 </Playground>
 
-Alternatively, you can use a `"civet"` directive at the beginning of your file
+The shorthand can instead follow the value,
+which is particularly useful at the end of a pipeline:
+
+<Playground>
+fetch url |> await |> .json() =: json
+</Playground>
+
+If you'd rather not declare your variables,
+you can use a `"civet"` directive at the beginning of your file
 to specify one of two automatic variable declaration modes:
 
 ### `autoVar`
@@ -1043,11 +1051,12 @@ Here is a table of all currently supported:
 | Unicode | ASCII | Unicode | ASCII | Unicode | ASCII | Unicode | ASCII |
 |:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
 | `≤` | `<=` | `≥` | `>=` | `≠` | `!=` | `≡` | `==` |
-| `≣` | `===` | `≢` | `!==` | `≔` | `:=` | `⁇` | `??` |
-| `‖` | `\|\|` | `≪` | `<<` | `≫` | `>>` | `⋙` | `>>>` |
-| `…` | `...` | `‥` | `..` | `∈` | `is in` | `∉` | `is not in` |
-| `▷` | `\|>` | `→` | `->` | `⇒` | `=>` | `’s` | `'s` |
-| `⧺` | `++` | `—` | `--` | `÷` | `%/` | `•` | `.` bullet |
+| `≣` | `===` | `≢` | `!==` | `≔` | `:=` | `≕` | `=:` |
+| `⁇` | `??` | `‖` | `\|\|` | `≪` | `<<` | `≫` | `>>` |
+| `⋙` | `>>>` | `…` | `...` | `‥` | `..` | `∈` | `is in` |
+| `∉` | `is not in` | `▷` | `\|>` | `→` | `->` | `⇒` | `=>` |
+| `’s` | `'s` | `⧺` | `++` | `—` | `--` | `÷` | `%/` |
+| `•` | `.` bullet |
 
 </div>
 
