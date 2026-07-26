@@ -6,7 +6,7 @@
  * 300k-line TypeScript parser. Handles:
  *   strings, template literals, comments (// /* ### ), numbers, identifiers,
  *   keywords, type keywords, builtins, operators, and Civet-specific syntax
- *   (@  @@  |>  ..  ...  ->  :=  unless  until).
+ *   (@  @@  |>  ..  ...  ->  :=  =:  =.  unless  until).
  */
 
 module.exports = grammar({
@@ -215,7 +215,7 @@ module.exports = grammar({
 
     operator: _ => token(choice(
       // Civet-specific
-      '|>', '->', ':=', '.=', '<?',
+      '|>', '->', ':=', '.=', '=:', '=.', '≕', '<?',
       // Ranges (... before .. so longer wins)
       '...', '..',
       // Multi-char operators (longer first within token(choice) for clarity)

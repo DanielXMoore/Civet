@@ -90,6 +90,7 @@ import type {
   ArrowFunction,
   AssignmentExpression,
   ASTError,
+  ASTLeaf,
   ASTNode,
   ASTRef,
   BinaryOp,
@@ -184,6 +185,7 @@ import type {
   TypeTuple,
   VoidType,
   WhenClause,
+  WSArray,
   WithClause,
   Yield,
   YieldExpression,
@@ -365,7 +367,7 @@ export function parseProgram(input: string, options?: { filename?: string, parse
       return root
 
 unicodeEscapePattern := String.raw`\\u\{0*(?:[\dA-Fa-f]{1,5}|10[\dA-Fa-f]{4})\}|\\u[\dA-Fa-f]{4}`
-nonAsciiIdentifierPattern := String.raw`[^\u0000-\u007F\p{ID_Continue}\s÷—‖’•‥…⁇→⇒∈∉∋∌≔≠≡≢≣≤≥≪≫⋙▷⧺⩵⩶]`
+nonAsciiIdentifierPattern := String.raw`[^\u0000-\u007F\p{ID_Continue}\s÷—‖’•‥…⁇→⇒∈∉∋∌≔≕≠≡≢≣≤≥≪≫⋙▷⧺⩵⩶]`
 
 const wellKnownSymbols = [
   "asyncIterator",
@@ -1105,7 +1107,7 @@ TrailingOperator
   TrailingDeclaration
 
 TrailingDeclaration
-  _? ( ConstAssignment / LetAssignment )
+  _? ( ConstAssignment / LetAssignment / BackwardConstAssignment / BackwardLetAssignment )
 
 TrailingPipe
   _? Pipe
@@ -1692,6 +1694,28 @@ FieldDefinition
       typeSuffix,
       children: $0,
       readonly,
+    }
+
+  # Backward readonly field initializer:
+  # `value =: field` → `readonly field = value`
+  InsertReadonly:readonly PostfixedExpressionOrCommaLoop:e NotDedented:ws BackwardConstAssignment:ca NotDedented:idWs ClassElementName:id TypeSuffix?:typeSuffix ->
+    // Adjust position to space before assignment to make TypeScript remapping happier
+    readonly.children[0].$loc = {
+      pos: ca.$loc.pos - 1
+      length: ca.$loc# + 1
+    }
+    return {
+      type: "FieldDefinition"
+      id
+      typeSuffix
+      children: [
+        readonly
+        trimFirstSpace idWs
+        id, typeSuffix
+        getTrimmingSpace idWs
+        ca, ws, e
+      ]
+      readonly
     }
 
   AbstractModifier?:abstract ReadonlyModifier?:readonly ClassElementName:id TypeSuffix?:typeSuffix Initializer?:initializer ->
@@ -2318,9 +2342,13 @@ MetaProperty
 
 # NOTE: Special `return.value` (and `return =` shorthand)
 # for changing the automatic return value of function
-ReturnValue
-  ( "return.value" NonIdContinue ) / ( Return &AfterReturnShorthand ) ::ReturnValue ->
+ReturnValue ::ReturnValue
+  "return.value" NonIdContinue ->
     return { type: "ReturnValue", children: [$1[0]] }
+  ReturnAsValue:value &AfterReturnShorthand -> value
+
+ReturnAsValue ::ReturnValue
+  Return:value -> { type: "ReturnValue", children: [value] }
 
 AfterReturnShorthand
   WAssignmentOp
@@ -4805,7 +4833,9 @@ AssignmentOpSymbol
   "⁇=" -> "??="
   "?=" -> "??="
   # NOTE: assertion to avoid matching part of a comparison op or arrow
-  "=" ![=>] -> $1
+  # `=:` and `=.` are backward declaration operators, not `=` assignments.
+  # Preserve ordinary assignments to leading-dot numeric literals (`x=.5`).
+  "=" /(?![=>:.])|(?=\.[0-9])/ -> $1
   CoffeeWordAssignmentOp -> $1
 
 CoffeeWordAssignmentOp
@@ -6452,11 +6482,11 @@ MaybeNestedPostfixedExpression
     return $skip unless expression
     return expression
 
-MaybeNestedPostfixedExpressionOrCommaLoop
+MaybeNestedPostfixedExpressionOrCommaLoop ::ASTNode
   # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
   # the second case, where they get checked by PrimaryExpression,
   # which then allows for trailing binary operators etc.
-  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested PostfixedExpressionOrCommaLoop )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ::unknown ->
+  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested PostfixedExpressionOrCommaLoop )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
     return $skip unless expression
     return expression unless trailing
     return [ expression, trailing ]
@@ -7075,10 +7105,17 @@ LexicalDeclaration ::LexicalDeclaration
   # NOTE: Using Expression to allow for If/SwitchExpressions
   # NOTE: Using PostfixExpression to allow postfix if/unless/for
   Loc:loc ( BindingPattern / BindingIdentifier ):pattern TypeSuffix?:typeSuffix NotDedented:ws ( ConstAssignment / LetAssignment ):assign MaybeNestedPostfixedExpressionOrCommaLoop:e ->
-    return processAssignmentDeclaration(
-      { $loc: loc, token: assign.decl }, // like InsertConst or InsertLet
+    return processAssignmentDeclaration
+      { loc.$loc, token: assign.decl } // like InsertConst or InsertLet
       pattern, typeSuffix, ws, assign, e
-    )
+  # Backward const/let shorthands: `y =: x` -> `const x = y`
+  Loc:loc PostfixedExpressionOrCommaLoop:e NotDedented:ws ( BackwardConstAssignment / BackwardLetAssignment ):assign NotDedented:bindingWs ( BindingPattern / BackwardBindingIdentifier / BindingIdentifier ):pattern TypeSuffix?:typeSuffix ->
+    return processAssignmentDeclaration
+      { loc.$loc, token: assign.decl } // like InsertConst or InsertLet
+      prepend trimFirstSpace(bindingWs), pattern
+      typeSuffix
+      getTrimmingSpace bindingWs
+      assign, [ws, e]
 
 ConstAssignment
   ":=" / "≔" ->
@@ -7087,6 +7124,18 @@ ConstAssignment
 LetAssignment
   ".=" ->
     return { $loc, token: "=", decl: "let " }
+
+BackwardConstAssignment
+  "=:" / "≕" ->
+    return { $loc, token: "=", decl: "const " }
+
+BackwardLetAssignment
+  # Don't take the leading dot from a numeric assignment such as `x=.5`.
+  "=." ![0-9] ->
+    return { $loc, token: "=", decl: "let " }
+
+BackwardBindingIdentifier
+  ReturnValue / ReturnAsValue -> { children: [$1], names: [] }
 
 TypeAssignment
   "::=" ->
@@ -7540,7 +7589,7 @@ _
   /(?=[ \t\/\\#])/ ( NonNewlineWhitespace / InlineComment )+ -> $2
 
 NonNewlineWhitespace
-  [ \t]+ ->
+  [ \t]+ ::ASTLeaf ->
     return { $loc, token: $0 }
   "\\" CoffeeLineContinuationEnabled EOL -> " "
 
@@ -8053,7 +8102,7 @@ JSXImplicitFragment
         state.currentIndent.token,
         "</>",
       ],
-      jsxChildren: [ first, ...rest!.map(([, tag]: [any, any]) => tag) ],
+      jsxChildren: [ first, ...rest!.map ?.1 ],
     }
     type := typeOfJSX(jsx, config)
     return type ? [
@@ -8820,7 +8869,7 @@ TypeAliasDeclaration ::TypeDeclaration
     return {
       type: "TypeDeclaration",
       id,
-      children: $0,
+      children: $0 as Children,
       ts: true,
     }
 
@@ -9095,8 +9144,8 @@ TypeIndex
 # (let/const and class properties, but not function parameters), and can't
 # parse both (?!).  For simplicity, we allow either in all cases.
 # In some cases (e.g. let/const), we transpile them away later.
-TypeSuffix
-  _? QuestionMark?:optional _? Colon:colon MaybeNestedType:t ::unknown -> {
+TypeSuffix ::TypeSuffix
+  _? QuestionMark?:optional _? Colon:colon MaybeNestedType:t -> {
     type: "TypeSuffix",
     ts: true,
     optional,
@@ -9108,7 +9157,7 @@ TypeSuffix
   # TypeScript has a special error for ! without : ("Declarations with definite
   # assignment assertions must also have type annotations.") but we parse it
   # so that the user can get this more useful error message.
-  NonNullAssertion:nonnull _? (Colon MaybeNestedType)?:ct ::unknown ->
+  NonNullAssertion:nonnull _? (Colon MaybeNestedType)?:ct ->
     [colon, t] := ct ?? []
     return {
       type: "TypeSuffix",
@@ -9401,15 +9450,16 @@ TypeElement ::ASTNode
     }
   __ DotDotDot __ Type:type
   Type:type ( _? DotDotDot )?:spaceDots ->
+    dots: ASTNode .= spaceDots
     if spaceDots
-      [space, dots] := spaceDots
+      [space, dotdotdot] := spaceDots
       ws := getTrimmingSpace(type)
-      spaceDots = [ ws, dots, space ]
+      dots = [ ws, dotdotdot, space ]
       type = trimFirstSpace(type)
     return {
-      type: "TypeElement",
-      t: type,
-      children: [ spaceDots, type ],
+      type: "TypeElement"
+      t: type
+      children: [ dots, type ]
     }
 
 NestedTypeElementList
@@ -9597,9 +9647,9 @@ TypeBinaryOp
     return { $loc, token: "&" }
 
 TypeFunction
-  # NOTE: Forbid `:=` and `.=` after return type to avoid treating `f: (x: T) => y := z`
+  # NOTE: Forbid declaration operators after return type to avoid treating `f: (x: T) => y := z`
   # as a typed const; prefer implicit object/arrow function interpretation.
-  ( Abstract _? )?:abstract ( Async _? )?:async ( New _? )?:new_ Parameters __ TypeFunctionArrow ( ReturnType / Loc ):returnType !( _? ( ConstAssignment / LetAssignment ) ) ::TypeFunction ->
+  ( Abstract _? )?:abstract ( Async _? )?:async ( New _? )?:new_ Parameters __ TypeFunctionArrow ( ReturnType / Loc ):returnType !TrailingDeclaration ::TypeFunction ->
     children := [ abstract, ...$0.slice(2, -1) ] // omit async and trailing lookahead
     if abstract and not new_
       children[1] = {
@@ -10280,19 +10330,23 @@ IndentedAtLeast
     return $0 if indent.level >= state.currentIndent.level
     return $skip
 
-NotDedented
+NotDedented ::WSArray
   IndentedAtLeast? _? ->
     ws := []
     ws.push(...$1) if $1
     ws.push(...$2) if $2
-    return ws.flat(Infinity).filter(Boolean)
+    // Depth 3 flattens EOS -> RestOfLine -> inline whitespace while keeping
+    // TypeScript inference finite, unlike flat(Infinity).
+    return ws.flat(3).filter(Boolean)
 
-SameLineOrIndentedFurther
+SameLineOrIndentedFurther ::WSArray
   IndentedFurther? _? ->
     ws := []
     ws.push(...$1) if $1
     ws.push(...$2) if $2
-    return ws.flat(Infinity).filter(Boolean)
+    // Depth 3 flattens EOS -> RestOfLine -> inline whitespace while keeping
+    // TypeScript inference finite, unlike flat(Infinity).
+    return ws.flat(3).filter(Boolean)
 
 Dedented
   !IndentedAtLeast EOS -> $2
