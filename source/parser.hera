@@ -90,6 +90,7 @@ import type {
   ArrowFunction,
   AssignmentExpression,
   ASTError,
+  ASTLeaf,
   ASTNode,
   ASTRef,
   BinaryOp,
@@ -184,6 +185,7 @@ import type {
   TypeTuple,
   VoidType,
   WhenClause,
+  WSArray,
   WithClause,
   Yield,
   YieldExpression,
@@ -6480,11 +6482,11 @@ MaybeNestedPostfixedExpression
     return $skip unless expression
     return expression
 
-MaybeNestedPostfixedExpressionOrCommaLoop
+MaybeNestedPostfixedExpressionOrCommaLoop ::ASTNode
   # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
   # the second case, where they get checked by PrimaryExpression,
   # which then allows for trailing binary operators etc.
-  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested PostfixedExpressionOrCommaLoop )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ::unknown ->
+  !NestedBulletedArray !NestedImplicitObjectLiteral PushIndent ( Nested PostfixedExpressionOrCommaLoop )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
     return $skip unless expression
     return expression unless trailing
     return [ expression, trailing ]
@@ -7587,7 +7589,7 @@ _
   /(?=[ \t\/\\#])/ ( NonNewlineWhitespace / InlineComment )+ -> $2
 
 NonNewlineWhitespace
-  [ \t]+ ->
+  [ \t]+ ::ASTLeaf ->
     return { $loc, token: $0 }
   "\\" CoffeeLineContinuationEnabled EOL -> " "
 
@@ -8100,7 +8102,7 @@ JSXImplicitFragment
         state.currentIndent.token,
         "</>",
       ],
-      jsxChildren: [ first, ...rest!.map(([, tag]: [any, any]) => tag) ],
+      jsxChildren: [ first, ...rest!.map ?.1 ],
     }
     type := typeOfJSX(jsx, config)
     return type ? [
@@ -8867,7 +8869,7 @@ TypeAliasDeclaration ::TypeDeclaration
     return {
       type: "TypeDeclaration",
       id,
-      children: $0,
+      children: $0 as Children,
       ts: true,
     }
 
@@ -9142,8 +9144,8 @@ TypeIndex
 # (let/const and class properties, but not function parameters), and can't
 # parse both (?!).  For simplicity, we allow either in all cases.
 # In some cases (e.g. let/const), we transpile them away later.
-TypeSuffix
-  _? QuestionMark?:optional _? Colon:colon MaybeNestedType:t ::unknown -> {
+TypeSuffix ::TypeSuffix
+  _? QuestionMark?:optional _? Colon:colon MaybeNestedType:t -> {
     type: "TypeSuffix",
     ts: true,
     optional,
@@ -9155,7 +9157,7 @@ TypeSuffix
   # TypeScript has a special error for ! without : ("Declarations with definite
   # assignment assertions must also have type annotations.") but we parse it
   # so that the user can get this more useful error message.
-  NonNullAssertion:nonnull _? (Colon MaybeNestedType)?:ct ::unknown ->
+  NonNullAssertion:nonnull _? (Colon MaybeNestedType)?:ct ->
     [colon, t] := ct ?? []
     return {
       type: "TypeSuffix",
@@ -9448,15 +9450,16 @@ TypeElement ::ASTNode
     }
   __ DotDotDot __ Type:type
   Type:type ( _? DotDotDot )?:spaceDots ->
+    dots: ASTNode .= spaceDots
     if spaceDots
-      [space, dots] := spaceDots
+      [space, dotdotdot] := spaceDots
       ws := getTrimmingSpace(type)
-      spaceDots = [ ws, dots, space ]
+      dots = [ ws, dotdotdot, space ]
       type = trimFirstSpace(type)
     return {
-      type: "TypeElement",
-      t: type,
-      children: [ spaceDots, type ],
+      type: "TypeElement"
+      t: type
+      children: [ dots, type ]
     }
 
 NestedTypeElementList
@@ -10327,19 +10330,23 @@ IndentedAtLeast
     return $0 if indent.level >= state.currentIndent.level
     return $skip
 
-NotDedented
+NotDedented ::WSArray
   IndentedAtLeast? _? ->
     ws := []
     ws.push(...$1) if $1
     ws.push(...$2) if $2
-    return ws.flat(Infinity).filter(Boolean)
+    // Depth 3 flattens EOS -> RestOfLine -> inline whitespace while keeping
+    // TypeScript inference finite, unlike flat(Infinity).
+    return ws.flat(3).filter(Boolean)
 
-SameLineOrIndentedFurther
+SameLineOrIndentedFurther ::WSArray
   IndentedFurther? _? ->
     ws := []
     ws.push(...$1) if $1
     ws.push(...$2) if $2
-    return ws.flat(Infinity).filter(Boolean)
+    // Depth 3 flattens EOS -> RestOfLine -> inline whitespace while keeping
+    // TypeScript inference finite, unlike flat(Infinity).
+    return ws.flat(3).filter(Boolean)
 
 Dedented
   !IndentedAtLeast EOS -> $2
