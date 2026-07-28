@@ -1,4 +1,4 @@
-{ testCase, throws } from ./helper.civet
+{ evalsTo, testCase, throws } from ./helper.civet
 
 describe "pipe", ->
   testCase """
@@ -478,6 +478,203 @@ describe "pipe", ->
       ---
       ($ => $+$)(x())
     """
+
+  describe "null-safe", ->
+    testCase """
+      basic
+      ---
+      x ?|> f
+      ---
+      x != null ? f(x) : x
+    """
+
+    testCase """
+      Unicode alias
+      ---
+      x ?▷ f |> g
+      ---
+      x != null ? g(f(x)) : x
+    """
+
+    testCase """
+      guards the remaining pipeline
+      ---
+      x ?|> f |> g |> h
+      ---
+      x != null ? h(g(f(x))) : x
+    """
+
+    testCase """
+      evaluates a complex input once
+      ---
+      getX() ?|> f |> g
+      ---
+      let ref;(ref = getX()) != null ? g(f(ref)) : ref
+    """
+
+    testCase """
+      second guard checks an intermediate result
+      ---
+      x ?|> f ?|> g
+      ---
+      let ref;x != null ? (ref = f(x)) != null ? g(ref) : ref : x
+    """
+
+    testCase """
+      ordinary steps before the guard still run
+      ---
+      x |> f ?|> g |> h
+      ---
+      let ref;(ref = f(x)) != null ? h(g(ref)) : ref
+    """
+
+    testCase """
+      parentheses end the guarded pipeline
+      ---
+      (x ?|> f |> g) |> recover
+      ---
+      recover((x != null ? g(f(x)) : x))
+    """
+
+    testCase """
+      postfix existence remains distinct
+      ---
+      x? |> f
+      x ?|> f
+      ---
+      f((x != null))
+      x != null ? f(x) : x
+    """
+
+    testCase """
+      multiline
+      ---
+      x
+      ?|> f
+      |> g
+      ---
+      x != null ? g(f(x)) : x
+    """
+
+    testCase """
+      thick pipe inside guarded suffix
+      ---
+      x ?|> f ||> tap |> g
+      ---
+      let ref;x != null ? (tap((ref = f(x))),g(ref)) : x
+    """
+
+    testCase """
+      thick pipe before guard is unconditional
+      ---
+      x ||> tap ?|> f |> g
+      ---
+      tap(x);x != null ? g(f(x)) : x
+    """
+
+    testCase """
+      throw inside guarded suffix
+      ---
+      x ?|> f |> throw
+      ---
+      x != null ? (()=>{throw f(x)})() : x
+    """
+
+    throws """
+      return inside guarded suffix is unsupported
+      ---
+      x ?|> f |> return
+      ---
+      ParseErrors: unknown:1:3 Can't use |> return in a null-safe pipeline
+    """
+
+    it "short-circuits at runtime", ->
+      evalsTo """
+        calls := []
+        step := (value) ->
+          calls.push value
+          value + 1
+        [
+          null ?|> step |> step
+          1 ?|> step |> step
+          calls
+        ]
+      """, [null, 3, [1, 2]]
+
+    it "repeated guard short-circuits an intermediate null", ->
+      evalsTo """
+        calls := []
+        stop := (value) ->
+          calls.push "stop"
+          null
+        after := (value) ->
+          calls.push "after"
+          value
+        result := 1 ?|> stop ?|> after
+        [result, calls]
+      """, [null, ["stop"]]
+
+    describe "guarded tap", ->
+      testCase """
+        basic
+        ---
+        x ?||> tap
+        ---
+        x != null ? (tap(x),x) : x
+      """
+
+      testCase """
+        guards later ordinary and thick pipes
+        ---
+        x ?||> tap |> f ||> log |> g
+        ---
+        let ref;x != null ? (tap(x),log((ref = f(x))),g(ref)) : x
+      """
+
+      testCase """
+        evaluates a complex input once
+        ---
+        getX() ?||> tap |> f
+        ---
+        let ref;(ref = getX()) != null ? (tap(ref),f(ref)) : ref
+      """
+
+      testCase """
+        Unicode alias
+        ---
+        x ?|▷ tap |> f
+        ---
+        x != null ? (tap(x),f(x)) : x
+      """
+
+      testCase """
+        postfix existence remains distinct
+        ---
+        x? ||> tap
+        x ?||> tap
+        ---
+        let ref;tap((ref = (x != null)));ref
+        x != null ? (tap(x),x) : x
+      """
+
+      it "retains its input and guards later ordinary and thick pipes", ->
+        evalsTo """
+          calls := []
+          tap := (value) ->
+            calls.push ["tap", value]
+            "ignored"
+          transform := (value) ->
+            calls.push ["transform", value]
+            value * 2
+          results := [
+            null ?||> tap |> transform ||> tap |> & + 1
+            2 ?||> tap |> transform ||> tap |> & + 1
+          ]
+          [results, calls]
+        """, [
+          [null, 5]
+          [["tap", 2], ["transform", 2], ["tap", 4]]
+        ]
 
   describe "thicc", ->
     testCase """
