@@ -58,3 +58,25 @@ export default {
 ```
 
 See also: [example CoffeeScript Plugin](integration/project-test/.civet/coffee-plugin.mjs)
+
+
+Debugging
+---
+
+Clicking `create a launch.json file` inside the Debug menu and using NodeJS as the debugger creates a simple debug configuration for your Civet project that has some sane defaults.
+To make this work a `tasks.json` is expected and may need to be created. You can use the following template for it:
+
+```json: tasks.json
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "civet: build",
+      "type": "shell",
+      "command": "npm run build:dev",
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}
+```
