@@ -15,6 +15,7 @@ import type {
 } from ./types.civet
 
 import {
+  append
   checkValidLHS
   convertOptionalType
   isBigIntLiteral
@@ -37,6 +38,77 @@ import {
 import {
   getHelperRef
 } from ./helper.civet
+
+import {
+  simplifyBindingProperties
+} from ./binding.civet
+
+import {
+  getPatternBlockPrefix
+} from ./pattern-matching.civet
+
+/**
+ * Build the loop-body statements required by a source `ForDeclaration`
+ * pattern, such as named destructuring, post-rest splices, and `@` bindings.
+ */
+function forDeclarationPatternPrefix(
+  declaration: ASTNode
+  implicitLift = false
+): StatementTuple[]
+  return [] unless declaration?.type is "ForDeclaration"
+  { binding } := declaration
+  prefix := getPatternBlockPrefix
+    binding.pattern
+    undefined
+    append(declaration.decl, " ")
+    binding.typeSuffix
+  simplifyBindingProperties binding
+  return [] unless prefix
+  if implicitLift
+    for [, statement] of prefix
+      if statement?.type is "Declaration"
+        (statement as Declaration | ForControlDeclaration).implicitLift = true
+  prefix
+
+/**
+ * Add a loop-body binding followed by any statements required by its pattern,
+ * merging adjacent declarations with the same var/const/let kind when possible.
+ */
+function pushForBlockDeclaration(
+  blockPrefix: StatementTuple[]
+  decl: NonNullASTNode
+  value: ASTNode
+  implicitLift = false
+): void
+  unless decl.type is "ForDeclaration" // assignment like `for x.y of ...` - no declaration
+    blockPrefix.push ["", [trimFirstSpace(decl), " = ", value], ";"]
+    return
+  binding := trimFirstSpace decl.binding // portion of decl to use when appending to previous
+  previous := blockPrefix.-1?[1]
+  previousImplicitLift := previous? and "implicitLift" in previous and previous.implicitLift
+  if previous?.type is "Declaration" and Boolean(previousImplicitLift) is implicitLift and previous.decl is decl.decl
+    previous.children.push ", ", binding, " = ", value
+    previous.names.push ...namesOf(decl)
+  else
+    blockPrefix.push ["", {
+      type: "Declaration"
+      children: [decl, " = ", value]
+      decl.decl
+      // names may get mutated by future pushForBlockDeclaration, so duplicate
+      names: [...namesOf(decl)]
+      implicitLift
+    }, ";"]
+
+  // Add pattern follow-ups. Any initial declaration is guaranteed to match
+  // the loop binding just created, so merge them.
+  patternPrefix := forDeclarationPatternPrefix(decl, implicitLift)
+  if patternPrefix.0?[1]?.type is "Declaration"
+    patternDeclaration := patternPrefix.shift()![1] as Declaration | ForControlDeclaration
+    patternPrevious := blockPrefix.-1![1] as Declaration | ForControlDeclaration
+    [, ...patternChildren] := patternDeclaration.children
+    patternPrevious.children.push ", ", ...trimFirstSpace(patternChildren)
+    patternPrevious.names.push ...namesOf(patternDeclaration)
+  blockPrefix.push ...patternPrefix
 
 function processRangeExpression(start: ASTNode, ws1: ASTNode, range: RangeDots, end: ASTNode)
   ws1 = [ws1, range.children[0]] // whitespace before ..
@@ -241,7 +313,8 @@ function forRange(
       . stepRef
 
   let varAssign: ASTNode[] = [], varLetAssign = varAssign, varLet = varAssign
-  let blockPrefix: StatementTuple[]?
+  blockPrefix: StatementTuple[] := []
+  bindingInBlock .= false
   names .= namesOf forDeclaration
   if forDeclaration?
     if forDeclaration.type is "AssignmentExpression" // Coffee-style for loop
@@ -253,9 +326,11 @@ function forRange(
       varLet = [",", ...varName, " = ", counterRef]
     else // const or var or assignment like `for x[y] of z`: put inside loop
       value := start?.type is "Literal" and start.subtype is "StringLiteral" ? ["String.fromCharCode(", counterRef, ")"] : counterRef
-      blockPrefix = [
-        ["", [forDeclaration, " = ", value], ";"]
-      ]
+      pushForBlockDeclaration blockPrefix, forDeclaration, value, true
+      bindingInBlock = true
+
+  unless bindingInBlock
+    blockPrefix.unshift ...forDeclarationPatternPrefix(forDeclaration)
 
   declaration: Declaration := {
     type: "Declaration"
@@ -414,31 +489,6 @@ function processForInOf($0: [
   let hoistDec: ASTNode?
   blockPrefix: StatementTuple[] := []
 
-  /** Add a loop-body declaration, appending to the previous one if it has the same var/const/let kind. */
-  function pushBlockDeclaration(
-    decl: NonNullASTNode
-    value: ASTNode
-    implicitLift = false
-  ): void
-    unless decl.type is "ForDeclaration" // assignment like `for x.y of ...` - no declaration
-      blockPrefix.push ["", [trimFirstSpace(decl), " = ", value], ";"]
-      return
-    binding := trimFirstSpace decl.binding // portion of decl to use when appending to previous
-    previous := blockPrefix.-1?[1]
-    previousImplicitLift := previous? and "implicitLift" in previous and previous.implicitLift
-    if previous?.type is "Declaration" and Boolean(previousImplicitLift) is implicitLift and previous.decl is decl.decl
-      previous.children.push ", ", binding, " = ", value
-      previous.names.push ...namesOf(decl)
-    else
-      blockPrefix.push ["", {
-        type: "Declaration"
-        children: [decl, " = ", value]
-        decl.decl
-        // names may get mutated by future pushBlockDeclaration, so duplicate
-        names: [...namesOf(decl)]
-        implicitLift
-      }, ";"]
-
   // for each item[, index] of array
   // for each item1, item2[, index] of array1, array2
   if each
@@ -501,9 +551,9 @@ function processForInOf($0: [
         value := not cycles[i]? and defaultValues[i]? is not "undefined"
           ? [counterRef, " < ", lengthRefs[i], " ? ", itemValue, " : ", trimFirstSpace(defaultValues[i])]
           : itemValue
-        pushBlockDeclaration decl, value, true
+        pushForBlockDeclaration blockPrefix, decl, value, true
       if indexDeclaration
-        pushBlockDeclaration indexDeclaration, counterRef, true
+        pushForBlockDeclaration blockPrefix, indexDeclaration, counterRef, true
 
       condition := lenIndices# ? [counterRef, " < ", endRef, "; "] : ["; "]
       children := [...errors, open, declaration, "; ", condition, counterRef, "++", close]
@@ -562,9 +612,9 @@ function processForInOf($0: [
     for each decl, i of itemDeclarations
       value .= [nextRefs[i], "?.value"]
       value = [nextRefs[i], "?.done ? ", trimFirstSpace(defaultValues[i]), " : ", ...value] if defaultValues[i]?
-      pushBlockDeclaration decl, value
+      pushForBlockDeclaration blockPrefix, decl, value
     if indexDeclaration
-      pushBlockDeclaration indexDeclaration, counterRef
+      pushForBlockDeclaration blockPrefix, indexDeclaration, counterRef
 
     return {
       declaration
@@ -596,11 +646,7 @@ function processForInOf($0: [
     inOf.token is "in" and indexDeclaration and pattern?.type is not "Identifier"
   )
     itemRef := makeRef if inOf.token is "in" then "key" else "item"
-    blockPrefix.push(["", {
-      type: "Declaration"
-      children: [declaration, " = ", itemRef]
-      names: namesOf declaration
-    } satisfies ForControlDeclaration, ";"])
+    pushForBlockDeclaration blockPrefix, declaration, itemRef
     declaration =
       type: "ForDeclaration"
       binding: {
@@ -618,6 +664,7 @@ function processForInOf($0: [
       pattern = itemRef
 
   unless indexDeclaration or own
+    blockPrefix.unshift ...forDeclarationPatternPrefix(declaration)
     return {
       declaration
       iterand
@@ -634,18 +681,10 @@ function processForInOf($0: [
         decl: "let"
         names: []
       } satisfies ForControlDeclaration
-      indexDecl := indexDeclaration!
-      indexAssignment: ASTNode :=
-        if indexDecl.type is "ForDeclaration"
-          {
-            type: "Declaration"
-            children: [trimFirstSpace(indexDecl), " = ", counterRef, "++"]
-            indexDecl.names
-            decl: indexDecl.decl
-          } satisfies ForControlDeclaration
-        else
-          [trimFirstSpace(indexDecl), " = ", counterRef, "++"]
-      blockPrefix.push(["", indexAssignment, ";"])
+      indexDecl := trimFirstSpace indexDeclaration!
+      indexPrefix: StatementTuple[] := []
+      pushForBlockDeclaration indexPrefix, indexDecl, [counterRef, "++"]
+      blockPrefix.push ...indexPrefix
 
     // grammar guarantees inOf.token is "of" or "in" only
     when "in" // for key, value in object
@@ -675,29 +714,12 @@ function processForInOf($0: [
                 type: "Index"
                 expression: trimmedPattern
                 children: [ "[", trimmedPattern, "]" ]
-        blockPrefix.push ["",
-          if indexDeclaration.type is "ForDeclaration"
-            { binding, children } := indexDeclaration
-            binding.children.push binding.initializer = makeNode {}
-              type: "Initializer"
-              expression
-              children: ["", " = ", expression]
-            makeNode
-              type: "Declaration"
-              children: [
-                ...trimFirstSpace(children) as ASTNode[]
-              ]
-              bindings: [indexDeclaration.binding]
-              decl: indexDeclaration.decl
-              names: indexDeclaration.names
-          else
-            [
-              trimFirstSpace(indexDeclaration), " = "
-              trimFirstSpace(expRef)
-              "[", trimFirstSpace(pattern), "]"
-            ]
-          ";"]
+        indexDecl := trimFirstSpace indexDeclaration
+        indexPrefix: StatementTuple[] := []
+        pushForBlockDeclaration indexPrefix, indexDecl, expression
+        blockPrefix.push ...indexPrefix
 
+  blockPrefix.unshift ...forDeclarationPatternPrefix(declaration)
   return {
     declaration,
     iterand,
@@ -708,7 +730,9 @@ function processForInOf($0: [
 
 export {
   declarationIterand
+  forDeclarationPatternPrefix
   forRange
   processForInOf
   processRangeExpression
+  pushForBlockDeclaration
 }
