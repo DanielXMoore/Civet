@@ -93,6 +93,7 @@ import type {
   ASTLeaf,
   ASTNode,
   ASTRef,
+  ASTString,
   BinaryOp,
   BinaryOpRHS,
   Binding,
@@ -137,6 +138,8 @@ import type {
   IterationExpression,
   IterationFamily,
   IterationStatement,
+  JSXAttribute,
+  JSXAttributeInitializer,
   Label,
   LabelledStatement,
   LexicalDeclaration,
@@ -181,6 +184,7 @@ import type {
   TypeArgumentList,
   TypeFunction,
   TypeNode,
+  TypeParameters,
   TypeSuffix,
   TypeTuple,
   VoidType,
@@ -7604,7 +7608,7 @@ __
   /(?=\s|\/|#)/ ( Whitespace / Comment )* -> $2
   ""
 
-Whitespace
+Whitespace ::ASTLeaf
   [\s]+ ->
     return { $loc, token: $0 }
 
@@ -8237,65 +8241,58 @@ JSXIdentifierName
 # https://facebook.github.io/jsx/#prod-JSXAttributes
 JSXAttributes
   ( Whitespace? JSXAttribute )* ->
-    // Extract all .class shorthands into `classes` array, remembering the
-    // position of the first one so the merged attribute keeps its source
-    // position relative to other attributes and spreads.
-    classes := []
-    insertIndex .= 0
-    kept .= 0
-    attrs .= $0.filter((pair) => {
-      attr := pair[1]
-      if attr.type is "JSXClass"
-        insertIndex = kept unless classes#
-        classes.push(attr.class)
-        return false
-      kept++
-      return true
-    })
+    // Collect all class sources while retaining only the first one's
+    // attribute pair as an anchor for the merged attribute.
+    classes: ASTNode[] := []
+    explicitClasses: ASTNode[] .= []
+    className .= config.react ? "className" : "class"
+    attrs: [ASTLeaf | ASTString | undefined, JSXAttribute][] := []
+    classAnchor: Children .= []
+    for pair^[, attr] of $0
+      if attr is like {type: "JSXClass"}
+        unless classes#
+          attrs.push [" ", classAnchor] unless explicitClasses#
+          classes.push ...explicitClasses
+          explicitClasses = classes
+        classes.push attr.class
+      else if attr is like [["class", undefined], ...], [["className", undefined], ...]
+        unless classes# or explicitClasses#
+          classAnchor = attr
+          attrs.push pair
+        initializer := attr[1]
+        classValue := initializer is like {type: "JSXAttributeInitializer"} ?
+          initializer.value : undefined
+        explicitClasses.push classValue
+        className = attr[0][0]
+      else
+        attrs.push pair
     if classes#
-      // Check for non-shorthand class or className attribute
-      className .= config.react ? "className" : "class"
-      // Each explicit class removed ahead of the anchor shifts it back one.
-      // Count them against the pre-filter indices, then adjust once, so the
-      // comparison isn't made against an already-shifted anchor.
-      anchor := insertIndex
-      removed .= 0
-      attrs = attrs.filter((pair: any, i) => {
-        attr := pair[1]
-        if (attr[0][0] is "class" or attr[0][0] is "className") and
-            not attr[0][1]
-          className = attr[0][0]
-          classes.push(attr[1][attr[1].length-1])
-          removed++ if i < anchor
-          return false
-        return true
-      })
-      insertIndex = anchor - removed
-      function isBraced(c: any) {
-        return c[0] === "{" || c[0]?.token === "{"
-      }
-      function unbrace(c: any) {
+      function isBraced(c: ASTNode): c is Children
+        Array.isArray(c) and c[0] is like "{", {token: "{"}
+      function unbrace(c: Children): Children
         // Remove leading "{" and trailing "}" tokens
-        return c.slice(1, -1)
-      }
-      function parseClass(c: any) {
-        c = c.token || c
-        if (c.startsWith("'")) {
-          c = '"' +
-            c.slice(1, -1)
+        c[<..<]
+      function parseClass(token: string): string
+        if token.startsWith "'"
+          token = '"' +
+            token[<..<]
             .replace(/\\*"/g, (m: string) => m# % 2 == 0 ? m : "\\"+m) +
             '"'
-        }
-        return JSON.parse(c)
-      }
-      [strings, exprs] := [[], []]
-      classes.forEach (c) =>
+        JSON.parse token
+      strings: string[] := []
+      exprs: ASTNode[] := []
+      for each let c: ASTNode of classes
+        while Array.isArray(c) and c# is 1 then c = c[0]
         if isBraced c
-          exprs.push(unbrace(c))
-          exprs.push(", ")
-        else
-          strings.push(parseClass(c))
-        return
+          exprs.push unbrace c
+          exprs.push ", "
+        else if c <? "string"
+          strings.push parseClass c
+        else if {type: "StringLiteral", token} := c
+          strings.push parseClass token
+        else if c?
+          exprs.push c
+          exprs.push ", "
 
       stringPart := strings.filter(Boolean).join(" ")
       let classValue
@@ -8305,15 +8302,16 @@ JSXAttributes
           exprs.unshift(JSON.stringify(stringPart), ", ")
         if exprs# is 1
           // Single expression doesn't need array, filter, or join.
-          root .= exprs[0]
+          root: ASTNode .= exprs[0]
           // Remove trailing whitespace, e.g. in JSXShorthandString rule
-          while root# and isWhitespaceOrEmpty(root[root#-1])
-            root = root.slice(0, -1)
+          while Array.isArray(root) and root# and isWhitespaceOrEmpty root.-1
+            root = root[..<]
           // Unwrap possibly resulting singleton arrays
-          while root?# is 1 then root = root[0]
+          while Array.isArray(root) and root# is 1 then root = root[0]
           // processUnaryExpression wraps in {children: [...]}
-          root = root.children if root?.children
-          if root?.[0]?.token is "`"
+          if root is like {children} and Array.isArray root.children
+            root = root.children
+          if Array.isArray(root) and root[0] is like {token: "`"}
             // Template literals work just as-is.
             classValue = ["{", ...exprs, "}"]
           else
@@ -8330,18 +8328,23 @@ JSXAttributes
           classValue = `'${stringPart}'`
         else
           classValue = `{${JSON.stringify(stringPart)}}`
-      attrs.splice(insertIndex, 0, [" ", [className, ["=", classValue]]])
-    return attrs.map((pair) => {
+      classAnchor[0] = className
+      classAnchor[1] =
+        type: "JSXAttributeInitializer"
+        value: classValue
+        children: ["=", classValue]
+    // Without a shorthand, leave explicit class attributes untouched.
+    return (classes# ? attrs : $0).map (pair) =>
       [space, attr] := pair
       // Sometimes JSXAttribute adds a leading space to separate from previous.
       // Remove that space if there's already whitespace here.
-      if space and attr[0] is " "
-        pair = [space, attr.slice(1)]
-      return pair
-    })
+      if space and attr is like [" ", ...]
+        [space, attr[<..]]
+      else
+        pair
 
 # NOTE: Merged SpreadAttribute and Attribute
-JSXAttribute
+JSXAttribute ::JSXAttribute
   # https://facebook.github.io/jsx/#prod-JSXSpreadAttribute
   # allows something like
   #   OpenBrace __ DotDotDot Expression __ CloseBrace
@@ -8354,24 +8357,20 @@ JSXAttribute
     return convertObjectToJSXAttributes($1)
 
   # https://facebook.github.io/jsx/#prod-JSXAttribute
-  JSXAttributeName:name ( JSXAttributeInitializer / &JSXAttributeSpace ):value ->
+  JSXAttributeName:name ( JSXAttributeInitializer / &JSXAttributeSpace ):rawInitializer ->
     // Hera 0.9.0: `&JSXAttributeSpace` assertion now yields `true`; normalize to falsy.
-    value = undefined if value <? "boolean"
+    initializer: JSXAttributeInitializer? :=
+      rawInitializer <? "boolean" ? undefined : rawInitializer
     if name.type is "ComputedPropertyName"
-      if value
-        // Strip off equals sign and whitespace from JSXAttributeInitializer
-        value = value[value#-1]
-        // Strip off braces if present
-        if value[0]?.token is "{" and
-            value[value#-1]?.token is "}"
-          value = value.slice(1, -1)
-      else
-        // React and SolidJS define a bare attribute to mean setting it to true.
-        // We need to specify a value here, so this seems a reasonable choice.
-        value = "true"
+      // React and SolidJS define a bare attribute to mean setting it to true.
+      value: NonNullASTNode .= initializer?.value ?? "true"
+      // Strip off braces if present
+      if Array.isArray(value) and value[0] is like {token: "{"} and
+          value.-1 is like {token: "}"}
+        value = value[<..<]
       return ["{...{", name, ": ", value, "}}"]
     else
-      return [name, value]
+      return [name, initializer]
 
   # NOTE: Adding ...foo shorthand for {...foo}
   InsertInlineOpenBrace DotDotDot InlineJSXAttributeValue InsertCloseBrace &JSXAttributeSpace -> [$1, $2, $3, $4]
@@ -8450,7 +8449,7 @@ JSXShorthandString
   OpenBrace PostfixedExpressionOrCommaLoop __ CloseBrace
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeName
-JSXAttributeName
+JSXAttributeName ::NonNullASTNode
   # `<div 😊={x}>` — tried first so it claims the whole identifier (incl.
   # ASCII parts adjacent to unicode); wrapped as a synthetic
   # ComputedPropertyName so JSXAttribute emits `{...{"😊": value}}`.
@@ -8467,13 +8466,22 @@ JSXAttributeName
   ComputedPropertyName
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeInitializer
-JSXAttributeInitializer
+JSXAttributeInitializer ::JSXAttributeInitializer
   # Outside CoffeeScript compatibility mode,
   # allow attribute value to be an indented expression
   # Forbid trailing expressions outside the indentation, as that should be JSX
   !CoffeeJSXEnabled Whitespace?:ws1 Equals:equals &( NonNewlineWhitespace* EOL ) InsertInlineOpenBrace:open NestedPostfixedExpressionNoTrailing:expression InsertCloseBrace:close ->
-    return [ ws1, equals, open, trimFirstSpace(expression), close ]
-  Whitespace? Equals Whitespace? JSXAttributeValue
+    value: Children := [open, trimFirstSpace(expression), close]
+    return {
+      type: "JSXAttributeInitializer"
+      value
+      children: [ws1, equals, value]
+    }
+  Whitespace? Equals Whitespace? JSXAttributeValue:value -> {
+    type: "JSXAttributeInitializer"
+    value
+    children: $0
+  }
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeValue
 JSXAttributeValue
@@ -9386,7 +9394,7 @@ TypeIdentifier
     return {
       type: "TypeIdentifier",
       children: $0,
-      raw: [$2.name, ...$3.map(([dot, id]) => dot.token + id.name), ].join(''),
+      raw: [$2.name, ...$3.map(([, id]) => "." + id.name), ].join(''),
       args,
     }
   _? BasicThisLiteral ->
@@ -9793,7 +9801,7 @@ TypeArgument
 TypeArgumentDelimiter
   TypeParameterDelimiter
 
-TypeParameters
+TypeParameters ::TypeParameters
   OpenAngleBracket TypeParameter+:parameters __ CloseAngleBracket ->
     return {
       type: "TypeParameters",
