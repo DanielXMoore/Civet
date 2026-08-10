@@ -139,7 +139,7 @@ import type {
   IterationFamily,
   IterationStatement,
   JSXAttribute,
-  JSXAttributeInitializer,
+  JSXClass,
   Label,
   LabelledStatement,
   LexicalDeclaration,
@@ -8247,7 +8247,10 @@ JSXAttributes
     explicitClasses: ASTNode[] .= []
     className .= config.react ? "className" : "class"
     attrs: [ASTLeaf | ASTString | undefined, JSXAttribute][] := []
-    classAnchor: Children .= []
+    classAnchor: JSXAttribute .=
+      type: "JSXAttribute"
+      value: undefined
+      children: []
     for pair^[, attr] of $0
       if attr is like {type: "JSXClass"}
         unless classes#
@@ -8255,17 +8258,14 @@ JSXAttributes
           classes.push ...explicitClasses
           explicitClasses = classes
         classes.push attr.class
-      else if attr is like [["class", undefined], ...], [["className", undefined], ...]
+      else if attr is like {type: "JSXAttribute", name: ["class", undefined]}, {type: "JSXAttribute", name: ["className", undefined]}
         unless classes# or explicitClasses#
           classAnchor = attr
           attrs.push pair
-        initializer := attr[1]
-        classValue := initializer is like {type: "JSXAttributeInitializer"} ?
-          initializer.value : undefined
-        explicitClasses.push classValue
-        className = attr[0][0]
-      else
-        attrs.push pair
+        explicitClasses.push attr.value
+        className = attr.name[0]
+      else if attr is like {type: "JSXAttribute"}
+        attrs.push [pair[0], attr]
     if classes#
       function isBraced(c: ASTNode): c is Children
         Array.isArray(c) and c[0] is like "{", {token: "{"}
@@ -8328,23 +8328,21 @@ JSXAttributes
           classValue = `'${stringPart}'`
         else
           classValue = `{${JSON.stringify(stringPart)}}`
-      classAnchor[0] = className
-      classAnchor[1] =
-        type: "JSXAttributeInitializer"
-        value: classValue
-        children: ["=", classValue]
+      classAnchor.name = className
+      classAnchor.value = classValue
+      classAnchor.children = [className, "=", classValue]
     // Without a shorthand, leave explicit class attributes untouched.
     return (classes# ? attrs : $0).map (pair) =>
       [space, attr] := pair
       // Sometimes JSXAttribute adds a leading space to separate from previous.
       // Remove that space if there's already whitespace here.
-      if space and attr is like [" ", ...]
-        [space, attr[<..]]
+      if space and attr is like {type: "JSXAttribute", children: [" ", ...]}
+        [space, {...attr, children: attr.children[<..]}]
       else
         pair
 
 # NOTE: Merged SpreadAttribute and Attribute
-JSXAttribute ::JSXAttribute
+JSXAttribute
   # https://facebook.github.io/jsx/#prod-JSXSpreadAttribute
   # allows something like
   #   OpenBrace __ DotDotDot Expression __ CloseBrace
@@ -8353,31 +8351,47 @@ JSXAttribute ::JSXAttribute
   # {foo} is equivalent to foo={foo}, and
   # {foo, bar: baz} is equivalent to foo={foo} and bar={baz}.
   # {...foo} is a special case.
-  BracedObjectLiteral ->
-    return convertObjectToJSXAttributes($1)
+  BracedObjectLiteral:obj ::JSXAttribute ->
+    value := convertObjectToJSXAttributes(obj)
+    return {
+      type: "JSXAttribute"
+      value
+      children: value
+    }
 
   # https://facebook.github.io/jsx/#prod-JSXAttribute
-  JSXAttributeName:name ( JSXAttributeInitializer / &JSXAttributeSpace ):rawInitializer ->
+  JSXAttributeName:name ( JSXAttributeInitializer / &JSXAttributeSpace ):rawInitializer ::JSXAttribute ->
     // Hera 0.9.0: `&JSXAttributeSpace` assertion now yields `true`; normalize to falsy.
-    initializer: JSXAttributeInitializer? :=
-      rawInitializer <? "boolean" ? undefined : rawInitializer
+    initializer := rawInitializer <? "boolean" ? undefined : rawInitializer
+    value: ASTNode .= initializer?.value
+    let children: Children
     if name.type is "ComputedPropertyName"
       // React and SolidJS define a bare attribute to mean setting it to true.
-      value: NonNullASTNode .= initializer?.value ?? "true"
+      value ?= "true"
       // Strip off braces if present
-      if Array.isArray(value) and value[0] is like {token: "{"} and
-          value.-1 is like {token: "}"}
+      if Array.isArray(value) and value[0] is like {token: "{"} and value.-1 is like {token: "}"}
         value = value[<..<]
-      return ["{...{", name, ": ", value, "}}"]
+      children = ["{...{", name, ": ", value, "}}"]
     else
-      return [name, initializer]
+      children = [name, initializer?.children]
+    return {
+      type: "JSXAttribute"
+      name
+      value
+      children
+    }
 
   # NOTE: Adding ...foo shorthand for {...foo}
-  InsertInlineOpenBrace DotDotDot InlineJSXAttributeValue InsertCloseBrace &JSXAttributeSpace -> [$1, $2, $3, $4]
+  InsertInlineOpenBrace:open DotDotDot:dots InlineJSXAttributeValue:value InsertCloseBrace:close &JSXAttributeSpace ::JSXAttribute ->
+    return {
+      type: "JSXAttribute"
+      value
+      children: [open, dots, value, close]
+    }
 
   # NOTE: @foo and @@foo shorthands
   # for foo={this.foo} and foo={this.foo.bind(this)}
-  AtThis:at Identifier?:id InlineJSXCallExpressionRest*:rest &JSXAttributeSpace ->
+  AtThis:at Identifier?:id InlineJSXCallExpressionRest*:rest &JSXAttributeSpace ::JSXAttribute ->
     children := [ at, ...rest.flat() ]
     if id
       children.splice(1, 0, {
@@ -8391,49 +8405,85 @@ JSXAttribute ::JSXAttribute
     })
     last := lastAccessInCallExpression(expr)
     assert last, "AtThis+id/rest guarantees lastAccess"
+    let name: NonNullASTNode
+    let value: ASTNode
+    let attrChildren: Children
     if last.type is "Index"
-      return [
-        "{...{",
-        {...last, type: "ComputedPropertyName"},
-        ": ", expr, "}}"
-      ]
+      name = {...last, type: "ComputedPropertyName"}
+      value = expr
+      attrChildren = ["{...{", name, ": ", value, "}}"]
     else if last.name
-      return [last.name, "={", expr, "}"]
-    return $skip
+      {name} = last
+      value = ["{", expr, "}"]
+      attrChildren = [name, "=", value]
+    else
+      return $skip
+    return {
+      type: "JSXAttribute"
+      name
+      value
+      children: attrChildren
+    }
 
   # NOTE: foo(), foo.bar, foo?.bar, foo!, foo[bar], foo@bar don't need braces
-  Identifier:id InlineJSXCallExpressionRest+:rest &JSXAttributeSpace ->
+  Identifier:id InlineJSXCallExpressionRest+:rest &JSXAttributeSpace ::JSXAttribute ->
     expr := processCallMemberExpression({
       type: "CallExpression",
       children: [ id, ...rest.flat() ],
     })
     if expr!.type is "ObjectExpression"  // glob
-      return convertObjectToJSXAttributes(expr)
+      value := convertObjectToJSXAttributes expr
+      return {
+        type: "JSXAttribute"
+        value
+        children: value
+      }
     last := lastAccessInCallExpression(expr)
     assert last, "Identifier base guarantees lastAccess"
+    let name: NonNullASTNode
+    let value: ASTNode
+    let children: Children
     if last.type is "Index"
-      return [
-        "{...{",
-        {...last, type: "ComputedPropertyName"},
-        ": ", expr, "}}"
-      ]
+      name = {...last, type: "ComputedPropertyName"}
+      value = expr
+      children = ["{...{", name, ": ", value, "}}"]
     else if last.name
-      return [last.name, "={", expr, "}"]
-    return $skip
+      name = last.name
+      value = ["{", expr, "}"]
+      children = [name, "=", value]
+    else
+      return $skip
+    return {
+      type: "JSXAttribute"
+      name
+      value
+      children
+    }
 
   # NOTE: #id shorthand
-  "#" JSXShorthandString ->
-    return [ " ", "id=", $2 ]
-  Dot JSXShorthandString ->
+  "#" JSXShorthandString:value ::JSXAttribute ->
+    name := "id"
     return {
-      type: "JSXClass",
-      class: $2,
+      type: "JSXAttribute"
+      name
+      value
+      children: [" ", name, "=", value]
+    }
+  Dot JSXShorthandString ::JSXClass ->
+    return {
+      type: "JSXClass"
+      class: $2
     }
 
   # NOTE: Matching LiveScript flagging shorthand in addition +x -y !z -> x={true} y={false} z={false}
-  $[!+-]:toggle JSXAttributeName:id &JSXAttributeSpace ->
-    value := toggle is "+" ? "true" : "false"
-    return [ " ", id, "={", value, "}" ]
+  $[!+-]:toggle JSXAttributeName:name &JSXAttributeSpace ::JSXAttribute ->
+    value := ["{", toggle is "+" ? "true" : "false", "}"]
+    return {
+      type: "JSXAttribute"
+      name
+      value
+      children: [" ", name, "=", value]
+    }
 
 JSXAttributeSpace
   /[\s>]|\/>/
@@ -8466,19 +8516,17 @@ JSXAttributeName ::NonNullASTNode
   ComputedPropertyName
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeInitializer
-JSXAttributeInitializer ::JSXAttributeInitializer
+JSXAttributeInitializer ::{children: Children, value: ASTNode}
   # Outside CoffeeScript compatibility mode,
   # allow attribute value to be an indented expression
   # Forbid trailing expressions outside the indentation, as that should be JSX
   !CoffeeJSXEnabled Whitespace?:ws1 Equals:equals &( NonNewlineWhitespace* EOL ) InsertInlineOpenBrace:open NestedPostfixedExpressionNoTrailing:expression InsertCloseBrace:close ->
     value: Children := [open, trimFirstSpace(expression), close]
     return {
-      type: "JSXAttributeInitializer"
       value
       children: [ws1, equals, value]
     }
   Whitespace? Equals Whitespace? JSXAttributeValue:value -> {
-    type: "JSXAttributeInitializer"
     value
     children: $0
   }
