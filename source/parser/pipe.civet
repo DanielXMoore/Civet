@@ -8,8 +8,8 @@ type {
   BlockStatement
   Call
   Children
-  Condition
   ConditionalExpression
+  ElseClause
   IfStatement
   PipelineExpression
   ReturnStatement
@@ -53,8 +53,8 @@ function constructInvocation(fn: ExprWithComments, arg: ASTNode!)
 
     (ref as { type: "Ref" | "PipedExpression" }).type = "PipedExpression"
     ref.children = [makeLeftHandSideExpression(arg)]
-    // `ampersandBlock` guarantees a single use.  Once the shared ref becomes
-    // a real body node, its sole placeholder is its unambiguous parent.
+    // Once the shared ref becomes a real body node, its sole syntactic
+    // placeholder (when present) is its unambiguous parent.
     updateParentPointers ref, placeholders?[0]
 
     return makeNode {
@@ -159,8 +159,22 @@ function processPipelineExpression(s: PipelineExpression): void
   comma .= blockContainingStatement(s) ? ";" : ","
 
   let usingRef: ASTRef?
+  let assignmentTarget: ASTNode?
+  // Does this pipeline end in `|> return`?  Unlike `exits`, this does not
+  // mean that the current pipeline segment definitely exits,
+  // as there might  be optional `?|>` that would stop it.
   pipelineReturns := body.some [,,, expression] =>
     expression is like {token: "return"}
+
+  function assignPipelineValue(value: ASTNode): UnwrappedExpression
+    assigned := deepCopy assignmentTarget as ASTNode
+    removeHoistDecs assigned
+    expression: ASTNode[] := [assigned, " = ", value]
+    makeNode {
+      type: "UnwrappedExpression"
+      expression
+      children: expression
+    } satisfies UnwrappedExpression
 
   function finishPipelineSegment(finalArg: ASTNode): void
     if usingRef
@@ -174,7 +188,7 @@ function processPipelineExpression(s: PipelineExpression): void
     updateParentPointers finalArg, s
 
     // Wrap with parens because comma operator has low precedence
-    if not children.some(?.type is "ReturnStatement") and children.some & is ","
+    if not (finalArg is like { type: "ReturnStatement" }) and children.includes ","
       // Capture parent before parenthesizeExpression makes s its child.
       { parent } := s
       replaceNode s, parenthesizeExpression(s), parent
@@ -196,47 +210,57 @@ function processPipelineExpression(s: PipelineExpression): void
             continue switch
           when "CallExpression"
             const access = arg.children.pop()
-            // processAssignments will check that this is a valid
-            // last access to assign to
+            // checkValidLHS above validates the last access before we remove it.
 
             usingRef = makeRef()
             initRef = makeNode {
               type: "AssignmentExpression"
-              children: [usingRef, " = ", arg, comma]
+              children: [usingRef, " = ", arg, pipelineReturns ? ";" : comma]
               // missing `lhs`, hence cast below
             } as AssignmentExpression
 
-            arg = {
+            arg = makeNode {
               type: "MemberExpression"
               children: [usingRef, access]
             }
 
-        // assignment node
-        lhs := [[
-          [initRef]
-          arg
-          []
-          { token: "=", children: [" = "] }
-        ]]
-
-        Object.assign s, {
-          type: "AssignmentExpression"
-          children: [lhs, children]
-          names: null
-          lhs
-          assigned: arg
-          expression: children
-        } satisfies AssignmentExpression
-        updateParentPointers s
+        if pipelineReturns
+          assignmentTarget = arg
+          if initRef
+            (initRef as ASTParentWithHoist).hoistDec = {
+              type: "Declaration"
+              children: ["let ", usingRef]
+              names: []
+            }
+            children.push initRef
+            initRef.parent = s
+            usingRef = undefined
+          // `s` remains a pipeline because each returning branch performs
+          // the assignment explicitly below.
+          (s as ASTParent).children = children
+        else
+          lhs := [[
+            [initRef]
+            arg
+            []
+            { token: "=", children: [" = "] }
+          ]]
+          Object.assign s, {
+            type: "AssignmentExpression"
+            children: [lhs, children]
+            names: null
+            lhs
+            assigned: arg
+            expression: children
+          } satisfies AssignmentExpression
+          updateParentPointers s
 
         // Clone so that the same node isn't on the left and right because splice manipulation
         // moves things around and can cause a loop in the graph
         arg = deepCopy arg
-        removeHoistDecs arg
-
-        // except keep the ref the same
-        if arg!.children[0].type is "Ref"
-          arg!.children[0] = usingRef
+        // A returning assignment has no original LHS left to carry hoists
+        // (for example, the ref used by a negative-index target).
+        removeHoistDecs arg unless pipelineReturns
 
       else
         children.unshift {
@@ -258,7 +282,7 @@ function processPipelineExpression(s: PipelineExpression): void
         // Use the existing ref if present
         usingRef ?= ref
         guardedArg = usingRef
-        testArg = makeLeftHandSideExpression [usingRef, " = ", arg]
+        testArg = parenthesizeExpression [usingRef, " = ", arg]
 
       suffix: PipelineExpression :=
         type: "PipelineExpression"
@@ -274,15 +298,31 @@ function processPipelineExpression(s: PipelineExpression): void
           bare: false
         } satisfies BlockStatement
 
-        condition: Condition := parenthesizeExpression [testArg, " != null"]
+        condition := parenthesizeExpression [testArg, " != null"]
+
+        let elseClause: ElseClause?
+        if assignmentTarget
+          failureAssignment := assignPipelineValue guardedArg
+          failureExpressions: StatementTuple[] := [["", failureAssignment]]
+          failureBlock := makeNode {
+            type: "BlockStatement"
+            expressions: failureExpressions
+            children: ["{", failureExpressions, "}"]
+            bare: false
+          } satisfies BlockStatement
+          elseClause = makeNode {
+            type: "ElseClause"
+            block: failureBlock
+            children: [" ", "else ", failureBlock]
+          } satisfies ElseClause
 
         guardedReturn := makeNode {
           type: "IfStatement"
           condition
           negated: undefined
           then: block
-          else: undefined
-          children: ["if", condition, block]
+          else: elseClause
+          children: ["if", condition, block, elseClause]
         } satisfies IfStatement
 
         hoistTarget: ASTParentWithHoist .= guardedReturn
@@ -360,7 +400,19 @@ function processPipelineExpression(s: PipelineExpression): void
       arg
       returning
 
+    if result is like {
+      type: "StatementExpression"
+      statement: { type: "ThrowStatement" }
+    }
+      s.exits = true
+
     if result!.type is "ReturnStatement"
+      s.exits = true
+      if assignmentTarget
+        returned := result.expression
+        result.expression = assignPipelineValue returned
+        result.children = result.children.map & is returned ? result.expression : &
+        updateParentPointers result.expression, result
       // Attach errors/warnings if there are more steps
       if i < body# - 1
         result.children.push {
