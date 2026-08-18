@@ -3614,6 +3614,15 @@ Specify the `"civet react"` directive to use the `className` attribute instead:
 <div .foo>Civet
 </Playground>
 
+Multiple `class` (or `className`) attributes automatically merge into one,
+along with `.class` shorthand, automatically dropping falsey classes
+(a simplified form of [clsx](https://github.com/lukeed/clsx)):
+
+<Playground>
+<div .button class=displayClass()
+     class={"active" if isActive()}>Civet
+</Playground>
+
 ### Implicit Element
 
 <Playground>
