@@ -8241,32 +8241,45 @@ JSXIdentifierName
 # https://facebook.github.io/jsx/#prod-JSXAttributes
 JSXAttributes
   ( Whitespace? JSXAttribute )* ->
-    // Collect all class sources while retaining only the first one's
-    // attribute pair as an anchor for the merged attribute.
+    // Collect class sources by attribute name, retaining an output anchor at
+    // each group's first source position. Shorthand uses a synthetic anchor.
+    /**
+     * Primary "class" or "className" attribute name,
+     * or undefined meaning "use default" (when just merging shorthand).
+     */
+    let className: ASTString?
+    /** Primary class/className values, from explicit attributes and dotted shorthand */
     classes: ASTNode[] := []
-    explicitClasses: ASTNode[] .= []
-    className .= config.react ? "className" : "class"
+    /** Attributes using the other explicit name, kept separate from primary */
+    otherClasses: JSXAttribute[] := []
     attrs: [ASTLeaf | ASTString | undefined, JSXAttribute][] := []
     classAnchor: JSXAttribute .=
       type: "JSXAttribute"
       value: undefined
       children: []
+    // TypeScript narrows `attr` below but not the `pair` it came from, so the
+    // casts preserve the original pairs while recording the narrowed type.
     for pair^[, attr] of $0
       if attr is like {type: "JSXClass"}
         unless classes#
-          attrs.push [" ", classAnchor] unless explicitClasses#
-          classes.push ...explicitClasses
-          explicitClasses = classes
+          attrs.push [" ", classAnchor]
         classes.push attr.class
       else if attr is like {type: "JSXAttribute", name: ["class", undefined]}, {type: "JSXAttribute", name: ["className", undefined]}
-        unless classes# or explicitClasses#
-          classAnchor = attr
-          attrs.push pair
-        explicitClasses.push attr.value
-        className = attr.name[0]
+        // Dotted classes use the first explicit class-like attribute name.
+        className ?= attr.name[0]
+        if attr.name[0] is className
+          unless classes#
+            classAnchor = attr
+            attrs.push pair as [typeof pair[0], typeof attr]
+          classes.push attr.value
+        else
+          unless otherClasses#
+            attrs.push pair as [typeof pair[0], typeof attr]
+          otherClasses.push attr
       else if attr is like {type: "JSXAttribute"}
-        attrs.push [pair[0], attr]
-    if classes#
+        attrs.push pair as [typeof pair[0], typeof attr]
+
+    function mergeClassValues(values: ASTNode[]): ASTNode
       function parseClass(token: string): string
         if token.startsWith "'"
           token = '"' +
@@ -8276,7 +8289,7 @@ JSXAttributes
         JSON.parse token
       strings: string[] := []
       exprs: ASTNode[] := []
-      for each let c: ASTNode of classes
+      for each let c: ASTNode of values
         if c <? "string"
           strings.push parseClass c
         else if {type: "StringLiteral", token} := c
@@ -8324,12 +8337,19 @@ JSXAttributes
           classValue = `'${stringPart}'`
         else
           classValue = `{${JSON.stringify(stringPart)}}`
+      return classValue
+
+    unless classes is like [], [^classAnchor.value] // need to merge classes
+      className ?= config.react ? "className" : "class"
       classAnchor.name = className
-      classAnchor.value = classValue
-      classAnchor.children = [className, "=", classValue]
-    // Without a shorthand, leave explicit class attributes untouched.
-    return (classes# ? attrs : $0).map (pair) =>
-      [space, attr] := pair
+      classAnchor.value = mergeClassValues classes
+      classAnchor.children = [className, "=", classAnchor.value]
+    if otherClasses# > 1 // need to merge other classes
+      otherClassAnchor := otherClasses[0]
+      otherClassAnchor.value = mergeClassValues otherClasses.map .value
+      otherClassAnchor.children =
+        [otherClassAnchor.name, "=", otherClassAnchor.value]
+    for pair^[space, attr] of attrs
       // Sometimes JSXAttribute adds a leading space to separate from previous.
       // Remove that space if there's already whitespace here.
       if space and attr is like {type: "JSXAttribute", children: [" ", ...]}
