@@ -1,4 +1,4 @@
-{ testCase, throws } from ./helper.civet
+{ evalsTo, testCase, throws } from ./helper.civet
 
 describe "pipe", ->
   testCase """
@@ -464,6 +464,39 @@ describe "pipe", ->
     """
 
     testCase """
+      negative index ampersand expansion
+      ---
+      get() |> &.-1
+      ---
+      ($ => $[$.length-1])(get())
+    """
+
+    testCase """
+      negative index after access can still unwrap
+      ---
+      value |> &.items.-1
+      ---
+      let ref;(ref = value.items)[ref.length-1]
+    """
+
+    testCase """
+      unrelated negative index in ampersand function can still unwrap
+      ---
+      get() |> (+ foo.-1)
+      ---
+      get()+ foo[foo.length-1]
+    """
+
+    it "does not duplicate input after ampersand expansion", ->
+      evalsTo """
+        let calls = 0
+        get := ->
+          calls++
+          [1, 2]
+        [get() |> &.-1, calls]
+      """, [2, 1]
+
+    testCase """
       typed
       ---
       &: number |> (+ 1) |> &/2 |> Math.ceil
@@ -478,6 +511,402 @@ describe "pipe", ->
       ---
       ($ => $+$)(x())
     """
+
+  describe "null-safe", ->
+    testCase """
+      basic
+      ---
+      x ?|> f
+      ---
+      x != null ? f(x) : x
+    """
+
+    testCase """
+      Unicode alias
+      ---
+      x ?▷ f |> g
+      ---
+      x != null ? g(f(x)) : x
+    """
+
+    testCase """
+      guards the remaining pipeline
+      ---
+      x ?|> f |> g |> h
+      ---
+      x != null ? h(g(f(x))) : x
+    """
+
+    testCase """
+      evaluates a complex input once
+      ---
+      getX() ?|> f |> g
+      ---
+      let ref;(ref = getX()) != null ? g(f(ref)) : ref
+    """
+
+    testCase """
+      second guard checks an intermediate result
+      ---
+      x ?|> f ?|> g
+      ---
+      let ref;x != null ? (ref = f(x)) != null ? g(ref) : ref : x
+    """
+
+    testCase """
+      ordinary steps before the guard still run
+      ---
+      x |> f ?|> g |> h
+      ---
+      let ref;(ref = f(x)) != null ? h(g(ref)) : ref
+    """
+
+    testCase """
+      parentheses end the guarded pipeline
+      ---
+      (x ?|> f |> g) |> recover
+      ---
+      recover((x != null ? g(f(x)) : x))
+    """
+
+    testCase """
+      postfix existence remains distinct
+      ---
+      x? |> f
+      x ?|> f
+      ---
+      f((x != null))
+      x != null ? f(x) : x
+    """
+
+    testCase """
+      multiline
+      ---
+      x
+      ?|> f
+      |> g
+      ---
+      x != null ? g(f(x)) : x
+    """
+
+    testCase """
+      thick pipe inside guarded suffix
+      ---
+      x ?|> f ||> tap |> g
+      ---
+      let ref;x != null ? (tap((ref = f(x))),g(ref)) : x
+    """
+
+    testCase """
+      thick pipe before guard is unconditional
+      ---
+      x ||> tap ?|> f |> g
+      ---
+      tap(x);x != null ? g(f(x)) : x
+    """
+
+    testCase """
+      throw inside guarded suffix
+      ---
+      x ?|> f |> throw
+      ---
+      x != null ? (()=>{throw f(x)})() : x
+    """
+
+    testCase """
+      yield inside guarded suffix
+      ---
+      x ?|> f |> yield |> g
+      ---
+      x != null ? g(yield f(x)) : x
+    """, wrapper: """
+      function* f() {
+        CODE
+      }
+    """
+
+    testCase """
+      return inside guarded suffix
+      ---
+      x ?|> f |> return
+      ---
+      if(x != null) {return f(x)}
+    """
+
+    testCase """
+      return after guarded tap
+      ---
+      x ?||> tap |> f |> return
+      ---
+      if(x != null) {tap(x);return f(x)}
+    """
+
+    testCase """
+      returning pipeline is not implicitly returned again
+      ---
+      choose := (x) ->
+        x ||> tap |> return
+      ---
+      const choose = function(x) {
+        tap(x);return x
+      }
+    """
+
+    testCase """
+      guarded returning pipeline marks only its returning segment
+      ---
+      choose := (x) ->
+        x ?|> f |> return
+      ---
+      const choose = function(x) {
+        if(x != null) {return f(x)};return
+      }
+    """
+
+    testCase """
+      throwing pipeline is not implicitly returned
+      ---
+      choose := (x) ->
+        x ||> tap |> throw
+      ---
+      const choose = function(x) {
+        tap(x);throw x
+      }
+    """
+
+    testCase """
+      guarded throwing pipeline retains its null result
+      ---
+      choose := (x) ->
+        x ?|> throw
+      ---
+      const choose = function(x) {
+        return x != null ? (()=>{throw x})() : x
+      }
+    """
+
+    testCase """
+      return after complex input
+      ---
+      getX() ?|> f |> return
+      ---
+      let ref;if((ref = getX()) != null) {return f(ref)}
+    """
+
+    testCase """
+      return after repeated guard
+      ---
+      x ?|> f ?|> g |> return
+      ---
+      if(x != null) {let ref;if((ref = f(x)) != null) {return g(ref)}}
+    """
+
+    testCase """
+      tap before repeated returning guard
+      ---
+      x ?|> f ||> tap ?|> g |> return
+      ---
+      if(x != null) {let ref;tap((ref = f(x)));if(ref != null) {return g(ref)}}
+    """
+
+    testCase """
+      return guarded input directly
+      ---
+      x ?|> return
+      ---
+      if(x != null) {return x}
+    """
+
+    testCase """
+      ordinary pipe before returning guard is unconditional
+      ---
+      x |> f ?|> g |> return
+      ---
+      let ref;if((ref = f(x)) != null) {return g(ref)}
+    """
+
+    testCase """
+      assignment before returning guard
+      ---
+      x |>= f ?|> g |> return
+      ---
+      let ref;if((ref = f(x)) != null) {return x = g(ref)} else {x = ref}
+    """
+
+    testCase """
+      assignment ending in return
+      ---
+      x |>= f |> return
+      ---
+      return x = f(x)
+    """
+
+    testCase """
+      complex assignment before returning guard
+      ---
+      get().x |>= f ?|> g |> return
+      ---
+      let ref;let ref1;ref = get();if((ref1 = f(ref.x)) != null) {return ref.x = g(ref1)} else {ref.x = ref1}
+    """
+
+    testCase """
+      thick pipe before returning guard is unconditional
+      ---
+      x ||> tap ?|> f |> return
+      ---
+      tap(x);if(x != null) {return f(x)}
+    """
+
+    testCase """
+      parentheses end returning guard
+      ---
+      (x ?|> f) |> return
+      ---
+      return (x != null ? f(x) : x)
+    """
+
+    throws """
+      guarded pipe after return is error
+      ---
+      x ?|> f |> return |> g
+      ---
+      ParseErrors: unknown:1:3 Can't continue a pipeline after returning
+    """
+
+    it "short-circuits at runtime", ->
+      evalsTo """
+        calls := []
+        step := (value) ->
+          calls.push value
+          value + 1
+        [
+          null ?|> step |> step
+          1 ?|> step |> step
+          calls
+        ]
+      """, [null, 3, [1, 2]]
+
+    it "falls through on null before return", ->
+      evalsTo """
+        choose := (value) ->
+          value ?|> & + 1 |> return
+          "fallback"
+        [choose(null), choose(1)]
+      """, ["fallback", 2]
+
+    it "runs an ordinary pipe before a returning guard", ->
+      evalsTo """
+        calls := []
+        prepare := (value) ->
+          calls.push value
+          value > 0 ? value * 2 : null
+        choose := (value) ->
+          value |> prepare ?|> & + 1 |> return
+          "fallback"
+        [choose(0), choose(2), calls]
+      """, ["fallback", 5, [0, 2]]
+
+    it "assigns both outcomes of a returning guard", ->
+      evalsTo """
+        choose := (value) ->
+          let x = value
+          x |>= & ?|> & + 1 |> return
+          ["fallback", x]
+        [choose(null), choose(1)]
+      """, [["fallback", null], 2]
+
+    it "preserves target refs in a returning assignment", ->
+      evalsTo """
+        choose := (value) ->
+          body := children: [value]
+          body.children.-1 |>= & ?|> & + 1 |> return
+          body.children.-1
+        [choose(null), choose(1)]
+      """, [null, 2]
+
+    it "falls through when a repeated returning guard gets null", ->
+      evalsTo """
+        step := (value) -> value is 1 ? null : value + 1
+        choose := (value) ->
+          value ?|> step ?|> & * 2 |> return
+          "fallback"
+        [choose(null), choose(1), choose(2)]
+      """, ["fallback", "fallback", 6]
+
+    it "repeated guard short-circuits an intermediate null", ->
+      evalsTo """
+        calls := []
+        stop := (value) ->
+          calls.push "stop"
+          null
+        after := (value) ->
+          calls.push "after"
+          value
+        result := 1 ?|> stop ?|> after
+        [result, calls]
+      """, [null, ["stop"]]
+
+    describe "guarded tap", ->
+      testCase """
+        basic
+        ---
+        x ?||> tap
+        ---
+        x != null ? (tap(x),x) : x
+      """
+
+      testCase """
+        guards later ordinary and thick pipes
+        ---
+        x ?||> tap |> f ||> log |> g
+        ---
+        let ref;x != null ? (tap(x),log((ref = f(x))),g(ref)) : x
+      """
+
+      testCase """
+        evaluates a complex input once
+        ---
+        getX() ?||> tap |> f
+        ---
+        let ref;(ref = getX()) != null ? (tap(ref),f(ref)) : ref
+      """
+
+      testCase """
+        Unicode alias
+        ---
+        x ?|▷ tap |> f
+        ---
+        x != null ? (tap(x),f(x)) : x
+      """
+
+      testCase """
+        postfix existence remains distinct
+        ---
+        x? ||> tap
+        x ?||> tap
+        ---
+        let ref;tap((ref = (x != null)));ref
+        x != null ? (tap(x),x) : x
+      """
+
+      it "retains its input and guards later ordinary and thick pipes", ->
+        evalsTo """
+          calls := []
+          tap := (value) ->
+            calls.push ["tap", value]
+            "ignored"
+          transform := (value) ->
+            calls.push ["transform", value]
+            value * 2
+          results := [
+            null ?||> tap |> transform ||> tap |> & + 1
+            2 ?||> tap |> transform ||> tap |> & + 1
+          ]
+          [results, calls]
+        """, [
+          [null, 5]
+          [["tap", 2], ["transform", 2], ["tap", 4]]
+        ]
 
   describe "thicc", ->
     testCase """

@@ -1,18 +1,32 @@
 type {
+  AmpersandFunction
   ASTNode
+  ASTParent
+  ASTParentWithHoist
+  ASTRef
   AssignmentExpression
+  BlockStatement
   Call
+  Children
+  ConditionalExpression
+  ElseClause
+  IfStatement
+  PipelineExpression
+  ReturnStatement
+  StatementTuple
   ThrowStatement
   UnaryOpElement
+  UnwrappedExpression
 } from ./types.civet
 { gatherRecursiveAll } from ./traversal.civet
 {
-  addParentPointers
   checkValidLHS
-  clone
+  deepCopy
   makeLeftHandSideExpression
   makeNode
+  parenthesizeExpression
   removeHoistDecs
+  replaceNode
   skipIfOnlyWS
   updateParentPointers
 } from ./util.civet
@@ -35,11 +49,13 @@ function constructInvocation(fn: ExprWithComments, arg: ASTNode!)
   while expr.type is "ParenthesizedExpression"
     expr = expr.expression
   if expr.ampersandBlock
-    { ref, body } := expr
+    { ref, body, placeholders } := expr as AmpersandFunction
 
-    ref.type = "PipedExpression"
+    (ref as { type: "Ref" | "PipedExpression" }).type = "PipedExpression"
     ref.children = [makeLeftHandSideExpression(arg)]
-    updateParentPointers ref
+    // Once the shared ref becomes a real body node, its sole syntactic
+    // placeholder (when present) is its unambiguous parent.
+    updateParentPointers ref, placeholders?[0]
 
     return makeNode {
       type: "UnwrappedExpression"
@@ -58,9 +74,10 @@ function constructInvocation(fn: ExprWithComments, arg: ASTNode!)
   if (comment) (lhs.children as any[]).push comment
   comment = skipIfOnlyWS(fn.leadingComment)
   if (comment) (lhs.children as any[]).splice(1, 0, comment)
+  updateParentPointers lhs
 
   args := [arg]
-  call: Call := {
+  call: Call := makeNode {
     type: "Call"
     args
     children: ["(", args, ")"]
@@ -68,17 +85,17 @@ function constructInvocation(fn: ExprWithComments, arg: ASTNode!)
   // Turn `|> new Foo` into `new Foo(arg)` by adding to existing CallExpression
   if lhs.type is "NewExpression"
     { expression } .= lhs
-    expression = {
+    expression = makeNode {
       type: "CallExpression"
       children: [ expression, call ]
     }
-    {
+    makeNode {
       ...lhs
       expression
       children: lhs.children.map & is lhs.expression ? expression : &
     }
   else
-    {
+    makeNode {
       type: "CallExpression"
       children: [lhs, call]
     }
@@ -101,9 +118,9 @@ function constructPipeStep(fn: ExprWithComments, arg: ASTNode!, returning: ASTNo
         returning
       ]
     when "throw"
-      statement: ThrowStatement := { type: "ThrowStatement", children }
+      statement: ThrowStatement := makeNode { type: "ThrowStatement", children }
       return
-        . {
+        . makeNode {
             type: "StatementExpression"
             statement
             children: [statement]
@@ -111,10 +128,13 @@ function constructPipeStep(fn: ExprWithComments, arg: ASTNode!, returning: ASTNo
         . null
     when "return"
       // Return ignores ||> returning argument
-      return [{
-        type: "ReturnStatement"
-        children
-      }, null]
+      return
+        . makeNode {
+            type: "ReturnStatement"
+            expression: arg
+            children: children as Children
+          } satisfies ReturnStatement
+        . null
 
   return [
     constructInvocation(fn, arg)
@@ -124,56 +144,107 @@ function constructPipeStep(fn: ExprWithComments, arg: ASTNode!, returning: ASTNo
 // head: expr
 // body: [ws, pipe, ws, expr][]
 
-function processPipelineExpressions(statements: ASTNode): void
-  for each s of gatherRecursiveAll statements, .type is "PipelineExpression"
-    [ws, , body] := s.children
-    [, arg] .= s.children
+/**
+ * Transpile one pipeline. Normally, side-effecting `||>` steps are separated
+ * with semicolons at statement level and commas in expression position.
+ * A null-safe value suffix (`?|>` or `?||>`) uses commas because it is a
+ * conditional operand. If the pipeline `return`s, guards instead transpile to
+ * `if` statements. Other StatementExpression nodes are expressionized later.
+ */
+function processPipelineExpression(s: PipelineExpression): void
+  [ws, , body] .= s.children
+  [, arg] .= s.children
 
-    children := [ws]
-    comma := blockContainingStatement(s) ? ";" : ","
+  children: ASTNode[] .= [ws]
+  comma .= blockContainingStatement(s) ? ";" : ","
 
-    let usingRef = null
+  let usingRef: ASTRef?
+  let assignmentTarget: ASTNode?
+  // Does this pipeline end in `|> return`?  Unlike `exits`, this does not
+  // mean that the current pipeline segment definitely exits,
+  // as there might  be optional `?|>` that would stop it.
+  pipelineReturns := body.some [,,, expression] =>
+    expression is like {token: "return"}
 
-    for each step, i of body
-      const [leadingComment, pipe, trailingComment, expr] = step
-      const returns = pipe.token is "||>"
-      let ref, result,
-        returning = returns ? arg : null
+  function assignPipelineValue(value: ASTNode): UnwrappedExpression
+    assigned := deepCopy assignmentTarget as ASTNode
+    removeHoistDecs assigned
+    expression: ASTNode[] := [assigned, " = ", value]
+    makeNode {
+      type: "UnwrappedExpression"
+      expression
+      children: expression
+    } satisfies UnwrappedExpression
 
-      if pipe.token is "|>="
-        let initRef
-        if i is 0
-          checkValidLHS arg
+  function finishPipelineSegment(finalArg: ASTNode): void
+    if usingRef
+      s.hoistDec = {
+        type: "Declaration"
+        children: ["let ", usingRef]
+        names: []
+      }
 
-          :outer switch arg!.type
-            when "MemberExpression"
-              // If there is only a single access then we don't need a ref
-              break if arg.children.length <= 2
-              continue switch
-            when "CallExpression"
-              const access = arg.children.pop()
-              // processAssignments will check that this is a valid
-              // last access to assign to
+    children.push finalArg
+    updateParentPointers finalArg, s
 
-              usingRef = makeRef()
-              initRef = {
-                type: "AssignmentExpression"
-                children: [usingRef, " = ", arg, comma]
-              }
+    // Wrap with parens because comma operator has low precedence
+    if not (finalArg is like { type: "ReturnStatement" }) and children.includes ","
+      // Capture parent before parenthesizeExpression makes s its child.
+      { parent } := s
+      replaceNode s, parenthesizeExpression(s), parent
 
-              arg = {
-                type: "MemberExpression"
-                children: [usingRef, access]
-              }
+  for each step, i of body
+    [leadingComment, pipe, trailingComment, expr] := step
+    returns := pipe.token.endsWith "||>" // "||>" or "?||>"
+    returning .= returns ? arg : null
 
-          // assignment node
+    if pipe.token is "|>="
+      let initRef
+      if i is 0
+        checkValidLHS arg
+
+        switch arg!.type
+          when "MemberExpression"
+            // If there is only a single access then we don't need a ref
+            break if arg.children.length <= 2
+            continue switch
+          when "CallExpression"
+            const access = arg.children.pop()
+            // checkValidLHS above validates the last access before we remove it.
+
+            usingRef = makeRef()
+            initRef = makeNode {
+              type: "AssignmentExpression"
+              children: [usingRef, " = ", arg, pipelineReturns ? ";" : comma]
+              // missing `lhs`, hence cast below
+            } as AssignmentExpression
+
+            arg = makeNode {
+              type: "MemberExpression"
+              children: [usingRef, access]
+            }
+
+        if pipelineReturns
+          assignmentTarget = arg
+          if initRef
+            (initRef as ASTParentWithHoist).hoistDec = {
+              type: "Declaration"
+              children: ["let ", usingRef]
+              names: []
+            }
+            children.push initRef
+            initRef.parent = s
+            usingRef = undefined
+          // `s` remains a pipeline because each returning branch performs
+          // the assignment explicitly below.
+          (s as ASTParent).children = children
+        else
           lhs := [[
             [initRef]
             arg
             []
             { token: "=", children: [" = "] }
           ]]
-
           Object.assign s, {
             type: "AssignmentExpression"
             children: [lhs, children]
@@ -182,85 +253,191 @@ function processPipelineExpressions(statements: ASTNode): void
             assigned: arg
             expression: children
           } satisfies AssignmentExpression
+          updateParentPointers s
 
-          // Clone so that the same node isn't on the left and right because splice manipulation
-          // moves things around and can cause a loop in the graph
-          arg = clone arg
-          removeHoistDecs arg
+        // Clone so that the same node isn't on the left and right because splice manipulation
+        // moves things around and can cause a loop in the graph
+        arg = deepCopy arg
+        // A returning assignment has no original LHS left to carry hoists
+        // (for example, the ref used by a negative-index target).
+        removeHoistDecs arg unless pipelineReturns
 
-          // except keep the ref the same
-          if arg!.children[0].type is "Ref"
-            arg!.children[0] = usingRef
-
-        else
-          children.unshift({
-            type: "Error",
-            $loc: pipe.token.$loc,
-            message: "Can't use |>= in the middle of a pipeline",
-          })
       else
-        if (i is 0) s.children = children
-
-      if returns and (ref = needsRef(arg))
-        // Use the existing ref if present
-        usingRef = usingRef or ref
-        arg = {
-          type: "ParenthesizedExpression",
-          children: ["(", {
-            type: "AssignmentExpression"
-            children: [usingRef, " = ", arg]
-          }, ")"],
+        children.unshift {
+          type: "Error"
+          $loc: pipe.token.$loc
+          message: "Can't use |>= in the middle of a pipeline"
+          parent: s
         }
+    else
+      if i is 0
+        // After transpiling, children no longer has the parsed PipelineExpression tuple shape.
+        (s as ASTParent).children = children
+
+    if pipe.token.startsWith "?" // "?|>" or "?||>"
+      // Null-safe guard the entire remaining syntactic pipeline.
+      guardedArg .= arg
+      testArg .= arg
+      if ref := needsRef arg
+        // Use the existing ref if present
+        usingRef ?= ref
+        guardedArg = usingRef
+        testArg = parenthesizeExpression [usingRef, " = ", arg]
+
+      suffix: PipelineExpression :=
+        type: "PipelineExpression"
+        children: [[], guardedArg, []]
+        parent: s
+
+      if pipelineReturns
+        suffixExpressions: StatementTuple[] := [["", suffix]]
+        block := makeNode {
+          type: "BlockStatement"
+          expressions: suffixExpressions
+          children: [" {", suffixExpressions, "}"]
+          bare: false
+        } satisfies BlockStatement
+
+        condition := parenthesizeExpression [testArg, " != null"]
+
+        let elseClause: ElseClause?
+        if assignmentTarget
+          failureAssignment := assignPipelineValue guardedArg
+          failureExpressions: StatementTuple[] := [["", failureAssignment]]
+          failureBlock := makeNode {
+            type: "BlockStatement"
+            expressions: failureExpressions
+            children: ["{", failureExpressions, "}"]
+            bare: false
+          } satisfies BlockStatement
+          elseClause = makeNode {
+            type: "ElseClause"
+            block: failureBlock
+            children: [" ", "else ", failureBlock]
+          } satisfies ElseClause
+
+        guardedReturn := makeNode {
+          type: "IfStatement"
+          condition
+          negated: undefined
+          then: block
+          else: elseClause
+          children: ["if", condition, block, elseClause]
+        } satisfies IfStatement
+
+        hoistTarget: ASTParentWithHoist .= guardedReturn
+        expressions: StatementTuple[] .= [[ws, guardedReturn]]
+        if children# > 1
+          // This pipeline is now in statement position, so previous ||>
+          // steps no longer need comma separators forced by an outer guard.
+          prefixChildren := children[1..].map & is "," ? ";" : &
+          prefix := makeNode {
+            type: "UnwrappedExpression"
+            expression: prefixChildren
+            children: prefixChildren
+          } satisfies UnwrappedExpression
+          hoistTarget = prefix
+          expressions = [
+            [ws, prefix]
+            ["", guardedReturn]
+          ]
+
+        if usingRef
+          hoistTarget.hoistDec = {
+            type: "Declaration"
+            children: ["let ", usingRef]
+            names: []
+          }
+
+        replacement := makeNode {
+          type: "BlockStatement"
+          expressions
+          children: [expressions]
+          bare: true
+        } satisfies BlockStatement
+
+        replaceNode s, replacement, s.parent
+      else
+        conditional: ConditionalExpression :=
+          type: "ConditionalExpression"
+          children:
+            . testArg
+            . " != null ? "
+            . suffix
+            . " : "
+            . guardedArg
+        finishPipelineSegment conditional
+
+      // Continue the same loop inside the suffix placeholder. Later guards
+      // mutate nested placeholders in place, so no unwinding is needed.
+      s = suffix
+      ws = []
+      children = [ws]
+      (s as ASTParent).children = children
+      arg = guardedArg
+      usingRef = undefined
+      returning = returns ? arg : null
+      comma = ","
+
+    if returns
+      if ref := needsRef arg
+        // Use the existing ref if present
+        usingRef ?= ref
+        arg = parenthesizeExpression makeNode {
+          type: "AssignmentExpression"
+          children: [usingRef, " = ", arg]
+          // missing `lhs`, hence cast below
+        } as AssignmentExpression
         returning = usingRef
 
-      [result, returning] = constructPipeStep
-        {
-          leadingComment: skipIfOnlyWS(leadingComment)
-          trailingComment: skipIfOnlyWS(trailingComment)
-          expr
+    let result
+    [result, returning] = constructPipeStep
+      {
+        leadingComment: skipIfOnlyWS(leadingComment)
+        trailingComment: skipIfOnlyWS(trailingComment)
+        expr
+      }
+      arg
+      returning
+
+    if result is like {
+      type: "StatementExpression"
+      statement: { type: "ThrowStatement" }
+    }
+      s.exits = true
+
+    if result!.type is "ReturnStatement"
+      s.exits = true
+      if assignmentTarget
+        returned := result.expression
+        result.expression = assignPipelineValue returned
+        result.children = result.children.map & is returned ? result.expression : &
+        updateParentPointers result.expression, result
+      // Attach errors/warnings if there are more steps
+      if i < body# - 1
+        result.children.push {
+          type: "Error"
+          message: "Can't continue a pipeline after returning"
+          parent: result
         }
-        arg
-        returning
+      arg = result
+      if children.-1 is ","
+        children.pop()
+        children.push(";")
+      break
 
-      if result!.type is "ReturnStatement"
-        // Attach errors/warnings if there are more steps
-        if i < body.length - 1
-          result.children.push({
-            type: "Error",
-            message: "Can't continue a pipeline after returning",
-          })
-        arg = result
-        if children.-1 is ","
-          children.pop()
-          children.push(";")
-        break
+    if returning
+      arg = returning
+      children.push(result, comma)
+      updateParentPointers result, s
+    else
+      arg = result
 
-      if returning
-        arg = returning
-        children.push(result, comma)
-      else
-        arg = result
+  finishPipelineSegment arg
 
-    if usingRef
-      s.hoistDec = {
-        type: "Declaration",
-        children: ["let ", usingRef],
-        names: [],
-      }
-
-    children.push(arg)
-
-    // Wrap with parens because comma operator has low precedence
-    if !children.some(?.type is "ReturnStatement") and children.some & is ","
-      { parent } := s
-      parenthesizedExpression := makeLeftHandSideExpression { ...s }
-      Object.assign s, parenthesizedExpression, {
-        parent
-        hoistDec: undefined
-      }
-
-    // Update parent pointers
-    addParentPointers(s, s.parent)
+function processPipelineExpressions(statements: ASTNode): void
+  for each s of gatherRecursiveAll statements, .type is "PipelineExpression"
+    processPipelineExpression s
 
 export {
   processPipelineExpressions

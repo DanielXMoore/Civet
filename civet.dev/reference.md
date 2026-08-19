@@ -942,14 +942,36 @@ fetch url |> await
 |> return
 </Playground>
 
+Null-safe pipes `?|>` skip the remaining steps of the current pipeline when
+the left-hand value is `null` or `undefined`:
+
+<Playground>
+user
+  ?|> .profile
+  ?|> normalizeProfile
+  |> renderProfile
+</Playground>
+
+Use parentheses to keep steps from being aborted by a null-safe pipe:
+
+<Playground>
+(user
+  ?|> .profile
+  ?|> normalizeProfile
+) |> renderProfile
+</Playground>
+
 Pipe assignment:
 
 <Playground>
 data |>= .content
 </Playground>
 
-Fat pipes `||>` pass the left-hand value to the next two steps in the pipeline
-(ignoring the output from the right-hand side):
+Fat pipes `||>` are tap or tee pipes:
+they run the right-hand side but ignore its result,
+preserving the same left-hand value for the next step.
+(Similar to [Elixir's `Kernel.tap/2`](https://hexdocs.pm/elixir/Kernel.html#tap/2)
+and [magrittr's `%T>%` tee pipe](https://magrittr.tidyverse.org/reference/tee.html).)
 
 <Playground>
 array
@@ -980,10 +1002,16 @@ document.createElement('div')
 ||> .appendChild document.createTextNode 'Civet'
 </Playground>
 
+<Playground>
+document.querySelector('#main')
+?||> .className = 'civet'
+||> .click()
+</Playground>
+
 Unicode forms:
 
 <Playground>
-data ▷= func1 |▷ func2 ▷ func3
+data ▷= func1 |▷ func2 ▷ func3 ?▷ func4
 </Playground>
 
 ### Await Operators
@@ -1054,7 +1082,8 @@ Here is a table of all currently supported:
 | `≣` | `===` | `≢` | `!==` | `≔` | `:=` | `≕` | `=:` |
 | `⁇` | `??` | `‖` | `\|\|` | `≪` | `<<` | `≫` | `>>` |
 | `⋙` | `>>>` | `…` | `...` | `‥` | `..` | `∈` | `is in` |
-| `∉` | `is not in` | `▷` | `\|>` | `→` | `->` | `⇒` | `=>` |
+| `∉` | `is not in` | `▷` | `\|>` | `?▷` | `?\|>` | `\|▷` | `\|\|>` |
+| `?\|▷` | `?\|\|>` | `▷=` | `\|>=` | `→` | `->` | `⇒` | `=>` |
 | `’s` | `'s` | `⧺` | `++` | `—` | `--` | `÷` | `%/` |
 | `•` | `.` bullet |
 
