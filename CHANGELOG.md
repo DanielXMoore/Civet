@@ -4,6 +4,21 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.16 (2026-08-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.15...v0.11.16), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.16))
+* Fix semantic highlighting of generated code [[#2177](https://github.com/DanielXMoore/Civet/pull/2177)]
+* Fix crash on empty-braces property definitions or invalid globs [[#2179](https://github.com/DanielXMoore/Civet/pull/2179)]
+* Reverse declaration shorthand `=:` and `=.`; unwrap postfix `for` [[#2180](https://github.com/DanielXMoore/Civet/pull/2180)]
+* Keep JSX class shorthand at original position [[#2181](https://github.com/DanielXMoore/Civet/pull/2181)]
+* Fix `export default` with nested implicit object literal (#2186) [[#2187](https://github.com/DanielXMoore/Civet/pull/2187)]
+* Merge multiple JSX `class` attributes like shorthand [[#2188](https://github.com/DanielXMoore/Civet/pull/2188)]
+* Fix pattern destructuring in some `for` loops [[#2184](https://github.com/DanielXMoore/Civet/pull/2184)]
+* Fix object get/set shorthand with `!` non-null assertion [[#2191](https://github.com/DanielXMoore/Civet/pull/2191)]
+* Null-safe pipe `?|>` [[#2185](https://github.com/DanielXMoore/Civet/pull/2185)]
+* Fix destructured parameter type when initialized and `@` [[#2192](https://github.com/DanielXMoore/Civet/pull/2192)]
+* Fix `autoLet`/`autoConst` handling of refs [[#2193](https://github.com/DanielXMoore/Civet/pull/2193)]
+* Fix TypeScript narrowing in `for` iterator joins [[#2196](https://github.com/DanielXMoore/Civet/pull/2196)]
+* LSP: Fix completions via better newline handling [[#2197](https://github.com/DanielXMoore/Civet/pull/2197)]
+
 ## 0.11.15 (2026-07-20, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.14...v0.11.15), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.15))
 * Fix one-line then/else swallowing surrounding comma [[#2158](https://github.com/DanielXMoore/Civet/pull/2158)]
 * LSP: Fix sourcemapping of trimmed spaces and `#` length shorthand [[#2164](https://github.com/DanielXMoore/Civet/pull/2164)]
