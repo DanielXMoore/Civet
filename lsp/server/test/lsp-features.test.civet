@@ -1158,6 +1158,40 @@ describe "LSP features (shared project server)", ->
     insertText2 := cache.insertText <? "string" ? cache.insertText : cache.insertText?.value ?? ""
     assert !insertText2.includes("this."), `cache completion should not insert this.: ${insertText2}`
 
+  for [name, suffix] of [
+    ["at-eof", ""]
+    ["before-trailing-newline", "\n"]
+    ["before-later-class-member", "\n  foo := 1\n"]
+  ]
+    it `returns HTMLElement completions for constructor @ ${name}`, ->
+      uri := docUri path.join(projectRoot, `waveform-${name}.civet`)
+      text := "class Waveform < HTMLElement\n  @()\n    super()\n    @" + suffix
+      client.notify "textDocument/didOpen", {
+        textDocument: { uri, languageId: "civet", version: 1, text }
+      }
+      await waitForDiag(client, (p) => p.uri is uri)
+
+      lines := text.split "\n"
+      atLine := lines.findIndex (l) => l.trim() is "@"
+      result := await client.request "textDocument/completion", {
+        textDocument: { uri }
+        position: { line: atLine, character: lines[atLine].indexOf("@") + 1 }
+        context: { triggerKind: 2, triggerCharacter: "@" }
+      }
+      list := result?.items ?? result
+      assert Array.isArray(list), `expected completion items array, got ${JSON.stringify(result)}`
+      assert list.some((item: any) => item.label is "classList"),
+        `expected classList member completion, got ${list.map((item: any) => item.label).join(", ")}`
+
+      manualResult := await client.request "textDocument/completion", {
+        textDocument: { uri }
+        position: { line: atLine, character: lines[atLine].indexOf("@") + 1 }
+      }
+      manualList := manualResult?.items ?? manualResult
+      assert Array.isArray(manualList), `expected manual completion items array, got ${JSON.stringify(manualResult)}`
+      assert manualList.some((item: any) => item.label is "classList"),
+        `expected classList manual completion, got ${manualList.map((item: any) => item.label).join(", ")}`
+
   it "emits diagnostics for a parse error with a civet syntax error", ->
     uri := docUri path.join(projectRoot, "parse-error.civet")
     client.notify "textDocument/didOpen", {
@@ -1217,6 +1251,58 @@ describe "LSP features (shared project server)", ->
     }
     list := result?.items ?? result
     assert Array.isArray(list), "expected completion items array"
+
+  it "returns module completions after one unquoted letter", ->
+    uri := docUri path.join(projectRoot, "imp-one-letter.civet")
+    text := "import * as ts from t"
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    await waitForDiag(client, (p) => p.uri is uri)
+
+    result := await client.request "textDocument/completion", {
+      textDocument: { uri }
+      position: { line: 0, character: text# }
+    }
+    list := result?.items ?? result
+    assert Array.isArray(list), "expected completion items array"
+    assert list.some((item: any) => item.label is "typescript"),
+      `expected typescript module completion, got ${list.map((item: any) => item.label).join(", ")}`
+
+  it "does not parse standalone from as a backward import", ->
+    uri := docUri path.join(projectRoot, "standalone-from.civet")
+    text := "from"
+    client.notify "textDocument/didOpen", {
+      textDocument: { uri, languageId: "civet", version: 1, text }
+    }
+    diagnostics := await waitForDiag(client, (p) => p.uri is uri)
+
+    assert not diagnostics.diagnostics.some((diagnostic: any) => diagnostic.source is "civet"),
+      `expected no Civet parse diagnostic, got ${JSON.stringify diagnostics.diagnostics}`
+
+  for [name, text, cursor] of [
+    ["missing-module-one-space", "from import * as ts", "from "#]
+    ["missing-module-gap", "from  import * as ts", "from "#]
+    ["quoted-module", 'from "" import * as ts', "from "#]
+    ["missing-clause", 'from "" import', "from "#]
+    ["missing-type-clause", 'from "" import type', "from "#]
+    ["one-letter", "from t import * as ts", "from t"#]
+  ]
+    it `returns module completions for backward import with ${name}`, ->
+      uri := docUri path.join(projectRoot, `imp-backward-${name}.civet`)
+      client.notify "textDocument/didOpen", {
+        textDocument: { uri, languageId: "civet", version: 1, text }
+      }
+      await waitForDiag(client, (p) => p.uri is uri)
+
+      result := await client.request "textDocument/completion", {
+        textDocument: { uri }
+        position: { line: 0, character: cursor }
+      }
+      list := result?.items ?? result
+      assert Array.isArray(list), "expected completion items array"
+      assert list.some((item: any) => item.label is "typescript"),
+        `expected typescript module completion, got ${list.map((item: any) => item.label).join(", ")}`
 
   it "document symbols report top-level declarations", ->
     uri := docUri path.join(projectRoot, "symbols.civet")
