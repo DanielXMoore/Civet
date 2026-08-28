@@ -21,7 +21,6 @@ import type {
   IterationStatement
   LexicalDeclaration
   ObjectExpression
-  ParenthesizedExpression
   StatementTuple
   StringLiteral
   SwitchStatement
@@ -125,9 +124,10 @@ function processAssignmentDeclaration(decl: ASTLeaf, pattern: Binding["pattern"]
 
   children := [decl, binding]
 
+  names := pattern.names if "names" in pattern
   makeNode<LexicalDeclaration> {
     type: "Declaration"
-    pattern.names
+    names
     decl
     bindings: [binding]
     splices
@@ -238,6 +238,7 @@ function prependStatementExpressionBlock(initializer: Initializer, statement: AS
       pre.unshift ["", refDec, ";"]
     else
       wrapIterationReturningResults statement, => undefined
+      assert statement.resultsRef, "statement must have resultsRef"
       ref = initializer.expression = initializer.children[2] = statement.resultsRef
   else
     ref = initializer.expression = initializer.children[2] = makeRef()
@@ -376,7 +377,8 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
 
   processDeclarationCondition expression, condition.expression, s
 
-  { ref, pattern } := expression
+  ref := expression.ref if "ref" in expression
+  pattern := expression.pattern if "pattern" in expression
 
   if pattern
     conditions := getPatternConditions(pattern, ref)
@@ -394,16 +396,18 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
     if conditions#
       children .= condition.children
       // For negated conditions, put conditions inside the negation
-      if s.negated
-        assert
-          condition.expression is like {
-            type: 'UnaryExpression'
-            subtype: 'Negation'
-            expression: { type: 'ParenthesizedExpression' }
-          }
-          "Unsupported negated condition"
+      if "negated" in s and s.negated
+        if {
+          type: 'UnaryExpression'
+          subtype: 'Negation'
+          expression: {
+            type: 'ParenthesizedExpression'
+            children: expressionChildren
+        }} := condition.expression
+          children = expressionChildren
+        else
+          throw new Error "Unsupported negated condition"
 
-        { children } = condition.expression.expression as ParenthesizedExpression
       children.unshift "("
       for each c of conditions
         children.push " && ", c
@@ -411,8 +415,9 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
 
   // Move declaration to after the statement for until loops,
   // and for unless conditions with a guaranteed exit in the then clause.
-  { blockPrefix } := condition.expression
-  if s.negated and blockPrefix and
+  blockPrefix := condition.expression.blockPrefix if "blockPrefix" in condition.expression
+  if "negated" in s and s.negated and
+    blockPrefix and
     (s.type is "IfStatement" and isExit(s.then) or
     s.type is "IterationStatement")
 
@@ -476,7 +481,7 @@ function processDeclarationConditionStatement(s: IfStatement | IterationStatemen
       // Only add a declaration when a temp ref was needed (non-simple initializer).
       // For simple initializers (literals, identifiers), blockPrefix already has
       // the full declaration; adding a declStatement would produce invalid JS like `let 0;`.
-      if not statementDeclaration and condition.expression.hoistDec
+      if not statementDeclaration and "hoistDec" in condition.expression and condition.expression.hoistDec
         declStatement: StatementTuple := ["", [{
           type: "Declaration",
           children: ["let ", ...condition.expression.children],
@@ -625,11 +630,14 @@ function processStaticImport(decl: ImportDeclaration)
     ts: decl.ts
   } as ImportDeclaration
 
-function dynamizeImportDeclaration(decl: any)
+function dynamizeImportDeclaration(decl: ImportDeclaration)
   { imports } := decl
-  { star, binding, specifiers } .= imports
+  star := imports.star if "star" in imports?
+  binding := imports.binding if "binding" in imports?
+  specifiers := imports.specifiers if "specifiers" in imports?
+
   justDefault := binding and not specifiers and not star
-  pattern := do
+  pattern :=
     if binding
       if specifiers
         makeRef()
@@ -676,7 +684,8 @@ function dynamizeImportDeclaration(decl: any)
       pattern: pattern2
       initializer: initializer2
       children: [pattern2, initializer2]
-    pattern3 := convertNamedImportsToObject(imports.children.at(-1), true)
+
+    pattern3 := convertNamedImportsToObject(imports!.children.at(-1), true)
     initializer3: Initializer := {
       type: "Initializer"
       expression: pattern
@@ -684,13 +693,13 @@ function dynamizeImportDeclaration(decl: any)
     }
     bindings.push
       type: "Binding"
-      names: specifiers.names
+      names: specifiers.names if "names" in specifiers
       pattern: pattern3
       initializer: initializer3
       children: [pattern3, initializer3]
   {
     type: "Declaration"
-    names: imports.names
+    names: imports?.names
     bindings
     decl: c
     children: [
@@ -728,6 +737,8 @@ function dynamizeImportDeclarationExpression($0: [ASTNode, Whitespace, ASTNode, 
       parenthesizeExpression awaitExpression
     when "Declaration" // named imports
       object := convertNamedImportsToObject imports
+      // Type system disagress that object.type will always be "ObjectExpression"
+      assert object.type is "ObjectExpression", "convertNamedImportsToObject should have returned an ObjectExpression"
       processCallMemberExpression
         type: "CallExpression"
         children: []
