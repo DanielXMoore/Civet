@@ -54,6 +54,7 @@
   getCurrentLineText
   likelyImportContext
   measureTokenLength
+  missingBackwardModuleContext
   parseErrorsToDiagnostics
   resolvePathAliasDir
 } from ./lib/completions.civet
@@ -444,14 +445,15 @@ export function startServer(connection: Connection, dependencies: ServerDependen
         if statement is 'from' or statement is 'require'
           show.otherLspCompletions = false
 
-        // Hardcode special-case cursor offset
-        //
-        //     Source:      import a from ./a|
-        //     Transpiled:  import a from "./a"|
-        //     Adjusted:    import a from "./a|"
-        //
-        if not qt or qt !== endqt then cursorOffsetAdjustment = -1
-        if qt and qt !== endqt then closingQuoteSuffix = qt
+        // Hardcode cursor offsets for the quotes Civet adds while recovering
+        // import paths.  An unquoted path's mapped cursor is one character
+        // early because of its inserted opening quote; an unclosed quoted
+        // path's mapped cursor is after its inserted closing quote.
+        if not qt
+          cursorOffsetAdjustment = +1
+        else if qt !== endqt
+          cursorOffsetAdjustment = -1
+          closingQuoteSuffix = qt
 
         importPath = pathText
         show.relative = importPath.startsWith('./') or importPath.startsWith('../')
@@ -483,8 +485,9 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     assert document
 
     // Fast path for space trigger
-    linePrefix := getCurrentLineText(document, position).slice(0, position.character)
-    isLikelyImportContext := likelyImportContext(linePrefix)
+    lineText := getCurrentLineText document, position
+    linePrefix := lineText[< position.character]
+    isLikelyImportContext := likelyImportContext linePrefix
     if context?.triggerCharacter is ' ' and not isLikelyImportContext
       return []
 
@@ -543,32 +546,47 @@ export function startServer(connection: Connection, dependencies: ServerDependen
 
     // Civet files
 
-    // … Sourcemap the line/columns
-    // Keep the original source cursor; `position` is remapped below.
-    sourcePosition := position
     meta := service.host.getMeta(sourcePath)
     return civetFileCompletions unless meta
     { sourcemapLines, transpiledDoc } := meta
     return civetFileCompletions unless transpiledDoc
+
+    // … Sourcemap the line/columns
+    // Keep the original source cursor; `position` is remapped below.
+    sourcePosition := position
+    sourceCharacter := sourcePosition.character
     if sourcemapLines
-      position = forwardMap(sourcemapLines, position)
+      mapPosition .= sourcePosition
+      // At `from |import`, the cursor shares its source offset with the
+      // following `import`, which maps to the start of the reordered output.
+      // Map from the separator so completion stays in the recovered `from ""`.
+      if sourceCharacter > 0 and
+         missingBackwardModuleContext lineText, sourcePosition.character
+        mapPosition = { ...sourcePosition, character: sourceCharacter - 1 }
+      position = forwardMap sourcemapLines, mapPosition
       logger.log 'remapped'
     p .= transpiledDoc.offsetAt(position)
 
     // … Adjust the cursor position, on a case-per-case basis, to access better completions.
     //  0: Default, when sourcemap cursor position is already perfect.
-    // -1: Gets inside closing quotes for import file completion.
+    // -1: Gets inside an inserted closing quote for import file completion.
+    // +1: Gets past an inserted opening quote for an unquoted import path.
     p += heuristics.cursorOffsetAdjustment
 
     // A bare Civet `@` maps to TS `this`, often with the sourcemapped cursor
     // inside the generated word. Move to after `this`/`this.` so TS returns
     // member completions, and ask as if `.` triggered the completion.
-    if context?.triggerCharacter is '@'
+    hasBareAtBeforeCursor :=
+      sourceCharacter > 0 and lineText[sourceCharacter - 1] is '@' and
+      (sourceCharacter < 2 or lineText[sourceCharacter - 2] is not '@')
+    isBareAtCompletion :=
+      context?.triggerCharacter is '@' or hasBareAtBeforeCursor
+    if isBareAtCompletion
       text := transpiledDoc.getText()
-      if sourcemapLines
-        sourceOffset := document.offsetAt(sourcePosition)
-        if sourceOffset > 0 and document.getText()[sourceOffset - 1] is '@'
-          p = transpiledDoc.offsetAt(forwardMap(sourcemapLines, document.positionAt(sourceOffset - 1)))
+      if sourcemapLines and hasBareAtBeforeCursor
+        atPosition := { ...sourcePosition, character: sourceCharacter - 1 }
+        mappedAtPosition := forwardMap sourcemapLines, atPosition
+        p = transpiledDoc.offsetAt mappedAtPosition
       searchStart := Math.max(0, p - 3)
       aroundP := text.slice(searchStart, p + 4)
       thisIdx := aroundP.lastIndexOf('this')
@@ -606,7 +624,7 @@ export function startServer(connection: Connection, dependencies: ServerDependen
       civetFileCompletions.concat(completions)
       closingQuoteSuffix)
 
-    if context?.triggerCharacter is '@'
+    if isBareAtCompletion
       return CompletionList.create(items, true)
     return items
 
