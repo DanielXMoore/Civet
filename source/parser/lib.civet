@@ -13,6 +13,7 @@ import type {
   ASTNode
   ASTNodeObject
   ASTRef
+  ASTString
   BlockStatement
   BreakStatement
   Call
@@ -32,7 +33,9 @@ import type {
   CoffeeClassPrototype
   ExpressionNode
   ForStatement
+  FunctionExpression
   IfStatement
+  Identifier
   Index
   Initializer
   IterationExpression
@@ -43,6 +46,7 @@ import type {
   MemberExpression
   MethodDefinition
   MethodSignature
+  NonNullASTNode
   NormalCatchParameter
   ObjectExpression
   ObjectProperty
@@ -391,7 +395,7 @@ function canExpressionizeBlock(blockOrExpression: ASTNode): boolean
     for every [, s] of expressions
       isExpression(s)
 
-function expressionizeIfStatement(statement: IfStatement): ASTNode
+function expressionizeIfStatement(statement: IfStatement): NonNullASTNode
   { condition, then: b, else: e } := statement
   [ ...condRest, closeParen ] := condition.children  // separate ')'
 
@@ -1030,20 +1034,39 @@ function lastAccessInCallExpression(exp: any)
   if exp.type is "Identifier" or exp.type is "PropertyAccess" or exp.type is "Index"
     exp
 
-// Given a MethodDefinition, convert into a FunctionExpression.
-// Returns undefined if the method is a getter or setter.
-function convertMethodToFunction(method: any)
+/**
+ * Return the static string name of a property key, if it has one.
+ */
+function staticPropertyName(id: NonNullASTNode): string?
+  return id if id <? "string"
+  return unless isASTNodeObject id
+  return id.name if "name" in id and id.name <? "string"
+  if "token" in id and id.token <? "string"
+    token := id.token
+    return token.match(/^(?:"|')/) ? token[<..<] : token
+
+/**
+ * Given a MethodDefinition, convert into a FunctionExpression.
+ * Returns undefined if the method must remain a method.
+ */
+function convertMethodToFunction(method: MethodDefinition): (FunctionExpression & {id: Identifier, name: string})?
   { signature, block } := method
-  { async, modifier, optional } := signature
+  { async, id, modifier, optional } := signature
 
   return if modifier?.get or modifier?.set
-  func := ["function "]
+  /* c8 ignore next -- object-literal MethodDefinitions always have blocks; this guard helps TypeScript understand that invariant */
+  return unless block
+  return unless id is like {type: "Identifier"}
+  {name} := id
+  func: Children := ["function "]
   if async?
     // put `function` after `async`
     func.unshift async
-    // ensure space after `async` (absent in e.g. `async* f()`)
-    if async# and not async.-1?.#
-      async.push " "
+    // Ensure a space after `async` (absent in e.g. `async* f()`).
+    // Nonempty MethodSignature.async is a [keyword/token, whitespace] tuple;
+    // help TypeScript understand that the computed final index is its
+    // whitespace slot (1).
+    async[async# - 1 as 1] = " " if async# > 1 and not async[async# - 1 as 1]?#
 
   sigChildren := signature.children.slice(1)
   if optional
@@ -1052,7 +1075,8 @@ function convertMethodToFunction(method: any)
 
   return {
     ...signature
-    id: signature.name
+    id
+    name
     signature
     type: "FunctionExpression"
     children: [
@@ -1073,6 +1097,7 @@ function convertFunctionToMethod(id: any, exp: any)
   {
     ...exp,
     type: "MethodDefinition",
+    id,
     name: id.name,
     signature: {
       ...exp.signature
@@ -1091,6 +1116,7 @@ function convertArrowFunctionToMethod(id: any, exp: any)
   exp = {
     ...exp,
     type: "MethodDefinition",
+    id,
     name: id.name,
     signature: {
       ...exp.signature
@@ -1161,9 +1187,8 @@ function convertObjectToJSXAttributes(obj: ObjectExpression): Children
       when "SpreadProperty"
         parts.push(['{', part.dots, part.value, '}'])
       when "MethodDefinition"
-        const func = convertMethodToFunction(part)
-        if func
-          parts.push([part.name, '={', convertMethodToFunction(part), '}'])
+        if func := convertMethodToFunction part
+          parts.push [func.name, '={', func, '}']
         else
           rest.push(part)
   if rest#
@@ -1174,7 +1199,7 @@ function convertObjectToJSXAttributes(obj: ObjectExpression): Children
 /**
  * Returns a new MethodDefinition node.
  */
-function makeGetterMethod(name: ASTNode, ws: ASTNode, value: ASTNode, returnType: ASTNode, block?: BlockStatement, kind: { token: "get" | "set" } = { token: "get" }, autoReturn: boolean = true, setValueSuffix?: ASTNode): MethodDefinition
+function makeGetterMethod(id: ClassElementName | ASTString, ws: ASTNode, value: ASTNode, returnType: ASTNode, block?: BlockStatement, kind: { token: "get" | "set" } = { token: "get" }, autoReturn: boolean = true, setValueSuffix?: ASTNode): MethodDefinition
   { token } := kind
   ws = trimFirstSpace ws
   let setVal
@@ -1210,11 +1235,13 @@ function makeGetterMethod(name: ASTNode, ws: ASTNode, value: ASTNode, returnType
 
     expressions.push finalStatement
 
-  children := [kind, " ", name, parameters, returnType, block]
+  name := staticPropertyName id
+  children := [kind, " ", id, parameters, returnType, block]
 
   return {
     type: "MethodDefinition"
     children
+    id
     name
     signature: {
       type: "MethodSignature"
@@ -1223,6 +1250,7 @@ function makeGetterMethod(name: ASTNode, ws: ASTNode, value: ASTNode, returnType
         set: token is "set"
         async: false
       }
+      id
       name
       returnType
       parameters
@@ -1646,7 +1674,7 @@ function unchainOptionalMemberExpression(exp: MemberExpression | CallExpression,
   else // Unchanged
     exp
 
-function attachPostfixStatementAsExpression(exp: ASTNode, post: [WSNode, IfStatement | IterationStatement | DoStatement | ForStatement])
+function attachPostfixStatementAsExpression(exp: ASTNode, post: [WSNode, IfStatement | IterationStatement | DoStatement | ForStatement]): NonNullASTNode
   postfixStatement := post[1]
 
   switch postfixStatement.type
@@ -1988,6 +2016,7 @@ function processCoffeeClasses(statements: StatementTuple[]): void
         signature: MethodSignature := {}
           type: "MethodSignature"
           children: [ "constructor(", parameters, ")" ]
+          id: "constructor"
           name: "constructor"
           parameters
           modifier: {}
@@ -2561,6 +2590,7 @@ export {
   replaceNode
   replaceNodes
   skipImplicitArguments
+  staticPropertyName
   stripTrailingImplicitComma
   trimFirstSpace
   typeSuffixForExpression

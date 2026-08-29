@@ -118,6 +118,7 @@ export type OtherNode =
   | FinallyClause
   | ForDeclaration
   | FunctionRestParameter
+  | FunctionSignature
   | ImportAssertion
   | ImportClause
   | OperatorImportClause
@@ -159,6 +160,8 @@ export type OtherNode =
   | TypeArgument
   | TypeArguments
   | TypeCondition
+  | TypeDeclarationBinding
+  | TypeLexicalDeclaration
   | TypeParameters
   | TypeSuffix
   | WhenClause
@@ -348,26 +351,28 @@ export type BinaryOp = (string &
   relational?: never
   assoc?: never
   type?: undefined
-) | (ASTLeaf &
-  type?: undefined
+) | ((ASTLeaf | Keyword | (Partial<ASTLeaf> & {special: true})) &
   spaced?: boolean
   special?: true
-  // The following are allowed only when special is true:
-  prec?: string | number | undefined
-  assoc?: string?
-  call?: ASTNode
+  // The following are meaningful only when special is true:
+  prec?: string | number
+  assoc?: OperatorAssoc?
+  call?: NonNullASTNode
   method?: ASTNode
   relational?: boolean
   reversed?: boolean
   negated?: boolean
   asConst?: boolean
+  suffix?: ASTNode
 ) | (PatternTest &
   token?: never
+  call?: never
   relational?: never
   assoc?: never
   asConst?: never
 ) | (ChainOp &
   token?: never
+  call?: never
   relational?: never
 )
 
@@ -877,7 +882,7 @@ export type ImportClause = ASTParent & DeclarationProbe &
   binding?: ASTNodeObject & { names: string[] }
   star?: Star
   specifiers?: Extract<NamedImportElement, { type?: undefined }>[]
-  rest?: Extract<NamedImportElement, { type: "BindingRestProperty" }>
+  rest?: Extract<NamedImportElement, { type: "BindingRestProperty" }>?
 
 /** Clause for `import operator {…}` — separate specifier shape from ImportClause. */
 export type OperatorImportClause = ASTParent & DeclarationProbe &
@@ -929,6 +934,15 @@ export type TypeDeclaration = ASTParent &
   id: Identifier
   ts: true
 
+export type TypeLexicalDeclaration = ASTParent &
+  type: "TypeLexicalDeclaration"
+  names: string[]
+  ts: true
+
+export type TypeDeclarationBinding = ASTParent &
+  type: "TypeDeclarationBinding"
+  names: string[]
+
 export type InterfaceDeclaration = ASTParent &
   type: "InterfaceDeclaration"
   id: Identifier
@@ -976,6 +990,7 @@ export type Declaration = ASTParent &
   names: string[]
   bindings: Binding[]
   decl: DeclarationKind
+  autoExport?: true
   splices?: unknown[]
   thisAssignments?: ThisAssignments
   // Should placeholders in contents be lifted above the parent block,
@@ -1034,6 +1049,8 @@ export type Identifier =
 
 export type ReturnValue = ASTParent &
   type: "ReturnValue"
+  placeholder: NonNullASTNode
+  names: []
 
 export type StatementExpression = ASTParent &
   type: "StatementExpression"
@@ -1103,7 +1120,11 @@ export type FinallyToken = "finally " | (Keyword & { token: "finally" })
 
 export type BindingIdentifier = AtBinding | Identifier | ReturnValue
 
-export type BindingPattern = BindingIdentifier | ObjectBindingPattern | ArrayBindingPattern | PinPattern | NamedBindingPattern | Literal | RegularExpressionLiteral
+export type BindingPattern = (
+  BindingIdentifier | ObjectBindingPattern | ArrayBindingPattern | PinPattern | NamedBindingPattern | Literal | RegularExpressionLiteral
+) &
+  /** Post-rest parameter rewriting emits a JS-only copy of the binding. */
+  js?: boolean
 
 // Includes things that appear inside BindingPatterns (when recursing)
 // but aren't patterns by themselves
@@ -1159,13 +1180,14 @@ export type BindingRestElement = ASTParent &
   names: string[]
   rest: true
   typeSuffix?: TypeSuffix?
-  binding: BindingIdentifier | BindingPattern | EmptyBinding
+  binding: BindingPattern | EmptyBinding
   initializer?: undefined // rest elements don't accept initializers
 
 export type EmptyBinding = ASTParent &
   type: "EmptyBinding"
   names: string[]
   ref: ASTRef
+  js?: boolean
 
 export type ElisionElement = ASTParent &
   type: "ElisionElement"
@@ -1191,6 +1213,7 @@ export type NamedBindingPattern = ASTParent &
   binding: BindingIdentifier
   pattern: BindingPattern
   subbinding?: ASTNode
+  typeSuffix?: TypeSuffix?
 
 export type HasSubbinding = BindingProperty | NamedBindingPattern
 
@@ -1316,13 +1339,16 @@ export type Argument = ASTParent &
 
 export type FunctionExpression = ASTParent &
   type: "FunctionExpression"
-  name: string
-  id: Identifier
-  async?: ASTNode[]
-  generator?: ASTNode[]
-  signature: FunctionSignature
-  block: BlockStatement
+  /** String version of function name, or undefined for an anonymous function. */
+  name?: string?
+  /** Function name as an AST node, or undefined for an anonymous function. */
+  id?: BindingIdentifier?
+  async?: ASTNode[]?
+  generator?: ASTNode[]?
+  signature: FunctionSignature | MethodSignature
+  block: BlockStatement | null
   parameters: ParametersNode
+  ts?: boolean
 
 export type AmpersandBlockBody =
   ref?: ASTRef
@@ -1348,10 +1374,11 @@ export type PipelineExpression = ASTParentWithHoist &
 
 export type MethodDefinition = ASTParent &
   type: "MethodDefinition"
-  name: NonNullASTNode
+  id: ClassElementName | ASTString
+  name?: string?
   async?: ASTNode[]?
   generator?: ASTNode[]?
-  signature: FunctionSignature
+  signature: MethodSignature
   block?: BlockStatement
   parameters: ParametersNode
   autoBind?: boolean? // CoffeeScript => bound methods
@@ -1364,7 +1391,8 @@ export type MultiMethodDefinition = ASTParent &
 
 export type ArrowFunction = ASTParent &
   type: "ArrowFunction"
-  name: string
+  /** String version of function name, or undefined for an anonymous function. */
+  name?: string?
   async: ASTNode[]
   // Arrow functions can't grammatically be generators; FunctionNode machinery
   // reads `.generator` uniformly, so declare it as never so readers see
@@ -1373,6 +1401,9 @@ export type ArrowFunction = ASTParent &
   signature: FunctionSignature
   block: BlockStatement
   parameters: ParametersNode
+  returnType?: ReturnTypeAnnotation?
+  parenthesized?: boolean
+  parenthesizedOp?: BinaryOp
   // The next four properties are metadata installed by
   // `makeAmpersandFunction` to decide and perform pipeline unrolling.
   // Use `AmpersandFunction` for guaranteed fields.
@@ -1387,32 +1418,45 @@ export type AmpersandFunction = ArrowFunction &
   body: ASTNode
   ampersandBlock: boolean
 
-export type FunctionSignature = ASTParent &
-  type: "MethodSignature" | "FunctionSignature"
-  /** undefined means anonymous (e.g. arrow function) */
-  name?: ASTNode
-  id?: Identifier?
+export type FunctionSignatureBase = ASTParent &
   async?: ASTNode[]?
   generator?: ASTNode[]?
   modifier: MethodModifier
   optional?: ASTNode?
   returnType?: ReturnTypeAnnotation?
   parameters: ParametersNode
-  block?: BlockStatement | null
   /**
   Force implicit return for this function for IIFE
   (overriding "civet -implicitReturns")
   */
   implicitReturn?: boolean?
 
-export type OperatorSignature = FunctionSignature &
+export type FunctionSignature = FunctionSignatureBase &
   type: "FunctionSignature"
+  /** String version of function name, or undefined for an anonymous function. */
+  name?: string?
+  /** Function name as an AST node, or undefined for an anonymous function. */
+  id?: BindingIdentifier?
+  block: BlockStatement | null
+
+export type OperatorSignature = FunctionSignature &
   id: Identifier
   behavior?: OperatorBehavior?
 
-export type MethodSignature = FunctionSignature &
+export type MethodSignature = FunctionSignatureBase &
   type: "MethodSignature"
-  name: NonNullASTNode
+  /**
+   * Method name. `ClassElementName` covers parsed method names and `ASTString`
+   * covers synthesized ones. When this is a computed property name, the `name`
+   * property below is undefined.
+   */
+  id: ClassElementName | ASTString
+  /** String version of method name. */
+  name?: string?
+  /**
+   * Async keyword/token and following whitespace, or empty when absent.
+   */
+  async?: [] | [ASTString | Keyword, Whitespace]
 
 export type TypeSuffix = ASTParent &
   type: "TypeSuffix"
@@ -1595,6 +1639,7 @@ export type TypeNode =
   | TypeConditional
   | TypeAsserts
   | TypePredicate
+  | UniqueSymbolType
   | VoidType
 
 export type TypeIdentifier = ASTParent &
@@ -1670,7 +1715,10 @@ export type TypePredicate = ASTParent &
 
 export type VoidType = ASTLeafWithType "VoidType"
 
-export type TypeLiteralNode = ASTLeaf | ASTString | VoidType
+export type UniqueSymbolType = ASTParent &
+  type: "UniqueSymbolType"
+
+export type TypeLiteralNode = ASTLeaf | ASTString | UniqueSymbolType | VoidType
 
 export type ThisAssignment =
   | [string, ASTRef]
