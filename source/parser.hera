@@ -120,7 +120,9 @@ import type {
   ElseClause,
   EmptyCondition,
   EmptyStatement,
+  EnumBlock,
   EnumDeclaration,
+  EnumProperty,
   ExpressionNode,
   Extends,
   CoffeeForBindingAssignment,
@@ -140,6 +142,7 @@ import type {
   Initializer,
   InterfaceDeclaration,
   ImportDeclaration,
+  ImportAssertion,
   ImportClause,
   Index,
   IterationExpression,
@@ -152,6 +155,7 @@ import type {
   LexicalDeclaration,
   MethodDefinition,
   MethodSignature,
+  ModuleSpecifier,
   MultiMethodDefinition,
   NamedBindingPattern,
   NamedImportElement,
@@ -2379,7 +2383,7 @@ AfterReturnShorthand
 # The parameters in a function definition
 Parameters
   NonEmptyParameters
-  TypeParameters?:tp Loc:p ->
+  TypeParameters?:tp Loc:p ::ParsedParameters ->
     parameters: FunctionParameter[] := []
     return {
       type: "Parameters",
@@ -2392,10 +2396,10 @@ Parameters
 
 # Allow for [a, b] => ... or {a, b} -> ...
 ShortArrowParameters
-  ( ObjectBindingPattern / ArrayBindingPattern ):binding ->
+  ( ObjectBindingPattern / ArrayBindingPattern ):binding ::ParsedParameters ->
     // Based on ParameterElement
     { typeSuffix } := binding
-    parameter := {
+    parameter: Parameter := {
       type: "Parameter"
       children: [ binding, typeSuffix ]
       names: binding.names
@@ -2410,8 +2414,8 @@ ShortArrowParameters
 
 # In esArrowFunction mode, allow single bare identifier as arrow parameter (ES-style: x => ...)
 ESArrowIdentifierParameters
-  ESArrowFunctionEnabled Identifier:id ->
-    parameter := {
+  ESArrowFunctionEnabled Identifier:id ::ParsedParameters ->
+    parameter: Parameter := {
       type: "Parameter"
       children: [id]
       id.names
@@ -2441,7 +2445,7 @@ ThinArrowParameters
   Parameters
 
 NonEmptyParameters
-  TypeParameters?:tp OpenParen:open ParameterList:parameters ( __ CloseParen ):close ::ParametersNode ->
+  TypeParameters?:tp OpenParen:open ParameterList:parameters ( __ CloseParen ):close ::ParsedParameters ->
     return {
       type: "Parameters",
       children: [ tp, open, parameters, close ],
@@ -2471,7 +2475,7 @@ NestedParameter
     // Attach whitespace to first parameter
     params = [...params]
     params[0] = prepend(ws, params[0])
-    return params
+    return params.flat()
 
 Parameter
   ThisType ::ThisType
@@ -3097,7 +3101,8 @@ FunctionExpression
 OperatorDeclaration ::OperatorDeclaration
   # `operator {x, y} := ...` declaration while blessing
   Operator OperatorBehavior?:behavior _:w Loc:loc LexicalDeclaration:decl ->
-    unless Array.isArray decl.names
+    // Pin patterns (`operator x.y := …`) and literals declare no names.
+    unless decl.names#
       return {}
         type: "Error"
         message: "Operator declaration must declare identifiers"
@@ -3977,7 +3982,7 @@ ArrayElementExpression
       type: "SpreadElement",
       children: [ws, dots, exp],
       expression: exp,
-      names: exp.names,
+      names: namesOf(exp),
     }
 
   # NOTE: Using PostfixedExpression, a superset of Expression to allow If/Switch expressions
@@ -3991,14 +3996,14 @@ ArrayElementExpression
           type: "ArrayElement",
           children: [exp],
           expression: exp,
-          names: exp!.names,
+          names: namesOf(exp),
         }
       else
         return {
           type: "SpreadElement",
           children: [...spread, exp],
           expression: exp,
-          names: exp!.names,
+          names: namesOf(exp),
         }
 
     return {
@@ -4303,7 +4308,7 @@ PropertyDefinition
     return {
       type: "SpreadProperty",
       children,
-      names: exp.names,
+      names: namesOf(exp),
       dots,
       value: exp,
     }
@@ -4361,7 +4366,7 @@ PropertyDefinition
     return {
       type: "SpreadProperty",
       children: [ws, dots, exp],
-      names: exp.names,
+      names: namesOf(exp),
       dots,
       value: exp,
     }
@@ -4440,7 +4445,7 @@ PropertyDefinition
       return {
         type: "SpreadProperty",
         children: [ws, dots, paren],
-        names: value!.names,
+        names: namesOf(value),
         dots,
         value: paren,
       }
@@ -4468,7 +4473,7 @@ PropertyDefinition
 
 NamedProperty
   # NOTE: Optional named property { y?: value } → { ...(value != null ? {y: value} : {}) }
-  PropertyName:name "?" _? Colon _? PostfixedExpression:exp ->
+  PropertyName:name "?" _? Colon _? PostfixedExpression:exp ::SpreadProperty ->
     { ref, refAssignment } := maybeRefAssignment(exp)
     checkExp := refAssignment ? parenthesizeExpression(refAssignment) : exp
     dots := { $loc, token: "..." }
@@ -4483,7 +4488,7 @@ NamedProperty
     }
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
   # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
-  PropertyName:name _? Colon PostfixedExpression:exp ->
+  PropertyName:name _? Colon PostfixedExpression:exp ::Property ->
     return {
       type: "Property",
       children: $0,
@@ -4496,7 +4501,7 @@ NamedProperty
 # used to distinguish between braceless inline objects and ternary expression conditions
 # Allow postfixed expression only if this first property isn't the last
 SnugNamedProperty
-  PropertyName:name Colon:colon MaybeNestedExpression:expression ( ( _? PostfixStatement ) &( Nested NamedProperty ) )?:post ->
+  PropertyName:name Colon:colon MaybeNestedExpression:expression ( ( _? PostfixStatement ) &( Nested NamedProperty ) )?:post ::Property ->
     if post
       // post[0] drops the lookahead assertion
       expression = attachPostfixStatementAsExpression(expression, post[0])
@@ -4505,6 +4510,7 @@ SnugNamedProperty
       children: [name, colon, expression],
       name,
       names: namesOf(expression),
+      value: expression,
     }
 
 PropertyName
@@ -6808,7 +6814,7 @@ FromClause ::FromClause
 # https://github.com/tc39/proposal-import-attributes
 # https://devblogs.microsoft.com/typescript/announcing-typescript-5-3/#import-attributes
 # NOTE: Forbid newline before `with` which could mean a function call
-ImportAssertion
+ImportAssertion ::ImportAssertion
   _? ( "with" / "assert" ):keyword NonIdContinue _? ObjectLiteral:object ->
     return {
       type: "ImportAssertion",
@@ -6919,7 +6925,7 @@ ModuleExportName
   IdentifierName
 
 # https://262.ecma-international.org/#prod-ModuleSpecifier
-ModuleSpecifier
+ModuleSpecifier ::ModuleSpecifier
   UnprocessedModuleSpecifier:module ImportAssertion?:assertion ->
     module = rewriteModuleSpecifier(module)
 
@@ -9228,7 +9234,7 @@ EnumDeclaration ::EnumDeclaration
       }]
     }
 
-EnumBlock
+EnumBlock ::EnumBlock
   __ OpenBrace NestedEnumProperties:props __ CloseBrace ->
     return {
       properties: props.properties,
@@ -9261,7 +9267,7 @@ NestedEnumPropertyLine
       children: pair,
     }))
 
-EnumProperty
+EnumProperty ::EnumProperty
   Identifier:name ( __ Equals MaybeNestedExpression )?:initializer ObjectPropertyDelimiter ->
     return {
       type: "EnumProperty",
@@ -9797,7 +9803,8 @@ TypeFunction
   # NOTE: Forbid declaration operators after return type to avoid treating `f: (x: T) => y := z`
   # as a typed const; prefer implicit object/arrow function interpretation.
   ( Abstract _? )?:abstract ( Async _? )?:async ( New _? )?:new_ Parameters __ TypeFunctionArrow ( ReturnType / Loc ):returnType !TrailingDeclaration ::TypeFunction ->
-    children := [ abstract, ...$0.slice(2, -1) ] // omit async and trailing lookahead
+    // omit async (wrapped into the return type below) and trailing lookahead
+    children: Children := [ abstract, new_, $4, $5, $6, returnType ]
     if abstract and not new_
       children[1] = {
         type: "Error",
