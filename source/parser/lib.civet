@@ -22,20 +22,20 @@ import type {
   CatchBinding
   CatchClause
   Children
+  ClassElementName
+  CoffeeClassPrototype
   ComptimeStatement
   Condition
   ContinueStatement
   Declaration
   DoStatement
   ElseClause
-  FinallyClause
-  ClassElementName
-  CoffeeClassPrototype
   ExpressionNode
+  FinallyClause
   ForStatement
   FunctionExpression
-  IfStatement
   Identifier
+  IfStatement
   Index
   Initializer
   IterationExpression
@@ -43,6 +43,7 @@ import type {
   Label
   LabelledStatement
   Literal
+  Loc
   MemberExpression
   MethodDefinition
   MethodSignature
@@ -55,13 +56,14 @@ import type {
   Placeholder
   Property
   StatementTuple
+  StringLiteral
   SwitchStatement
   TypeArgument
   TypeArguments
   TypeConditional
   TypeNode
   TypeSuffix
-  Loc
+  UnaryExpression
   UnaryOpSymbolLeaf
   WSNode
 } from ./types.civet
@@ -96,6 +98,7 @@ import {
   isFunction
   isWhitespaceOrEmpty
   literalValue
+  makeAssignment
   makeLeftHandSideExpression
   makeNode
   maybeWrap
@@ -250,9 +253,10 @@ function adjustIndexAccess(dot: AccessStart): AccessStart
 
   return dot
 
-function rewriteModuleSpecifier(module: ASTLeaf): ASTLeaf
+function rewriteModuleSpecifier(module: StringLiteral): StringLiteral
+function rewriteModuleSpecifier(module: ASTLeaf | StringLiteral): ASTLeaf | StringLiteral
 function rewriteModuleSpecifier(module: Literal): Literal
-function rewriteModuleSpecifier(module: ASTLeaf | Literal): ASTLeaf | Literal
+function rewriteModuleSpecifier(module: ASTLeaf | StringLiteral | Literal): ASTLeaf | StringLiteral | Literal
   switch module.type
     when "Literal"
       return module unless module.subtype is "StringLiteral"
@@ -312,22 +316,23 @@ function rewriteDynamicImportCall(call: Call): Call
 // Negate expression inside condition.  `notLoc` is the source location of
 // the `unless`/`until` keyword being rewritten — the synthesized `!` leaf
 // inherits it so the output stays source-mapped.
-function negateCondition(condition: Condition, notLoc: Loc)
-  { expression } .= condition
+function negateCondition(condition: Condition, notLoc: Loc): Condition
+  { expression } := condition
   children := condition.children.slice()
   i := children.indexOf(expression)
   assert.notEqual i, -1, "negateCondition: expression must be directly in condition.children"
   bang: UnaryOpSymbolLeaf := { $loc: notLoc, token: "!" }
   pre := [bang]
-  expression = makeLeftHandSideExpression expression
-  children[i] = expression = {
+  operand := makeLeftHandSideExpression expression
+  negation: UnaryExpression := {
     type: "UnaryExpression"
     subtype: "Negation"
-    children: [pre, expression]
+    children: [pre, operand]
     pre
-    expression
+    expression: operand
   }
-  { ...condition, expression, children }
+  children[i] = negation
+  { ...condition, expression: negation, children }
 
 /**
 Somewhat incomplete detection of expressions used to
@@ -1037,9 +1042,8 @@ function lastAccessInCallExpression(exp: any)
 /**
  * Return the static string name of a property key, if it has one.
  */
-function staticPropertyName(id: NonNullASTNode): string?
+function staticPropertyName(id: ASTNodeObject | ASTString): string?
   return id if id <? "string"
-  return unless isASTNodeObject id
   return id.name if "name" in id and id.name <? "string"
   if "token" in id and id.token <? "string"
     token := id.token
@@ -1653,9 +1657,7 @@ function unchainOptionalMemberExpression(exp: MemberExpression | CallExpression,
 
       if j > 1 or needsRef children[0]
         usesRef = true
-        base = makeLeftHandSideExpression
-          type: "AssignmentExpression"
-          children: [ref, " = ", children.splice(0, j)]
+        base = makeLeftHandSideExpression makeAssignment ref, children.splice(0, j), implicit: true
 
         base.parent = child
         children.unshift ref
@@ -1974,10 +1976,9 @@ function processBreaksContinues(statements: StatementTuple[]): void
  */
 function makePrototypeAssignment(className: ASTNode, id: ClassElementName, exp: ExpressionNode | ASTRef): ASTNode
   access: ASTNode .=
-    // SymbolElement already has the form `["[", SymbolLiteral, "]"]`
-    if Array.isArray id then id
-    // ComputedPropertyName children already include the brackets.
-    else if id.type is "ComputedPropertyName" then id
+    // ComputedPropertyName (including symbol elements) children already
+    // include the brackets.
+    if id.type is "ComputedPropertyName" then id
     // Plain identifier (including LengthShorthand) gets dot access,
     // unless its name was a non-ASCII unicode identifier that had to
     // be rendered via brackets to preserve the original source name.
@@ -1990,14 +1991,7 @@ function makePrototypeAssignment(className: ASTNode, id: ClassElementName, exp: 
     // round-trip via bracket access.
     else
       ["[", id, "]"]
-  return makeNode {
-    type: "AssignmentExpression"
-    children: [className, ".prototype", access, " = ", exp]
-    lhs: className as any
-    assigned: className
-    expression: exp as any
-    names: []
-  }
+  makeAssignment [className, ".prototype", access], exp
 
 function processCoffeeClasses(statements: StatementTuple[]): void
   for each ce of gatherRecursiveAll statements, .type is "ClassExpression"
@@ -2284,8 +2278,8 @@ function processPlaceholders(statements: StatementTuple[]): void
           type is "PipelineExpression"
           // Declaration
           type is "Initializer"
-          // Right-hand side of assignment
-          type is "AssignmentExpression" and
+          // Right-hand side of a source assignment (not a ref wrapper)
+          type is "AssignmentExpression" and not ancestor.implicit and
             findChildIndex(ancestor, child) is
             ancestor.children.indexOf ancestor.expression
           type is "ReturnStatement"
@@ -2563,6 +2557,7 @@ export {
   makeGetterMethod
   makeLeftHandSideExpression
   makeRef
+  makeAssignment
   maybeRef
   maybeRefAssignment
   modifyString

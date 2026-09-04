@@ -45,6 +45,7 @@ import {
   makeAmpersandFunction,
   makeExpressionStatement,
   makeGetterMethod,
+  makeAssignment,
   makeLeftHandSideExpression,
   makeRef,
   maybeRef,
@@ -86,11 +87,12 @@ import {
   wrapTypeInPromise,
 } from "./parser/lib.civet"
 import type {
+  AccessStart as AccessStartType,
   AccessStart,
   Argument,
-  ArrayExpression,
   ArrayBindingPattern,
   ArrayBindingPatternContent as ArrayBindingPatternContentType,
+  ArrayExpression,
   ArrowFunction,
   AssignmentExpression,
   ASTError,
@@ -104,32 +106,44 @@ import type {
   Binding,
   BindingIdentifier,
   BindingRestElement,
+  BindingRestProperty as BindingRestPropertyType,
   BlockStatement,
+  Call,
+  CallExpression as CallExpressionType,
   CaseBlock,
   CaseClause,
   Children,
-  CommentNode,
-  ComptimeStatement,
-  Condition,
-  ConstructedExportSpecifier,
-  Declaration,
-  DeclarationKind,
-  DebuggerStatement,
-  DefaultClause,
-  DoStatement,
-  ElseClause,
-  EmptyCondition,
-  EmptyStatement,
-  EnumDeclaration,
-  ExpressionNode,
-  Extends,
   CoffeeForBindingAssignment,
   CoffeeForDeclaration as CoffeeForDeclarationType,
-  ForReduction,
+  CommentNode,
+  ComptimeStatement,
+  ComputedPropertyName as ComputedPropertyNameType,
+  Condition,
+  ConditionFragment,
+  ConstructedExportSpecifier,
+  ContinueStatement,
+  DebuggerStatement,
+  Declaration,
+  DeclarationCondition as DeclarationConditionType,
+  DeclarationKind,
+  DefaultClause,
+  DoStatement,
+  ElisionElement,
+  ElseClause,
+  EmptyBinding,
+  EmptyCondition,
+  EmptyStatement,
+  EnumBlock,
+  EnumDeclaration,
+  EnumProperty,
+  ExpressionNode,
+  Extends,
+  FinallyClause as FinallyClauseType,
   ForControlDeclaration,
   ForDeclaration,
-  ForStatementControl,
+  ForReduction,
   ForStatement,
+  ForStatementControl,
   FromClause,
   FunctionExpression,
   FunctionParameter,
@@ -137,11 +151,12 @@ import type {
   FunctionSignature,
   Identifier,
   IfStatement,
+  ImportAssertion,
+  ImportClause,
+  ImportDeclaration,
+  Index,
   Initializer,
   InterfaceDeclaration,
-  ImportDeclaration,
-  ImportClause,
-  Index,
   IterationExpression,
   IterationFamily,
   IterationStatement,
@@ -150,15 +165,21 @@ import type {
   Label,
   LabelledStatement,
   LexicalDeclaration,
+  Literal as LiteralType,
+  LiteralPattern as LiteralPatternType,
+  MemberExpression as MemberExpressionType,
   MethodDefinition,
   MethodSignature,
+  ModuleSpecifier,
   MultiMethodDefinition,
   NamedBindingPattern,
-  NamedImportElement,
   NamedExports,
+  NamedImportElement,
   NamespaceDeclaration,
+  NegativeIndex,
   NonNullAssertion,
   NonNullASTNode,
+  NumericLiteral as NumericLiteralType,
   ObjectBindingPattern,
   ObjectExpression,
   ObjectProperty,
@@ -167,40 +188,55 @@ import type {
   OperatorImportClause,
   OperatorImportSpecifier,
   OperatorSignature,
+  Optional,
   Parameter,
   ParametersNode as ParsedParameters,
   ParenthesizedExpression,
   PatternClause,
   PinPattern,
+  PipelineExpression as PipelineExpressionType,
   Property,
+  PropertyAccess as PropertyAccessType,
+  PropertyBind as PropertyBindType,
+  PropertyGlob as PropertyGlobType,
+  PropertyName as PropertyNameType,
   RangeEnd,
+  RangeExpression as RangeExpressionType,
   RangeExpression,
+  RegularExpressionLiteral as RegularExpressionLiteralType,
   ReturnTypeAnnotation,
   ReturnValue,
+  SliceExpression,
+  SpreadElement,
   SpreadProperty,
   StatementExpression,
   StatementTuple,
+  StringLiteral as StringLiteralType,
+  Substitution,
   SwitchStatement,
+  TemplateLiteral as TemplateLiteralType,
+  ThisAssignments,
   ThisType,
   ThrowStatement,
   TryStatement,
-  ThisAssignments,
-  TypeConditional,
-  TypeCondition,
-  TypeDeclaration,
-  TypeDeclarationBinding,
   TypeArgument,
   TypeArgumentList,
+  TypeArguments as TypeArgumentsType,
+  TypeCondition,
+  TypeConditional,
+  TypeDeclaration,
+  TypeDeclarationBinding,
   TypeFunction,
   TypeLexicalDeclaration,
   TypeNode,
   TypeParameters,
   TypeSuffix,
   TypeTuple,
+  UntypedNode,
   VoidType,
   WhenClause,
-  WSArray,
   WithClause,
+  WSArray,
   Yield,
   YieldExpression,
 } from "./parser/types.civet"
@@ -226,6 +262,8 @@ interface ParserState
   forbidPipeline: boolean[]
   forbidColonArgument: boolean[]
   forbidInlineObjectLiteral: boolean[]
+  /** Inside a pattern-matching PatternExpression: literals are patterns. */
+  matchPattern: boolean[]
   JSXTagStack: unknown[]
   indentLevels: { level: number, token?: string }[]
   operators: Map<string, OperatorBehavior?>
@@ -246,6 +284,7 @@ interface ParserState
   readonly pipelineForbidden: number
   readonly colonArgumentForbidden: number
   readonly inlineObjectLiteralForbidden: number
+  readonly matchPatternEnabled: number
   readonly currentJSXTag: unknown
 
 export const state = {    // parser state
@@ -260,6 +299,7 @@ export const state = {    // parser state
   forbidPipeline: [false],
   forbidColonArgument: [false],
   forbidInlineObjectLiteral: [false],
+  matchPattern: [false],
   JSXTagStack: [undefined],
 } as! ParserState
 
@@ -325,6 +365,11 @@ Object.defineProperties(state, {
       {forbidInlineObjectLiteral: s} := state
       s[s#-1]
   },
+  matchPatternEnabled: {
+    get()
+      {matchPattern: s} := state
+      s[s#-1]
+  },
   currentJSXTag: {
     get()
       {JSXTagStack: s} := state
@@ -346,7 +391,8 @@ function setOperatorBehavior(name: string, behavior: OperatorBehavior?)
 
 export function getStateKey()
   stateInt :=
-    ((state.currentIndent.level % 256) << 11) |
+    ((state.currentIndent.level % 256) << 12) |
+    (state.matchPatternEnabled << 11) |
     (state.classImplicitCallForbidden << 10) |
     (state.indentedApplicationForbidden << 9) |
     (state.bracedApplicationForbidden << 8) |
@@ -464,7 +510,7 @@ SingleLineExpression
 NonPipelineExpression
   NonPipelineAssignmentExpression ::ExpressionNode
 
-NestedExpressionizedStatement
+NestedExpressionizedStatement ::CallExpressionType
   # Allow trailing call expressions at two levels:
   # within the indentation and outside
   &EOS PushIndent ( Nested ExpressionizedStatementWithTrailingCallExpressions )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
@@ -529,21 +575,21 @@ CommaExpressionSpread
     return $0
 
 AssignmentExpressionSpread
-  _? DotDotDot AssignmentExpression:expression ->
+  _? DotDotDot AssignmentExpression:expression ::SpreadElement ->
     return {
       type: "SpreadElement",
       children: $0,
       expression,
       names: namesOf(expression),
     }
-  AssignmentExpression:expression ( _? DotDotDot )? ->
-    return $1 unless $2
+  AssignmentExpression:expression _? DotDotDot ::SpreadElement ->
     return {
       type: "SpreadElement",
-      children: [ ...$2, $1 ],
+      children: [ $2, $3, expression ],
       expression,
       names: namesOf(expression),
     }
+  AssignmentExpression
   _? DotDotDot AssignmentExpression:expression ->
     return {
       type: "SpreadElement",
@@ -573,7 +619,7 @@ Arguments
     return args if args
     return $skip
 
-ImplicitArguments
+ImplicitArguments ::Call
   ApplicationStart InsertOpenParen:open Trimmed_?:ws ForbidNestedBinaryOp ForbidPipeline ArgumentList?:args RestorePipeline RestoreNestedBinaryOp InsertCloseParen:close ->
     return $skip unless args
     // Don't treat as call if this is a postfix for/while/until/if/unless
@@ -585,7 +631,7 @@ ImplicitArguments
       children: [open, ws, args, close]
     }
 
-ExplicitArguments
+ExplicitArguments ::Call
   OpenParen:open AllowAll ( PostfixedArgumentList ( __ Comma )? )?:args __:ws RestoreAll CloseParen:close ->
     if args
       if args[1] // trailing comma
@@ -638,7 +684,7 @@ ForbiddenImplicitCalls
 ReservedBinary
   /(as|of|by|satisfies|then|when|implements|xor|xnor)(?!\p{ID_Continue}|[\u200C\u200D$])/
 
-ArgumentsWithTrailingCallExpressions
+ArgumentsWithTrailingCallExpressions ::[Call, ...ASTNode[]]
   Arguments:args AllowedTrailingCallExpressions?:trailing ->
     return [ args, ...trailing ?? [] ]
 
@@ -1199,7 +1245,7 @@ PipelineExpression
   PipelineAllowed _?:ws PipelineHeadItem:head PipelineExpressionBody:body AllowedTrailingCallExpressions?:trailing ->
     // NOTE: Ampersand-block heads (`&.foo |> bar`) are unwrapped later in
     // pipe.civet's constructInvocation; we don't need special handling here.
-    node := {
+    node: PipelineExpressionType := {
       type: "PipelineExpression",
       children: [ws, head, body]
     }
@@ -1681,7 +1727,7 @@ FieldDefinition
         // intact rather than emit invalid `Foo.prototype.#x = ...`.
         // The PrivateIdentifier rule normalises to type "Identifier"
         // with a `#`-prefixed name, so detect by name prefix.
-        if (id?.name?.startsWith?.("#")) {
+        if (id?.type === "Identifier" && id.name.startsWith("#")) {
           return {
             type: "FieldDefinition",
             id,
@@ -1749,7 +1795,7 @@ ThisLiteral
   HashThis
   # NOTE: Added @identifier shorthand, also works for private identifiers
   # Converts 'IdentifierName' node to string so this won't interfere with refs
-  AtThis:at $( Hash? IdentifierName ):id ->
+  AtThis:at $( Hash? IdentifierName ):id ::MemberExpressionType ->
     // `@😊` → `this["😊"]` to match the binding-side bracket form, but
     // `@#😊` → `this.#u$1F60A$` since private fields can't be string-keyed.
     escaped := escapeIdentifier(id)
@@ -1799,9 +1845,10 @@ BasicThisLiteral
 # This is slightly different from how https://262.ecma-international.org/#sec-relational-operators handles relational operators
 # grammatically but should be equivalent in practice
 HashThis
-  AtThis?:at LengthShorthand:id ( &( _ ( Not __ )? ActualIn ) "" )?:beforeIn ->
-    return [ '"', id.name, '"' ] if beforeIn? and not at?
-
+  # `# in x` → `"length" in x` (branded check)
+  LengthShorthand:id &( _ ( Not __ )? ActualIn ) ::Children ->
+    return [ '"', id.name, '"' ]
+  AtThis?:at LengthShorthand:id ::MemberExpressionType ->
     return {
       type: "MemberExpression",
       children: [at ?? "this", {
@@ -1815,7 +1862,7 @@ HashThis
   PrivateIdentifier:id &( _ ( Not __ )? ActualIn ) ->
     return id
 
-  PrivateIdentifier:id ->
+  PrivateIdentifier:id ::MemberExpressionType ->
     return {
       type: "MemberExpression",
       children: ["this", {
@@ -1903,9 +1950,9 @@ CallExpressionRest
   # But x<y>z and x<y>0 is a comparison chain.
   TypeArguments !( IdentifierName / NumericLiteral ) -> $1
   # perf: assertion to exit early
-  /(?=['"`])/ ( TemplateLiteral / StringLiteral ):literal ->
+  /(?=['"`])/ ( TemplateLiteral / StringLiteral ):literal ::ASTString | TemplateLiteralType ->
     if literal.type is "StringLiteral"
-      literal = "`" + literal.token.slice(1, -1).replace(/(`|\$\{)/g, "\\$1") + "`"
+      return "`" + literal.token.slice(1, -1).replace(/(`|\$\{)/g, "\\$1") + "`"
     return literal
   # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
   OptionalShorthand?:optional ArgumentsWithTrailingCallExpressions:argsWithTrailing ->
@@ -1925,9 +1972,9 @@ ExplicitCallExpressionRest
   # But x<y>z and x<y>0 is a comparison chain.
   TypeArguments !( IdentifierName / NumericLiteral ) -> $1
   # perf: assertion to exit early
-  /(?=['"`])/ ( TemplateLiteral / StringLiteral ):literal ->
+  /(?=['"`])/ ( TemplateLiteral / StringLiteral ):literal ::ASTString | TemplateLiteralType ->
     if literal.type is "StringLiteral"
-      literal = "`" + literal.token.slice(1, -1).replace(/(`|\$\{)/g, "\\$1") + "`"
+      return "`" + literal.token.slice(1, -1).replace(/(`|\$\{)/g, "\\$1") + "`"
     return literal
   OptionalShorthand?:optional ExplicitArguments:call ->
     return call unless optional
@@ -1939,7 +1986,7 @@ ExplicitCallExpressionRest
     }
 
 # NOTE: Added shorthand x?(3) -> x?.(3)
-OptionalShorthand
+OptionalShorthand ::Optional
   # perf: assertion to exit early
   /(?=[\/?])/ InlineComment*:comments QuestionMark:q OptionalDot:d ->
     return {
@@ -2011,7 +2058,7 @@ MemberExpressionRestBody
   NonNullAssertion
 
 # Handles indexing and slicing
-MemberBracketContent
+MemberBracketContent ::SliceExpression | Index
   OpenBracket:open ( SliceParameters / PostfixedExpression ):expression __:ws CloseBracket:close ->
     // Some kind of slice
     if expression!.type is "SliceParameters"
@@ -2048,6 +2095,7 @@ MemberBracketContent
     return {
       type: "Index",
       children: [open, ws1, ws2, close],
+      expression: undefined,
       random: true,
     }
 
@@ -2186,8 +2234,8 @@ PropertyAccess
     }
 
   # NOTE: Added shorthand x.-1 -> x[x.length-1]
-  AccessStart:dot "-":neg IntegerLiteral:num ->
-    len := {
+  AccessStart:dot "-":neg IntegerLiteral:num ::NegativeIndex ->
+    len: UntypedNode := {
       children: []
     }
     children := [
@@ -2204,11 +2252,11 @@ PropertyAccess
       len,
     }
 
-  AccessStart:dot InlineComment*:comments ( IdentifierName / PrivateIdentifier / LengthShorthand ):id ->
+  AccessStart:dot InlineComment*:comments ( IdentifierName / PrivateIdentifier / LengthShorthand ):id ::Index | PropertyAccessType ->
     // `data.😊` → `data["😊"]` since `u$1F60A$` isn't the real property.
     if id.unicode
       key := propertyKey(id)
-      expression := {
+      expression: LiteralType := {
         type: "Literal",
         subtype: "StringLiteral",
         children: [key],
@@ -2233,7 +2281,7 @@ PropertyAccess
     }
 
   # NOTE: For LSP completion / robustness, parse `foo.` but with an error node
-  ExplicitAccessStart:dot &EOS ->
+  ExplicitAccessStart:dot &EOS ::PropertyAccessType ->
     return {
       type: "PropertyAccess",
       name: "",
@@ -2247,7 +2295,7 @@ PropertyAccess
       ]
     }
 
-  ImplicitAccessStart:dot ( PrivateIdentifier / LengthShorthand ):id ->
+  ImplicitAccessStart:dot ( PrivateIdentifier / LengthShorthand ):id ::PropertyAccessType ->
     return {
       type: "PropertyAccess",
       name: id.name,
@@ -2256,10 +2304,10 @@ PropertyAccess
     }
 
   # NOTE: Added CoffeeScript :: prototype shorthand only when enabled
-  CoffeePrototypeEnabled PropertyAccessModifier?:modifier DoubleColon:p IdentifierName?:id ->
+  CoffeePrototypeEnabled PropertyAccessModifier?:modifier DoubleColon:p IdentifierName?:id ::PropertyAccessType ->
     dot := {token: ".", $loc: p.$loc}
     // Based on AccessStart
-    start := {
+    start: AccessStartType := {
       type: "AccessStart",
       children: modifier ? [modifier, dot] : [dot],
       optional: modifier?.token === "?",
@@ -2304,7 +2352,7 @@ AccessLiteral
 ExplicitPropertyGlob
   &ExplicitAccessStart PropertyGlob -> $2
 
-PropertyGlob
+PropertyGlob ::PropertyGlobType
   # NOTE: Added shorthand obj.{a,b:c} -> {a: obj.a, c: obj.b}
   ( PropertyAccessModifier? OptionalDot ):dot InlineComment* BracedObjectLiteral:object ->
     return {
@@ -2314,7 +2362,7 @@ PropertyGlob
       children: $0,
     }
 
-PropertyBind
+PropertyBind ::PropertyBindType
   # NOTE: foo@.bar and foo@bar shorthand for foo.bar.bind(foo)
   # foo@bar(baz) shorthand for foo.bar.bind(foo, baz)
   PropertyAccessModifier?:modifier At OptionalDot:dot ( IdentifierName / PrivateIdentifier ):id Arguments?:args ->
@@ -2333,7 +2381,7 @@ PropertyBind
     }
 
 # Variation on PropertyBind that forbids implicit arguments (for JSX)
-PropertyBindExplicitArguments
+PropertyBindExplicitArguments ::PropertyBindType
   PropertyAccessModifier?:modifier At OptionalDot:dot ( IdentifierName / PrivateIdentifier ):id ExplicitArguments?:args ->
     children := id.unicode
       ? [modifier, modifier?.token is "?" ? dot : null, "[", propertyKey(id), "]"]
@@ -2378,7 +2426,7 @@ AfterReturnShorthand
 # The parameters in a function definition
 Parameters
   NonEmptyParameters
-  TypeParameters?:tp Loc:p ->
+  TypeParameters?:tp Loc:p ::ParsedParameters ->
     parameters: FunctionParameter[] := []
     return {
       type: "Parameters",
@@ -2391,10 +2439,10 @@ Parameters
 
 # Allow for [a, b] => ... or {a, b} -> ...
 ShortArrowParameters
-  ( ObjectBindingPattern / ArrayBindingPattern ):binding ->
+  ( ObjectBindingPattern / ArrayBindingPattern ):binding ::ParsedParameters ->
     // Based on ParameterElement
     { typeSuffix } := binding
-    parameter := {
+    parameter: Parameter := {
       type: "Parameter"
       children: [ binding, typeSuffix ]
       names: binding.names
@@ -2409,8 +2457,8 @@ ShortArrowParameters
 
 # In esArrowFunction mode, allow single bare identifier as arrow parameter (ES-style: x => ...)
 ESArrowIdentifierParameters
-  ESArrowFunctionEnabled Identifier:id ->
-    parameter := {
+  ESArrowFunctionEnabled Identifier:id ::ParsedParameters ->
+    parameter: Parameter := {
       type: "Parameter"
       children: [id]
       id.names
@@ -2440,7 +2488,7 @@ ThinArrowParameters
   Parameters
 
 NonEmptyParameters
-  TypeParameters?:tp OpenParen:open ParameterList:parameters ( __ CloseParen ):close ::ParametersNode ->
+  TypeParameters?:tp OpenParen:open ParameterList:parameters ( __ CloseParen ):close ::ParsedParameters ->
     return {
       type: "Parameters",
       children: [ tp, open, parameters, close ],
@@ -2462,7 +2510,7 @@ ParameterList
 NestedParameterList
   PushIndent NestedParameter*:params PopIndent ->
     return $skip unless params#
-    return params
+    return params.flat()
 
 NestedParameter
   # Allow one or more parameters on one line
@@ -2470,7 +2518,7 @@ NestedParameter
     // Attach whitespace to first parameter
     params = [...params]
     params[0] = prepend(ws, params[0])
-    return params
+    return params.flat()
 
 Parameter
   ThisType ::ThisType
@@ -2562,6 +2610,7 @@ PinPattern ::PinPattern
       children: [expression],
       expression: expression as Identifier,
       typeSuffix: typeSuffixForExpression(expression),
+      names: [],
     }
   Caret SingleLineExpressionWithIndentedApplicationForbidden:expression ->
     return {
@@ -2569,6 +2618,7 @@ PinPattern ::PinPattern
       children: [expression],
       expression,
       typeSuffix: typeSuffixForExpression(expression),
+      names: [],
     }
   ActualMemberExpression:expression ->
     return {
@@ -2576,6 +2626,7 @@ PinPattern ::PinPattern
       children: [expression],
       expression,
       typeSuffix: typeSuffixForExpression(expression),
+      names: [],
     }
   # Handle unary numeric in switch patterns
   ([+-] NumericLiteral):expression ->
@@ -2584,6 +2635,7 @@ PinPattern ::PinPattern
       children: [expression],
       expression: expression as ASTNode,
       typeSuffix: typeSuffixForExpression(expression as ASTNode),
+      names: [],
     }
   # Handle undefined in switch patterns
   Undefined:expression ->
@@ -2592,12 +2644,13 @@ PinPattern ::PinPattern
       children: [expression],
       expression,
       typeSuffix: typeSuffixForExpression(expression),
+      names: [],
     }
 
 # `name^ pattern` means bind the whole thing to `name`,
 # but also destructure/match `pattern`
 NamedBindingPattern
-  BindingIdentifier:binding Caret _?:ws BindingPattern:pattern ::NamedBindingPattern ->
+  BindingIdentifier:binding Caret _?:ws ( BindingPattern / LiteralPattern ):pattern ::NamedBindingPattern ->
     pattern = prepend(ws, pattern)
     return {
       type: "NamedBindingPattern",
@@ -2607,6 +2660,7 @@ NamedBindingPattern
       pattern,
       subbinding: [pattern, " = ", binding],
       typeSuffix: pattern.typeSuffix,
+      names: [...namesOf(binding), ...namesOf(pattern)],
     }
 
 # https://262.ecma-international.org/#prod-BindingPattern
@@ -2614,9 +2668,30 @@ BindingPattern
   ObjectBindingPattern
   ArrayBindingPattern
   PinPattern
-  Literal
-  RegularExpressionLiteral
   NamedBindingPattern
+
+# Literals only match in pattern matching (`switch` cases), where
+# PatternExpression enables them for the whole, possibly nested, pattern.
+LiteralPattern ::LiteralPatternType
+  MatchPatternEnabled ( Literal / RegularExpressionLiteral ) -> $2
+
+MatchPatternEnabled
+  "" ->
+    return $skip unless state.matchPatternEnabled
+
+EnableMatchPattern
+  "" ->
+    state.matchPattern.push(true);
+
+# Expressions (initializers, right-hand sides) never see match mode, even
+# when nested inside a pattern.
+DisableMatchPattern
+  "" ->
+    state.matchPattern.push(false);
+
+RestoreMatchPattern
+  "" ->
+    state.matchPattern.pop();
 
 # https://262.ecma-international.org/#prod-ObjectBindingPattern
 # NOTE: Simplified from spec
@@ -2718,7 +2793,7 @@ BindingProperty
 
   # NOTE: Allow ::T type suffix before value
   # NOTE: name^ means we should bind name despite having a value
-  _?:ws1 PropertyName:name QuestionMarkTypeSuffix?:optional Caret?:bind _?:ws2 Colon:colon _?:ws3 ( BindingPattern / BindingIdentifier ):value BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
+  _?:ws1 PropertyName:name QuestionMarkTypeSuffix?:optional Caret?:bind _?:ws2 Colon:colon _?:ws3 ( BindingPattern / LiteralPattern / BindingIdentifier ):value BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
     if optional // merge into typeSuffix
       if typeSuffix and not typeSuffix.optional
         typeSuffix = {
@@ -2730,10 +2805,12 @@ BindingProperty
         typeSuffix ?= optional
     // Convert `name^: pattern` into `name: name^pattern`
     if bind
+      // Literal keys can't double as bindings
+      return $skip if name is like {type: "StringLiteral"}, {type: "NumericLiteral"}
       // For unicode `name`, PropertyName rewrote it to render as `"src"`.
       // The binding side (collapsed shorthand on LHS, subbinding `= name`
       // on RHS) needs the mangled JS identifier — `name.identifier`.
-      binding := name.identifier ?? name
+      binding := name.type is "Identifier" and name.identifier or name
       pattern := value
       value = {
         type: "NamedBindingPattern",
@@ -2743,7 +2820,7 @@ BindingProperty
         pattern,
         subbinding: [pattern, " = ", binding],
         typeSuffix: pattern.typeSuffix,
-        names: value.names,
+        names: [...namesOf(binding), ...namesOf(pattern)],
       }
     return {
       type: "BindingProperty",
@@ -2752,7 +2829,7 @@ BindingProperty
       value,
       typeSuffix,
       initializer,
-      names: value.names,
+      names: namesOf(value),
     }
 
   # NOTE: ^name is short for property `name: ^name`
@@ -2866,10 +2943,10 @@ BindingElement
   BindingRestElement
 
   # NOTE: Merged in SingleNameBinding
-  _?:ws ( BindingPattern / BindingIdentifier ):binding BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
+  _?:ws ( BindingPattern / LiteralPattern / BindingIdentifier ):binding BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
     return {
       type: "BindingElement",
-      names: binding.names,
+      names: namesOf(binding),
       typeSuffix,
       binding,
       children: [ws, binding, initializer],
@@ -2877,7 +2954,7 @@ BindingElement
     }
 
   # NOTE: Merged in ElisionElement
-  &( _? "," ) ->
+  &( _? "," ) ::ElisionElement ->
     return {
       type: "ElisionElement",
       children: [""],
@@ -2893,7 +2970,7 @@ BindingRestElement ::BindingRestElement
       dots,
       binding,
       typeSuffix,
-      name: binding.name,
+      name: "name" in binding ? binding.name : undefined,
       names: binding.names,
       rest: true,
     }
@@ -2904,13 +2981,13 @@ BindingRestElement ::BindingRestElement
       children: [...(ws || []), dots, binding],
       dots,
       binding,
-      name: binding.name,
+      name: "name" in binding ? binding.name : undefined,
       names: binding.names,
       rest: true,
     }
 
 # NOTE: Allows for empty binding rest pattern like in CoffeeScript
-EmptyBindingPattern
+EmptyBindingPattern ::EmptyBinding
   "" ->
     ref := makeRef()
     return {
@@ -3096,7 +3173,8 @@ FunctionExpression
 OperatorDeclaration ::OperatorDeclaration
   # `operator {x, y} := ...` declaration while blessing
   Operator OperatorBehavior?:behavior _:w Loc:loc LexicalDeclaration:decl ->
-    unless Array.isArray decl.names
+    // Pin patterns (`operator x.y := …`) and literals declare no names.
+    unless decl.names#
       return {}
         type: "Error"
         message: "Operator declaration must declare identifiers"
@@ -3171,17 +3249,16 @@ OperatorPrecedence ::OperatorBehavior
   # inspired by https://docs.raku.org/language/functions#Precedence
   _? ( "tighter" / "looser" / "same" ):mod NonIdContinue _? ( Identifier / ( OpenParen BinaryOp CloseParen ) ):op ->
     let prec: number, error: ASTError?
-    if op.type is "Identifier"
-      if state.operators.has(op.name)
-        prec = state.operators.get(op.name)?.prec ?? precedenceCustomDefault
-      else
-        prec = precedenceCustomDefault
-        error = {
-          type: "Error",
-          message: `Precedence refers to unknown operator ${op.name}`,
-        }
+    if Array.isArray op // parenthesized operator
+      prec = getPrecedence(op[1])
+    else if state.operators.has(op.name)
+      prec = state.operators.get(op.name)?.prec ?? precedenceCustomDefault
     else
-      prec = getPrecedence((op as any)[1])
+      prec = precedenceCustomDefault
+      error = {
+        type: "Error",
+        message: `Precedence refers to unknown operator ${op.name}`,
+      }
 
     switch mod
       case "tighter":
@@ -3565,7 +3642,7 @@ PostfixedSingleLineNoCommaStatements
       bare: true,
     }
 
-NestedBlockStatements
+NestedBlockStatements ::BlockStatement
   PushIndent NestedBlockStatement*:statements TrailingNestedComments:trailing PopIndent ->
     return $skip unless statements# or trailing#
 
@@ -3577,13 +3654,14 @@ NestedBlockStatements
     children: ASTNode[] := [expressions]
     children.push(trailing) if trailing#
 
-    return {
+    block: BlockStatement := {
       type: "BlockStatement",
       expressions,
       children,
       bare: true,
-      trailing: trailing# ? trailing : undefined,
     }
+    block.trailing = trailing if trailing#
+    return block
 
 NestedBlockStatement
   Nested:nested BlockStatementPart+:statements ->
@@ -3624,7 +3702,7 @@ BlockStatementPart
 
 # https://262.ecma-international.org/#prod-Literal
 Literal
-  /(?=[0-9.'"tfyno])/ LiteralContent:literal ::Literal ->
+  /(?=[0-9.'"tfyno])/ LiteralContent:literal ::LiteralType ->
     return {
       type: "Literal",
       subtype: literal.type,
@@ -3709,8 +3787,13 @@ SymbolLiteral
       }
 
 # :symbol as element of object or class
-SymbolElement
-  SymbolLiteral -> [ "[", $1, "]" ]
+SymbolElement ::ComputedPropertyNameType
+  SymbolLiteral:expression ->
+    return {
+      type: "ComputedPropertyName",
+      children: [ "[", expression, "]" ],
+      expression,
+    }
 
 # https://262.ecma-international.org/#prod-Identifier
 # Extended: identifiers may include non-identifier Unicode (emoji, math
@@ -3778,7 +3861,7 @@ _ArrayLiteral
   # NOTE: Check ArrayBindingPattern case of lhs destructuring
   ArrayBindingPattern UpcomingAssignment -> $1
   # NOTE: Added [] followed by elements
-  OpenBracket:open CloseBracket:close ApplicationStart AllowAll ( NestedElementList / SingleLineElementList )?:content RestoreAll ->
+  OpenBracket:open CloseBracket:close ApplicationStart AllowAll ( NestedElementList / SingleLineElementList )?:content RestoreAll ::ArrayExpression ->
     return $skip unless content
 
     // Remove trailing comma
@@ -3797,7 +3880,7 @@ _ArrayLiteral
       children: [open, ...content, close],
       names: content.flatMap(namesOf)
     }
-  OpenBracket:open AllowAll ( ArrayLiteralContent __ CloseBracket )? RestoreAll ->
+  OpenBracket:open AllowAll ( ArrayLiteralContent __ CloseBracket )? RestoreAll ::ArrayExpression | RangeExpressionType ->
     return $skip unless $3
     [ content, ws, close ] := $3
 
@@ -3976,7 +4059,7 @@ ArrayElementExpression
       type: "SpreadElement",
       children: [ws, dots, exp],
       expression: exp,
-      names: exp.names,
+      names: namesOf(exp),
     }
 
   # NOTE: Using PostfixedExpression, a superset of Expression to allow If/Switch expressions
@@ -3990,14 +4073,14 @@ ArrayElementExpression
           type: "ArrayElement",
           children: [exp],
           expression: exp,
-          names: exp!.names,
+          names: namesOf(exp),
         }
       else
         return {
           type: "SpreadElement",
           children: [...spread, exp],
           expression: exp,
-          names: exp!.names,
+          names: namesOf(exp),
         }
 
     return {
@@ -4023,7 +4106,7 @@ NestedBulletedArray ::ArrayExpression
 
 # NOTE: Bulleted array intended for beginning of lines,
 # when leading indentation has already been consumed.
-BulletedArray
+BulletedArray ::ArrayExpression
   InsertOpenBracket:open ( ArrayBullet NestedArrayBullet* )?:content InsertCloseBracket:close ->
     return $skip unless content
     content = [
@@ -4085,14 +4168,12 @@ Bullet
 
 BulletedArrayWithTrailing
   BulletedArray:array AllowedTrailingCallExpressions?:trailing ( NotDedented Pipe __ PipelineTailItem )*:pipeline ->
-    if trailing
-      array = [ array, trailing ]
-    if pipeline#
-      array = {
-        type: "PipelineExpression",
-        children: [ undefined, array, pipeline ],
-      }
-    return array
+    head: ASTNode := trailing ? [ array, trailing ] : array
+    return head unless pipeline#
+    return {
+      type: "PipelineExpression",
+      children: [ undefined, head, pipeline ],
+    }
 
 # https://262.ecma-international.org/#prod-ObjectLiteral
 # NOTE: Slightly simplified from spec
@@ -4234,11 +4315,14 @@ NestedPropertyDefinition
 # but where the indentation has already been consumed.
 # They can span multiple lines at the same indentation level.
 # They must start with a snug property, and all properties must have a colon.
-ImplicitObjectLiteral
+ImplicitObjectLiteral ::ObjectExpression
   InsertInlineOpenBrace:open SnugNamedProperty:first ( ImplicitObjectPropertyDelimiter NamedProperty )*:rest ( _? Comma )?:trailing InsertCloseBrace:close ->
+    properties := [first, ...rest.map(([, prop]) => prop)]
     return {
       type: "ObjectExpression",
       children: [open, first, ...rest, trailing, close],
+      names: properties.flatMap(namesOf),
+      properties,
     }
 
 # This is different from ObjectPropertyDelimiter because the braces are implicit so we can't look ahead to find the closing one
@@ -4252,11 +4336,14 @@ ImplicitObjectPropertyDelimiter
 # They must start with a snug property, and all properties must have a colon.
 # Disabled in the "then" of a snug ternary `a?b:c` so `{b:c}` doesn't
 # swallow the ternary colon.
-InlineObjectLiteral
+InlineObjectLiteral ::ObjectExpression
   !InlineObjectLiteralForbidden InsertInlineOpenBrace:open SnugNamedProperty:first ( InlineObjectPropertyDelimiter NamedProperty )*:rest ( _? Comma &Dedented )?:trailing InsertCloseBrace:close ->
+    properties := [first, ...rest.map(([, prop]) => prop)]
     return {
       type: "ObjectExpression",
       children: [open, first, ...rest, trailing, close],
+      names: properties.flatMap(namesOf),
+      properties,
     }
 
 InlineObjectPropertyDelimiter
@@ -4302,7 +4389,7 @@ PropertyDefinition
     return {
       type: "SpreadProperty",
       children,
-      names: exp.names,
+      names: namesOf(exp),
       dots,
       value: exp,
     }
@@ -4319,7 +4406,7 @@ PropertyDefinition
         type: "Property",
         children: [ws, id, ": ", value],
         name: id,
-        names: id.names,
+        names: namesOf(id),
         value,
         flagToggle: toggle,
       }
@@ -4327,7 +4414,7 @@ PropertyDefinition
     // `{ 😊 }` → `{ "😊": u$1F60A$ }`. PropertyName already rewrote `id`'s
     // children to render the quoted source; `id.identifier` is the original
     // Identifier whose children render the mangled local-variable reference.
-    if id.unicode
+    if id.type is "Identifier" and id.identifier
       return {
         type: "Property",
         children: [ws, id, ": ", id.identifier],
@@ -4340,7 +4427,7 @@ PropertyDefinition
       type: "Property",
       children: [ws, id],
       name: id,
-      names: id.names,
+      names: namesOf(id),
       value: id,
       implicitName: true,
     }
@@ -4360,7 +4447,7 @@ PropertyDefinition
     return {
       type: "SpreadProperty",
       children: [ws, dots, exp],
-      names: exp.names,
+      names: namesOf(exp),
       dots,
       value: exp,
     }
@@ -4433,13 +4520,13 @@ PropertyDefinition
     if name[0] is "#" then name = name.slice(1)
 
     // { y? } → { ...((y != null) && {y}) }
-    if not (pre# or rhs# or pipeline#) and post?.token is "?" and value!.type is "Identifier"
+    if not (pre# or rhs# or pipeline#) and post is like {token: "?"} and value!.type is "Identifier"
       dots := { $loc, token: "..." }
       paren := parenthesizeExpression({ children: ["(", value, " != null) && {", name, "}"] })
       return {
         type: "SpreadProperty",
         children: [ws, dots, paren],
-        names: value!.names,
+        names: namesOf(value),
         dots,
         value: paren,
       }
@@ -4467,7 +4554,7 @@ PropertyDefinition
 
 NamedProperty
   # NOTE: Optional named property { y?: value } → { ...(value != null ? {y: value} : {}) }
-  PropertyName:name "?" _? Colon _? PostfixedExpression:exp ->
+  PropertyName:name "?" _? Colon _? PostfixedExpression:exp ::SpreadProperty ->
     { ref, refAssignment } := maybeRefAssignment(exp)
     checkExp := refAssignment ? parenthesizeExpression(refAssignment) : exp
     dots := { $loc, token: "..." }
@@ -4482,7 +4569,7 @@ NamedProperty
     }
   # NOTE: CoverInitializedName early error doesn't seem necessary with this parser
   # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
-  PropertyName:name _? Colon PostfixedExpression:exp ->
+  PropertyName:name _? Colon PostfixedExpression:exp ::Property ->
     return {
       type: "Property",
       children: $0,
@@ -4495,7 +4582,7 @@ NamedProperty
 # used to distinguish between braceless inline objects and ternary expression conditions
 # Allow postfixed expression only if this first property isn't the last
 SnugNamedProperty
-  PropertyName:name Colon:colon MaybeNestedExpression:expression ( ( _? PostfixStatement ) &( Nested NamedProperty ) )?:post ->
+  PropertyName:name Colon:colon MaybeNestedExpression:expression ( ( _? PostfixStatement ) &( Nested NamedProperty ) )?:post ::Property ->
     if post
       // post[0] drops the lookahead assertion
       expression = attachPostfixStatementAsExpression(expression, post[0])
@@ -4504,9 +4591,10 @@ SnugNamedProperty
       children: [name, colon, expression],
       name,
       names: namesOf(expression),
+      value: expression,
     }
 
-PropertyName
+PropertyName ::PropertyNameType
   # https://262.ecma-international.org/#prod-LiteralPropertyName
   NumericLiteral
   ComputedPropertyName
@@ -4516,9 +4604,10 @@ PropertyName
   # NOTE: Content-Type -> "Content-Type"
   $(IdentifierName? "-" /(?:\p{ID_Continue}|[\u200C\u200D$-])*/) ->
     return {
+      type: "StringLiteral",
       token: `"${$1}"`,
       $loc,
-    }
+    } as const
   # Unicode `id` renders quoted via children so PropertyName consumers emit
   # the source name automatically; `id.identifier` carries the original for
   # shorthand value-side reads.
@@ -4526,7 +4615,7 @@ PropertyName
     return id unless id.unicode
     return {
       ...id,
-      children: [{$loc: id.children[0].$loc, token: `"${id.unicode}"`}],
+      children: [propertyKey(id)],
       identifier: id,
     }
   LengthShorthand
@@ -4535,14 +4624,14 @@ PropertyName
 ComputedPropertyName
   # https://262.ecma-international.org/#prod-ComputedPropertyName
   # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
-  OpenBracket PostfixedExpression:expression __ CloseBracket ->
+  OpenBracket PostfixedExpression:expression __ CloseBracket ::ComputedPropertyNameType ->
     return {
       type: "ComputedPropertyName",
       children: $0,
       expression,
     }
   # NOTE: Extending to allow template literals without brackets
-  InsertOpenBracket TemplateLiteral:expression InsertCloseBracket ->
+  InsertOpenBracket TemplateLiteral:expression InsertCloseBracket ::ComputedPropertyNameType | StringLiteralType ->
     // Check for CoffeeScript interpolated double-quote string
     // without interpolation
     return $2 if $2.type is "StringLiteral"
@@ -4552,7 +4641,7 @@ ComputedPropertyName
       expression,
       implicit: true,
     }
-  InsertOpenBracket [+-] NumericLiteral InsertCloseBracket ->
+  InsertOpenBracket [+-] NumericLiteral InsertCloseBracket ::ComputedPropertyNameType ->
     expression := [ $2, $3 ]
     return {
       type: "ComputedPropertyName",
@@ -4611,16 +4700,18 @@ MethodDefinition ::MethodDefinition | MultiMethodDefinition
         if lastAccess
           ({ name } = lastAccess)
 
-      if not name then ({ name } = base!)
+      name = base.name if not name and base is like {type: "Identifier"}
       return $skip unless name
 
       // Skip autoReturn for identifiers with an explicit block like `get foo { true }`
       autoReturn := not block or base!.type !== "Identifier"
       return makeGetterMethod(name, ws, base, returnType, block, kind, autoReturn)
 
-    last .= rest[rest#-1]
+    // Unwrap trailing tuples (e.g. `[Call, ...trailing]`) to the final node
+    last: ASTNode .= rest[rest#-1]
     while Array.isArray(last)
       last = last[last#-1]
+    assert last, "getter shorthand: expected a trailing member or call"
 
     switch last.type
       case "Call":
@@ -4708,7 +4799,7 @@ MethodSignature ::MethodSignature
       type: "MethodSignature",
       children: $0,
       id,
-      name: id.token,
+      name: id.name,
       modifier: {},
       returnType: undefined,
       parameters,
@@ -5555,7 +5646,9 @@ ForStatementControlWithWhen ::ForStatementControl
     return control unless condition
     expressions: StatementTuple[] := [["", {
       type: "ContinueStatement",
-      children: ["continue"]
+      children: ["continue"],
+      with: undefined,
+      label: undefined,
     }]]
     block: BlockStatement := {
       type: "BlockStatement",
@@ -5563,11 +5656,19 @@ ForStatementControlWithWhen ::ForStatementControl
       children: [expressions],
       bare: true,
     }
+    guard: Condition := {
+      type: "ParenthesizedExpression",
+      children: ["(!", makeLeftHandSideExpression(trimFirstSpace(condition)), ")"],
+      expression: condition,
+    }
     blockPrefix: StatementTuple[] := [...control.blockPrefix ?? [],
       ["", {
         type: "IfStatement",
+        condition: guard,
+        negated: undefined,
         then: block,
-        children: ["if (!", makeLeftHandSideExpression(trimFirstSpace(condition)), ") ", block],
+        else: undefined,
+        children: ["if ", guard, " ", block],
         // & placeholders in the condition came from outside the for-body,
         // so they should lift past it (otherwise `continue` ends up trapped
         // inside an arrow function — issue #1788).
@@ -5639,11 +5740,9 @@ CoffeeForStatementParameters ::ForStatementControl
 
       // index is actually value in Coffee "for of", y = z[x]
       if index
-        blockPrefix./**/push(["", {
-          type: "AssignmentExpression",
-          children: [index, " = ", exp, "[", declarationExp, "]"],
-          names: index.names,
-        }, ";"])
+        blockPrefix./**/push(["",
+          makeAssignment(index, [exp, "[", declarationExp, "]"], { names: index.names }),
+        ";"])
 
       kind.token = "in"
     else if kind.token is "in" // CoffeeScript loop comprehensions
@@ -5666,7 +5765,7 @@ CoffeeForStatementParameters ::ForStatementControl
       if index
         index = trimFirstSpace(index)
         indexAssignment = [index, "="]
-        assignmentNames./**/push(...index!.names)
+        assignmentNames./**/push(...namesOf(index))
 
       expRefDec := (expRef !== exp)
         // Trim a single leading space if present
@@ -5680,11 +5779,9 @@ CoffeeForStatementParameters ::ForStatementControl
         pushForBlockDeclaration blockPrefix, varRef,
           [expRef, "[", indexAssignment, counterRef, "]"], true
       else
-        blockPrefix./**/push(["", {
-          type: "AssignmentExpression",
-          children: [varRef, " = ", expRef, "[", indexAssignment, counterRef, "]"],
-          names: assignmentNames,
-        }, ";"])
+        blockPrefix./**/push(["",
+          makeAssignment(varRef, [expRef, "[", indexAssignment, counterRef, "]"], { names: assignmentNames }),
+        ";"])
 
       // The for-head Declaration (`let i = 0, len = arr.length` or, for a
       // literal negative step, `let i = arr.length - 1`). Distinct from the
@@ -5735,10 +5832,7 @@ CoffeeForIndex
   _?:ws1 Comma _?:ws2 BindingIdentifier:id ->
     ws2 = trimFirstSpace(ws1)
 
-    return {
-      ...id,
-      children: [...ws1 || [], ...ws2 || [], ...id.children]
-    }
+    return prepend([...ws1 or [], ...ws2 or []], id)
 
 CoffeeForDeclaration ::CoffeeForDeclarationType | CoffeeForBindingAssignment
   # NOTE: Coffee doesn't allow expression bindings like `for a.x in b`
@@ -5987,8 +6081,10 @@ PatternExpressionList
     return [first, ...rest.map(([, , , p]) => p)]
 
 PatternExpression
-  BindingPattern
-  ForbidIndentedApplication ( ( BindingIdentifier Caret? )? SingleLineBinaryOpRHS+ )?:body RestoreIndentedApplication ->
+  EnableMatchPattern ( BindingPattern / LiteralPattern )?:pattern RestoreMatchPattern ->
+    return $skip unless pattern
+    return pattern
+  ForbidIndentedApplication ( ( BindingIdentifier Caret? )? SingleLineBinaryOpRHS+ )?:body RestoreIndentedApplication ::ConditionFragment ->
     return $skip unless body
     [ named, rhs ] := body
     let binding
@@ -6020,7 +6116,7 @@ CaseExpression
   PropertyName:value &( _? Colon ) ->
     if value.type is "ComputedPropertyName"
       return value.expression if value.implicit
-      return {...value, type: "ArrayExpression"}
+      return { type: "ArrayExpression", children: value.children } as const
     return value
   ExpressionWithObjectApplicationForbidden
 
@@ -6071,7 +6167,7 @@ WFinallyClause
     return prepend($1, $2)
 
 # https://262.ecma-international.org/#prod-Finally
-FinallyClause
+FinallyClause ::FinallyClauseType
   Finally ( BracedThenClause / BracedOrEmptyBlock ):block ->
     return {
       type: "FinallyClause",
@@ -6152,8 +6248,9 @@ BoundedCondition
       expression,
     }
 
-DeclarationCondition
-  ForbidBracedApplication ForbidIndentedApplication ForbidNewlineBinaryOp LexicalDeclaration?:declaration RestoreNewlineBinaryOp RestoreBracedApplication RestoreIndentedApplication ->
+DeclarationCondition ::DeclarationConditionType
+  # Declaration conditions pattern match, so literal patterns are enabled.
+  ForbidBracedApplication ForbidIndentedApplication ForbidNewlineBinaryOp EnableMatchPattern LexicalDeclaration?:declaration RestoreMatchPattern RestoreNewlineBinaryOp RestoreBracedApplication RestoreIndentedApplication ->
     return $skip unless declaration
 
     return {
@@ -6434,11 +6531,13 @@ KeywordStatement
     }
 
   # NOTE: `continue switch` for fallthrough
-  Continue _ Switch ->
+  Continue _ Switch ::ContinueStatement ->
     return {
       type: "ContinueStatement",
       special: $3.token,
       children: [],
+      with: undefined,
+      label: undefined,
     }
 
   # https://262.ecma-international.org/#prod-ContinueStatement
@@ -6590,7 +6689,7 @@ ImportDeclaration ::ImportDeclaration
     // Replace `import` with `const` in JS output
     imp := [
       { ...$1, ts: true },
-      { ...$1, token: "const", js: true },
+      { ...$1, token: "const" as const, js: true },
     ]
     return {
       type: "ImportDeclaration",
@@ -6752,7 +6851,7 @@ NamedImports ::ImportClause
     }
 
 # `...rest` in named imports — triggers namespace+const desugar.
-NamedImportRest
+NamedImportRest ::BindingRestPropertyType
   __:ws DotDotDot:dots BindingIdentifier:binding ObjectPropertyDelimiter:delim ->
     return {
       type: "BindingRestProperty",
@@ -6760,6 +6859,7 @@ NamedImportRest
       dots,
       binding,
       delim,
+      typeSuffix: undefined,
     }
 
 OperatorNamedImports ::OperatorImportClause
@@ -6807,7 +6907,7 @@ FromClause ::FromClause
 # https://github.com/tc39/proposal-import-attributes
 # https://devblogs.microsoft.com/typescript/announcing-typescript-5-3/#import-attributes
 # NOTE: Forbid newline before `with` which could mean a function call
-ImportAssertion
+ImportAssertion ::ImportAssertion
   _? ( "with" / "assert" ):keyword NonIdContinue _? ObjectLiteral:object ->
     return {
       type: "ImportAssertion",
@@ -6918,7 +7018,7 @@ ModuleExportName
   IdentifierName
 
 # https://262.ecma-international.org/#prod-ModuleSpecifier
-ModuleSpecifier
+ModuleSpecifier ::ModuleSpecifier
   UnprocessedModuleSpecifier:module ImportAssertion?:assertion ->
     module = rewriteModuleSpecifier(module)
 
@@ -7063,7 +7163,7 @@ NamedExports
       type: "NamedExports"
       children: $0
       specifiers
-      constructed: specifiers.filter (s): s is ConstructedExportSpecifier => not Array.isArray(s) and s?.type is "ConstructedExportSpecifier"
+      constructed: specifiers.filter (s): s is ConstructedExportSpecifier => s is like {type: "ConstructedExportSpecifier"}
     }
   # Unbraced version: export x, y
   InsertInlineOpenBrace:open ImplicitExportSpecifier:first ( ImplicitObjectPropertyDelimiter ImplicitExportSpecifier )*:rest InsertCloseBrace:close &( StatementDelimiter / ( __ From )) ->
@@ -7077,7 +7177,7 @@ ExportSpecifier
     children :=
       if rename
         [ws1, ts, local, rename[0], rename[1], rename[2], propertyKey(rename[3]), delim]
-      else if local.unicode
+      else if local.type is "Identifier" and local.unicode
         [ws1, ts, local, " as ", propertyKey(local), delim]
       else
         [ws1, ts, local, delim]
@@ -7112,7 +7212,7 @@ ImplicitExportSpecifier
   !Default ModuleExportName:local ( __ As __ ModuleExportName )?:rename ->
     if rename
       return [local, rename[0], rename[1], rename[2], propertyKey(rename[3])]
-    if local.unicode
+    if local.type is "Identifier" and local.unicode
       return [local, " as ", propertyKey(local)]
     return [local, rename]
 
@@ -7165,12 +7265,14 @@ LexicalDeclaration ::LexicalDeclaration
   # NOTE: Added const/let shorthands
   # NOTE: Using Expression to allow for If/SwitchExpressions
   # NOTE: Using PostfixExpression to allow postfix if/unless/for
-  Loc:loc ( BindingPattern / BindingIdentifier ):pattern TypeSuffix?:typeSuffix NotDedented:ws ( ConstAssignment / LetAssignment ):assign MaybeNestedPostfixedExpressionOrCommaLoop:e ->
+  Loc:loc ( BindingPattern / BindingIdentifier ):pattern TypeSuffix?:typeSuffix NotDedented:ws ( ConstAssignment / LetAssignment ):assign DisableMatchPattern MaybeNestedPostfixedExpressionOrCommaLoop?:e RestoreMatchPattern ->
+    return $skip unless e
     return processAssignmentDeclaration
       { loc.$loc, token: assign.decl } // like InsertConst or InsertLet
       pattern, typeSuffix, ws, assign, e
   # Backward const/let shorthands: `y =: x` -> `const x = y`
-  Loc:loc PostfixedExpressionOrCommaLoop:e NotDedented:ws ( BackwardConstAssignment / BackwardLetAssignment ):assign NotDedented:bindingWs ( BindingPattern / BackwardBindingIdentifier / BindingIdentifier ):pattern TypeSuffix?:typeSuffix ->
+  Loc:loc DisableMatchPattern PostfixedExpressionOrCommaLoop?:e RestoreMatchPattern NotDedented:ws ( BackwardConstAssignment / BackwardLetAssignment ):assign NotDedented:bindingWs ( BindingPattern / BackwardBindingIdentifier / BindingIdentifier ):pattern TypeSuffix?:typeSuffix ->
+    return $skip unless e
     return processAssignmentDeclaration
       { loc.$loc, token: assign.decl } // like InsertConst or InsertLet
       prepend trimFirstSpace(bindingWs), pattern
@@ -7235,11 +7337,13 @@ LexicalBinding ::Binding
 
 # https://262.ecma-international.org/#prod-Initializer
 Initializer ::Initializer
-  __ Equals MaybeNestedPostfixedExpression:expression -> {
-    type: "Initializer",
-    expression,
-    children: $0,
-  }
+  __:ws Equals:eq DisableMatchPattern MaybeNestedPostfixedExpression?:expression RestoreMatchPattern ->
+    return $skip unless expression
+    return {
+      type: "Initializer",
+      expression,
+      children: [ws, eq, expression],
+    }
 
 # https://262.ecma-international.org/#prod-VariableStatement
 VariableStatement ::Declaration
@@ -7267,7 +7371,7 @@ VariableDeclarationList ::Omit<Declaration, "decl">
 # NOTE: No leading minus sign
 NumericLiteral
   # perf: short circuit if no possibility of being a number
-  /(?=[0-9.])/ NumericLiteralKind:token ::NumericLiteral ->
+  /(?=[0-9.])/ NumericLiteralKind:token ::NumericLiteralType ->
     return { type: "NumericLiteral", $loc, token } as const
 
 NumericLiteralKind
@@ -7309,7 +7413,7 @@ HexIntegerLiteral
 # NOTE: Integer variation of NumericLiteral
 IntegerLiteral
   # perf: short circuit if no possibility of being an integer
-  /(?=[0-9])/ IntegerLiteralKind:token ::NumericLiteral ->
+  /(?=[0-9])/ IntegerLiteralKind:token ::NumericLiteralType ->
     return { type: "NumericLiteral", $loc, token } as const
 
 IntegerLiteralKind
@@ -7327,7 +7431,7 @@ DecimalIntegerLiteral
 # NOTE: This includes unprocessed double-quoted strings.  If you might want to
 # accept a template literal in the form of a CoffeeScript double-quoted string
 # interpolation, be sure to check TemplateLiteral before StringLiteral.
-StringLiteral ::StringLiteral
+StringLiteral ::StringLiteralType
   DoubleQuote DoubleStringCharacters:str DoubleQuote ->
     return {
       type: "StringLiteral",
@@ -7352,7 +7456,7 @@ SingleStringCharacters
 
 # StringLiteral but without literal newlines, used for module names
 SingleLineStringLiteral
-  $( DoubleQuote /(?:\\.|[^"\n])*/ DoubleQuote ) / $( SingleQuote /(?:\\.|[^'\n])*/ SingleQuote ) ::StringLiteral ->
+  $( DoubleQuote /(?:\\.|[^"\n])*/ DoubleQuote ) / $( SingleQuote /(?:\\.|[^'\n])*/ SingleQuote ) ::StringLiteralType ->
     return {
       type: "StringLiteral",
       $loc,
@@ -7404,7 +7508,7 @@ CoffeeDoubleQuotedStringCharacters
     return { $loc, token: $0 }
 
 # https://262.ecma-international.org/#prod-RegularExpressionLiteral
-RegularExpressionLiteral
+RegularExpressionLiteral ::RegularExpressionLiteralType
   HeregexLiteral
   $("/" RegularExpressionBody "/" RegularExpressionFlags):raw ->
     return {
@@ -7421,7 +7525,7 @@ RegularExpressionClassCharacters
   /(?:\\.|[^\]])*/ ->
     return { $loc, token: $0 }
 
-HeregexLiteral
+HeregexLiteral ::RegularExpressionLiteralType
   TripleSlash:open HeregexBody:body TripleSlash:close RegularExpressionFlags:flags ->
     hasSubstitutions .= body.some (part) => part.type is "Substitution"
 
@@ -7488,8 +7592,8 @@ heregexEscapes: Record<string, string> := {
 HeregexPart
   RegularExpressionClass
 
-  CoffeeInterpolationEnabled CoffeeStringSubstitution -> { type: "Substitution", children: $2 }
-  TemplateSubstitution -> { type: "Substitution", children: $1 }
+  CoffeeInterpolationEnabled CoffeeStringSubstitution ::Substitution -> { type: "Substitution", children: $2 }
+  TemplateSubstitution ::Substitution -> { type: "Substitution", children: $1 }
 
   $( /\\./ ):escape -> { $loc, token: heregexEscapes[escape[1]] ?? escape }
 
@@ -7529,11 +7633,13 @@ RegularExpressionFlags
 
 # https://262.ecma-international.org/#prod-TemplateLiteral
 # NOTE: Simplified template grammar
-TemplateLiteral
+TemplateLiteral ::TemplateLiteralType | StringLiteralType
   # perf: assertion to exit early
   /(?=[`'"])/ _TemplateLiteral -> $2
 
-_TemplateLiteral
+# NOTE: CoffeeScript interpolated strings without interpolation collapse to a
+# StringLiteral.
+_TemplateLiteral ::TemplateLiteralType | StringLiteralType
   TripleTick ( TemplateBlockCharacters / TemplateSubstitution )* TripleTick ->
     return dedentBlockSubstitutions($0, config.tab)
 
@@ -7800,9 +7906,15 @@ Comptime
   "comptime" NonIdContinue !":" ->
     return { type: "Keyword" as const, $loc, token: $1 }
 
-ConstructorShorthand
+ConstructorShorthand ::Identifier
   "@" ->
-    return { $loc, token: "constructor" }
+    name := "constructor"
+    return {
+      type: "Identifier",
+      name,
+      names: [name],
+      children: [{ $loc, token: name }],
+    }
 
 Declare
   "declare" NonIdContinue ->
@@ -8473,12 +8585,12 @@ JSXAttribute
   # NOTE: @foo and @@foo shorthands
   # for foo={this.foo} and foo={this.foo.bind(this)}
   AtThis:at Identifier?:id InlineJSXCallExpressionRest*:rest &JSXAttributeSpace ::JSXAttribute ->
-    children := [ at, ...rest.flat() ]
+    children: Children := [ at, ...rest.flat() ]
     if id
       children.splice(1, 0, {
         type: "PropertyAccess",
         children: [".", id],
-        name: id,
+        name: id.name,
       })
     expr := processCallMemberExpression({
       type: "CallExpression",
@@ -8621,7 +8733,7 @@ JSXAttributeValue
     // double-quoted string that didn't end up actually interpolating.
     // Instead parse using the following string literal rule,
     // which avoids e.g. converting newlines into \n.
-    return $skip if value!.type is "StringLiteral"
+    return $skip if value is like {type: "StringLiteral"}
     return [open, value, close]  // omit &JSXAttributeSpace
   # NOTE: InlineJSXAttributeValue which contains TemplateLiteral must be before
   # StringLiteral, so that CoffeeScript interpolated strings get checked first.
@@ -9227,7 +9339,7 @@ EnumDeclaration ::EnumDeclaration
       }]
     }
 
-EnumBlock
+EnumBlock ::EnumBlock
   __ OpenBrace NestedEnumProperties:props __ CloseBrace ->
     return {
       properties: props.properties,
@@ -9260,7 +9372,7 @@ NestedEnumPropertyLine
       children: pair,
     }))
 
-EnumProperty
+EnumProperty ::EnumProperty
   Identifier:name ( __ Equals MaybeNestedExpression )?:initializer ObjectPropertyDelimiter ->
     return {
       type: "EnumProperty",
@@ -9278,8 +9390,8 @@ TypeProperty
 TypeIndexSignature
   # NOTE: QuestionMark will be parsed by following TypeSuffix
   ( [+-]? Readonly NotDedented )?:prefix OpenBracket:open TypeIndex:index CloseBracket:close ( __ [+-] &( _? QuestionMark ) )?:suffix ->
-    suffix = [suffix[0], suffix[1]] if suffix
-    return [prefix, open, index, close, suffix]
+    // omit the lookahead assertion from suffix
+    return [prefix, open, index, close, suffix and [suffix[0], suffix[1]]]
 
 TypeIndex
   __ Identifier TypeSuffix
@@ -9796,7 +9908,8 @@ TypeFunction
   # NOTE: Forbid declaration operators after return type to avoid treating `f: (x: T) => y := z`
   # as a typed const; prefer implicit object/arrow function interpretation.
   ( Abstract _? )?:abstract ( Async _? )?:async ( New _? )?:new_ Parameters __ TypeFunctionArrow ( ReturnType / Loc ):returnType !TrailingDeclaration ::TypeFunction ->
-    children := [ abstract, ...$0.slice(2, -1) ] // omit async and trailing lookahead
+    // omit async (wrapped into the return type below) and trailing lookahead
+    children: Children := [ abstract, new_, $4, $5, $6, returnType ]
     if abstract and not new_
       children[1] = {
         type: "Error",
@@ -9836,7 +9949,7 @@ TypeFunctionArrow
     return { $loc, token: "=>" }
 
 TypeArguments
-  OpenAngleBracket:open ( __ TypeArgumentDelimited )+:args __:ws CloseAngleBracket:close ::TypeArguments ->
+  OpenAngleBracket:open ( __ TypeArgumentDelimited )+:args __:ws CloseAngleBracket:close ::TypeArgumentsType ->
     flatArgs := args.flatMap(([ws, [arg, delim]]) => [prepend(ws, arg), delim]) as TypeArgumentList
     flatArgs.pop() // remove last delimiter
     return {
@@ -9847,7 +9960,7 @@ TypeArguments
     }
 
 ImplicitTypeArguments
-  TypeApplicationStart InsertOpenAngleBracket:open Trimmed_?:ws TypeArgumentList:args InsertCloseAngleBracket:close ::TypeArguments ->
+  TypeApplicationStart InsertOpenAngleBracket:open Trimmed_?:ws TypeArgumentList:args InsertCloseAngleBracket:close ::TypeArgumentsType ->
     // Remove trailing comma which is forbidden in TypeScript type arguments
     last := args[args# - 1]
     args = args.slice(0, -1) if isComma last
@@ -9870,7 +9983,7 @@ ForbiddenImplicitTypeCalls
   /(extends|not|is)(?!\p{ID_Continue}|[\u200C\u200D$])/
 
 # Based on ArgumentList
-TypeArgumentList
+TypeArgumentList ::TypeArgumentList
   # Check for same line arguments then nested arguments
   !EOS TypeArgument ( CommaDelimiter !EOS WTypeArgument )* ( CommaDelimiter ( NestedTypeBulletedTuple / NestedInterfaceBlock / NestedTypeArgumentList ) )+ ->
     return [
@@ -9882,7 +9995,7 @@ TypeArgumentList
     ]
   # NOTE: Added nested arguments on separate new lines
   ( NestedTypeBulletedTuple / NestedInterfaceBlock ) ( CommaDelimiter ( NestedTypeBulletedTuple / NestedInterfaceBlock / NestedTypeArgumentList ) )* ->
-    rest: [ASTNode, ASTNode][] := $2
+    rest := $2
     return [
       trimFirstSpace($1),
       ...rest.flatMap(([comma, args]) =>
@@ -10242,6 +10355,7 @@ Reset
     state.forbidPipeline = [false]
     state.forbidColonArgument = [false]
     state.forbidInlineObjectLiteral = [false]
+    state.matchPattern = [false]
     state.JSXTagStack = [undefined]
 
     state.operators = new Map
