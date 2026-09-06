@@ -30,6 +30,7 @@ import type {
   Parameter
   ParametersNode
   PostRestBindingElements
+  ReturnStatement
   ReturnTypeAnnotation
   StatementTuple
   SwitchStatement
@@ -255,7 +256,7 @@ function processReturnValue(func: FunctionNode)
     declaration ??= child if ancestor  // remember binding
 
   // Compute default return type
-  returnType: ReturnTypeAnnotation? .= func.returnType ?? func.signature?.returnType
+  returnType: ReturnTypeAnnotation? .= func.signature?.returnType
   if returnType
     { t } := returnType
     switch t.type
@@ -283,7 +284,7 @@ function processReturnValue(func: FunctionNode)
 
   // Modify existing declaration, or add declaration of return.value after {
   if declaration
-    unless declaration.typeSuffix?
+    unless "typeSuffix" in declaration and declaration.typeSuffix?
       declaration.children![1] = declaration.typeSuffix = returnType
   else
     block.expressions.unshift [
@@ -297,10 +298,10 @@ function processReturnValue(func: FunctionNode)
 
   // Transform existing `return` -> `return ret`
   gatherRecursiveWithinFunction block,
-    (r) => r.type is "ReturnStatement" and not r.expression
+    (r): r is ReturnStatement => r.type is "ReturnStatement" and not r.expression
   .forEach (r) =>
     r.expression = ref
-    r.children!.splice -1, 1, " ", ref
+    r.children.splice -1, 1, " ", ref
 
   // Implicit return before }
   unless block.children.-2?.type is "ReturnStatement"
@@ -344,9 +345,9 @@ function patternAsValue(pattern: ASTNodeObject): ASTNodeObject
           index := children.indexOf pattern.initializer
           assert.notEqual index, -1, "failed to find initializer in BindingElement"
           children.splice index, 1
-        if pattern.value?
-          children = children.map & is pattern.value ?
-            patternAsValue pattern.value : &
+        if value := pattern.value
+          children = children.map & is value ?
+            patternAsValue value : &
       { ...pattern, children }
     when "AtBindingProperty"
       children := [...pattern.children]
@@ -419,24 +420,25 @@ function nameAbstractClass(exp: ClassExpression): ASTNode
 // Maybe these insertion modifications can be refactored to be more DRY eventually.
 function assignResults(node: StatementTuple[] | ASTNode, collect: (node: ASTNode) => ASTNode): void
   // TODO: unify this with the `exp` switch
-  switch node!.type
-    when "BlockStatement"
-      if node!.expressions.length
-        assignResults(node!.expressions.-1, collect)
-      else
-        node!.expressions.push(["", collect("void 0"), ";"])
-        updateParentPointers node
-      return
-    when "CaseClause"
-      // CaseClauses don't get a result assigned
-      return
-    when "WhenClause", "DefaultClause", "PatternClause"
-      assignResults(node!.block, collect)
-      return
+  if node is like { type }
+    switch node.type
+      when "BlockStatement"
+        if node.expressions#
+          assignResults(node.expressions.-1, collect)
+        else
+          node.expressions.push(["", collect("void 0"), ";"])
+          updateParentPointers node
+        return
+      when "CaseClause"
+        // CaseClauses don't get a result assigned
+        return
+      when "WhenClause", "DefaultClause", "PatternClause"
+        assignResults(node.block, collect)
+        return
 
   assert Array.isArray(node), "assignResults: node must be a statement tuple or a handled node type"
   [, exp, semi] .= node
-  return if semi?.type is "SemicolonDelimiter"
+  return if semi is like { type: "SemicolonDelimiter" }
   return if isExit exp
 
   exp = exp as ASTNodeObject
@@ -534,7 +536,8 @@ function assignResults(node: StatementTuple[] | ASTNode, collect: (node: ASTNode
         return
 
   // Insert push wrapping expression
-  parent := node[1]!.parent
+  node_1 := node[1]
+  parent := node_1.parent if node_1 is like { parent }
   node[1] = collect(node[1])
   updateParentPointers parent if parent?
 
@@ -604,31 +607,39 @@ function insertReturn(node: ASTNode): void
         [" ", patternAsValue(exp.bindings.-1.pattern)]
       else
         [] as ASTNode
-      parent := outer.parent as BlockStatement?
-      index := findChildIndex parent?.expressions, outer
+
+      assert (outer is like { parent }), "Delcaration must have a parent"
+      { parent } := outer
+      assert "expressions" in parent?, "Delcaration parent must have an expression"
+      { expressions } := parent
+
+      index := findChildIndex expressions, outer
       assert.notEqual index, -1, "Could not find declaration in parent"
-      parent!.expressions.splice index+1, 0, ["",
+      expressions.splice index+1, 0, ["",
         type: "ReturnStatement"
         expression: value
         children: [
-          ";" unless parent!.expressions[index][2] is ";"
+          ";" unless expressions[index][2] is ";"
           "return"
           value
         ]
         parent: exp
       ]
-      braceBlock parent!
+      braceBlock parent
       return
     when "FunctionExpression"
       // Add return after function declaration if it has an id to not interfere with hoisting
       if exp.id
-        parent := outer.parent as BlockStatement?
-        index := findChildIndex parent?.expressions, outer
+        unless { parent^: { expressions } } := outer
+          /* c8 ignore next -- defensive: should be unreachable but types disagree */
+          throw new Error "Declaration must have parent"
+
+        index := findChildIndex expressions, outer
         assert.notEqual index, -1, "Could not find function declaration in parent"
-        parent!.expressions.splice index+1, 0, ["",
+        expressions.splice index+1, 0, ["",
           wrapWithReturn exp.id, exp, true
         ]
-        braceBlock parent!
+        braceBlock parent
         return
       /* c8 ignore next 3 */
       // This is currently never hit because anonymous FunctionExpressions are already wrapped in parens by this point
@@ -931,40 +942,45 @@ function processParams(f: FunctionNode): void
   function append(p: FunctionParameter | ASTError): void
     (rest ? after : before).push(p)
   for each param of parameters.parameters
-    switch param.type
-      when "ThisType"
-        if tt
-          append
-            type: "Error"
-            message: "Only one typed this parameter is allowed"
-          append param
+    if "type" in param
+      switch param.type
+        when "ThisType"
+          if tt
+            append
+              type: "Error"
+              message: "Only one typed this parameter is allowed"
+            append param
+          else
+            tt = trimFirstSpace(param) as ThisType
+            if before# or rest // moving ThisType to front
+              delim .= tt.children.-1
+              delim = delim.-1 if Array.isArray delim
+              unless delim is like {token: ","}
+                tt = {
+                  ...tt
+                  children: [...tt.children, ", "]
+                }
+        when "FunctionRestParameter"
+          if rest
+            append
+              type: "Error"
+              message: "Only one rest parameter is allowed"
+            append param
+          else
+            rest = param
         else
-          tt = trimFirstSpace(param) as ThisType
-          if before# or rest // moving ThisType to front
-            delim .= tt.children.-1
-            delim = delim.-1 if Array.isArray delim
-            unless delim is like {token: ","}
-              tt = {
-                ...tt
-                children: [...tt.children, ", "]
-              }
-      when "FunctionRestParameter"
-        if rest
-          append
-            type: "Error"
-            message: "Only one rest parameter is allowed"
           append param
-        else
-          rest = param
-      else
-        append param
+    else
+      append param
 
-  parameters.names = before.flatMap .names
+  parameters.names = before.flatMap ("names" in & and &.names || [])
   parameters.parameters[..] = []
   parameters.parameters.push tt if tt
   parameters.parameters.push ...before
   if rest
-    restIdentifier := rest.binding.ref or rest.binding
+    restIdentifier := (or)
+      rest.binding.ref if "ref" in rest.binding
+      rest.binding
     parameters.names.push ...(rest.names ?? [])
     rest.children.pop() // remove delimiter
 
@@ -980,7 +996,7 @@ function processParams(f: FunctionNode): void
           message: "Non-end rest parameter cannot be binding pattern"
 
       after = trimFirstSpace after
-      names := after.flatMap .names
+      names := after.flatMap ("names" in & and &.names || [])
       elements := (after as (Parameter | ASTError)[]).map (p) =>
         return p if p.type is "Error"
         {
@@ -1156,7 +1172,8 @@ function processParams(f: FunctionNode): void
           // (Currently just handle `@prop ::` individual typing,
           // where parent is AtBindingProperty or BindingElement,
           // or when the parent is the whole Parameter.)
-          typeSuffix := binding.parent?.typeSuffix
+          { parent } := binding
+          typeSuffix := parent.typeSuffix if "typeSuffix" in parent?
           continue unless accessModifier or typeSuffix
           // Remove accessModifier from parameter if we lift it to a field
           if parameter.accessModifier
@@ -1197,7 +1214,7 @@ function processParams(f: FunctionNode): void
     } satisfies Declaration
   prefix ++= thisAssignments
   // Add indentation and delimiters
-  prefix = prefix.map (s) => s?.js
+  prefix = prefix.map (s) => s is like { js } and s.js
     ? ["", makeNode {
       // TODO: figure out how to get JS only statement tuples
       ...s

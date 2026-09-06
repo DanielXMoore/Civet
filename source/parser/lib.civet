@@ -14,6 +14,7 @@ import type {
   ASTNodeObject
   ASTRef
   ASTString
+  Binding
   BlockStatement
   BreakStatement
   Call
@@ -48,11 +49,13 @@ import type {
   MethodSignature
   NonNullASTNode
   NormalCatchParameter
+  ObjectBindingPattern
   ObjectExpression
   ObjectProperty
   ParametersNode
   ParenthesizedExpression
   Placeholder
+  PostRestBindingElements
   Property
   StatementTuple
   SwitchStatement
@@ -210,8 +213,9 @@ import {
 } from ../parser.hera
 
 function addPostfixStatement(statement: ASTNode, ws: ASTNode, post: IterationStatement | ForStatement | IfStatement)
+  blockPrefix := post.blockPrefix if "blockPrefix" in post
   expressions := [
-    ...post.blockPrefix or []
+    ...blockPrefix or []
     ["", statement]
   ]
 
@@ -390,10 +394,9 @@ function canExpressionizeIfAsTernary(statement: IfStatement): boolean
     e ? canExpressionizeBlock e.block : true
 
 // Mirror of `expressionizeBlock`'s success condition — keep in sync.
-function canExpressionizeBlock(blockOrExpression: ASTNode): boolean
-  if { expressions } := blockOrExpression
-    for every [, s] of expressions
-      isExpression(s)
+function canExpressionizeBlock(blockOrExpression: BlockStatement): boolean
+  for every [, s] of blockOrExpression.expressions
+    isExpression(s)
 
 function expressionizeIfStatement(statement: IfStatement): NonNullASTNode
   { condition, then: b, else: e } := statement
@@ -852,7 +855,7 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
               isWhitespaceOrEmpty(part.children[0]) ? part.children[0] : ""
               name
               isWhitespaceOrEmpty(part.children[2]) ? part.children[2] : ""
-              part.children[3]?.token is ":" ? part.children[3] : ":"
+              part.children[3] is like { token: ":" } ? part.children[3] : ":"
               value
               part.delim // comma delimiter
             ]
@@ -995,10 +998,10 @@ function processCallMemberExpression(node: CallExpression | MemberExpression): A
 // * unary suffix applied to above
 // * comma operators applied to above
 function makeExpressionStatement(expression: ASTNode): ASTNode
-  if Array.isArray(expression) and expression[1]?[0]?[0]?[1]?.token is "," // CommaExpression
+  if expression is like [_, [ [ [_, { token: "," }, ...], ...], ...], ...] // CommaExpression
     [
       makeExpressionStatement expression[0]
-      expression[1].map ([comma, exp]: [any, any]) => // CommaDelimiter AssignmentExpression
+      expression[1].map ([comma, exp]: ASTNode & [any, any]) => // CommaDelimiter AssignmentExpression
         [comma, makeExpressionStatement exp]
     ]
   else if expression?.type is "ObjectExpression" or
@@ -1134,7 +1137,7 @@ function convertArrowFunctionToMethod(id: any, exp: any)
   exp
 
 // Convert NamedImports into equivalent ObjectExpression or ObjectBindingPattern
-function convertNamedImportsToObject(node: any, pattern?: boolean, kind: "dynamic" | "destructuring" = "dynamic")
+function convertNamedImportsToObject(node: any, pattern?: boolean, kind: "dynamic" | "destructuring" = "dynamic"): ObjectExpression | ObjectBindingPattern
   properties := node.specifiers.map (specifier: any) =>
     if specifier.ts
       { type: "Error", message: `cannot use \`type\` in ${kind} import` }
@@ -1163,7 +1166,7 @@ function convertNamedImportsToObject(node: any, pattern?: boolean, kind: "dynami
       properties
       node.children.-1 // }
     ]
-  }
+  } as ObjectExpression | ObjectBindingPattern
 
 // Convert an ObjectExpression (with `properties`)
 // into a set of JSX attributes.
@@ -1275,12 +1278,19 @@ function processBindingPatternLHS(lhs: any, tail: any): void
     atBinding.type = undefined
     atBinding.children = thisExpr
     // Update blockPrefixes that use this ref as a rest identifier (e.g. [...@x, y] = z)
-    for each nodeWithPrefix of gatherRecursiveAll lhs, (n) => n.blockPrefix
-      { blockPrefix } := nodeWithPrefix
+    for each { blockPrefix } of gatherRecursiveAll(lhs,
+        (n): n is ASTNodeObject & { blockPrefix: PostRestBindingElements } => Boolean
+          n.blockPrefix if "blockPrefix" in n
+        )
+
       blockPrefix.children = blockPrefix.children.map (c: any) => c is ref ? thisExpr : c
+
   // Also handle AtBindings inside blockPrefixes (e.g. post-rest @x in [a, ..., @x] = y)
-  for each nodeWithPrefix of gatherRecursiveAll lhs, (n) => n.blockPrefix
-    { blockPrefix } := nodeWithPrefix
+  for each { blockPrefix } of gatherRecursiveAll(lhs,
+      (n): n is ASTNodeObject & { blockPrefix: PostRestBindingElements } => Boolean
+        n.blockPrefix if "blockPrefix" in n
+      )
+
     for each atBinding of gatherRecursiveAll blockPrefix, .type is "AtBinding"
       atBinding.type = undefined
       atBinding.children = ["this.", atBinding.ref.id]
@@ -1319,11 +1329,12 @@ function processAssignments(statements: ASTNode): void
         else
           pre.push(["(", lhs, ", "])
           post.push(")")
+
         // Use refs to avoid duplicating side-effectful member access and indices
-        { assigned } := expr
-        /* c8 ignore next -- defensive guard: tests always reach this with `.children` populated */
-        return assigned unless assigned?.children
-        { children } := assigned
+        unless { assigned^: { children } }:= expr
+          /* c8 ignore next -- defensive guard: tests always reach this with `.children` populated */
+          throw new Error 'expected .assigned.children'
+        assert children, "expected children"
 
         // Find the terminal member access (last PropertyAccess or Index)
         j .= children.findLastIndex (c: any) => c?.type is like "PropertyAccess", "Index"
@@ -1346,7 +1357,7 @@ function processAssignments(statements: ASTNode): void
         // Cache the terminal Index expression if it has side effects
         terminal := children[j]
         outerTerminal .= terminal
-        if terminal?.type is "Index"
+        if terminal is like { type: "Index" }
           { ref, refAssignment } := maybeRefAssignment terminal.expression
           if refAssignment
             replaceNode terminal.expression, (if postfix then ref else refAssignment), terminal
@@ -1593,7 +1604,7 @@ function processAssignments(statements: ASTNode): void
           [ws1, ...children, ws2, op, ...assigns, $2]
 
         if newMemberExp !== lhs
-          if newMemberExp.usesRef
+          if "usesRef" in newMemberExp and newMemberExp.usesRef
             exp.hoistDec =
               type: "Declaration"
               children: ["let ", optionalChainRef]
@@ -1609,6 +1620,7 @@ function processAssignments(statements: ASTNode): void
     // Add any additional binding refs that need to be declared to our hoisted declarations
     if refsToDeclare.size
       if exp.hoistDec
+        assert "children" in exp.hoistDec and exp.hoistDec.children, "hoisted declaration must have children"
         exp.hoistDec.children.push [...refsToDeclare].map [",", &]
       else
         exp.hoistDec =
@@ -1855,7 +1867,7 @@ function processStatementExpressions(statements: StatementTuple[]): void
         replaceNode statement, wrapIIFE([["", statement]]), exp
 
 function processNegativeIndexAccess(statements: StatementTuple[]): void
-  gatherRecursiveAll(statements, (n) => n.type is "NegativeIndex")
+  gatherRecursiveAll(statements, (n) => "type" in n and n.type is "NegativeIndex")
     .forEach (exp): void =>
       parent := exp.parent!
       { children } := parent
@@ -2270,7 +2282,7 @@ function processPlaceholders(statements: StatementTuple[]): void
         // Skip this node of its child told us to
         prevImplicitLift := implicitLift
         {implicitLift} = ancestor as Declaration
-        return if prevImplicitLift
+        return false if prevImplicitLift
 
         {type} := ancestor
         if type is "IfStatement"

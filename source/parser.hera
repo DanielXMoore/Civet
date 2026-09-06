@@ -190,6 +190,7 @@ import type {
   TypeDeclaration,
   TypeDeclarationBinding,
   TypeArgument,
+  TypeArguments,
   TypeArgumentList,
   TypeFunction,
   TypeLexicalDeclaration,
@@ -586,14 +587,15 @@ ImplicitArguments
     }
 
 ExplicitArguments
-  OpenParen:open AllowAll ( PostfixedArgumentList ( __ Comma )? )?:args __:ws RestoreAll CloseParen:close ->
-    if args
-      if args[1] // trailing comma
-        args = [ ...args[0], args[1] ]
+  OpenParen:open AllowAll ( PostfixedArgumentList ( __ Comma )? )?:postArgs __:ws RestoreAll CloseParen:close ->
+    args := if postArgs
+      if postArgs[1] // trailing comma
+        [ ...postArgs[0], postArgs[1] ]
       else // no trailing comma
-        args = args[0]
+        postArgs[0]
     else // no arguments
-      args = []
+      []
+
     return {
       type: "Call",
       args,
@@ -1108,8 +1110,7 @@ ArrowFunction
 FatArrow
   # Ensures at least one space before arrow
   _?:ws FatArrowToken:arrow ->
-    ws = " " unless ws
-    return [ ws, arrow ]
+    return [ ws || " ", arrow ]
 
 FatArrowToken
   "=>" / "⇒" ->
@@ -1143,8 +1144,7 @@ FatArrowBody
     // object literal. Skip so we fall through to NoCommaBracedOrEmptyBlock.
     return $skip if config.esBraceBlock and exp!.type is "ObjectExpression"
     // Ensure object literal is wrapped in parens
-    exp = makeExpressionStatement(exp)
-    expressions := [["", exp]]
+    expressions := [["", makeExpressionStatement(exp)]]
     return {
       type: "BlockStatement",
       bare: true,
@@ -1313,7 +1313,7 @@ ParenthesizedExpression
   OpenParen:open AllowAll ( PostfixedCommaExpression __ CloseParen )? RestoreAll ::ParenthesizedExpression ->
     return $skip unless $3
     [expression, ws, close] := $3
-    if expression!.type is "ParenthesizedExpression" and (expression as any).implicit
+    if expression is like { type: "ParenthesizedExpression", implicit: true }
       return {
         ...expression,
         children: [open, (expression as any).expression, ws, close],
@@ -1394,9 +1394,8 @@ ClassBinding
 # https://262.ecma-international.org/#prod-ClassHeritage
 ClassHeritage
   ExtendsClause:extendsClause WithClause?:withClause ImplementsClause?:implementsClause ->
-    if withClause
-      extendsClause = convertWithClause(withClause, extendsClause)
-    return [ extendsClause, implementsClause ]
+    clause := withClause ? convertWithClause(withClause, extendsClause) : extendsClause
+    return [ clause, implementsClause ]
 
   WithClause?:withClause ImplementsClause?:implementsClause ->
     return [ convertWithClause(withClause), implementsClause ] if withClause
@@ -1411,9 +1410,9 @@ ExtendsClause
 WithClause ::WithClause
   # Nested form where C, D appear on separate lines, indented
   # Also allows for arbitrary expressions
-  NotDedented With PushIndent ( Nested Expression _? Comma? )*:targets PopIndent ->
-    return $skip unless targets#
-    targets = targets.map(($) => $.slice(0, -1)) // strip Comma?
+  NotDedented With PushIndent ( Nested Expression _? Comma? )*:targetNodes PopIndent ->
+    return $skip unless targetNodes#
+    targets := targetNodes.map(.slice(0, -1)) // strip Comma?
     return {
       type: "WithClause",
       children: $0,
@@ -1476,11 +1475,11 @@ ExtendsTarget
 ImplementsClause
   # Nested form where interfaces appear on separate lines, indented
   # Allows for implicit type arguments
-  ImplementsToken:i PushIndent ( Nested TypeIdentifier ArrayBulletDelimiter )*:targets PopIndent ->
-    return $skip unless targets#
+  ImplementsToken:i PushIndent ( Nested TypeIdentifier ArrayBulletDelimiter )*:targetsNodes PopIndent ->
+    return $skip unless targetsNodes#
     // remove final comma
-    last := targets.at(-1)!.slice(0, -1)
-    targets = targets.slice(0, -1).concat(last)
+    last := targetsNodes.at(-1)!.slice(0, -1)
+    targets := [...targetsNodes.slice(0, -1), ...last]
     return {
       ts: true,
       children: [i, targets],
@@ -1503,8 +1502,7 @@ ImplementsToken
     return { children }
 
   NotDedented "implements" NonIdContinue ->
-    $2 = { $loc, token: $2 }
-    return [$1, $2]
+    return [$1, { $loc, token: $2 }]
 
 ImplementsShorthand
   "<:" ->
@@ -1664,14 +1662,14 @@ FieldDefinition
   # name: (param1, param2) ->
   # name: (param1, param2) => which gets wrapped in bind in constructor
   CoffeeClassesEnabled ClassElementName:id _? Colon __ AssignmentExpression:exp ->
-    switch (exp!.type) {
-      case "FunctionExpression": {
+    assert (exp is like { type }), "AssignmentExpression must exist"
+
+    switch exp.type
+      when "FunctionExpression"
         return convertFunctionToMethod(id, exp)
-      }
-      case "ArrowFunction": {
+      when "ArrowFunction"
         return convertArrowFunctionToMethod(id, exp)
-      }
-      default:
+      else
         // CoffeeScript-compatible: `name: value` becomes a prototype
         // assignment (`Class.prototype.name = value`) lifted out of the
         // class body in processCoffeeClasses. The empty children make
@@ -1694,7 +1692,6 @@ FieldDefinition
           exp,
           children: [],
         }
-    }
 
   # NOTE: Added readonly semantic equivalent of const field assignment
   InsertReadonly:readonly ClassElementName:id TypeSuffix?:typeSuffix __ ConstAssignment:ca MaybeNestedPostfixedExpressionOrCommaLoop ->
@@ -9626,18 +9623,19 @@ NestedTypeElement
 
 # NOTE: Nested bulleted tuple starts with an indentation.
 NestedTypeBulletedTuple ::TypeTuple
-  ( InsertSpace InsertOpenBracket ):open PushIndent NestedTypeBullet*:content InsertCloseBracket:close PopIndent ->
-    return $skip unless content#
-    content = content.flat() // combine bullets into one array
+  ( InsertSpace InsertOpenBracket ):open PushIndent NestedTypeBullet*:nestedContent InsertCloseBracket:close PopIndent ->
+    return $skip unless nestedContent#
+    content := nestedContent.flat() // combine bullets into one array
 
     // Remove implicit comma from last element
     // NOTE: TypeElementList always returns arrays of objects (TypeElement /
     // TypeBulletedTuple), not bare arrays, so Array.isArray(last) arm dead.
-    last := content[content# - 1]
-    children .= last?.children
-    if children?.at(-1).implicit
-      children = children.slice(0, -1)
-      content[content# - 1] = { ...last, children }
+    if { children, ...lastChildProps } := content.-1
+      if children and children.-1 is like { implicit: true }
+          content.-1 = {
+            ...lastChildProps
+            children |> .slice(0, -1)
+          }
 
     return {
       type: "TypeTuple",

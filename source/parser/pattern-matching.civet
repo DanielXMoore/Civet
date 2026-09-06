@@ -5,7 +5,6 @@ import type {
   ASTRef
   BindingProperty
   BindingRestElement
-  BindingRestProperty
   BlockStatement
   Condition
   ContinueStatement
@@ -207,7 +206,7 @@ function getPatternConditions(
   switch pattern.type
     when "ArrayBindingPattern"
       const { elements, length } = pattern,
-        hasRest = Boolean(pattern.omittedRest) or elements.some((e) => e.rest),
+        hasRest = Boolean(pattern.omittedRest) or elements.some((e) => e.rest if "rest" in e),
         l = (length - +hasRest).toString(),
         lengthCheck = hasRest
         ? [ref, ".length >= ", l]
@@ -319,7 +318,7 @@ function getPatternBlockPrefix(
   // Gather bindings
   [splices, thisAssignments] .= gatherBindingCode(pattern)
   patternBindings := nonMatcherBindings(pattern)
-  typeSuffix = patternBindings.typeSuffix if "typeSuffix" in patternBindings
+  typeSuffix = patternBindings.typeSuffix if "typeSuffix" in patternBindings?
   subbindings := gatherSubbindings patternBindings
   simplifyBindingProperties patternBindings
   simplifyBindingProperties subbindings
@@ -375,9 +374,9 @@ function elideMatchersFromPropertyBindings(properties: ObjectBindingPatternConte
         { children, name, value } := p
         [ws] := children
 
-        shouldElide := (or)
-          name.type is "NumericLiteral" and !value?.name
-          name.type is "ComputedPropertyName" and value?.subtype is "NumericLiteral"
+        shouldElide := (and)
+          name.type is "ComputedPropertyName"
+          value and "subtype" in value and value.subtype is "NumericLiteral"
         if shouldElide
           continue
         else
@@ -455,22 +454,28 @@ function nonMatcherBindings(pattern: ASTNodeObject): ASTNodeObject?
     else
       pattern
 
+type DuplicateBinding =
+  | BindingProperty
+  | Identifier
+  | (BindingRestElement & { binding: Identifier })
+
 function aggregateDuplicateBindings(bindings: ASTNode)
   props := gatherRecursiveAll bindings,
-    ($): $ is BindingProperty | BindingRestProperty | Identifier | BindingRestElement => (or)
+    ($): $ is DuplicateBinding => (or)
       $.type is "BindingProperty"
       // Don't deduplicate ...rest properties; user should do so manually
       // because ...rest can be named arbitrarily
       //$.type is "BindingRestProperty"
       $.type is "Identifier" and $.parent?.type is "BindingElement"
-      $.type is "BindingRestElement"
+      $.type is "BindingRestElement" and $.binding.type is "Identifier"
 
   declarations: ASTNode[] := []
 
-  propsGroupedByName := new Map<string, ASTNodeObject[]>
+  propsGroupedByName := new Map<string, DuplicateBinding[]>
 
   for each p of props
-    { name, value } := p
+    { name } := p
+    value := p.value if "value" in p
 
     // JavaScript does not bind a property that gets matched against
     // an array or object pattern
@@ -479,8 +484,12 @@ function aggregateDuplicateBindings(bindings: ASTNode)
       continue
 
     // This is to handle aliased props, non-aliased props, and binding identifiers in arrays
-    const key = value?.name or name?.name or name
-    if key?.type is "NumericLiteral" or key?.type is "ComputedPropertyName"
+    key := (or)
+      value.name if "name" in value?
+      name.name if name is like { name }
+      name
+
+    if key is like { type } and key.type is like "NumericLiteral", "ComputedPropertyName"
       continue
 
     if propsGroupedByName.has key
@@ -489,7 +498,6 @@ function aggregateDuplicateBindings(bindings: ASTNode)
       propsGroupedByName.set key, [p]
 
   propsGroupedByName.forEach (shared, key) =>
-    return unless key
     // NOTE: Allows pattern matching reserved word keys by binding to
     // inaccessible refs; explicit `_` prefix because Civet-only reserved
     // words (`is`, `loop`, ...) are valid JS so makeRef leaves them bare
@@ -525,7 +533,7 @@ function aggregateDuplicateBindings(bindings: ASTNode)
  * Adjust the alias of a binding property, adding an alias if one doesn't exist or
  * replacing an existing alias. This mutates the property in place.
  */
-function aliasBinding(p: ASTNodeObject, ref: ASTRef): void
+function aliasBinding(p: DuplicateBinding, ref: ASTRef): void
   if p.type is "Identifier"
     // Array element binding
     // TODO: This ignores `name` and `names` properties of Identifier and
