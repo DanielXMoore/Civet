@@ -29,9 +29,26 @@ export default defineConfig({
   plugins: [
     civetVitePlugin({
       // options
+      ts: 'preserve',
     }),
   ],
 })
+```
+
+You can write configuration in Civet if you run Vite 6.1+ via
+`node --import @danielx/civet/register node_modules/vite/bin/vite.js --configLoader native --config vite.config.civet`.
+
+```ts
+// vite.config.civet
+{ defineConfig } from 'vite'
+civetVitePlugin from '@danielx/civet/vite'
+
+export default defineConfig
+  // ...
+  plugins:
+    . civetVitePlugin
+        // options
+        ts: 'preserve'
 ```
 
 To use Civet files as Web Workers, you can use
@@ -64,12 +81,14 @@ export default defineConfig({
   plugins: [
     civetVitePlugin({
       // options
+      ts: 'preserve',
     }),
   ],
   worker: {
     plugins: () => [
       civetVitePlugin({
         // options
+        ts: 'preserve',
       }),
     ],
     // format: "es",  // if using { type: 'module' }
@@ -78,6 +97,10 @@ export default defineConfig({
 ```
 
 ### SolidStart
+
+[SolidStart 2 uses Vite directly](https://docs.solidjs.com/solid-start/v2/getting-started);
+see the [Vite directions](#vite).
+For SolidStart 1.x:
 
 ```ts
 // app.config.ts
@@ -97,7 +120,7 @@ export default defineConfig({
 })
 ```
 
-The plugin detects vinxi (the framework underlying SolidStart) and
+The plugin detects vinxi (the framework underlying SolidStart 1.x) and
 compiles `.civet` route modules for the filesystem router's route
 analysis.  `vite-plugin-solid` compiles the JSX in the output, keyed off
 the `extensions` option above, so the plugin's `ts` option must be a mode
@@ -113,9 +136,31 @@ esbuild
   .build({
     // ...
     // sourcemap: true, // build and link sourcemap files
-    plugins: [civetEsbuildPlugin()],
+    plugins: [civetEsbuildPlugin({
+      // options
+      ts: 'preserve',
+    })],
   })
   .catch(() => process.exit(1));
+```
+
+You can write the esbuild script in Civet if you run it via
+`civet esbuild.civet` or
+`node --import @danielx/civet/register esbuild.civet`.
+
+```ts
+// esbuild.civet
+{ build } from 'esbuild'
+civetEsbuildPlugin from '@danielx/civet/esbuild'
+
+await build
+  entryPoints: ['src/main.civet']
+  bundle: true
+  outdir: 'dist'
+  plugins:
+    . civetEsbuildPlugin
+        // options
+        ts: 'preserve'
 ```
 
 ### Astro
@@ -131,9 +176,18 @@ export default defineConfig({
   integrations: [
     civet({
       // options
+      ts: 'preserve',
     }),
   ],
 })
+```
+
+You can write configuration in `astro.config.civet` with this wrapper:
+
+```js
+// astro.config.mjs
+import '@danielx/civet/register'
+export default (await import('./astro.config.civet')).default
 ```
 
 To use Civet files as Web Workers, see the [Vite directions](#vite) above.
@@ -152,6 +206,7 @@ export default defineConfig({
   integrations: [
     civet({
       // options
+      ts: 'preserve',
     }),
   ],
   vite: {
@@ -159,6 +214,7 @@ export default defineConfig({
       plugins: () => [
         civetVitePlugin({
           // options
+          ts: 'preserve',
         }),
       ],
       // format: "es",  // if using { type: 'module' }
@@ -179,6 +235,7 @@ export default defineConfig({
   plugins: [
     civetFarmPlugin({
       // options
+      ts: 'preserve',
     })
   ],
 })
@@ -196,9 +253,18 @@ export default defineConfig({
   plugins: [
     civetRolldownPlugin({
       // options
+      ts: 'preserve',
     }),
   ],
 })
+```
+
+You can write configuration in `rolldown.config.civet` with this wrapper:
+
+```js
+// rolldown.config.mjs
+import '@danielx/civet/register'
+export default (await import('./rolldown.config.civet')).default
 ```
 
 ### Rollup
@@ -212,9 +278,25 @@ export default {
   plugins: [
     civetRollupPlugin({
       // options
+      ts: 'civet',
     }),
   ],
 }
+```
+
+You can write configuration in Civet if you run Rollup via
+`node --import @danielx/civet/register node_modules/rollup/dist/bin/rollup --config rollup.config.civet`.
+
+```ts
+// rollup.config.civet
+civetRollupPlugin from '@danielx/civet/rollup'
+
+export default
+  // ...
+  plugins:
+    . civetRollupPlugin
+        // options
+        ts: 'civet'
 ```
 
 ### Webpack
@@ -227,9 +309,25 @@ module.exports = {
   plugins: [
     civetWebpackPlugin({
       // options
+      ts: 'civet',
     }),
   ],
 };
+```
+
+You can write configuration in Civet if you run Webpack via
+`node --import @danielx/civet/register node_modules/webpack/bin/webpack.js --config webpack.config.civet`.
+
+```ts
+// webpack.config.civet
+civetWebpackPlugin from '@danielx/civet/webpack'
+
+export default
+  // ...
+  plugins:
+    . civetWebpackPlugin
+        // options
+        ts: 'civet'
 ```
 
 ## Options
