@@ -12,6 +12,7 @@ import type {
   HasSubbinding
   ObjectBindingPattern
   PostRestBindingElements
+  StatementTuple
   ThisAssignments
 } from ./types.civet
 
@@ -25,10 +26,12 @@ import {
 
 import {
   assert
+  isASTNodeObject
   isComma
   makeAssignment
   namesOf
   parenthesizeType
+  replaceNode
   trimFirstSpace
   typeSuffixForExpression
   updateParentPointers
@@ -293,10 +296,9 @@ function gatherBindingCode(statements: ASTNode, opts?: { injectParamProps?: bool
 
       if opts?.injectParamProps and n.type is "Parameter" and n.accessModifier
         for each id of n.names
-          thisAssignments.push
-            type: "AssignmentExpression"
-            children: [`this.${id} = `, id]
-            js: true
+          assignment := makeAssignment `this.${id}`, id
+          assignment.js = true
+          thisAssignments.push assignment
         continue
 
       if { blockPrefix } := n
@@ -403,7 +405,55 @@ function gatherBindingPatternTypeSuffix(pattern: ArrayBindingPattern | ObjectBin
         }
   pattern
 
+/**
+ * Literal and regular-expression patterns only match; they can't bind.
+ * Reject them in binding positions (declarations, assignments, parameters,
+ * loop bindings, imports), following binding positions only: property keys
+ * and initializers are not patterns.  Pattern-matching contexts (switch and
+ * catch patterns, `is like`, and the pattern of a declaration condition) are
+ * exempt.
+ */
+function validateBindingPatterns(statements: StatementTuple[]): void
+  function check(pattern: ASTNode): void
+    return unless isASTNodeObject pattern
+    switch pattern.type
+      when "Literal", "RegularExpressionLiteral"
+        leaf := pattern.children[0]
+        error: ASTError := {
+          type: "Error"
+          message: "Literal patterns can only appear in pattern matching"
+        }
+        error.$loc = leaf.$loc if leaf is like {$loc}
+        replaceNode pattern, [error, pattern]
+      when "ObjectBindingPattern"
+        for each property of pattern.properties
+          check property.value if property.type is "BindingProperty"
+      when "ArrayBindingPattern"
+        for each element of pattern.elements
+          if element.type is "BindingElement" or element.type is "BindingRestElement"
+            check element.binding
+      when "NamedBindingPattern"
+        check pattern.pattern
+
+  for each node of gatherRecursiveAll statements, (n) => n.type is like "Binding", "Parameter", "FunctionRestParameter", "TypeDeclarationBinding", "AssignmentExpression", "Declaration"
+    switch node.type
+      when "Binding"
+        // The pattern of `if x := …` matches rather than binds
+        continue if node.parent?.parent?.type is "DeclarationCondition"
+        check node.pattern
+      when "Parameter", "FunctionRestParameter"
+        check node.binding
+      when "TypeDeclarationBinding"
+        check node.children[0]
+      when "AssignmentExpression"
+        for each [, target] of node.lhs
+          check target
+      when "Declaration"
+        // Named imports with pattern bindings desugar to a destructuring declaration
+        check node.pattern if "pattern" in node
+
 export {
+  validateBindingPatterns
   adjustAtBindings
   adjustBindingElements
   arrayPatternValueElements

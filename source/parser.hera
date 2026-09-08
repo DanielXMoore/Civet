@@ -165,7 +165,6 @@ import type {
   LabelledStatement,
   LexicalDeclaration,
   Literal,
-  LiteralPattern,
   MemberExpression,
   MethodDefinition,
   MethodSignature,
@@ -261,8 +260,6 @@ interface ParserState
   forbidPipeline: boolean[]
   forbidColonArgument: boolean[]
   forbidInlineObjectLiteral: boolean[]
-  /** Inside a pattern-matching PatternExpression: literals are patterns. */
-  matchPattern: boolean[]
   JSXTagStack: unknown[]
   indentLevels: { level: number, token?: string }[]
   operators: Map<string, OperatorBehavior?>
@@ -283,7 +280,6 @@ interface ParserState
   readonly pipelineForbidden: number
   readonly colonArgumentForbidden: number
   readonly inlineObjectLiteralForbidden: number
-  readonly matchPatternEnabled: number
   readonly currentJSXTag: unknown
 
 export const state = {    // parser state
@@ -298,7 +294,6 @@ export const state = {    // parser state
   forbidPipeline: [false],
   forbidColonArgument: [false],
   forbidInlineObjectLiteral: [false],
-  matchPattern: [false],
   JSXTagStack: [undefined],
 } as! ParserState
 
@@ -364,11 +359,6 @@ Object.defineProperties(state, {
       {forbidInlineObjectLiteral: s} := state
       s[s#-1]
   },
-  matchPatternEnabled: {
-    get()
-      {matchPattern: s} := state
-      s[s#-1]
-  },
   currentJSXTag: {
     get()
       {JSXTagStack: s} := state
@@ -390,8 +380,7 @@ function setOperatorBehavior(name: string, behavior: OperatorBehavior?)
 
 export function getStateKey()
   stateInt :=
-    ((state.currentIndent.level % 256) << 12) |
-    (state.matchPatternEnabled << 11) |
+    ((state.currentIndent.level % 256) << 11) |
     (state.classImplicitCallForbidden << 10) |
     (state.indentedApplicationForbidden << 9) |
     (state.bracedApplicationForbidden << 8) |
@@ -2542,7 +2531,7 @@ ParameterElement
     return {
       type: "Parameter",
       children: [ $1, accessModifier, $3, binding, typeSuffix, initializer, delim ],
-      names: binding.names,
+      names: namesOf(binding),
       typeSuffix,
       accessModifier,
       initializer,
@@ -2646,7 +2635,7 @@ PinPattern ::PinPattern
 # `name^ pattern` means bind the whole thing to `name`,
 # but also destructure/match `pattern`
 NamedBindingPattern
-  BindingIdentifier:binding Caret _?:ws ( BindingPattern / LiteralPattern ):pattern ::NamedBindingPattern ->
+  BindingIdentifier:binding Caret _?:ws BindingPattern:pattern ::NamedBindingPattern ->
     pattern = prepend(ws, pattern)
     return {
       type: "NamedBindingPattern",
@@ -2660,34 +2649,15 @@ NamedBindingPattern
     }
 
 # https://262.ecma-international.org/#prod-BindingPattern
+# NOTE: Literal and RegularExpressionLiteral only match; they can't bind.
+# validateBindingPatterns rejects them outside pattern-matching contexts.
 BindingPattern
   ObjectBindingPattern
   ArrayBindingPattern
   PinPattern
+  Literal
+  RegularExpressionLiteral
   NamedBindingPattern
-
-# Literals only match in pattern matching (`switch` cases), where
-# PatternExpression enables them for the whole, possibly nested, pattern.
-LiteralPattern ::LiteralPattern
-  MatchPatternEnabled ( Literal / RegularExpressionLiteral ) -> $2
-
-MatchPatternEnabled
-  "" ->
-    return $skip unless state.matchPatternEnabled
-
-EnableMatchPattern
-  "" ->
-    state.matchPattern.push(true);
-
-# Expressions (initializers, right-hand sides) never see match mode, even
-# when nested inside a pattern.
-DisableMatchPattern
-  "" ->
-    state.matchPattern.push(false);
-
-RestoreMatchPattern
-  "" ->
-    state.matchPattern.pop();
 
 # https://262.ecma-international.org/#prod-ObjectBindingPattern
 # NOTE: Simplified from spec
@@ -2789,7 +2759,7 @@ BindingProperty
 
   # NOTE: Allow ::T type suffix before value
   # NOTE: name^ means we should bind name despite having a value
-  _?:ws1 PropertyName:name QuestionMarkTypeSuffix?:optional Caret?:bind _?:ws2 Colon:colon _?:ws3 ( BindingPattern / LiteralPattern / BindingIdentifier ):value BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
+  _?:ws1 PropertyName:name QuestionMarkTypeSuffix?:optional Caret?:bind _?:ws2 Colon:colon _?:ws3 ( BindingPattern / BindingIdentifier ):value BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
     if optional // merge into typeSuffix
       if typeSuffix and not typeSuffix.optional
         typeSuffix = {
@@ -2939,7 +2909,7 @@ BindingElement
   BindingRestElement
 
   # NOTE: Merged in SingleNameBinding
-  _?:ws ( BindingPattern / LiteralPattern / BindingIdentifier ):binding BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
+  _?:ws ( BindingPattern / BindingIdentifier ):binding BindingTypeSuffix?:typeSuffix Initializer?:initializer ->
     return {
       type: "BindingElement",
       names: namesOf(binding),
@@ -2967,7 +2937,7 @@ BindingRestElement ::BindingRestElement
       binding,
       typeSuffix,
       name: "name" in binding ? binding.name : undefined,
-      names: binding.names,
+      names: namesOf(binding),
       rest: true,
     }
 
@@ -2978,7 +2948,7 @@ BindingRestElement ::BindingRestElement
       dots,
       binding,
       name: "name" in binding ? binding.name : undefined,
-      names: binding.names,
+      names: namesOf(binding),
       rest: true,
     }
 
@@ -5944,7 +5914,7 @@ ForBinding
     return {
       type: "Binding",
       children: [ pattern, typeSuffix ?? pattern.typeSuffix, initializer ],
-      names: pattern.names,
+      names: namesOf(pattern),
       pattern,
       cycle,
       typeSuffix: typeSuffix ?? pattern.typeSuffix,
@@ -6077,9 +6047,7 @@ PatternExpressionList
     return [first, ...rest.map(([, , , p]) => p)]
 
 PatternExpression
-  EnableMatchPattern ( BindingPattern / LiteralPattern )?:pattern RestoreMatchPattern ->
-    return $skip unless pattern
-    return pattern
+  BindingPattern
   ForbidIndentedApplication ( ( BindingIdentifier Caret? )? SingleLineBinaryOpRHS+ )?:body RestoreIndentedApplication ::ConditionFragment ->
     return $skip unless body
     [ named, rhs ] := body
@@ -6245,8 +6213,7 @@ BoundedCondition
     }
 
 DeclarationCondition ::DeclarationCondition
-  # Declaration conditions pattern match, so literal patterns are enabled.
-  ForbidBracedApplication ForbidIndentedApplication ForbidNewlineBinaryOp EnableMatchPattern LexicalDeclaration?:declaration RestoreMatchPattern RestoreNewlineBinaryOp RestoreBracedApplication RestoreIndentedApplication ->
+  ForbidBracedApplication ForbidIndentedApplication ForbidNewlineBinaryOp LexicalDeclaration?:declaration RestoreNewlineBinaryOp RestoreBracedApplication RestoreIndentedApplication ->
     return $skip unless declaration
 
     return {
@@ -7261,14 +7228,12 @@ LexicalDeclaration ::LexicalDeclaration
   # NOTE: Added const/let shorthands
   # NOTE: Using Expression to allow for If/SwitchExpressions
   # NOTE: Using PostfixExpression to allow postfix if/unless/for
-  Loc:loc ( BindingPattern / BindingIdentifier ):pattern TypeSuffix?:typeSuffix NotDedented:ws ( ConstAssignment / LetAssignment ):assign DisableMatchPattern MaybeNestedPostfixedExpressionOrCommaLoop?:e RestoreMatchPattern ->
-    return $skip unless e
+  Loc:loc ( BindingPattern / BindingIdentifier ):pattern TypeSuffix?:typeSuffix NotDedented:ws ( ConstAssignment / LetAssignment ):assign MaybeNestedPostfixedExpressionOrCommaLoop:e ->
     return processAssignmentDeclaration
       { loc.$loc, token: assign.decl } // like InsertConst or InsertLet
       pattern, typeSuffix, ws, assign, e
   # Backward const/let shorthands: `y =: x` -> `const x = y`
-  Loc:loc DisableMatchPattern PostfixedExpressionOrCommaLoop?:e RestoreMatchPattern NotDedented:ws ( BackwardConstAssignment / BackwardLetAssignment ):assign NotDedented:bindingWs ( BindingPattern / BackwardBindingIdentifier / BindingIdentifier ):pattern TypeSuffix?:typeSuffix ->
-    return $skip unless e
+  Loc:loc PostfixedExpressionOrCommaLoop:e NotDedented:ws ( BackwardConstAssignment / BackwardLetAssignment ):assign NotDedented:bindingWs ( BindingPattern / BackwardBindingIdentifier / BindingIdentifier ):pattern TypeSuffix?:typeSuffix ->
     return processAssignmentDeclaration
       { loc.$loc, token: assign.decl } // like InsertConst or InsertLet
       prepend trimFirstSpace(bindingWs), pattern
@@ -7311,7 +7276,7 @@ LexicalBinding ::Binding
     return {
       type: "Binding",
       children: [ pattern, typeSuffix, initializer ],
-      names: pattern.names,
+      names: namesOf(pattern),
       pattern,
       typeSuffix,
       initializer,
@@ -7333,13 +7298,11 @@ LexicalBinding ::Binding
 
 # https://262.ecma-international.org/#prod-Initializer
 Initializer ::Initializer
-  __:ws Equals:eq DisableMatchPattern MaybeNestedPostfixedExpression?:expression RestoreMatchPattern ->
-    return $skip unless expression
-    return {
-      type: "Initializer",
-      expression,
-      children: [ws, eq, expression],
-    }
+  __ Equals MaybeNestedPostfixedExpression:expression -> {
+    type: "Initializer",
+    expression,
+    children: $0,
+  }
 
 # https://262.ecma-international.org/#prod-VariableStatement
 VariableStatement ::Declaration
@@ -9180,7 +9143,7 @@ TypeDeclarationBinding ::TypeDeclarationBinding
     return {
       type: "TypeDeclarationBinding",
       children: $0,
-      names: $1.names,
+      names: namesOf($1),
     }
 
 InterfaceExtendsClause
@@ -10358,7 +10321,6 @@ Reset
     state.forbidPipeline = [false]
     state.forbidColonArgument = [false]
     state.forbidInlineObjectLiteral = [false]
-    state.matchPattern = [false]
     state.JSXTagStack = [undefined]
 
     state.operators = new Map
