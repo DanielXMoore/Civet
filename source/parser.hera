@@ -190,6 +190,7 @@ import type {
   TypeDeclaration,
   TypeDeclarationBinding,
   TypeArgument,
+  TypeArguments,
   TypeArgumentList,
   TypeFunction,
   TypeLexicalDeclaration,
@@ -586,14 +587,15 @@ ImplicitArguments
     }
 
 ExplicitArguments
-  OpenParen:open AllowAll ( PostfixedArgumentList ( __ Comma )? )?:args __:ws RestoreAll CloseParen:close ->
-    if args
-      if args[1] // trailing comma
-        args = [ ...args[0], args[1] ]
+  OpenParen:open AllowAll ( PostfixedArgumentList ( __ Comma )? )?:postArgs __:ws RestoreAll CloseParen:close ->
+    args := if postArgs
+      if postArgs[1] // trailing comma
+        [ ...postArgs[0], postArgs[1] ]
       else // no trailing comma
-        args = args[0]
+        postArgs[0]
     else // no arguments
-      args = []
+      []
+
     return {
       type: "Call",
       args,
@@ -1108,8 +1110,7 @@ ArrowFunction
 FatArrow
   # Ensures at least one space before arrow
   _?:ws FatArrowToken:arrow ->
-    ws = " " unless ws
-    return [ ws, arrow ]
+    return [ ws || " ", arrow ]
 
 FatArrowToken
   "=>" / "⇒" ->
@@ -1143,8 +1144,7 @@ FatArrowBody
     // object literal. Skip so we fall through to NoCommaBracedOrEmptyBlock.
     return $skip if config.esBraceBlock and exp!.type is "ObjectExpression"
     // Ensure object literal is wrapped in parens
-    exp = makeExpressionStatement(exp)
-    expressions := [["", exp]]
+    expressions := [["", makeExpressionStatement(exp)]]
     return {
       type: "BlockStatement",
       bare: true,
@@ -1313,7 +1313,7 @@ ParenthesizedExpression
   OpenParen:open AllowAll ( PostfixedCommaExpression __ CloseParen )? RestoreAll ::ParenthesizedExpression ->
     return $skip unless $3
     [expression, ws, close] := $3
-    if expression!.type is "ParenthesizedExpression" and (expression as any).implicit
+    if expression is like { type: "ParenthesizedExpression", implicit: true }
       return {
         ...expression,
         children: [open, (expression as any).expression, ws, close],
@@ -1394,9 +1394,8 @@ ClassBinding
 # https://262.ecma-international.org/#prod-ClassHeritage
 ClassHeritage
   ExtendsClause:extendsClause WithClause?:withClause ImplementsClause?:implementsClause ->
-    if withClause
-      extendsClause = convertWithClause(withClause, extendsClause)
-    return [ extendsClause, implementsClause ]
+    clause := withClause ? convertWithClause(withClause, extendsClause) : extendsClause
+    return [ clause, implementsClause ]
 
   WithClause?:withClause ImplementsClause?:implementsClause ->
     return [ convertWithClause(withClause), implementsClause ] if withClause
@@ -1411,9 +1410,9 @@ ExtendsClause
 WithClause ::WithClause
   # Nested form where C, D appear on separate lines, indented
   # Also allows for arbitrary expressions
-  NotDedented With PushIndent ( Nested Expression _? Comma? )*:targets PopIndent ->
-    return $skip unless targets#
-    targets = targets.map(($) => $.slice(0, -1)) // strip Comma?
+  NotDedented With PushIndent ( Nested Expression _? Comma? )*:targetNodes PopIndent ->
+    return $skip unless targetNodes#
+    targets := targetNodes.map .slice(0, -1) // strip Comma?
     return {
       type: "WithClause",
       children: $0,
@@ -1476,11 +1475,11 @@ ExtendsTarget
 ImplementsClause
   # Nested form where interfaces appear on separate lines, indented
   # Allows for implicit type arguments
-  ImplementsToken:i PushIndent ( Nested TypeIdentifier ArrayBulletDelimiter )*:targets PopIndent ->
-    return $skip unless targets#
+  ImplementsToken:i PushIndent ( Nested TypeIdentifier ArrayBulletDelimiter )*:targetsNodes PopIndent ->
+    return $skip unless targetsNodes#
     // remove final comma
-    last := targets.at(-1)!.slice(0, -1)
-    targets = targets.slice(0, -1).concat(last)
+    last := targetsNodes.at(-1)!.slice(0, -1)
+    targets := [...targetsNodes.slice(0, -1), ...last]
     return {
       ts: true,
       children: [i, targets],
@@ -1503,8 +1502,7 @@ ImplementsToken
     return { children }
 
   NotDedented "implements" NonIdContinue ->
-    $2 = { $loc, token: $2 }
-    return [$1, $2]
+    return [$1, { $loc, token: $2 }]
 
 ImplementsShorthand
   "<:" ->
@@ -1664,36 +1662,34 @@ FieldDefinition
   # name: (param1, param2) ->
   # name: (param1, param2) => which gets wrapped in bind in constructor
   CoffeeClassesEnabled ClassElementName:id _? Colon __ AssignmentExpression:exp ->
-    switch (exp!.type) {
-      case "FunctionExpression": {
-        return convertFunctionToMethod(id, exp)
+    if exp is like { type }
+      switch exp.type
+        when "FunctionExpression"
+          return convertFunctionToMethod id, exp
+        when "ArrowFunction"
+          return convertArrowFunctionToMethod id, exp
+
+    // CoffeeScript-compatible: `name: value` becomes a prototype
+    // assignment (`Class.prototype.name = value`) lifted out of the
+    // class body in processCoffeeClasses. The empty children make
+    // this entry invisible in the emitted class body.
+    // PrivateIdentifier (`#x`) is JS-only — CoffeeScript has no
+    // private fields — so leave the original class-field semantics
+    // intact rather than emit invalid `Foo.prototype.#x = ...`.
+    // The PrivateIdentifier rule normalises to type "Identifier"
+    // with a `#`-prefixed name, so detect by name prefix.
+    if id is like { name: /^#/ }
+      return {
+        type: "FieldDefinition"
+        id
+        children: [id, " = ", exp]
       }
-      case "ArrowFunction": {
-        return convertArrowFunctionToMethod(id, exp)
-      }
-      default:
-        // CoffeeScript-compatible: `name: value` becomes a prototype
-        // assignment (`Class.prototype.name = value`) lifted out of the
-        // class body in processCoffeeClasses. The empty children make
-        // this entry invisible in the emitted class body.
-        // PrivateIdentifier (`#x`) is JS-only — CoffeeScript has no
-        // private fields — so leave the original class-field semantics
-        // intact rather than emit invalid `Foo.prototype.#x = ...`.
-        // The PrivateIdentifier rule normalises to type "Identifier"
-        // with a `#`-prefixed name, so detect by name prefix.
-        if (id?.name?.startsWith?.("#")) {
-          return {
-            type: "FieldDefinition",
-            id,
-            children: [id, " = ", exp],
-          }
-        }
-        return {
-          type: "CoffeeClassPrototype",
-          id,
-          exp,
-          children: [],
-        }
+
+    return {
+      type: "CoffeeClassPrototype"
+      id
+      exp
+      children: []
     }
 
   # NOTE: Added readonly semantic equivalent of const field assignment
@@ -6967,11 +6963,11 @@ ExportDeclaration
   Decorators? Export __ Default __ !FunctionDeclaration ( LexicalDeclaration / VariableStatement / TypeAliasDeclaration / NamespaceDeclaration / EnumDeclaration / OperatorDeclaration ):declaration ->
     let id, error
     if declaration.type is "Declaration"
-      names := declaration.names
+      names := namesOf declaration
       if names# !== 1
         error = {
           type: "Error",
-          message: `export default with ${names#} variable declaration (should be 1)`
+          message: `export default with ${names#} variable declarations (should be 1)`
         }
       id = names[0]
     else
@@ -8870,7 +8866,7 @@ JSXChildExpression
   Whitespace? LexicalDeclaration:d ->
     decl := d!
     // Add refs from thisAssignments to list of names
-    names .= decl.names.concat(
+    names .= namesOf(decl).concat(
       decl.thisAssignments!.map((a: any) => a[1][1])
     )
     // Remove duplicate names
@@ -8878,7 +8874,7 @@ JSXChildExpression
     names = names.filter((name: string, i: number) => i is 0 or name !== names[i-1])
     d = {
       ...decl,
-      hoistDec: {
+      hoistDec: if names# then {
         type: "Declaration",
         children: [
           "let ",
@@ -8897,6 +8893,12 @@ JSXChildExpression
     else if d.splices?#
       (d.children as any[]).push(...d.splices)
     (d.children as any[]).push(",void 0")
+    unless decl.names
+      d.children.push {
+        type: "Error"
+        message: "JSX declaration must declare identifiers"
+        $loc
+      } satisfies ASTError
     return d
   # NOTE: Using PostfixedExpressionOrCommaLoop to allow If/Switch expressions and postfixes
   Whitespace? ( DotDotDot Whitespace? )? PostfixedExpressionOrCommaLoop
@@ -9626,18 +9628,19 @@ NestedTypeElement
 
 # NOTE: Nested bulleted tuple starts with an indentation.
 NestedTypeBulletedTuple ::TypeTuple
-  ( InsertSpace InsertOpenBracket ):open PushIndent NestedTypeBullet*:content InsertCloseBracket:close PopIndent ->
-    return $skip unless content#
-    content = content.flat() // combine bullets into one array
+  ( InsertSpace InsertOpenBracket ):open PushIndent NestedTypeBullet*:nestedContent InsertCloseBracket:close PopIndent ->
+    return $skip unless nestedContent#
+    content := nestedContent.flat() // combine bullets into one array
 
     // Remove implicit comma from last element
     // NOTE: TypeElementList always returns arrays of objects (TypeElement /
     // TypeBulletedTuple), not bare arrays, so Array.isArray(last) arm dead.
-    last := content[content# - 1]
-    children .= last?.children
-    if children?.at(-1).implicit
-      children = children.slice(0, -1)
-      content[content# - 1] = { ...last, children }
+    if { children, ...lastChildProps } := content.-1
+      if children and children.-1 is like { implicit: true }
+          content.-1 = {
+            ...lastChildProps
+            children |> .slice(0, -1)
+          }
 
     return {
       type: "TypeTuple",
