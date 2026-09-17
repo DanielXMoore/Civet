@@ -213,7 +213,7 @@ import {
   getSync
 } from ../parser.hera
 
-function addPostfixStatement(statement: ASTNode, ws: ASTNode, post: IterationStatement | ForStatement | IfStatement)
+function addPostfixStatement(statement: ASTNode, ws: ASTNode, post: IterationStatement | ForStatement | DoStatement | IfStatement)
   expressions: StatementTuple[] := [
     ...post.blockPrefix if "blockPrefix" in post
     ["", statement]
@@ -356,27 +356,24 @@ function isExpression(node: ASTNode): boolean
 
   return true
 
-function expressionizeBlock(blockOrExpression: ASTNode)
-  if { expressions } := blockOrExpression
-    l := expressions#
-    results := []
+function expressionizeBlock({ expressions }: BlockStatement)
+  l := expressions#
+  results := []
 
-    for [ws, s, _delim], i of expressions
-      if (!isExpression(s)) return
-      wrapped := makeLeftHandSideExpression s
-      if i is l - 1
-        results.push [ws, wrapped]
-      else
-        results.push [ws, wrapped, ","]
-
-    if results# > 1
-      makeLeftHandSideExpression results
-    else if results#
-      results
+  for each [ws, s, _delim], i of expressions
+    if (!isExpression(s)) return
+    wrapped := makeLeftHandSideExpression s
+    if i is l - 1
+      results.push [ws, wrapped]
     else
-      ["void 0"]
+      results.push [ws, wrapped, ","]
+
+  if results# > 1
+    makeLeftHandSideExpression results
+  else if results#
+    results
   else
-    blockOrExpression
+    ["void 0"]
 
 /**
 True iff `expressionizeIfStatement` would produce a clean ternary
@@ -417,7 +414,6 @@ function expressionizeIfStatement(statement: IfStatement): NonNullASTNode
   // to the operand they came from so following generated syntax stays live.
   if b.trailing?#
     children.push b.trailing
-  implicitElse .= undefined
   if e
     e2 := expressionizeBlock(e.block)
     unless e2
@@ -431,13 +427,12 @@ function expressionizeIfStatement(statement: IfStatement): NonNullASTNode
     children.push ...e.children[3..]
   else
     children.push "\n" if b.trailing?#
-    children.push implicitElse = ":void 0"
+    children.push ":", statement.defaultElse ?? "void 0"
   children.push closeParen
 
   makeNode {
     type: "IfExpression"
     children
-    implicitElse
   }
 
 function expressionizeTypeIf([ifOp, condition, t, e]: [any, any, any, any]): TypeConditional
@@ -1696,11 +1691,10 @@ function unchainOptionalMemberExpression(exp: MemberExpression | CallExpression,
     exp
 
 function attachPostfixStatementAsExpression(exp: ASTNode, post: [WSNode, IfStatement | IterationStatement | DoStatement | ForStatement]): NonNullASTNode
-  postfixStatement := post[1]
+  statement := addPostfixStatement(exp, ...post)
 
-  switch postfixStatement.type
+  switch statement.type
     when "ForStatement", "IterationStatement", "DoStatement"
-      statement := addPostfixStatement(exp, ...post) as IterationStatement | ForStatement | DoStatement
       return {
         type: "IterationExpression"
         subtype: statement.type
@@ -1712,7 +1706,11 @@ function attachPostfixStatementAsExpression(exp: ASTNode, post: [WSNode, IfState
         resultsRef: undefined
       } as IterationExpression
     when "IfStatement"
-      return expressionizeIfStatement { ...postfixStatement, then: exp as BlockStatement }
+      return {
+        type: "StatementExpression"
+        statement
+        children: [statement]
+      }
 
 function processTypes(node: ASTNode)
   // T? -> T | undefined; T?? -> T | undefined | null; T! -> NonNullable<T>
@@ -1827,23 +1825,6 @@ function processTypes(node: ASTNode)
           replaceNode unary, replace, parent
         else
           suffixIndex--
-
-/**
-Rewrite auto-generated `:void 0` fallbacks to `:[]` in `IfExpression`s that
-are the direct expression of a `SpreadElement` inside an `ArrayExpression`,
-so that `[...if cond then arr]` yields `[]` (not a TypeError) when `cond`
-is falsy.
-*/
-function processArraySpreadIfFallback(statements: StatementTuple[]): void
-  for each spread of gatherRecursiveAll statements, .type is "SpreadElement"
-    continue unless spread.parent?.type is "ArrayExpression"
-    // Prefix `...if`/`...unless` wraps the IfExpression in a StatementExpression;
-    // postfix `...a if x` places the IfExpression directly under the spread.
-    exp .= spread.expression as any
-    if exp?.type is "StatementExpression"
-      exp = exp.statement
-    continue unless exp?.type is "IfExpression" and exp.implicitElse
-    replaceNode exp.implicitElse, ":[]", exp
 
 /**
 Wrap any remaining statement expressions in IIFE.
@@ -2165,7 +2146,6 @@ function processProgram(root: BlockStatement): void
   processDeclarations(statements)
   processAssignments(statements)
   processStatementExpressions(statements)
-  processArraySpreadIfFallback(statements)
   processPatternMatching(statements)
   processIterationExpressions(statements, !!(config.iife or config.repl))
   processFinallyClauses(statements)
