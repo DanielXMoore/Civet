@@ -1698,6 +1698,14 @@ fall back to an empty array instead of `undefined`:
 ]
 </Playground>
 
+String interpolation with an outermost postfix or prefix `if`/`unless`
+falls back to an empty string instead of `undefined`:
+
+<Playground>
+`downloaded ${count} byte${'s' unless count is 1}`
+`${if ready then "Ready!"}`
+</Playground>
+
 Function arguments that are either parenthesized or indented
 can have a postfix `if`:
 
