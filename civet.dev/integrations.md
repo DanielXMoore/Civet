@@ -150,9 +150,12 @@ hx --health civet
 - [SolidStart](https://github.com/DanielXMoore/Civet/blob/main/integration/unplugin-examples/solid-start) ([older](https://github.com/orenelbaum/solid-start-civet-template))
 - [p5.js](https://codesandbox.io/p/sandbox/drawing-points-civet-2tk4jq)
 
-## Linters
+## Linting/Styling
 
-- [eslint plugin](https://github.com/DanielXMoore/Civet/blob/main/integration/eslint)
+- [eslint plugin](https://github.com/DanielXMoore/Civet/blob/main/integration/eslint) lints transpiled JS/TS output
+- [civet-clint](https://github.com/shogi-dojo/civet-clint) restyles Civet source code directly
+- [Civetify agent skill](https://github.com/edemaine/agents-config/tree/main/skills/civetify) aims for idiomatic Civet code style, starting from Civet or JS/TS
+- [CoffeeScript-to-Civet agent skill](https://github.com/edemaine/agents-config/tree/main/skills/coffeescript-to-civet) ports CoffeeScript code to non-coffee-compat Civet, or removes coffee-compat flags from Civet code
 
 ## Testing
 
