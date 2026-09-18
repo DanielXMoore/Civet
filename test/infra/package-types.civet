@@ -1,0 +1,70 @@
+import assert from node:assert/strict
+import fs from node:fs/promises
+import os from node:os
+import path from node:path
+import ts from typescript
+
+// Resolve the distributed declarations from an isolated consumer so ambient
+// declarations or package self-references cannot hide packaging mistakes.
+describe "package declarations", ->
+  it "resolve main and config types for ESM, CommonJS, and legacy consumers", async function()
+    @timeout 30000
+    root := await fs.mkdtemp path.join(os.tmpdir(), "civet-package-types-")
+    try
+      packageDir := path.join root, "node_modules/@danielx/civet"
+      await fs.mkdir path.join(packageDir, "dist"), recursive: true
+      await fs.copyFile "package.json", path.join(packageDir, "package.json")
+      for name of ["types.d.ts", "types.d.mts", "config.d.ts", "config.d.mts"]
+        await fs.copyFile path.join("dist", name), path.join(packageDir, "dist", name)
+      source := '''
+        import Civet, { compile, type CompileOptions, type ParseOptions, type ParseError } from "@danielx/civet"
+        import Config, { loadConfig } from "@danielx/civet/config"
+        const parseOptions: ParseOptions = { comptime: true, globals: undefined, operators: undefined }
+        const error: ParseError = {
+          name: "ParseError", message: "unknown:?:? test", header: "test",
+          body: undefined, filename: "unknown", line: "?", column: "?"
+        }
+        // @ts-expect-error generated errors need not have an offset
+        const offset: number = error.offset
+        const options: CompileOptions = { parseOptions, sync: true }
+        const output: string = compile("x := 1", { ...options, sync: true })
+        const result: Promise<CompileOptions> = loadConfig("civetconfig.json")
+        Civet.compile(output)
+        Config.loadConfig("civetconfig.json")
+        // @ts-expect-error public options must not resolve to any
+        const invalid: ParseOptions = { comptime: "yes" }
+        '''
+      for [module, moduleResolution, extensions] of [
+        [ts.ModuleKind.Node16, ts.ModuleResolutionKind.Node16, ["mts", "cts"]]
+        [ts.ModuleKind.NodeNext, ts.ModuleResolutionKind.NodeNext, ["mts", "cts"]]
+        [ts.ModuleKind.ESNext, ts.ModuleResolutionKind.Bundler, ["mts"]]
+        [ts.ModuleKind.CommonJS, ts.ModuleResolutionKind.Node10, ["ts"]]
+      ] as const
+        for extension of extensions
+          file := path.join root, `consumer.${extension}`
+          // Legacy resolution uses package.json types; config uses modern exports.
+          code := if extension is "ts"
+            source.split("\n").filter((line) => not /Config|loadConfig/.test line).join "\n"
+          else
+            source
+          await fs.writeFile file, code
+          program := ts.createProgram [file], {
+            module
+            moduleResolution
+            ignoreDeprecations: if Number(ts.versionMajorMinor.split(".")[0]) >= 6 then "6.0" else "5.0"
+            target: ts.ScriptTarget.ESNext
+            strict: true
+            exactOptionalPropertyTypes: true
+            noEmit: true
+            types: ["node"]
+            typeRoots: [path.resolve "node_modules/@types"]
+          }
+          diagnostics := ts.getPreEmitDiagnostics program
+          assert.equal diagnostics.length, 0,
+            ts.formatDiagnosticsWithColorAndContext diagnostics, {
+              getCurrentDirectory: => root
+              getCanonicalFileName: (name) => name
+              getNewLine: => "\n"
+            }
+    finally
+      await fs.rm root, recursive: true, force: true
