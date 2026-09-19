@@ -109,10 +109,13 @@ export type OtherNode =
   | ComputedPropertyName
   | ConditionFragment
   | ConstructedExportSpecifier
+  | DeclarationCondition
   | DefaultClause
   | ElisionElement
   | ElseClause
   | EmptyBinding
+  | EmptyCondition
+  | EnumProperty
   | Extends
   | FieldDefinition
   | FinallyClause
@@ -137,6 +140,7 @@ export type OtherNode =
   | NonNullAssertion
   | NormalCatchParameter
   | ObjectBindingPattern
+  | Optional
   | Parameter
   | ParametersNode
   | PatternClause
@@ -156,6 +160,7 @@ export type OtherNode =
   | SliceExpression
   | SpreadElement
   | Star
+  | Substitution
   | SymbolLiteral
   | ThisType
   | TypeArgument
@@ -407,11 +412,21 @@ export type AssignmentExpression = ASTParent &
   assigned: ASTNode
   expression: NonNullASTNode
   hoistDec?: ASTNode
+  /**
+   * Manufactured wrapper around an existing expression (e.g. `ref = exp`),
+   * as opposed to an assignment written in the source.  Placeholder
+   * lifting looks through implicit assignments.
+   */
+  implicit?: boolean
+  /** JS-only output, e.g. constructor parameter property assignments. */
+  js?: boolean
 
 export type AssignmentExpressionLHS = [undefined, NonNullASTNode, [WSNode, [string, WSNode]], ASTLeaf][]
 
 export type MemberExpression = ASTParent &
   type: "MemberExpression"
+  /** `@x` / `#` shorthand for `this.x` / `this.length`; suppresses implicit-call prefixing. */
+  thisShorthand?: boolean
   privateShorthand?: boolean
   privateId?: Identifier
 
@@ -577,6 +592,10 @@ export type IterationStatement = ASTParent &
   negated: boolean?
   /** From grammar `( _? Star )?`: optional [whitespace, Star] tuple. */
   generator: [Whitespace, Star] | undefined
+  /** Only `for` loops reduce; declared absent so IterationFamily consumers can test it. */
+  reduction?: undefined
+  /** Only `for` and `if` carry a blockPrefix; declared absent for uniform postfix handling. */
+  blockPrefix?: undefined
   object?: boolean
   resultsRef: ASTRef?
   resultsParent?: boolean // inherit resultsRef from parent loop
@@ -589,6 +608,9 @@ export type BreakStatement = ASTParent &
 export type ComptimeStatement = ASTParent &
   type: "ComptimeStatement"
   block: BlockStatement
+  /** Never a generator or reduction; declared absent so IterationFamily consumers can test them. */
+  generator?: undefined
+  reduction?: undefined
   /**
    * Source blocks preserved so consumers can read the original `then`/`else`
    * independently of which one `block` selected.
@@ -611,9 +633,12 @@ export type DoStatement = ASTParent &
   block: BlockStatement
   /** From grammar `( _? Star )?`: optional [whitespace, Star] tuple. */
   generator: [Whitespace, Star] | undefined
+  /** Only `for` loops reduce; declared absent so IterationFamily consumers can test it. */
+  reduction?: undefined
 
 export type ForStatement = ASTParent &
   type: "ForStatement"
+  /** Statements to run at the start of the body, inherited from ForStatementControl. */
   blockPrefix?: StatementTuple[]
   declaration: (Declaration | ForDeclaration | ForControlDeclaration)?
   /** Optional value used for implicit loop body. */
@@ -721,6 +746,11 @@ export type EmptyStatement = ASTParent &
 export type EmptyCondition = ASTParent &
   type: "EmptyCondition"
 
+/** `if x := …` / `while x := …`: a declaration used as a condition. */
+export type DeclarationCondition = ASTParent &
+  type: "DeclarationCondition"
+  declaration: LexicalDeclaration
+
 export type Extends = ASTParent &
   type: "Extends"
   negated?: boolean
@@ -769,10 +799,15 @@ export type Index = ASTParent &
   type: "Index"
   expression: ASTNode
   optional?: Optional?
+  /** `x[i%]`: index modulo length; cleared once rewritten. */
+  mod?: boolean
+  /** `x[?]`: random index (no expression); cleared once rewritten. */
+  random?: boolean
 
+/** `x.-1` → `x[x.length-1]`; `len` is filled in by processNegativeIndexAccess. */
 export type NegativeIndex = ASTParent &
   type: "NegativeIndex"
-  len: ASTParent
+  len: UntypedNode
 
 export type SliceExpression = ASTParent &
   type: "SliceExpression"
@@ -815,6 +850,8 @@ export type ASTRef = ASTObject &
 export type AtBinding =
   type: "AtBinding"
   ref: ASTRef
+  /** Never carries a type suffix; declared for uniform BindingPattern access. */
+  typeSuffix?: undefined
   at?: ASTLeaf
   children: Children & [ASTRef]
   parent?: Parent
@@ -958,6 +995,16 @@ export type EnumDeclaration = ASTParent &
   type: "EnumDeclaration"
   id: Identifier
 
+/** Braced or indented enum body; untyped node (no `type`) like other block wrappers. */
+export type EnumBlock = ASTParent &
+  properties: EnumProperty[]
+
+export type EnumProperty = ASTParent &
+  type: "EnumProperty"
+  name: Identifier
+  /** From grammar `( __ Equals MaybeNestedExpression )?`. */
+  initializer: [Whitespace, ASTLeaf, NonNullASTNode]?
+
 export type OperatorFunctionDeclaration = FunctionExpression &
   operator: true
 
@@ -982,7 +1029,7 @@ export type Star =
 export type ModuleSpecifier = ASTParent &
   type: "ModuleSpecifier"
   module: ASTLeaf | StringLiteral
-  assertion?: ImportAssertion
+  assertion?: ImportAssertion?
 
 export type ImportAssertion = ASTParent &
   type: "ImportAssertion"
@@ -996,6 +1043,8 @@ export type Declaration = ASTParent &
   /** Undefined for invalid lexical LHSs; operator declarations use this to reject them. */
   names: string[]?
   bindings: Binding[]
+  /** Destructuring pattern of a declaration synthesized from a named import. */
+  pattern?: ObjectBindingPattern
   decl: DeclarationKind
   autoExport?: true
   splices?: unknown[]
@@ -1035,6 +1084,8 @@ export type Identifier =
   type: "Identifier"
   name: string
   names: string[]
+  /** Never carries a type suffix; declared for uniform BindingPattern access. */
+  typeSuffix?: undefined
   /**
    * Keyword covers the `import` → Identifier path that promotes the Import
    * keyword node into an identifier reference. ASTRef covers
@@ -1058,6 +1109,8 @@ export type ReturnValue = ASTParent &
   type: "ReturnValue"
   placeholder: NonNullASTNode
   names: []
+  /** Never carries a type suffix; declared for uniform BindingPattern access. */
+  typeSuffix?: undefined
 
 export type StatementExpression = ASTParent &
   type: "StatementExpression"
@@ -1128,7 +1181,7 @@ export type FinallyToken = "finally " | (Keyword & { token: "finally" })
 export type BindingIdentifier = AtBinding | Identifier | ReturnValue
 
 export type BindingPattern = (
-  BindingIdentifier | ObjectBindingPattern | ArrayBindingPattern | PinPattern | NamedBindingPattern | Literal | RegularExpressionLiteral
+  BindingIdentifier | ObjectBindingPattern | ArrayBindingPattern | PinPattern | NamedBindingPattern | LiteralPattern
 ) &
   /** Post-rest parameter rewriting emits a JS-only copy of the binding. */
   js?: boolean
@@ -1136,6 +1189,12 @@ export type BindingPattern = (
 // Includes things that appear inside BindingPatterns (when recursing)
 // but aren't patterns by themselves
 export type BindingPatternComponent = BindingProperty | AtBindingProperty | BindingRestProperty | BindingElement | BindingRestElement | BindingPattern
+
+/**
+ * Literal matchers.  Parsed wherever a BindingPattern is, but only valid in
+ * pattern-matching contexts; validateBindingPatterns rejects the rest.
+ */
+export type LiteralPattern = Literal | RegularExpressionLiteral
 
 export type PatternExpression = BindingPattern | ConditionFragment | ASTRef
 
@@ -1146,7 +1205,14 @@ export type ConditionFragment = ASTParent &
 
 export type RegularExpressionLiteral = ASTParent &
   type: "RegularExpressionLiteral"
-  raw: string
+  /** Never carries a type suffix; declared for uniform pattern access. */
+  typeSuffix?: undefined
+  /** Source text of a plain `/…/` literal; heregexes have no static form. */
+  raw?: string
+
+/** Interpolated part of a heregex, rendered inside `RegExp(\`…\`)`. */
+export type Substitution = ASTParent &
+  type: "Substitution"
 
 export type TemplateLiteral = ASTParent &
   type: "TemplateLiteral"
@@ -1183,7 +1249,8 @@ export type BindingElement = ASTParent &
 export type BindingRestElement = ASTParent &
   type: "BindingRestElement"
   dots: ASTLeaf
-  name: string
+  /** Identifier bindings only. */
+  name: string?
   names: string[]
   rest: true
   typeSuffix?: TypeSuffix?
@@ -1212,13 +1279,17 @@ export type Placeholder = ASTObject &
 export type PinPattern = ASTParent &
   type: "PinPattern"
   expression: ASTNode
+  /** Pins compare against an existing value; they declare nothing. */
+  names: []
   ref?: ASTRef
   typeSuffix?: TypeSuffix?
 
 export type NamedBindingPattern = ASTParent &
   type: "NamedBindingPattern"
-  binding: BindingIdentifier
+  /** `{[key]^: pattern}` binds through a computed key. */
+  binding: BindingIdentifier | ComputedPropertyName
   pattern: BindingPattern
+  names: string[]
   subbinding?: ASTNode
   typeSuffix?: TypeSuffix?
 
@@ -1230,7 +1301,7 @@ export type Whitespace = ASTString | (ASTLeaf | ASTString | CommentNode)[]?
 export type Delimiter = ASTLeaf | ASTString | Delimiter[]
 
 export type PropertyName =
-  Literal | NumericLiteral | StringLiteral | ComputedPropertyName | Identifier
+  Identifier | StringLiteral | NumericLiteral | ComputedPropertyName
 
 export type ComputedPropertyName =
   type: "ComputedPropertyName"
@@ -1269,6 +1340,9 @@ export type AtBindingProperty = ASTParent &
 
 export type BindingRestProperty = ASTParent &
   type: "BindingRestProperty"
+  /** Set by NamedImportRest; the destructuring forms spread the identifier instead. */
+  dots?: ASTLeaf
+  binding?: BindingIdentifier
   typeSuffix: TypeSuffix?
   delim: ASTNode
   // AtBinding case
@@ -1564,24 +1638,11 @@ export type CoffeeClassPrivate = ASTParent &
 /**
  * The shape returned by the ClassElementName grammar rule:
  *   PropertyName / LengthShorthand / PrivateIdentifier / SymbolElement.
- * PropertyName branches to bare-leaf forms (hyphenated names) plus
- * NumericLiteral / ComputedPropertyName / StringLiteral / Identifier;
- * LengthShorthand and PrivateIdentifier both normalise to Identifier.
- * SymbolElement is a `[ "[", SymbolLiteral, "]" ]` tuple.
+ * Hyphenated names are StringLiteral leaves, LengthShorthand and
+ * PrivateIdentifier normalise to Identifier, and SymbolElement is a
+ * ComputedPropertyName wrapping the SymbolLiteral.
  */
-export type ClassElementName =
-  | NumericLiteral
-  | StringLiteral
-  | ASTLeaf
-  | Identifier
-  | ComputedPropertyName
-  | SymbolElement
-
-export type SymbolElement = [
-  ASTLeaf | ASTString
-  SymbolLiteral
-  ASTLeaf | ASTString
-]
+export type ClassElementName = PropertyName
 
 export type CoffeeClassPrototype = ASTParent &
   type: "CoffeeClassPrototype"
@@ -1598,6 +1659,8 @@ export type CoffeeClassPublic = ASTParent &
 export type Literal =
   type: "Literal"
   subtype: "NullLiteral" | "BooleanLiteral" | "NumericLiteral" | "StringLiteral" | "RegularExpressionLiteral"
+  /** Never carries a type suffix; declared for uniform pattern access. */
+  typeSuffix?: undefined
   children: Children & (LiteralContent | ASTLeaf | string)[]
   parent?: Parent
   raw: string
@@ -1658,10 +1721,13 @@ export type TypeIdentifier = ASTParent &
 export type TypeArguments = ASTParent &
   type: "TypeArguments"
   ts: true
-  // Should alternate: argument, delimiter, argument, delimiter, ..., argument
   args: TypeArgumentList
 
-export type TypeArgumentList = (TypeArgument | Delimiter)[]
+// Alternates argument, delimiter, argument, ..., argument.  Nested forms
+// (`NestedTypeBulletedTuple`, `NestedInterfaceBlock`) contribute TypeTuple
+// nodes and spread their raw children (including the whitespace tuples from
+// `CommaDelimiter` / `( _? Comma )`) directly into the list.
+export type TypeArgumentList = (TypeArgument | TypeTuple | Delimiter | Children | undefined)[]
 
 export type TypeArgument = ASTObject &
   type: "TypeArgument"
