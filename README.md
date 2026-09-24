@@ -23,6 +23,7 @@ The modern way to write TypeScript.
   [Jest](https://github.com/DanielXMoore/Civet/blob/main/integration/jest),
   [Gulp](integration/gulp),
   [Bun](source/bun-civet.civet),
+  [Deno](source/deno-civet.civet),
   [`<script>` tag](https://github.com/DanielXMoore/Civet/tree/main/integration/script)
 - Starter templates for [Solid](https://github.com/edemaine/civet-solid-vite-template) ([older](https://github.com/orenelbaum/solid-civet-template)) and [Solid Start](https://github.com/orenelbaum/solid-start-civet-template)
 
