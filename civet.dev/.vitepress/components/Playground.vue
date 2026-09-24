@@ -274,8 +274,10 @@ async function initMonaco() {
     updateOutputCursor(event.position, false);
   });
   monacoEditor.onMouseMove((event: any) => {
-    if (event.target.position) {
-      updateOutputCursor(event.target.position, true);
+    // Match Monaco's tooltip anchor, even in the right half of a character.
+    const position = event.target.range?.getStartPosition() ?? event.target.position;
+    if (position) {
+      updateOutputCursor(position, true);
     }
   });
   monacoEditor.onMouseLeave?.(() => {
