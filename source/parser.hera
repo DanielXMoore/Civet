@@ -107,6 +107,7 @@ import type {
   BindingIdentifier,
   BindingRestElement,
   BlockStatement,
+  CallExpression,
   CaseBlock,
   CaseClause,
   Children,
@@ -490,7 +491,7 @@ ExpressionizedStatementWithTrailingCallExpressions
         makeLeftHandSideExpression($1),
         ...$2,
       ],
-    }
+    } as CallExpression
 
 ExpressionizedStatement
   # perf: assertion to exit early
@@ -994,7 +995,7 @@ UpdateExpressionSymbol
 AssignmentExpression
   # NOTE: ActualAssignment has highest precedence:
   # `x = y |> z` parses as `x = (y |> z)` not `(x = y) |> z`
-  _?:ws ActualAssignment:assign ::ASTNode ->
+  _?:ws ActualAssignment:assign ->
     return prepend(ws, assign)
   # NOTE: It is important for pipeline to have higher precedence than
   # usual binary operators, so that x |> & + 2 |> & * 3
@@ -1040,16 +1041,16 @@ ActualAssignment
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
   ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedExpression ::AssignmentExpression ->
-    $1 = $1.map((x) => [x[0], x[1], ...x[2]])
-    $0 = [$1, $2]
+    lhs := $1.map((x) => [x[0], x[1], ...x[2]])
+    children := [lhs, $2]
     return {
       type: "AssignmentExpression",
-      children: $0,
+      children,
       // NOTE: This null marks the assignment for later processing to distinguish it
       // from fake assignments that only add a name to a scope
       names: null,
-      lhs: $1,
-      assigned: $1[0][1],
+      lhs,
+      assigned: lhs[0][1],
       expression: $2,
     }
 
@@ -1058,17 +1059,17 @@ NonPipelineActualAssignment
   # NOTE: Consolidated assignment ops
   # NOTE: UpdateExpression instead of LeftHandSideExpression to allow
   # e.g. ++x *= 2 which we later convert to ++x, x *= 2
-  ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedNonPipelineExpression ::ASTNode ->
-    $1 = $1.map((x) => [x[0], x[1], ...x[2]])
-    $0 = [$1, $2]
+  ( NotDedented UpdateExpressionPattern WAssignmentOp )+ MaybeNestedNonPipelineExpression ::AssignmentExpression ->
+    lhs := $1.map((x) => [x[0], x[1], ...x[2]])
+    children := [lhs, $2]
     return {
       type: "AssignmentExpression",
-      children: $0,
+      children,
       // NOTE: This null marks the assignment for later processing to distinguish it
       // from fake assignments that only add a name to a scope
       names: null,
-      lhs: $1,
-      assigned: $1[0][1],
+      lhs,
+      assigned: lhs[0][1],
       expression: $2,
     }
 
@@ -1091,14 +1092,14 @@ YieldExpression
 # https://262.ecma-international.org/#prod-ArrowFunction
 ArrowFunction
   ThinArrowFunction ::FunctionExpression
-  ( Async _ )?:async ArrowParameters:parameters ReturnTypeSuffix?:returnType FatArrow:arrow FatArrowBody:expOrBlock ::ArrowFunction ->
-    async = [] unless async
+  ( Async _ )?:asyncKeyword ArrowParameters:parameters ReturnTypeSuffix?:returnType FatArrow:arrow FatArrowBody:expOrBlock ::ArrowFunction ->
+    async := asyncKeyword || []
 
     return {
       type: "ArrowFunction",
       signature: {
         modifier: {
-          async: !!async!#,
+          async: !!async#,
         },
         parameters,
         returnType,
@@ -2013,8 +2014,10 @@ MemberExpressionRestBody
 MemberBracketContent
   OpenBracket:open ( SliceParameters / PostfixedExpression ):expression __:ws CloseBracket:close ->
     // Some kind of slice
-    if expression!.type is "SliceParameters"
-      {start, end, reversed, children} := expression
+    assert expression, "expected expression"
+    if expression.type is "SliceParameters"
+      { start, end, children } := expression
+      reversed := expression.reversed if "reversed" in expression
 
       return {
         type: "SliceExpression",
@@ -2051,16 +2054,17 @@ MemberBracketContent
     }
 
 SliceParameters
-  Loc:ls Expression?:start __:ws RangeDots:dots Loc:le Expression?:end ->
+  Loc:ls Expression?:startExpression __:ws RangeDots:dots Loc:le Expression?:endExpression ->
     reversed := dots.increasing === false
     sign := reversed ? "-" : "+"
-    noBounds := not start and not end and (dots.triple or
+    noBounds := not startExpression and not endExpression and (dots.triple or
       dots.left.raw is "" is dots.right.raw)
     let children
-    start ??= {
+    start: ASTNode .= startExpression ?? {
       $loc: ls.$loc,
       token: reversed ? "-1" : "0",
     }
+    end: ASTNode .= endExpression
     unless end
       if reversed
         end = {
@@ -2117,7 +2121,7 @@ AccessStart ::AccessStart
     return {
       type: "AccessStart",
       children: modifier ? [modifier, dot] : [dot],
-      optional: modifier?.token === "?",
+      optional: modifier is like { token: "?" }
     }
   # NOTE: ?x -> ?.x shorthand, unless a snug ternary follows (#1507)
   QuestionMark:modifier InsertDot:dot ![.\s] !SnugTernaryColonAhead ->
@@ -2153,7 +2157,7 @@ ExplicitAccessStart
     return {
       type: "AccessStart",
       children: modifier ? [modifier, dot] : [dot],
-      optional: modifier?.token === "?",
+      optional: modifier is like { token: "?" }
     }
 
 ImplicitAccessStart
@@ -2161,7 +2165,7 @@ ImplicitAccessStart
     return {
       type: "AccessStart",
       children: modifier ? [modifier, dot] : [dot],
-      optional: modifier?.token === "?",
+      optional: modifier is like { token: "?" }
     }
 
 PropertyAccessModifier
@@ -2263,7 +2267,7 @@ PropertyAccess
     start := {
       type: "AccessStart",
       children: modifier ? [modifier, dot] : [dot],
-      optional: modifier?.token === "?",
+      optional: modifier is like { token: "?" }
     }
     if id
       // `x::😊` → `x.prototype["😊"]`: unicode names need bracket access.
@@ -2324,7 +2328,7 @@ PropertyBind
     // optional-chain `?` modifier keeps its dot (`x?.["😊"]`); plain `x@😊`
     // and non-null `x!@😊` drop it since `.[` only pairs with `?.`.
     children := id.unicode
-      ? [modifier, modifier?.token is "?" ? dot : null, "[", propertyKey(id), "]"]
+      ? [modifier, modifier is like { token: "?" } ? dot : null, "[", propertyKey(id), "]"]
       : [modifier, dot, id]
     return {
       type: "PropertyBind",
@@ -2337,7 +2341,7 @@ PropertyBind
 PropertyBindExplicitArguments
   PropertyAccessModifier?:modifier At OptionalDot:dot ( IdentifierName / PrivateIdentifier ):id ExplicitArguments?:args ->
     children := id.unicode
-      ? [modifier, modifier?.token is "?" ? dot : null, "[", propertyKey(id), "]"]
+      ? [modifier, modifier is like { token: "?" } ? dot : null, "[", propertyKey(id), "]"]
       : [modifier, dot, id]
     return {
       type: "PropertyBind",
@@ -2482,10 +2486,10 @@ Parameter
 FunctionRestParameter
   # BindingRestElement has a leading _?
   # but also sometimes invokes __ via BindingIdentifier
-  !EOS BindingRestElement:rest TypeSuffix?:typeSuffix ParameterElementDelimiter ::FunctionRestParameter ->
+  !EOS BindingRestElement:rest TypeSuffix?:typeSuffix ParameterElementDelimiter:delimiter ::FunctionRestParameter ->
     return {
       type: "FunctionRestParameter",
-      children: $0.slice(1),
+      children: [rest, typeSuffix, delimiter],
       rest,
       names: rest.names,
       binding: rest.binding,
@@ -2932,9 +2936,9 @@ FunctionDeclaration ::FunctionExpression | ParenthesizedExpression
 
 FunctionSignature ::FunctionSignature
   # NOTE: Merged in async and generator with optionals
-  ( Async _ )?:async Function:func ( _? Star )?:generator ( _? NWBindingIdentifier )?:wid _?:w Parameters:parameters ReturnTypeSuffix?:returnType ->
-    async = [] unless async
-    generator = [] unless generator
+  ( Async _ )?:asyncKeyword Function:func ( _? Star )?:generatorStar ( _? NWBindingIdentifier )?:wid _?:w Parameters:parameters ReturnTypeSuffix?:returnType ->
+    async := asyncKeyword || []
+    generator := generatorStar || []
 
     id := wid?.[1]
     return {
@@ -2946,8 +2950,8 @@ FunctionSignature ::FunctionSignature
       async,
       generator,
       modifier: {
-        async: !!async!#,
-        generator: !!generator!#,
+        async: !!async#,
+        generator: !!generator#,
       },
       block: null,
       children: !parameters.implicit
@@ -2984,12 +2988,12 @@ FunctionExpression
     // (foo) doesn't need an arrow wrapper; just foo suffices
     return op.call if op is like {special: true} and op.call and not op.negated
 
-    ws1 or= op is like {spaced: true} ? [" "] : []
-    ws2 or= op is like {spaced: true} ? [" "] : []
+    ws1_ := ws1 or (op is like {spaced: true} ? [" "] : [])
+    ws2_ := ws2 or (op is like {spaced: true} ? [" "] : [])
     refA := makeRef("a")
     refB := makeRef("b")
     body := processBinaryOpExpression([refA, [
-      [ws1, op, ws2, refB] // BinaryOpRHS
+      [ws1_, op, ws2_, refB] // BinaryOpRHS
     ]])
 
     parameterList: FunctionParameter[] := [ [ refA, "," ], refB ]
@@ -3030,13 +3034,13 @@ FunctionExpression
 
   # Haskell-style sections
   OpenParen:open NonPipelineAssignmentExpression:lhs __:ws1 BinaryOp:op __:ws2 CloseParen:close ::ParenthesizedExpression ->
-    ws1 or= op is like {spaced: true} ? [" "] : []
-    ws2 or= op is like {spaced: true} ? [" "] : []
+    ws1_ := ws1 or (op is like {spaced: true} ? [" "] : [])
+    ws2_ := ws2 or (op is like {spaced: true} ? [" "] : [])
     refB := makeRef("b")
     fn := makeAmpersandFunction({
       ref: refB,
       body: processBinaryOpExpression([lhs, [
-        [ws1, op, ws2, refB] // BinaryOpRHS
+        [ws1_, op, ws2_, refB] // BinaryOpRHS
       ]])
     })
     return {
@@ -3045,8 +3049,8 @@ FunctionExpression
       expression: fn,
     }
   # Assignment version based on ActualAssignment rule
-  OpenParen:open ( NotDedented UpdateExpression WAssignmentOp )+:lhs __:ws2 CloseParen:close ::ParenthesizedExpression ->
-    lhs = lhs.map((x) => [x[0], x[1], ...x[2]])
+  OpenParen:open ( NotDedented UpdateExpression WAssignmentOp )+:lhsNodes __:ws2 CloseParen:close ::ParenthesizedExpression ->
+    lhs := lhsNodes.map((x) => [x[0], x[1], ...x[2]])
     refB := makeRef("b")
     fn := makeAmpersandFunction({
       ref: refB,
@@ -3078,13 +3082,13 @@ FunctionExpression
       expression: fn,
     }
   OpenParen:open __:ws1 !/\+\+|--|⧺|—|[\+\-&]\S/ !( Placeholder ( TypePostfix / BinaryOpRHS ) ) BinaryOp:op __:ws2 NonPipelineAssignmentExpression:rhs CloseParen:close ::ParenthesizedExpression ->
-    ws1 or= op is like {spaced: true} ? [" "] : []
-    ws2 or= op is like {spaced: true} ? [" "] : []
+    ws1_ := ws1 or (op is like {spaced: true} ? [" "] : [])
+    ws2_ := ws2 or (op is like {spaced: true} ? [" "] : [])
     refA := makeRef("a")
     fn := makeAmpersandFunction({
       ref: refA,
       body: processBinaryOpExpression([refA, [
-        [ws1, op, ws2, rhs] // BinaryOpRHS
+        [ws1_, op, ws2_, rhs] // BinaryOpRHS
       ]])
     })
     return {
@@ -3137,9 +3141,9 @@ OperatorDeclaration ::OperatorDeclaration
 # NOTE: Like FunctionSignature, but no async or star or @,
 # and parameters are required (to be useful).
 OperatorSignature
-  ( Async _ )?:async Operator:op ( _ Function )?:func ( _? Star )?:generator _:w1 Identifier:id OperatorBehavior?:behavior _?:w2 NonEmptyParameters:parameters ReturnTypeSuffix?:returnType ::OperatorSignature ->
-    async = [] unless async
-    generator = [] unless generator
+  ( Async _ )?:asyncKeyword Operator:op ( _ Function )?:func ( _? Star )?:generatorStar _:w1 Identifier:id OperatorBehavior?:behavior _?:w2 NonEmptyParameters:parameters ReturnTypeSuffix?:returnType ::OperatorSignature ->
+    async := asyncKeyword || []
+    generator := generatorStar || []
     // Add "function" (if not already one) to replace "operator"
     unless func
       func = { $loc: op.$loc, token: "function" } as any
@@ -3154,8 +3158,8 @@ OperatorSignature
       async,
       generator,
       modifier: {
-        async: !!async!#,
-        generator: !!generator!#,
+        async: !!async#,
+        generator: !!generator#,
       },
       block: null,
       children: [ async, func, generator, w1, id, behavior?.error, w2, parameters, returnType ],
@@ -3172,7 +3176,7 @@ OperatorPrecedence ::OperatorBehavior
   # inspired by https://docs.raku.org/language/functions#Precedence
   _? ( "tighter" / "looser" / "same" ):mod NonIdContinue _? ( Identifier / ( OpenParen BinaryOp CloseParen ) ):op ->
     let prec: number, error: ASTError?
-    if op.type is "Identifier"
+    if "type" in op and op.type is "Identifier"
       if state.operators.has(op.name)
         prec = state.operators.get(op.name)?.prec ?? precedenceCustomDefault
       else
@@ -3203,8 +3207,8 @@ OperatorAssociativity ::OperatorBehavior
     return { assoc }
 
 ThinArrowFunction
-  ( Async _ )?:async ThinArrowParameters:parameters ReturnTypeSuffix?:returnType _?:ws ThinArrow:arrow ( BracedObjectSingleLineStatements / NoCommaBracedOrEmptyBlock ):block ->
-    async = [] unless async
+  ( Async _ )?:asyncKeyword ThinArrowParameters:parameters ReturnTypeSuffix?:returnType _?:ws ThinArrow:arrow ( BracedObjectSingleLineStatements / NoCommaBracedOrEmptyBlock ):block ->
+    async := asyncKeyword || []
     generator: ASTNode[] := []
 
     // Assuming there's anything before the arrow, use input whitespace `ws`
@@ -3227,8 +3231,8 @@ ThinArrowFunction
         async,
         generator,
         modifier: {
-          async: !!async!#,
-          generator: !!generator!#,
+          async: !!async#,
+          generator: !!generator#,
         },
         returnType,
       },
@@ -3448,6 +3452,7 @@ BracedBlock
       expressions: s.expressions,
       // Remove !EOS assertion
       children: [o, s.children, ws, c],
+      bare: false
     }
 
 # This version forbids same-line postfixes like `while cond`, e.g., in do/try.
@@ -3461,6 +3466,7 @@ NoPostfixBracedBlock
       expressions: s.expressions,
       // Remove !EOS assertion
       children: [o, s.children, ws, c],
+      bare: false
     }
 
 # This version forbids top-level , operator in one-liners
@@ -3474,6 +3480,7 @@ NoCommaBracedBlock
       expressions: s.expressions,
       // Remove !EOS assertion
       children: [o, s.children, ws, c],
+      bare: false
     }
 
 NonSingleBracedBlock ::BlockStatement
@@ -3777,9 +3784,9 @@ ArrayLiteral
 
 _ArrayLiteral
   # NOTE: Check ArrayBindingPattern case of lhs destructuring
-  ArrayBindingPattern UpcomingAssignment -> $1
+  ArrayBindingPattern UpcomingAssignment ::ArrayBindingPattern -> $1
   # NOTE: Added [] followed by elements
-  OpenBracket:open CloseBracket:close ApplicationStart AllowAll ( NestedElementList / SingleLineElementList )?:content RestoreAll ->
+  OpenBracket:open CloseBracket:close ApplicationStart AllowAll ( NestedElementList / SingleLineElementList )?:content RestoreAll ::ArrayExpression ->
     return $skip unless content
 
     // Remove trailing comma
@@ -3798,11 +3805,11 @@ _ArrayLiteral
       children: [open, ...content, close],
       names: content.flatMap(namesOf)
     }
-  OpenBracket:open AllowAll ( ArrayLiteralContent __ CloseBracket )? RestoreAll ->
+  OpenBracket:open AllowAll ( ArrayLiteralContent __ CloseBracket )? RestoreAll ::ArrayExpression|RangeExpression ->
     return $skip unless $3
     [ content, ws, close ] := $3
 
-    if content.type is "RangeExpression"
+    if "type" in content and content.type is "RangeExpression"
       return prepend(ws, content)
 
     // ArrayLiteralContent always returns an array here (RangeExpression case handled above)
@@ -3979,7 +3986,7 @@ ArrayElementExpression
       type: "SpreadElement",
       children: [ws, dots, exp],
       expression: exp,
-      names: exp.names,
+      names: exp.names if "names" in exp,
     }
 
   # NOTE: Using PostfixedExpression, a superset of Expression to allow If/Switch expressions
@@ -4012,14 +4019,15 @@ ArrayElementExpression
 
 # NOTE: Nested bulleted array starts with an indentation.
 NestedBulletedArray ::ArrayExpression
-  ( InsertSpace InsertOpenBracket ):open PushIndent AllowPipeline NestedArrayBullet*:content RestorePipeline InsertCloseBracket:close PopIndent ->
-    return $skip unless content#
-    content = content.flat() // combine bullets into one array
+  ( InsertSpace InsertOpenBracket ):open PushIndent AllowPipeline NestedArrayBullet*:nestedContent RestorePipeline InsertCloseBracket:close PopIndent ->
+    return $skip unless nestedContent#
+    content := nestedContent.flat() // combine bullets into one array
 
     // Remove implicit comma from last element
-    last := content[content# - 1]
-    if last.children?.at(-1)?.implicit
-      last.children = last.children.slice(0, -1)
+    last := content.-1
+    if { children } := last
+      if children and children.-1 is like { implicit: true }
+        last.children = children[...-1]
 
     return {
       type: "ArrayExpression",
@@ -4029,18 +4037,18 @@ NestedBulletedArray ::ArrayExpression
 # NOTE: Bulleted array intended for beginning of lines,
 # when leading indentation has already been consumed.
 BulletedArray
-  InsertOpenBracket:open ( ArrayBullet NestedArrayBullet* )?:content InsertCloseBracket:close ->
-    return $skip unless content
-    content = [
-      ...trimFirstSpace(content[0]), // replace first space with bracket
-      ...content[1]!.flat(),
+  InsertOpenBracket:open ( ArrayBullet NestedArrayBullet* )?:nestedContent InsertCloseBracket:close ::ArrayExpression ->
+    return $skip unless nestedContent
+    content := [
+      ...trimFirstSpace(nestedContent[0]), // replace first space with bracket
+      ...nestedContent[1]!.flat(),
     ]
 
     // Remove implicit comma from last element
-    last .= content![content!# - 1]
-    if last!.children?.at(-1)?.implicit
-      content![content!# - 1] = last =
-        { ...last, children: last.children!.slice(0, -1) }
+    last := content.-1
+    if { children } := last
+      if children and children.-1 is like { implicit: true }
+        content.-1 = { ...last, children: children[...-1] }
 
     return {
       type: "ArrayExpression",
@@ -4089,7 +4097,8 @@ Bullet
   "." [ \t]+
 
 BulletedArrayWithTrailing
-  BulletedArray:array AllowedTrailingCallExpressions?:trailing ( NotDedented Pipe __ PipelineTailItem )*:pipeline ->
+  BulletedArray:bulletedArray AllowedTrailingCallExpressions?:trailing ( NotDedented Pipe __ PipelineTailItem )*:pipeline ->
+    array: ASTNode .= bulletedArray
     if trailing
       array = [ array, trailing ]
     if pipeline#
@@ -4101,7 +4110,7 @@ BulletedArrayWithTrailing
 
 # https://262.ecma-international.org/#prod-ObjectLiteral
 # NOTE: Slightly simplified from spec
-ObjectLiteral
+ObjectLiteral ::ASTNode
   # NOTE: Check for object binding pattern in case of destructuring to an object lhs
   ObjectBindingPattern UpcomingAssignment -> $1
   BracedObjectLiteral
@@ -4284,7 +4293,7 @@ PropertyDefinition
     // Treat empty-bodied `do` and `loop` (which require no expression)
     // as keys instead of iterations
     if exp.block.implicit and
-        (statement.type is "DoStatement" or statement.subtype is "loop")
+        (statement.type is "DoStatement" or ("subtype" in statement and statement.subtype is "loop"))
       return $skip
 
     // immutably set exp.statement.object = true
@@ -4326,7 +4335,7 @@ PropertyDefinition
         name: id,
         names: id.names,
         value,
-        flagToggle: toggle,
+        flagToggle: toggle as "!" | "+" | "-",
       }
 
     // `{ 😊 }` → `{ "😊": u$1F60A$ }`. PropertyName already rewrote `id`'s
@@ -4397,11 +4406,11 @@ PropertyDefinition
     last := lastAccessInCallExpression(value)
     return $skip unless last
 
-    let name, ref, refAssignment
+    let name
     { expression, type } := last
     if type is "Index"
       // TODO: If `last` is a suitable string literal, could use it for `name`.
-      { ref, refAssignment } = maybeRefAssignment(expression)
+      { ref, refAssignment } := maybeRefAssignment(expression)
       if refAssignment
         name = {
           type: "ComputedPropertyName",
@@ -4438,7 +4447,7 @@ PropertyDefinition
     if name[0] is "#" then name = name.slice(1)
 
     // { y? } → { ...((y != null) && {y}) }
-    if not (pre# or rhs# or pipeline#) and post?.token is "?" and value!.type is "Identifier"
+    if not (pre# or rhs# or pipeline#) and post is like { token: "?" } and value is like { type: "Identifier" }
       dots := { $loc, token: "..." }
       paren := parenthesizeExpression({ children: ["(", value, " != null) && {", name, "}"] })
       return {
@@ -4529,10 +4538,15 @@ PropertyName
   # shorthand value-side reads.
   IdentifierName:id ->
     return id unless id.unicode
+    child := id.children[0]
+    assert "$loc" in child, "expected identifier token location"
     return {
-      ...id,
-      children: [{$loc: id.children[0].$loc, token: `"${id.unicode}"`}],
-      identifier: id,
+      ...id
+      children: [{
+        $loc: child.$loc
+        token: `"${id.unicode}"`
+      }],
+      identifier: id
     }
   LengthShorthand
   SymbolElement
@@ -4550,7 +4564,7 @@ ComputedPropertyName
   InsertOpenBracket TemplateLiteral:expression InsertCloseBracket ->
     // Check for CoffeeScript interpolated double-quote string
     // without interpolation
-    return $2 if $2.type is "StringLiteral"
+    return $2 if "type" in $2 and $2.type is "StringLiteral"
     return {
       type: "ComputedPropertyName",
       children: $0,
@@ -4611,16 +4625,18 @@ MethodDefinition ::MethodDefinition | MultiMethodDefinition
 
     unless rest#
       let name
-      if base!.type is "MemberExpression"
+      assert base, "base expected"
+      if "type" in base and base.type is "MemberExpression"
         lastAccess := lastAccessInCallExpression(base)
         if lastAccess
           ({ name } = lastAccess)
 
-      if not name then ({ name } = base!)
+      if not name
+        name = base.name if "name" in base
       return $skip unless name
 
       // Skip autoReturn for identifiers with an explicit block like `get foo { true }`
-      autoReturn := not block or base!.type !== "Identifier"
+      autoReturn := not block or not ("type" in base and base.type === "Identifier")
       return makeGetterMethod(name, ws, base, returnType, block, kind, autoReturn)
 
     last .= rest[rest#-1]
@@ -4680,7 +4696,6 @@ MethodDefinition ::MethodDefinition | MultiMethodDefinition
 MethodModifier
   # NOTE: Merged get/set definitions
   GetOrSet:kind _?:ws &ClassElementName ->
-    ws = " " unless ws
     return {
       // no async or generator, because getters and setters can't be
       modifier: {
@@ -4689,20 +4704,20 @@ MethodModifier
         get: kind.token is "get",
         set: kind.token is "set",
       },
-      children: [ kind, ws ],
+      children: [ kind, ws || " " ],
     }
   # NOTE: Merged async and generator into MethodModifier
-  ( Async __ )?:async ( Star __ )?:generator ->
-    async = [] unless async
-    generator = [] unless generator
+  ( Async __ )?:asyncKeyword ( Star __ )?:generatorStar ->
+    async := asyncKeyword || []
+    generator := generatorStar || []
     return {
       async,
       generator,
       modifier: {
-        async: !!async!#,
+        async: !!async#,
         get: false,
         set: false,
-        generator: !!generator!#,
+        generator: !!generator#,
       },
       children: [ async, generator ],
     }
@@ -4732,7 +4747,7 @@ MethodSignature ::MethodSignature
       type: "MethodSignature",
       children: [ ...modifier.children, id, ws1, optional, ws2, parameters, returnType ],
       async: modifier.async,
-      generator: modifier.generator,
+      generator: modifier.generator if "generator" in modifier,
       id,
       name,
       optional,
@@ -5261,9 +5276,9 @@ Statement
 IterationActualStatement
   IterationStatement !ShouldExpressionize ->
     // Leave generator forms for IterationExpression
-    return $skip if $1.generator
+    return $skip if "generator" in $1 and $1.generator
     // Leave `for` reductions for IterationExpression
-    return $skip if $1.reduction
+    return $skip if "reduction" in $1 and $1.reduction
     return $1
 
 # NOTE: Leave statement with trailing call expressions or pipe operator
@@ -5427,8 +5442,8 @@ IterationExpression
       children: [statement],
       block: statement.block,
       statement,
-      async,
-      generator: statement.generator
+      async: !!async,
+      generator: statement.generator if "generator" in statement,
     }
 
 # NOTE: Added from CoffeeScript
@@ -5876,16 +5891,15 @@ SwitchStatement
     if condition.type is "EmptyCondition"
       // Negate all case condition expressions. This converts them to booleans
       // and is slightly smaller than switch(true) {case: !!exp ... }
-      caseBlock.clauses.forEach {cases} =>
-        if cases
+      for each clause of caseBlock.clauses
+        if { cases } := clause
           cases.forEach (c: any) =>
             exp := c[1]
             switch exp.type
               when "Identifier", "Literal"
                 c.splice(1, 0, "!")
               else
-               c.splice(1, 1, "!(", exp, ")")
-            return
+                c.splice(1, 1, "!(", exp, ")")
 
     return {
       type: "SwitchStatement",
@@ -5959,11 +5973,14 @@ CaseClause
     // If the block ends with a `// ...` comment (issue #832), prefix the
     // inserted `;break;` with a newline so it isn't swallowed by the comment.
     // Copy $0 rather than mutating in place — Hera may cache the match.
-    children .= $0
-    if hasTrailingComment block
-      bIdx := children.indexOf b
-      b = { ...b, token: "\n" + b.token }
-      children = [...children.slice(0, bIdx), b, ...children.slice(bIdx + 1)]
+    children :=
+      if hasTrailingComment block
+        bIdx := $0.indexOf b
+        b = { ...b, token: "\n" + b.token }
+        [...$0.slice(0, bIdx), b, ...$0.slice(bIdx + 1)]
+      else
+        $0
+
     return {
       type: "WhenClause",
       children,
@@ -5980,11 +5997,11 @@ CaseClause
     }
   # NOTE: Added else from CoffeeScript
   Else:e ImpliedColon:colon ( ThenClause / BracedBlock / EmptyBlock ):block ::DefaultClause ->
-    e = { ...e, token: "default" }
+    defaultToken := { ...e, token: "default" }
     return {
       type: "DefaultClause",
       block,
-      children: [ e, colon, block ]
+      children: [ defaultToken, colon, block ]
     }
 
 PatternExpressionList
@@ -7068,7 +7085,7 @@ NamedExports
       type: "NamedExports"
       children: $0
       specifiers
-      constructed: specifiers.filter (s): s is ConstructedExportSpecifier => not Array.isArray(s) and s?.type is "ConstructedExportSpecifier"
+      constructed: specifiers.filter (s): s is ConstructedExportSpecifier => s is like { type: "ConstructedExportSpecifier" }
     }
   # Unbraced version: export x, y
   InsertInlineOpenBrace:open ImplicitExportSpecifier:first ( ImplicitObjectPropertyDelimiter ImplicitExportSpecifier )*:rest InsertCloseBrace:close &( StatementDelimiter / ( __ From )) ->
@@ -7428,19 +7445,21 @@ RegularExpressionClassCharacters
 
 HeregexLiteral
   TripleSlash:open HeregexBody:body TripleSlash:close RegularExpressionFlags:flags ->
-    hasSubstitutions .= body.some (part) => part.type is "Substitution"
+    hasSubstitutions .= body.some (part) => "type" in part and part.type is "Substitution"
 
     if hasSubstitutions
       children := [
         {...open, token: "RegExp(`"},
         // Escape backticks, backslashes, and '$' in the body text
-        body.map((e) => e.type is "Substitution"
-          ? e
-          : {
-            ...e,
-            token: e.token.replace(/[`\\$]/g, "\\$&"),
-          }
-        ),
+        body.map (e) =>
+          if "type" in e and e.type is "Substitution"
+            e
+          else
+            assert "token" in e, "expected token"
+            {
+              ...e,
+              token: e.token.replace(/[`\\$]/g, "\\$&"),
+            }
         "`"
       ]
 
@@ -7610,7 +7629,7 @@ _Comment
 # This is more accurately called "RestOfLineComment"
 SingleLineComment
   JSSingleLineComment
-  CoffeeCommentEnabled CoffeeSingleLineComment
+  CoffeeCommentEnabled CoffeeSingleLineComment -> $2
 
 JSSingleLineComment
   # Two or four+ slashes are comments; three slashes are heregexes/directives.
@@ -8169,20 +8188,20 @@ JSXImplicitFragment
   # Always allow a single JSX tag.
   # Implicit fragment can be explicitly forbidden; it also inherits
   # forbidden status from binary ops on the following line.
-  JSXTag:first ( ImplicitFragmentAllowed NestedBinaryOpAllowed NewlineBinaryOpAllowed ( Nested ( JSXTag / JSXAngleChild ) )* )?:rest ->
-    rest = rest ? rest[3] : []
-    jsx := rest!# === 0 ? first : {
+  JSXTag:first ( ImplicitFragmentAllowed NestedBinaryOpAllowed NewlineBinaryOpAllowed ( Nested ( JSXTag / JSXAngleChild ) )* )?:restNodes ->
+    rest := restNodes ? restNodes[3] : []
+    jsx := rest# === 0 ? first : {
       type: "JSXFragment",
       children: [
         "<>\n",
         state.currentIndent.token,
         first,
-        ...rest!,
+        ...rest,
         "\n",
         state.currentIndent.token,
         "</>",
       ],
-      jsxChildren: [ first, ...rest!.map ?.1 ],
+      jsxChildren: [ first, ...rest.map ?.1 ],
     }
     type := typeOfJSX(jsx, config)
     return type ? [
@@ -8205,30 +8224,30 @@ JSXElement ::ASTNode
   JSXSelfClosingElement
   # NOTE: In default JSX mode, JSX children must be properly indented,
   # and closing tags are optional (but still allowed).
-  !CoffeeJSXEnabled PushJSXOpeningElement:open JSXMixedChildren?:children JSXOptionalClosingElement:close PopJSXStack ->
+  !CoffeeJSXEnabled PushJSXOpeningElement:open JSXMixedChildren?:mixedChildren JSXOptionalClosingElement:close PopJSXStack ->
     /* c8 ignore next -- JSXMixedChildren always returns an object; $skip kept as a defensive guard against future grammar edits that could change that */
-    return $skip unless children
-    let parts
-    $0 = $0.slice(1)
-    if close
-      parts = $0
-    else if children.jsxChildren#
-      parts = [
-        ...$0,
-        "\n", // InsertNewline
-        state.currentIndent.token, // InsertIndent
-        ["</", open[1], ">"],
-      ]
-    else
-      parts = [open.slice(0, -1), " />"]
-    return { type: "JSXElement", children: parts, tag: open[1] }
+    return $skip unless mixedChildren
+    nodes := $0[1..]
+    children :=
+      if close
+        nodes
+      else if mixedChildren.jsxChildren#
+        [
+          ...nodes
+          "\n" // InsertNewline
+          state.currentIndent.token // InsertIndent
+          ["</", open[1], ">"]
+        ]
+      else
+        [open.slice(0, -1), " />"]
+    return { type: "JSXElement", children, tag: open[1] }
   # NOTE: In CoffeeScript JSX mode, JSX children do not need to be properly
   # indented, but tags must be explicitly closed.
   CoffeeJSXEnabled JSXOpeningElement:open JSXChildren? Whitespace? JSXClosingElement:close ->
-    $0 = $0.slice(1)
     // Check that tags match
     return $skip if open[1] !== close[2]
-    return { type: "JSXElement", children: $0, tag: open[1] }
+    nodes := $0[1..]
+    return { type: "JSXElement", children: nodes, tag: open[1] }
 
 # https://facebook.github.io/jsx/#prod-JSXSelfClosingElement
 JSXSelfClosingElement
@@ -8263,25 +8282,25 @@ JSXClosingElement
 JSXFragment ::ASTNode
   # NOTE: In default JSX mode, JSX children must be properly indented,
   # and closing tags are optional (but still allowed).
-  !CoffeeJSXEnabled PushJSXOpeningFragment:open JSXMixedChildren?:children JSXOptionalClosingFragment:close PopJSXStack ->
+  !CoffeeJSXEnabled PushJSXOpeningFragment:open JSXMixedChildren?:mixedChildren JSXOptionalClosingFragment:close PopJSXStack ->
     /* c8 ignore next -- JSXMixedChildren always returns an object; $skip kept as a defensive guard against future grammar edits that could change that */
-    return $skip unless children
-    $0 = $0.slice(1)
-    parts := close ? $0 :
+    return $skip unless mixedChildren
+    nodes := $0[1..]
+    children := close ? nodes :
       [
-        ...$0,
-        "\n", // InsertNewline
-        state.currentIndent.token, // InsertIndent
-        "</>",
+        ...nodes
+        "\n" // InsertNewline
+        state.currentIndent.token // InsertIndent
+        "</>"
       ]
-    return { type: "JSXFragment", children: parts, jsxChildren: children.jsxChildren }
+    return { type: "JSXFragment", children, jsxChildren: mixedChildren.jsxChildren }
   # NOTE: In CoffeeScript JSX mode, JSX children do not need to be properly
   # indented, but tags must be explicitly closed.
   CoffeeJSXEnabled "<>" JSXChildren?:children Whitespace? JSXClosingFragment ->
-    $0 = $0.slice(1)
+    nodes := $0[1..]
     return {
       type: "JSXFragment",
-      children: $0,
+      children: nodes,
       jsxChildren: children ? children.jsxChildren : []
     }
 
@@ -8632,7 +8651,8 @@ JSXAttributeValue
     // double-quoted string that didn't end up actually interpolating.
     // Instead parse using the following string literal rule,
     // which avoids e.g. converting newlines into \n.
-    return $skip if value!.type is "StringLiteral"
+    assert value, "expected an InlineJSXAttributeValue"
+    return $skip if "type" in value and value.type is "StringLiteral"
     return [open, value, close]  // omit &JSXAttributeSpace
   # NOTE: InlineJSXAttributeValue which contains TemplateLiteral must be before
   # StringLiteral, so that CoffeeScript interpolated strings get checked first.
@@ -9295,8 +9315,7 @@ TypeProperty
 TypeIndexSignature
   # NOTE: QuestionMark will be parsed by following TypeSuffix
   ( [+-]? Readonly NotDedented )?:prefix OpenBracket:open TypeIndex:index CloseBracket:close ( __ [+-] &( _? QuestionMark ) )?:suffix ->
-    suffix = [suffix[0], suffix[1]] if suffix
-    return [prefix, open, index, close, suffix]
+    return [prefix, open, index, close, suffix?[0...2]]
 
 TypeIndex
   __ Identifier TypeSuffix
@@ -9666,25 +9685,24 @@ NestedTypeBulletedTuple ::TypeTuple
 # NOTE: Bulleted tuple intended for beginning of lines,
 # when leading indentation has already been consumed.
 TypeBulletedTuple ::TypeNode
-  InsertOpenBracket:open ( TypeBullet NestedTypeBullet* )?:content InsertCloseBracket:close ->
-    return $skip unless content
-    content = [
-      ...trimFirstSpace(content[0]), // replace first space with bracket
-      ...content[1].flat(),
+  InsertOpenBracket:open ( TypeBullet NestedTypeBullet* )?:nestedContent InsertCloseBracket:close ->
+    return $skip unless nestedContent
+    content := [
+      ...trimFirstSpace(nestedContent[0]) // replace first space with bracket
+      ...nestedContent[1].flat()
     ]
 
     // Remove implicit comma from last element
     // NOTE: See NestedTypeBulletedTuple — Array.isArray(last) arm dead.
-    last := content![content!# - 1]
-    children .= last?.children
-    if children?.at(-1).implicit
-      children = children.slice(0, -1)
-      content![content!# - 1] = { ...last, children }
+    last := content.-1
+    if { children } := last
+      if children and children.-1 is like { implicit: true }
+        content.-1 = { ...last, children: children[...-1] }
 
     return {
       type: "TypeTuple",
       ts: true,
-      children: [open, ...content!, close],
+      children: [open, ...content, close],
     }
 
 NestedTypeBullet
