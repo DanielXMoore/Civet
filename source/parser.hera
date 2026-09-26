@@ -78,6 +78,7 @@ import {
   rewriteModuleSpecifier,
   reorderBindingRestProperty,
   replaceNodes,
+  withChildReplaced,
   skipImplicitArguments,
   stripTrailingImplicitComma,
   trimFirstSpace,
@@ -85,6 +86,7 @@ import {
   typeOfJSX,
   wrapTypeInPromise,
 } from "./parser/lib.civet"
+import type { ParseOptions } from "../types/types.js"
 import type {
   AccessStart,
   Argument,
@@ -212,7 +214,7 @@ import type {
  * Globals
  */
 let filename: string??        // filename currently being parsed
-let initialConfig: unknown | null              // input for parser config
+let initialConfig: ParseOptions??              // input for parser config
 let config: any                                 // current parser config after directives
 let sync: boolean??           // synchronous mode: as much as possible without await
 
@@ -369,7 +371,7 @@ export function getStateKey()
 
   return [stateInt, state.currentJSXTag]
 
-export function parseProgram(input: string, options?: { filename?: string, parseOptions?: unknown, sync?: boolean })
+export function parseProgram(input: string, options?: { filename?: string, parseOptions?: ParseOptions, sync?: boolean })
   filename = options?.filename
   initialConfig = options?.parseOptions
   sync = options?.sync
@@ -3978,6 +3980,8 @@ ArrayElementExpression
   ImplicitObjectLiteral &ArrayElementDelimiter -> $1
   # NOTE: Allow for postfix splat like CoffeeScript
   Expression:exp _?:ws DotDotDot:dots &ArrayElementDelimiter ->
+    if exp.type is "StatementExpression" and exp.statement.type is "IfStatement"
+      exp = withChildReplaced exp, exp.statement, { ...exp.statement, defaultElse: "[]" }
     return {
       type: "SpreadElement",
       children: [ws, dots, exp],
@@ -3989,21 +3993,23 @@ ArrayElementExpression
   # and also allow for postfix if/for/while
   ( ( __ DotDotDot __ )? PostfixedExpression )?:expMaybeSpread &ArrayElementDelimiter ->
     if expMaybeSpread
-      [spread, exp] := expMaybeSpread
+      [spread, exp] .= expMaybeSpread
 
       unless spread
         return {
           type: "ArrayElement",
           children: [exp],
           expression: exp,
-          names: exp.names if "names" in exp?,
+          names: namesOf(exp),
         }
       else
+        if exp.type is "StatementExpression" and exp.statement.type is "IfStatement"
+          exp = withChildReplaced exp, exp.statement, { ...exp.statement, defaultElse: "[]" }
         return {
           type: "SpreadElement",
           children: [...spread, exp],
           expression: exp,
-          names: exp.names if "names" in exp?,
+          names: namesOf(exp),
         }
 
     return {
@@ -5206,7 +5212,7 @@ PostfixedNoCommaStatement ::ASTNode
     return addPostfixStatement(statement, ...post) if post
     return statement
 
-PostfixedExpression ::ASTNode
+PostfixedExpression ::NonNullASTNode
   # Loops allow spreads before the postfix
   AssignmentExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ->
     return attachPostfixStatementAsExpression(expression, [ws, post])
@@ -5222,7 +5228,7 @@ CommaLoop
   CommaExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ->
     return attachPostfixStatementAsExpression(expression, [ws, post])
 
-PostfixedExpressionOrCommaLoop ::ASTNode
+PostfixedExpressionOrCommaLoop ::NonNullASTNode
   CommaLoop
   PostfixedExpression
 
@@ -5496,7 +5502,7 @@ DoStatement
 ComptimeStatement
   Comptime NoPostfixBracedOrEmptyBlock:t ElseClause?:e ::ComptimeStatement ->
     // Wrap the else block if present and comptime is off
-    block .= not (initialConfig as any)?.comptime and e?.block or t
+    block .= not initialConfig?.comptime and e?.block or t
     block = trimFirstSpace(block)
     return {
       type: "ComptimeStatement",
@@ -7407,7 +7413,7 @@ TripleSingleStringCharacters
     return { $loc, token: $0 }
 
 CoffeeStringSubstitution
-  CoffeeSubstitutionStart AllowAll ( PostfixedExpressionOrCommaLoop __ CloseBrace )? RestoreAll ->
+  CoffeeSubstitutionStart AllowAll ( StringSubstitutionExpression __ CloseBrace )? RestoreAll ->
     return $skip unless $3
     return [$1, ...$3]
 
@@ -7580,9 +7586,15 @@ _TemplateLiteral
 
 # NOTE: Simplified grammar
 TemplateSubstitution
-  SubstitutionStart AllowAll ( PostfixedExpressionOrCommaLoop __ CloseBrace )? RestoreAll ->
+  SubstitutionStart AllowAll ( StringSubstitutionExpression __ CloseBrace )? RestoreAll ->
     return $skip unless $3
     return [$1, ...$3]
+
+StringSubstitutionExpression
+  PostfixedExpressionOrCommaLoop:exp ->
+    if exp.type is "StatementExpression" and exp.statement.type is "IfStatement"
+      exp = withChildReplaced exp, exp.statement, { ...exp.statement, defaultElse: '""' }
+    return exp
 
 # https://262.ecma-international.org/#prod-TemplateCharacter
 TemplateCharacters

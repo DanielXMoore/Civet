@@ -25,7 +25,8 @@ mkdir "$out"
 
 # types (these get used for type checking during esbuild, so must go first)
 cp types/types.d.ts types/config.d.ts "$out"/
-cp types/config.d.ts "$out"/config.d.mts
+cp types/types.d.ts "$out"/types.d.mts
+sed 's#"./types.js"#"./types.mjs"#' types/config.d.ts > "$out"/config.d.mts
 
 # register-noconfig.js is made from register.js
 sed 's#//NOCONFIG//##g' register.js >register-noconfig.js
