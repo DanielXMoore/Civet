@@ -641,7 +641,7 @@ ForbiddenImplicitCalls
 
 # Binary operators that are reserved in that context
 ReservedBinary
-  /(as|of|by|satisfies|then|when|implements|xor|xnor)(?!\p{ID_Continue}|[\u200C\u200D$])/
+  /(as|of|by|satisfies|then|when|implements|xor|xnor)/ NonIdContinue
 
 ArgumentsWithTrailingCallExpressions
   Arguments:args AllowedTrailingCallExpressions?:trailing ->
@@ -1330,7 +1330,7 @@ ParenthesizedExpression
 
 Placeholder
   # Partial function application: f(., x) -> $ => f($, x)
-  Dot:dot !/\p{ID_Continue}|[\u200C\u200D$.#{=]/ PlaceholderTypeSuffix?:typeSuffix ->
+  Dot:dot NonIdContinue ![.#{=] PlaceholderTypeSuffix?:typeSuffix ->
     return {
       type: "Placeholder",
       subtype: ".",
@@ -3251,6 +3251,9 @@ ThinArrow
     return { $loc, token: "->" }
 
 ExplicitBlock ::BlockStatement
+  # Parse object literal application ({} followed by nested properties)
+  # so that {} isn't treated as an empty block.
+  &( _? ObjectLiteralApplication ) BracedObjectSingleLineStatements -> $2
   # Allow single-line block only when the block starts on the same line
   _?:ws1 OpenBrace:open AllowAll ( NestedBlockStatements / SingleLineStatements / EmptyBracedContent )?:block RestoreAll __:ws2 CloseBrace:close ->
     /* c8 ignore next -- structurally unreachable: EmptyBracedContent catches empty/ws-only, valid content matches one of the alts, invalid content blocks CloseBrace. $skip kept as state-safety belt inside AllowAll/RestoreAll. */
@@ -4114,7 +4117,21 @@ ObjectLiteral ::ASTNode
   InlineObjectLiteral
 
 BracedObjectLiteral ::ObjectExpression
-  # NOTE: Added {} followed by properties
+  ObjectLiteralApplication
+  OpenBrace:open AllowAll ( BracedObjectLiteralContent __ CloseBrace )? RestoreAll ->
+    return $skip unless $3
+    [ properties, ...close ] := $3
+
+    return {
+      type: "ObjectExpression",
+      children: [open, properties, close],
+      names: properties.flatMap(namesOf),
+      properties,
+    }
+
+# {} followed by nested properties provides braced object literal features
+# without needing } at the end
+ObjectLiteralApplication ::ObjectExpression
   OpenBrace:open CloseBrace:close ApplicationStart AllowAll ( NestedPropertyDefinitions / SingleLineObjectProperties )?:properties RestoreAll ->
     return $skip unless properties?#
     last .= properties[properties# - 1]
@@ -4125,16 +4142,6 @@ BracedObjectLiteral ::ObjectExpression
         children: last.children.filter((c: any) => c !== last.delim),
       }
       properties = [ ...properties.slice(0, properties# - 1), last ]
-    return {
-      type: "ObjectExpression",
-      children: [open, properties, close],
-      names: properties.flatMap(namesOf),
-      properties,
-    }
-  OpenBrace:open AllowAll ( BracedObjectLiteralContent __ CloseBrace )? RestoreAll ->
-    return $skip unless $3
-    [ properties, ...close ] := $3
-
     return {
       type: "ObjectExpression",
       children: [open, properties, close],
@@ -4286,9 +4293,10 @@ PropertyDefinition
   # a `do` block doesn't get treated as {do} property
   _?:ws InsertDotDotDot:dots IterationExpression:exp ::SpreadProperty ->
     { statement } .= exp
-    // Treat empty-bodied `do` and `loop` (which require no expression)
+    // Treat empty-bodied `do`, `comptime`, and `loop` (which require no expression)
     // as keys instead of iterations
-    if exp.block.implicit and statement is like { type: "DoStatement" }, { subtype: "loop" }
+    // A comptime else clause makes it an expression even when the selected block is empty.
+    if exp.block.implicit and statement is like { type: "DoStatement" }, { type: "ComptimeStatement", else: undefined }, { subtype: "loop" }
       return $skip
 
     // immutably set exp.statement.object = true
@@ -5340,10 +5348,10 @@ LabelIdentifier ::Label
       name: id.name,
       children: [id],
     }
-  /(?:loop|while|until|for|do)(?!\p{ID_Continue})/ ->
+  $/(?:loop|while|until|for|do)/:kind NonIdContinue ->
     return {
       type: "Label",
-      special: $0,
+      special: kind as NonNullable<Label["special"]>,
       name: "", // to be filled in
       children: []
     }
@@ -7724,7 +7732,13 @@ SemicolonDelimiter
 NonIdContinue
   ///
     (?!
+      // Unicode identifier continuations, including underscore
       \p{ID_Continue}
+      // $ is valid in JS identifiers but absent from ID_Continue
+      | \$
+      // Escaped characters: while\u0061 is whilea
+      | ${const unicodeEscapePattern}
+      // Civet's Unicode extensions; also covers ZWNJ/ZWJ
       | ${const nonAsciiIdentifierPattern}
     )
   /// -> undefined
@@ -7818,7 +7832,7 @@ Comma
     return { $loc, token: $1 }
 
 Comptime
-  "comptime" NonIdContinue !":" ->
+  "comptime" NonIdContinue ![.:] ->
     return { type: "Keyword" as const, $loc, token: $1 }
 
 ConstructorShorthand
@@ -9894,7 +9908,7 @@ ForbiddenImplicitTypeCalls
   # TypeBinaryOp, ExtendsToken, NotExtendsToken, TypeFunctionArrow
   /[|&<!=\-⇒→]/
   # Abstract, Readonly, ExtendsToken, NotExtendsToken, Is
-  /(extends|not|is)(?!\p{ID_Continue}|[\u200C\u200D$])/
+  /(extends|not|is)/ NonIdContinue
 
 # Based on ArgumentList
 TypeArgumentList

@@ -105,6 +105,89 @@ describe "comptime", ->
     json = {"hello":"world"}
   """, options
 
+  for enabled of [false, true]
+    describe `syntax with comptime ${enabled}`, ->
+      syntaxOptions := parseOptions: {comptime: enabled}
+
+      testCase """
+        object shorthand
+        ---
+        comptime := 42
+        obj := { comptime }
+        ---
+        const comptime = 42
+        const obj = { comptime }
+      """, syntaxOptions
+
+      testCase """
+        object shorthand separated by commas and newlines
+        ---
+        obj := { comptime, other }
+        nested := {
+          comptime
+          other
+        }
+        ---
+        const obj = { comptime, other }
+        const nested = {
+          comptime,
+          other
+        }
+      """, syntaxOptions
+
+      testCase """
+        property access on comptime identifier
+        ---
+        comptime.prop
+        value := comptime.prop
+        ---
+        comptime.prop
+        const value = comptime.prop
+      """, syntaxOptions
+
+      testCase ```
+        indented braced object
+        ---
+        obj := comptime {}
+          some: "data"
+        ---
+        ${enabled ? 'const obj = {"some":"data"}' : 'const obj = (()=>{ return ({\n  some: "data"})})()'}
+      ```, syntaxOptions
+
+      testCase ```
+        nonempty comptime still spreads
+        ---
+        obj := {
+          comptime await Promise.resolve {answer: 42}
+        }
+        ---
+        ${enabled ? 'const obj = {\n  ...(await (async ()=>{return {"answer":42}})())\n}' : 'const obj = {\n  ...(await (async ()=>{return (async ()=>{ return await Promise.resolve({answer: 42})})()})())\n}'}
+      ```, syntaxOptions
+
+      testCase ```
+        explicit empty block still spreads
+        ---
+        obj := { comptime {} }
+        ---
+        ${enabled ? 'const obj = { ...(()=>{return undefined})() }' : 'const obj = { ...(()=>{return (()=>{})()})() }'}
+      ```, syntaxOptions
+
+      testCase ```
+        omitted comptime body with else still spreads
+        ---
+        obj := { comptime else {answer: 42} }
+        ---
+        ${enabled ? 'const obj = { ...(()=>{return undefined})() }' : 'const obj = { ...(()=>{return (()=>{return ({answer: 42})})()})() }'}
+      ```, syntaxOptions
+
+      testCase ```
+        omitted comptime else body still spreads
+        ---
+        obj := { comptime {answer: 42} else }
+        ---
+        ${enabled ? 'const obj = { ...(()=>{return {"answer":42}})() }' : 'const obj = { ...(()=>{return (()=>{})()})() }'}
+      ```, syntaxOptions
+
   testCase """
     require
     ---
@@ -391,6 +474,15 @@ describe "serialize", ->
     assert.throws (=> serialize { *[Math.PI]() {} }), /cannot serialize method with computed name/
     assert.throws (=> serialize { async [Number.EPSILON]() {} }), /cannot serialize method with computed name/
     assert.throws (=> serialize { get [Symbol.toStringTag]() 'Object' }), /cannot serialize method with computed name/
+  for keyword of ["function", "class"]
+    for suffix of ["$", "\\u0061", "\\u{61}"]
+      it `ES6 method named ${keyword}${suffix}`, =>
+        source := `${keyword}${suffix}(){return 42}`
+        object := vm.runInNewContext `({${source}})`
+        method := Object.values(object)[0]
+        serialized := serialize method
+        assert.equal serialized, `function ${source}`
+        assert.equal vm.runInNewContext(`(${serialized})()`), 42
   it "null-prototype objects", =>
     obj := Object.create null,
       foo: value: 1, writable: true, enumerable: true, configurable: true
