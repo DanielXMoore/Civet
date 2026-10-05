@@ -139,6 +139,7 @@ hx --health civet
 - [Jest plugin](https://github.com/DanielXMoore/Civet/tree/main/integration/jest)
 - [Gulp plugin](https://github.com/DanielXMoore/Civet/tree/main/integration/gulp)
 - [Bun plugin](https://github.com/DanielXMoore/Civet/blob/main/source/bun-civet.civet)
+- [Deno plugin](https://github.com/DanielXMoore/Civet/blob/main/source/deno-civet.civet)
 - [Meteor plugin](https://github.com/edemaine/meteor-civet)
 - [`<script>` tag](https://github.com/DanielXMoore/Civet/tree/main/integration/script)
 - [Civetman](https://github.com/zihan-ch/civetman) automatically compiles `.civet` files, making it easy to integrate with arbitrary build chains (see also [vite-plugin-civetman](https://github.com/krist7599555/vite-plugin-civetman))
