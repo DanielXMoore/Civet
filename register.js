@@ -41,6 +41,10 @@ register('@danielx/civet/esm', import.meta.url, {data: {
 
 */
 
+// Enable native mapping before loading the compiler or user code.
+// Available since Node 16.6.0 / 14.18.0; skip on older runtimes.
+process.setSourceMapsEnabled?.(true);
+
 try {
   const { register } = require('node:module');
   const { pathToFileURL } = require('node:url');
@@ -67,38 +71,4 @@ if (require.extensions) {
     });
     module._compile(js, filename);
   };
-}
-
-const outputCache = new Map
-
-function retrieveFile(path) {
-  if (!path.endsWith('.civet')) return
-
-  // If it's a file URL, convert to local path
-  // I could not find a way to handle non-URLs except to swallow an error
-  if (path.startsWith('file:')) {
-    try {
-      path = require('url').fileURLToPath(path)
-    } catch (e) {}
-  }
-
-  if (!outputCache.has(path)) {
-    outputCache.set(path, compile(fs.readFileSync(path), {
-      filename: path,
-      js: true,
-      inlineMap: true,
-      sync: true,
-    }));
-  }
-  return outputCache.get(path)
-}
-
-try {
-  require('@cspotcode/source-map-support').install({
-    environment: 'node',
-    hookRequire: true,
-    retrieveFile,
-  })
-} catch (e) {
-  // ignore missing dependency
 }
