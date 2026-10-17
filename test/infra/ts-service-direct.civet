@@ -392,10 +392,6 @@ describe "ts-service direct factory usage", ->
     assert.equal remapFileName('/workspace/file.civet.tsx', transpilers), '/workspace/file.civet.tsx'
 
   it "getSourceFileName remaps transpiled siblings through the service object", ->
-    // service.getSourceFileName wraps remapFileName + getCanonicalFileName;
-    // lines 156-157 of service.civet are only reached when the service-level
-    // helper is called directly (the host's resolveModuleNames uses the
-    // underlying remapFileName directly).
     tmpDir := mkdtempSync path.join tmpdir(), 'civet-svc-remap-'
     try
       writeFileSync path.join(tmpDir, 'tsconfig.json'),
@@ -406,14 +402,48 @@ describe "ts-service direct factory usage", ->
         logger: nullLogger
         discoverProjectFiles: false
       }
-      // .civet.tsx → .civet, lowercased on case-insensitive systems.
-      remapped := service.getSourceFileName '/Workspace/file.civet.tsx'
-      assert remapped.endsWith('file.civet'), `expected file.civet suffix, got: ${remapped}`
-      // Passthrough for non-transpilable extensions.
-      passthrough := service.getSourceFileName '/Workspace/plain.ts'
-      assert passthrough.endsWith('plain.ts'), `expected plain.ts suffix, got: ${passthrough}`
+      // These paths become editor-visible URIs; preserve directory and file casing.
+      assert.equal service.getSourceFileName('/Workspace/MixedCase.civet.tsx'), path.normalize('/Workspace/MixedCase.civet')
+      assert.equal service.getSourceFileName('/Workspace/PlainFile.ts'), path.normalize('/Workspace/PlainFile.ts')
     finally
       rmSync tmpDir, recursive: true, force: true
+
+  for discoverProjectFiles of [true, false]
+    it `preserves unopened file casing when creating snapshots (discovery=${discoverProjectFiles})`, ->
+      tmpDir := mkdtempSync path.join tmpdir(), 'CivetSnapshots-'
+      try
+        writeFileSync path.join(tmpDir, 'tsconfig.json'),
+          '{"compilerOptions":{"target":"es2020"},"include":["**/*"]}'
+        sourcePath := path.join tmpDir, 'MixedCase.civet'
+        writeFileSync sourcePath, 'export value := 1\n'
+        service := SharedTSService tmpDir + path.sep, {
+          plugins: [makeCivetPlugin()]
+          docFactory: directDocFactory
+          logger: nullLogger
+          discoverProjectFiles
+        }
+        // getMeta and getScriptSnapshot can each create the synthetic document.
+        if discoverProjectFiles
+          service.host.getMeta sourcePath
+        else
+          service.host.getScriptSnapshot sourcePath + '.tsx'
+        assert.equal service.host.getMeta(sourcePath)?.transpiledDoc?.uri,
+          URI.file(sourcePath + '.tsx').toString()
+        assert service.host.getScriptFileNames().includes(sourcePath + '.tsx'),
+          'loading a snapshot must preserve the script file name returned to TypeScript'
+        if discoverProjectFiles
+          // Rebuilding after close must recover the registered spelling even
+          // when a cache lookup supplies different casing.
+          service.host.closeDocument sourcePath
+          service.host.getMeta getCanonicalFileName(sourcePath)
+          assert.equal service.host.getMeta(sourcePath)?.transpiledDoc?.uri,
+            URI.file(sourcePath + '.tsx').toString()
+          unless ts.sys.useCaseSensitiveFileNames
+            assert service.host.getMeta(sourcePath.toUpperCase())?.transpiledDoc,
+              'metadata lookup must remain case-insensitive, including the extension'
+        service.dispose()
+      finally
+        rmSync tmpDir, recursive: true, force: true
 
   it "closeDocument drops the doc, snapshot, and transpiled sibling but keeps scriptFileNames", ->
     tmpDir := mkdtempSync path.join tmpdir(), 'civet-close-doc-'

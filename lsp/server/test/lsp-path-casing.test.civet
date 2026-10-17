@@ -1,0 +1,79 @@
+// Paths sent to the editor must preserve casing, even on case-insensitive
+// filesystems. A lowercased navigation URI can change VS Code's tab labels
+// and Quick Open history without renaming any files on disk.
+{ spawnLspServer, type LspClient } from ./lsp-harness.civet
+{ URI } from vscode-uri
+{ mkdtempSync, writeFileSync, rmSync } from node:fs
+{ tmpdir } from node:os
+path from node:path
+assert from assert
+
+describe "LSP path casing", ->
+  @timeout 60000
+  let client: LspClient
+  let root: string
+
+  uriFor := (name: string) => URI.file(path.join(root, name)).toString()
+
+  before ->
+    root = mkdtempSync path.join(tmpdir(), 'CivetPathCasing-')
+    writeFileSync path.join(root, 'tsconfig.json'), JSON.stringify {
+      compilerOptions:
+        target: 'ES2020'
+        module: 'ESNext'
+        moduleResolution: 'Bundler'
+        jsx: 'preserve'
+      include: ['**/*']
+    }
+    writeFileSync path.join(root, 'UnopenedTarget.civet'), 'export unopenedValue := 42\n'
+    client = spawnLspServer()
+    await client.request 'initialize', {
+      processId: process.pid
+      rootUri: URI.file(root).toString()
+      capabilities: {}
+      workspaceFolders: [{ uri: URI.file(root).toString(), name: 'Casing' }]
+    }
+    client.notify 'initialized', {}
+
+  after ->
+    await client.stop() if client
+    rmSync root, recursive: true, force: true
+
+  for extension of ['civet', 'ts']
+    it `preserves mixed-case ${extension} URIs in navigation and rename results`, ->
+      uri := uriFor `MixedCase.${extension}`
+      name := `casingValue_${extension}`
+      client.notify 'textDocument/didOpen', {
+        textDocument: { uri, languageId: (if extension is 'ts' then 'typescript' else 'civet'), version: 1,
+          text: `export const ${name} = 42\n${name}\n` }
+      }
+      await client.waitFor 'textDocument/publishDiagnostics', (p) => p.uri is uri
+      params := { textDocument: { uri }, position: { line: 1, character: 2 } }
+
+      for method of ['textDocument/definition', 'textDocument/references']
+        locations := await client.request method, { ...params, context: { includeDeclaration: true } }
+        assert locations?.length, `expected ${method} locations`
+        for location of locations
+          assert.equal location.uri, uri, method
+
+      symbols := await client.request 'workspace/symbol', { query: name }
+      assert symbols?.length, 'expected a workspace symbol'
+      for symbol of symbols
+        assert.equal symbol.location.uri, uri, 'workspace/symbol'
+
+      edit := await client.request 'textDocument/rename', { ...params, newName: 'renamedValue' }
+      assert.deepEqual Object.keys(edit.changes), [uri], 'rename must preserve the target URI'
+
+  it "preserves the casing of an unopened Civet definition target", ->
+    uri := uriFor 'Entry.civet'
+    client.notify 'textDocument/didOpen', {
+      textDocument: { uri, languageId: 'civet', version: 1,
+        text: '{ unopenedValue } from ./UnopenedTarget.civet\nunopenedValue\n' }
+    }
+    await client.waitFor 'textDocument/publishDiagnostics', (p) => p.uri is uri
+    locations := await client.request 'textDocument/definition', {
+      textDocument: { uri }
+      position: { line: 1, character: 2 }
+    }
+    assert locations?.length, 'expected a cross-file definition'
+    assert.equal locations[0].uri, uriFor('UnopenedTarget.civet')
