@@ -2,8 +2,10 @@ assert from assert
 path from path
 { parseArgs, makeOutputFilename, type Options, type ParsedArgs } from ../source/cli.civet
 { cli, version } from ../source/cli.civet
-{ writeFile, mkdir, rm, readFile, realpath } from fs/promises
+{ writeFile, mkdir, mkdtemp, rm, readFile, realpath } from fs/promises
 { tmpdir } from os
+{ spawnSync } from node:child_process
+{ fileURLToPath } from node:url
 
 function argsParse(args: string | string[], parsed: ParsedArgs): Promise<void>
   args = args.split /\s+/ if args <? 'string'
@@ -758,12 +760,61 @@ describe "CLI stdout error handler", ->
     assert.equal exitCode, 1
     assert stdErr.length > 0, "stderr had error output"
 
-// In-process CLI run-mode tests were removed: cli's run-mode branch does
-// `await import '../register.js'`, which installs a second .civet ESM
-// loader in the mocha worker — corrupting later imports in the same
-// worker and tanking parallel coverage.  Cover lib.hasAwait /
-// hasImportDeclaration / hasExportDeclaration directly if you need to
-// re-add tests for the esm-detection block in cli.civet.
+// Run-mode tests use subprocesses: importing ../register.js in the mocha
+// worker would install a second .civet ESM loader and corrupt later imports.
+describe "CLI native source maps", ->
+  @timeout 30000
+  repoRoot := path.resolve path.dirname(fileURLToPath(import.meta.url)), '..'
+  let directory: string
+
+  // The implicit object's closing brace shifts the throw from source line 5
+  // to generated line 6, so an unmapped stack cannot accidentally pass.
+  source := """
+    function explode
+      object :=
+        a: 1
+        b: 2
+      throw new Error 'civet-stack-regression'
+    explode()
+
+  """
+
+  before ->
+    directory = await mkdtemp path.join tmpdir(), 'civet-cli-source-maps-'
+
+  after ->
+    await rm directory, {recursive: true, force: true}
+
+  for mode of ['file', 'eval', 'stdin']
+    for esm of [false, true]
+      it `${mode} maps ${if esm then 'ESM' else 'CJS'} stack traces`, ->
+        input := if esm
+          // An export selects ESM execution without adding a source line.
+          source.replace 'function explode', 'export function explode'
+        else
+          source
+        args := [path.join(repoRoot, 'dist/civet'), '--no-config']
+        switch mode
+          when 'file'
+            fixture := path.join directory, 'stack.civet'
+            await writeFile fixture, input
+            args.push fixture
+          when 'eval'
+            args.push '-e', input
+          when 'stdin'
+            args.push '-'
+        {error, status, stderr} := spawnSync process.execPath, args, {
+          cwd: directory
+          encoding: 'utf8'
+          input: if mode is 'stdin' then input else undefined
+          timeout: 15000
+          // Registration must enable mapping without a flag inherited from mocha.
+          env: {...process.env, NODE_OPTIONS: '', NODE_DISABLE_COMPILE_CACHE: '1'}
+        }
+        assert.ifError error
+        assert.equal status, 1, stderr
+        assert.match stderr, /Error: civet-stack-regression/
+        assert.match stderr, /at explode \([^\r\n]+:5:9\)/
 
 describe "CLI piped stdin", ->
   it "compiles Civet code read from piped stdin to stdout", ->
