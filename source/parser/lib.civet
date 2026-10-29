@@ -32,6 +32,7 @@ import type {
   FinallyClause
   ClassElementName
   ClassExpression
+  CoffeeClassPrivate
   CoffeeClassPrototype
   CoffeeClassStatement
   ExpressionNode
@@ -137,6 +138,7 @@ import {
   bracedBlock
   duplicateBlock
   hoistRefDecs
+  insertBeforeInBlock
   makeEmptyBlock
   processBlocks
 } from ./block.civet
@@ -2007,6 +2009,46 @@ function isThisScope(node: ASTNodeObject): node is FunctionExpression | MethodDe
 function isSuperCall(node: ASTNodeObject): node is CallExpression
   node.type is "CallExpression" and superIndex(node) >= 0
 
+/** `super(...)` calls in the same `this` scope, including nested ones */
+function gatherSuperCalls(node: ASTNode): CallExpression[]
+  gatherRecursive(node, isSuperCall, isThisScope).flatMap (call) =>
+    [call, ...gatherSuperCalls call.children]
+
+/**
+ * A computed method name like `[getKey()]` is evaluated once, when the
+ * class is defined, so cache it in a ref for `super[ref](...)`:
+ * `[ref = getKey()]() { return super[ref]() }`.
+ * Literal keys are returned unchanged.
+ */
+function cacheComputedKey(ce: ClassExpression, id: ClassElementName): ClassElementName
+  return id unless id is like {type: "ComputedPropertyName"}
+  { expression } := id
+  // Literals, including the implicit signed number `-1:`, can be reevaluated
+  return id if expression is like {type: "Literal"}, {type: "StringLiteral"}, {type: "NumericLiteral"} or (id.implicit and Array.isArray expression)
+  ref := makeRef "key"
+  replaceNode expression, makeNode({
+    type: "AssignmentExpression"
+    children: [ref, " = ", expression]
+    lhs: ref as any
+    assigned: ref
+    expression: expression as any
+    names: []
+  }), id
+  // Declare the ref outside the class, in the block containing it
+  { ancestor, child } := findAncestor ce, (ancestor): ancestor is BlockStatement => Boolean
+    ancestor.type is "BlockStatement" and (!ancestor.bare or ancestor.root) and not (ancestor is like {subtype: "ClassBody"})
+  assert ancestor, "cacheComputedKey: block not found"
+  insertBeforeInBlock ancestor, child, ["", {
+    type: "Declaration"
+    children: ["let ", ref]
+    names: []
+  } as! Declaration, ";"]
+  return {
+    type: "ComputedPropertyName"
+    children: ["[", ref, "]"]
+    expression: ref
+  }
+
 /** Index of the leading `super` keyword in a call, skipping whitespace */
 function superIndex(call: CallExpression): number
   { children } := call
@@ -2015,6 +2057,10 @@ function superIndex(call: CallExpression): number
 
 function isThis(node: ASTNodeObject): node is Identifier
   node.type is "Identifier" and node.name is "this"
+
+function isIdentifierNamed(name: string?)
+  (node: ASTNodeObject): node is Identifier =>
+    node.type is "Identifier" and node.name is name
 
 /** Class name identifier replacing `this`, keeping its source location */
 function makeThisReplacement(thisNode: Identifier, name: string): Identifier
@@ -2086,41 +2132,61 @@ function processCoffeeClasses(statements: StatementTuple[]): void
     // inside arrow functions but not nested functions or classes.
     for each method of gatherRecursive ce.body, .type is "MethodDefinition", .type is "ClassExpression"
       continue if method.name is "constructor"
-      superCalls := gatherRecursive method.block, isSuperCall, isThisScope
+      superCalls := gatherSuperCalls [method.parameters, method.block]
+      continue unless superCalls#
+      access := makeElementAccess cacheComputedKey ce, method.id as ClassElementName
       for each call of superCalls
-        call.children.splice superIndex(call) + 1, 0,
-          deepCopy makeElementAccess method.id as ClassElementName
+        call.children.splice superIndex(call) + 1, 0, deepCopy access
 
     // In a CoffeeScript class, `x = y` makes a private variable x visible
     // only within the class scope only, implemented via IIFE wrapper.
     // In a CoffeeScript class, `name: value` (where value is not a
     // function) is a prototype assignment Class.prototype.name = value,
     // and an executable statement like `@include M` runs on the class;
-    // both are lifted out of the class body via the same IIFE wrapper,
-    // in source order.
-    privates := expressions.filter &[1]?.type is "CoffeeClassPrivate"
-    // Iterate-and-narrow to get a properly-typed array:
+    // both are lifted out of the class body via the same IIFE wrapper.
+    // Privates, prototype fields and statements keep their source order.
+    // Iterate-and-narrow to get properly-typed nodes:
     // `filter` can't carry a tuple-element narrowing into the result.
-    liftedNodes: (CoffeeClassPrototype | CoffeeClassStatement)[] := []
-    for [, p] of expressions
-      if p?.type is "CoffeeClassPrototype" or p?.type is "CoffeeClassStatement"
-        liftedNodes.push p
+    lifted: [StatementTuple, CoffeeClassPrivate | CoffeeClassPrototype | CoffeeClassStatement][] := []
+    for entry of expressions
+      p := entry[1]
+      if p?.type is "CoffeeClassPrivate" or p?.type is "CoffeeClassPrototype" or p?.type is "CoffeeClassStatement"
+        lifted.push [entry, p]
 
-    { parent, target } := ce
-    unless privates# or liftedNodes#
+    // In `NS.A = class A extends A`, the heritage sees the class's own
+    // uninitialized `A`, so pass the superclass in as an IIFE parameter,
+    // as CoffeeScript does: `NS.A = ((superClass) => ...)(A)`
+    superArgs: [ASTRef, ASTNode][] := []
+    { heritage, parent, target } := ce
+    // heritage is `[extendsClause, implementsClause]`, or just an
+    // implementsClause when there's no `extends`
+    if target and Array.isArray heritage
+      extendsClause := heritage[0] as [ASTLeaf, WSNode, ASTNode]
+      superclass := extendsClause[2]
+      if gatherRecursive(superclass, isIdentifierNamed ce.name)#
+        superRef := makeRef "superClass"
+        extendsClause[2] = superRef
+        superArgs.push [superRef, superclass]
+
+    unless lifted# or superArgs#
       // `class NS.A` becomes `NS.A = class A`
       if target
         replaceNode ce, makeClassTargetAssignment(target, ce), parent
       continue
 
-    // Remove privates and lifted nodes from class body, in place
+    // Remove lifted nodes from class body, in place
+    liftedEntries := new Set lifted.map &[0]
     for i of [expressions# >.. 0]
-      t := expressions[i][1]?.type
-      if t is "CoffeeClassPrivate" or t is "CoffeeClassPrototype" or t is "CoffeeClassStatement"
-        expressions.splice i, 1
+      expressions.splice i, 1 if liftedEntries.has expressions[i]
 
-    let wrapped: ASTNode
-    if liftedNodes#
+    // Privates before the first prototype field or statement run before
+    // the class, so static initializers can see them.
+    firstIndex .= lifted.findIndex &[1].type is not "CoffeeClassPrivate"
+    firstIndex = lifted# if firstIndex < 0
+    body: StatementTuple[] := lifted[...firstIndex].map &[0]
+    if firstIndex is lifted#
+      body.push [indent, wrapWithReturn ce]
+    else
       // The class needs a local name to receive prototype assignments.
       // Named classes use their declared name directly; anonymous
       // classes are bound to a generated ref via `let _Class = class {}`
@@ -2137,27 +2203,40 @@ function processCoffeeClasses(statements: StatementTuple[]): void
           children: ["let ", classRef, " = ", ce]
           names: []
         } as! Declaration
-      body: StatementTuple[] := [...privates]
       body.push [indent, classStatement]
-      for p of liftedNodes
-        if p.type is "CoffeeClassPrototype"
+      classIndex := body#
+      // Ref for the class in statements that shadow its name
+      let shadowRef: ASTRef?
+      for each [entry, p] of lifted[firstIndex..]
+        if p.type is "CoffeeClassPrivate"
+          body.push entry
+        else if p.type is "CoffeeClassPrototype"
           body.push [indent, makePrototypeAssignment(className, p.id, p.exp)]
         else
           // `this` in the class body is the class, but the IIFE is an
-          // arrow function, so substitute the class name.
-          for each t of gatherRecursive p.expression, isThis, isThisScope
-            replaceNode t, className <? "string" ? makeThisReplacement(t, className) : className
+          // arrow function, so substitute the class name, or a ref if
+          // the statement may bind that name (`(A) => @x()`).
+          thisNodes := gatherRecursive p.expression, isThis, isThisScope
+          if className <? "string" and gatherRecursive(p.expression, isIdentifierNamed className)#
+            unless shadowRef
+              shadowRef = makeRef "_Class"
+              body.splice classIndex, 0, [indent, makeNode {
+                type: "Declaration"
+                children: ["const ", shadowRef, " = ", className]
+                names: []
+              } as! Declaration]
+            for each t of thisNodes
+              replaceNode t, shadowRef
+          else
+            for each t of thisNodes
+              replaceNode t, className <? "string" ? makeThisReplacement(t, className) : className
           body.push [indent, p.expression]
       body.push [indent, makeNode {
         type: "ReturnStatement"
         children: ["return ", className]
         expression: className
       }]
-      wrapped = wrapIIFE body
-    else
-      wrapped = wrapIIFE
-        . ...privates
-        . [indent, wrapWithReturn ce]
+    let wrapped: ASTNode = wrapIIFE body, undefined, undefined, superArgs
 
     // Outer assignment for named classes: `class Foo` becomes
     // `Foo = (IIFE)` so the IIFE result is captured into the binding.
