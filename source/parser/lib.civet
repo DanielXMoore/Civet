@@ -31,7 +31,9 @@ import type {
   ElseClause
   FinallyClause
   ClassElementName
+  ClassExpression
   CoffeeClassPrototype
+  CoffeeClassStatement
   ExpressionNode
   ForStatement
   FunctionExpression
@@ -1951,12 +1953,25 @@ function processBreaksContinues(statements: StatementTuple[]): void
 
 /**
  * Construct `ClassName.prototype<access> = exp` for a lifted
- * CoffeeClassPrototype entry, where <access> is `.name` for plain
- * identifiers, `[Symbol.foo]` for symbol-keyed elements, or `[key]`
- * for other computed forms.
+ * CoffeeClassPrototype entry, with <access> from makeElementAccess.
  */
 function makePrototypeAssignment(className: ASTNode, id: ClassElementName, exp: ExpressionNode | ASTRef): ASTNode
-  access: ASTNode .=
+  return makeNode {
+    type: "AssignmentExpression"
+    children: [className, ".prototype", makeElementAccess(id), " = ", exp]
+    lhs: className as any
+    assigned: className
+    expression: exp as any
+    names: []
+  }
+
+/**
+ * Member access for a class element name: `.name` for plain identifiers,
+ * `[Symbol.foo]` for symbol-keyed elements, or `[key]` for other
+ * computed forms.
+ */
+function makeElementAccess(id: ClassElementName): ASTNode
+  return
     // SymbolElement already has the form `["[", SymbolLiteral, "]"]`
     if Array.isArray id then id
     // ComputedPropertyName children already include the brackets.
@@ -1973,13 +1988,41 @@ function makePrototypeAssignment(className: ASTNode, id: ClassElementName, exp: 
     // round-trip via bracket access.
     else
       ["[", id, "]"]
+
+/** `target = exp` for a CoffeeScript qualified class name `class NS.A` */
+function makeClassTargetAssignment(target: ASTNode[], exp: ASTNode): ASTNode
   return makeNode {
     type: "AssignmentExpression"
-    children: [className, ".prototype", access, " = ", exp]
-    lhs: className as any
-    assigned: className
+    children: [target, " = ", exp]
+    lhs: target as any
+    assigned: target
     expression: exp as any
     names: []
+  }
+
+/** Nodes that start a new `this`/`super` scope (arrow functions don't) */
+function isThisScope(node: ASTNodeObject): node is FunctionExpression | MethodDefinition | ClassExpression
+  node.type is "FunctionExpression" or node.type is "MethodDefinition" or node.type is "ClassExpression"
+
+function isSuperCall(node: ASTNodeObject): node is CallExpression
+  node.type is "CallExpression" and superIndex(node) >= 0
+
+/** Index of the leading `super` keyword in a call, skipping whitespace */
+function superIndex(call: CallExpression): number
+  { children } := call
+  i := children.findIndex & is like {token: "super"}
+  i >= 0 and children[...i].every(isWhitespaceOrEmpty) ? i : -1
+
+function isThis(node: ASTNodeObject): node is Identifier
+  node.type is "Identifier" and node.name is "this"
+
+/** Class name identifier replacing `this`, keeping its source location */
+function makeThisReplacement(thisNode: Identifier, name: string): Identifier
+  return makeNode {
+    type: "Identifier"
+    name
+    names: [name]
+    children: [{ $loc: (thisNode.children[0] as ASTLeaf).$loc, token: name }]
   }
 
 function processCoffeeClasses(statements: StatementTuple[]): void
@@ -2038,30 +2081,46 @@ function processCoffeeClasses(statements: StatementTuple[]): void
           when "ArrowFunction"
             replaceNode assignment, convertArrowFunctionToMethod(id, expression)
 
+    // In a CoffeeScript method, `super(args)` calls the parent's method
+    // of the same name: `super.name(args)`.  `super` is lexical, so look
+    // inside arrow functions but not nested functions or classes.
+    for each method of gatherRecursive ce.body, .type is "MethodDefinition", .type is "ClassExpression"
+      continue if method.name is "constructor"
+      superCalls := gatherRecursive method.block, isSuperCall, isThisScope
+      for each call of superCalls
+        call.children.splice superIndex(call) + 1, 0,
+          deepCopy makeElementAccess method.id as ClassElementName
+
     // In a CoffeeScript class, `x = y` makes a private variable x visible
     // only within the class scope only, implemented via IIFE wrapper.
     // In a CoffeeScript class, `name: value` (where value is not a
     // function) is a prototype assignment Class.prototype.name = value,
-    // also lifted out of the class body via the same IIFE wrapper.
+    // and an executable statement like `@include M` runs on the class;
+    // both are lifted out of the class body via the same IIFE wrapper,
+    // in source order.
     privates := expressions.filter &[1]?.type is "CoffeeClassPrivate"
-    // Iterate-and-narrow to get a properly-typed CoffeeClassPrototype[]:
+    // Iterate-and-narrow to get a properly-typed array:
     // `filter` can't carry a tuple-element narrowing into the result.
-    prototypeNodes: CoffeeClassPrototype[] := []
+    liftedNodes: (CoffeeClassPrototype | CoffeeClassStatement)[] := []
     for [, p] of expressions
-      if p?.type is "CoffeeClassPrototype"
-        prototypeNodes.push p
-    continue unless privates# or prototypeNodes#
+      if p?.type is "CoffeeClassPrototype" or p?.type is "CoffeeClassStatement"
+        liftedNodes.push p
 
-    { parent } := ce
+    { parent, target } := ce
+    unless privates# or liftedNodes#
+      // `class NS.A` becomes `NS.A = class A`
+      if target
+        replaceNode ce, makeClassTargetAssignment(target, ce), parent
+      continue
 
-    // Remove privates and prototypes from class body, in place
+    // Remove privates and lifted nodes from class body, in place
     for i of [expressions# >.. 0]
       t := expressions[i][1]?.type
-      if t is "CoffeeClassPrivate" or t is "CoffeeClassPrototype"
+      if t is "CoffeeClassPrivate" or t is "CoffeeClassPrototype" or t is "CoffeeClassStatement"
         expressions.splice i, 1
 
     let wrapped: ASTNode
-    if prototypeNodes#
+    if liftedNodes#
       // The class needs a local name to receive prototype assignments.
       // Named classes use their declared name directly; anonymous
       // classes are bound to a generated ref via `let _Class = class {}`
@@ -2080,8 +2139,15 @@ function processCoffeeClasses(statements: StatementTuple[]): void
         } as! Declaration
       body: StatementTuple[] := [...privates]
       body.push [indent, classStatement]
-      for p of prototypeNodes
-        body.push [indent, makePrototypeAssignment(className, p.id, p.exp)]
+      for p of liftedNodes
+        if p.type is "CoffeeClassPrototype"
+          body.push [indent, makePrototypeAssignment(className, p.id, p.exp)]
+        else
+          // `this` in the class body is the class, but the IIFE is an
+          // arrow function, so substitute the class name.
+          for each t of gatherRecursive p.expression, isThis, isThisScope
+            replaceNode t, className <? "string" ? makeThisReplacement(t, className) : className
+          body.push [indent, p.expression]
       body.push [indent, makeNode {
         type: "ReturnStatement"
         children: ["return ", className]
@@ -2095,9 +2161,12 @@ function processCoffeeClasses(statements: StatementTuple[]): void
 
     // Outer assignment for named classes: `class Foo` becomes
     // `Foo = (IIFE)` so the IIFE result is captured into the binding.
+    // Qualified names assign to their target instead: `NS.Foo = (IIFE)`.
     // Anonymous classes skip this — replaceNode below puts the IIFE
     // directly where the ClassExpression was.
-    if ce.binding
+    if target
+      wrapped = makeClassTargetAssignment target, wrapped
+    else if ce.binding
       binding .= trimFirstSpace ce.binding
       wrapped = makeNode {
         type: "AssignmentExpression"

@@ -111,6 +111,7 @@ import type {
   CaseBlock,
   CaseClause,
   Children,
+  CoffeeClassStatement,
   CommentNode,
   ComptimeStatement,
   Condition,
@@ -1379,13 +1380,15 @@ ClassDeclaration
 
 # https://262.ecma-international.org/#prod-ClassExpression
 ClassExpression
-  Decorators?:decorators ( Abstract __ )?:abstract Class:class_ !":" ClassBinding?:binding ClassHeritage?:heritage ClassBody:body ->
+  Decorators?:decorators ( Abstract __ )?:abstract Class:class_ !":" ( CoffeeClassTarget / ClassBinding )?:b ClassHeritage?:heritage ClassBody:body ->
+    { binding, target } := b and "target" in b ? b : { binding: b, target: undefined }
     id := binding?.[0]
     return {
       type: "ClassExpression",
       decorators,
       abstract,
       binding,
+      target,
       id,
       name: id is like {name} ? id.name : undefined,
       heritage,
@@ -1395,6 +1398,23 @@ ClassExpression
 
 ClassBinding
   !EOS BindingIdentifier TypeParameters? -> [$2, $3]
+
+# CoffeeScript qualified class name: `class NS.A` or `class @A`.
+# The class is named by the last segment, and processCoffeeClasses
+# assigns it to the full target: `NS.A = class A {}`.
+CoffeeClassTarget
+  CoffeeClassesEnabled !EOS __:ws CoffeeClassTargetBase:base ( Dot Identifier )*:rest ->
+    target := [...base, ...rest.flat()]
+    id := target.at(-1) as Identifier
+    return {
+      // The class name is a copy of the last segment, which stays in target
+      binding: [prepend(ws, { ...id, children: [...id.children] }), undefined] as const
+      target
+    }
+
+CoffeeClassTargetBase
+  AtThis Identifier -> [$1, ".", $2]
+  IdentifierReference Dot Identifier
 
 # https://262.ecma-international.org/#prod-ClassHeritage
 ClassHeritage
@@ -1583,6 +1603,16 @@ ClassElement
       type: static_ ? "CoffeeClassPublic" : "CoffeeClassPrivate",
       children: [decorators, declare, access, static_, override, assignment],
       assignment
+    }
+  # CoffeeScript executable class body statement: @include M
+  # processCoffeeClasses runs it after the class, with `this` as the class
+  # (but `@name(params)` followed by an indented block is a static method)
+  CoffeeClassesEnabled !"@@" &"@" ForbidIndentedApplication AssignmentExpression?:expression RestoreIndentedApplication !IndentedFurther &StatementDelimiter ::CoffeeClassStatement ->
+    return $skip unless expression is like {type: "CallExpression"}
+    return {
+      type: "CoffeeClassStatement",
+      expression: expression as CallExpression,
+      children: [expression],
     }
   # NOTE: Combined optional static and Method/Field definition
   Decorators?:decorators DeclareModifier?:declare AccessModifier?:access StaticModifier?:static_ OverrideModifier?:override ClassElementDefinition:definition ->

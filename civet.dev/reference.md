@@ -4066,6 +4066,16 @@ class X
   @staticFunc: -> @publicStaticVar
 </Playground>
 
+Class bodies can run code, method `super(...)` calls the parent method
+of the same name, and class names can be qualified:
+
+<Playground>
+"civet coffeeClasses autoVar"
+class NS.Y extends X
+  @include Mixin
+  get: -> super() + 1
+</Playground>
+
 ### IIFE Wrapper
 
 In some CommonJS contexts
