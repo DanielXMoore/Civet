@@ -112,7 +112,9 @@ import type {
   CaseBlock,
   CaseClause,
   Children,
+  ClassBody,
   CoffeeClassStatement,
+  CoffeeClassStaticArrow,
   CommentNode,
   ComptimeStatement,
   ComputedPropertyName,
@@ -1541,7 +1543,7 @@ ImplementsTarget
 
 # https://262.ecma-international.org/#prod-ClassBody
 # NOTE: Nesting and indentation sensitive
-ClassBody
+ClassBody ::ClassBody
   # NOTE: ClassBracedContent single-line alternative always succeeds with
   # (possibly empty) array, so `?:expressions` never captures undefined.
   __:ws1 OpenBrace:open AllowAll ClassBracedContent:expressions RestoreAll __:ws2 CloseBrace:close ->
@@ -1549,6 +1551,14 @@ ClassBody
       type: "BlockStatement",
       subtype: "ClassBody",
       children: [ws1, open, expressions, ws2, close],
+      expressions,
+    }
+  # CoffeeScript single-line class body: `class A then m: -> 1`
+  CoffeeClassesEnabled Then InsertOpenBrace:open ClassBracedContent:expressions InsertCloseBrace:close ->
+    return {
+      type: "BlockStatement",
+      subtype: "ClassBody",
+      children: [open, expressions, expressions# ? " " : "", close],
       expressions,
     }
   InsertOpenBrace NestedClassElements?:expressions InsertNewline InsertIndent InsertCloseBrace ->
@@ -1561,22 +1571,22 @@ ClassBody
     }
 
 # based on BracedContent
-ClassBracedContent
+ClassBracedContent ::StatementTuple[]
   NestedClassElements
   # based on SingleLineStatements
   ForbidNewlineBinaryOp ( ( _? !EOS ) ClassElement StatementDelimiter )*:stmts RestoreNewlineBinaryOp ->
-    return stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
+    return stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim]) as StatementTuple[]
 
-NestedClassElements
+NestedClassElements ::StatementTuple[]
   PushIndent NestedClassElement*:elements TrailingNestedCommentLine*:trailing PopIndent ->
     return $skip unless elements# or trailing#
     // Each element of elements is a list of same-line class elements. Flatten.
-    expressions := elements.flat()
+    expressions := elements.flat() as StatementTuple[]
     // Standalone same-or-deeper-indent comment-only trailing lines (#832)
     // stay inside the class body's braces.  Inline trailing comments on
     // the last element continue to escape — those typically annotate the
     // surrounding class, not a member.
-    trailing# ? [...expressions, ...trailing] : expressions
+    trailing# ? [...expressions, ...trailing] as StatementTuple[] : expressions
 
 NestedClassElement
   Nested:nested ClassElementPart+:elements ->
@@ -1623,6 +1633,16 @@ ClassElement
       type: "CoffeeClassStatement",
       expression: expression as CallExpression,
       children: [expression],
+    }
+  # CoffeeScript static bound method `@name: =>` is a static arrow field,
+  # so `this` is the class: `static name = () => ...`
+  CoffeeClassesEnabled StaticModifier:static_ ClassElementName:id _? Colon __ AssignmentExpression:exp ::CoffeeClassStaticArrow ->
+    return $skip unless exp is like {type: "ArrowFunction"}
+    return {
+      type: "CoffeeClassStaticArrow",
+      id,
+      exp,
+      children: [static_, id, " = ", exp],
     }
   # NOTE: Combined optional static and Method/Field definition
   Decorators?:decorators DeclareModifier?:declare AccessModifier?:access StaticModifier?:static_ OverrideModifier?:override ClassElementDefinition:definition ->
