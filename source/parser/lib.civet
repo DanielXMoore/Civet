@@ -9,6 +9,7 @@
 import type {
   AccessStart
   AmpersandFunction
+  ArrowFunction
   ASTLeaf
   ASTNode
   ASTNodeObject
@@ -2104,6 +2105,15 @@ function processCoffeeClasses(statements: StatementTuple[]): void
           modifier: {}
           returnType: undefined
         block := makeEmptyBlock()
+        // A derived class must call the parent constructor before binding;
+        // heritage is an array when the class has an `extends` clause
+        if Array.isArray ce.heritage
+          superCall := makeNode {
+            type: "CallExpression"
+            children: [{ token: "super" }, "(...arguments)"]
+            parent: block
+          } as! CallExpression
+          block.expressions.push [indent, superCall, ";"]
         construct = {}
           ...signature
           type: "MethodDefinition"
@@ -2119,29 +2129,40 @@ function processCoffeeClasses(statements: StatementTuple[]): void
         ...for each name of autoBindMethodNames
           [indent, ["this.", name, " = this.", name, ".bind(this)"], ";"] satisfies StatementTuple
 
-    // Convert public static function and arrow assignments to methods
-    staticMethods := new Set<CoffeeClassPublic>
-    for each [, entry] of expressions when entry?.type is "CoffeeClassPublic"
-      if assignment := entry.assignment
+    // Convert public static function assignments to methods.
+    // Static bound methods (`@name = =>` and `@name: =>`) stay static
+    // arrow fields, where `this` is the class.
+    // Neither runs code when the class is defined, so they're not lifted.
+    staticFunctions := new Set<CoffeeClassPublic>
+    staticArrows: [ClassElementName, ArrowFunction][] := []
+    for each [, entry] of expressions
+      if entry?.type is "CoffeeClassStaticArrow"
+        staticArrows.push [entry.id, entry.exp]
+      else if entry?.type is "CoffeeClassPublic"
+        { assignment } := entry
         { expression, lhs: [[,id]] } := assignment
         switch expression.type
           when "FunctionExpression"
             replaceNode assignment, convertFunctionToMethod(id, expression)
-            staticMethods.add entry
+            staticFunctions.add entry
           when "ArrowFunction"
-            replaceNode assignment, convertArrowFunctionToMethod(id, expression)
-            staticMethods.add entry
+            staticArrows.push [id as ClassElementName, expression]
+            staticFunctions.add entry
 
     // In a CoffeeScript method, `super(args)` calls the parent's method
     // of the same name: `super.name(args)`.  `super` is lexical, so look
     // inside arrow functions but not nested functions or classes.
-    for each method of gatherRecursive ce.body, .type is "MethodDefinition", .type is "ClassExpression"
-      continue if method.name is "constructor"
-      superCalls := gatherSuperCalls [method.parameters, method.block]
-      continue unless superCalls#
-      access := makeElementAccess cacheComputedKey ce, method.id as ClassElementName
+    rewriteSuperCalls := (id: ClassElementName, node: ASTNode) =>
+      superCalls := gatherSuperCalls node
+      return unless superCalls#
+      access := makeElementAccess cacheComputedKey ce, id
       for each call of superCalls
         call.children.splice superIndex(call) + 1, 0, deepCopy access
+    for each method of gatherRecursive ce.body, .type is "MethodDefinition", .type is "ClassExpression"
+      continue if method.name is "constructor"
+      rewriteSuperCalls method.id as ClassElementName, [method.parameters, method.block]
+    for each [id, arrow] of staticArrows
+      rewriteSuperCalls id, arrow
 
     // In a CoffeeScript class, `x = y` makes a private variable x visible
     // only within the class scope only, implemented via IIFE wrapper.
@@ -2158,7 +2179,7 @@ function processCoffeeClasses(statements: StatementTuple[]): void
       p := entry[1]
       if p?.type is "CoffeeClassPrivate" or p?.type is "CoffeeClassPrototype" or p?.type is "CoffeeClassStatement"
         lifted.push [entry, p]
-      else if p?.type is "CoffeeClassPublic" and not staticMethods.has p
+      else if p?.type is "CoffeeClassPublic" and not staticFunctions.has p
         lifted.push [entry, p]
 
     // In `NS.A = class A extends A`, the heritage sees the class's own
