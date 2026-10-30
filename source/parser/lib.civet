@@ -33,6 +33,7 @@ import type {
   ClassElementName
   ClassExpression
   CoffeeClassPrivate
+  CoffeeClassPublic
   CoffeeClassPrototype
   CoffeeClassStatement
   ExpressionNode
@@ -2118,14 +2119,17 @@ function processCoffeeClasses(statements: StatementTuple[]): void
           [indent, ["this.", name, " = this.", name, ".bind(this)"], ";"] satisfies StatementTuple
 
     // Convert public static function and arrow assignments to methods
+    staticMethods := new Set<CoffeeClassPublic>
     for each [, entry] of expressions when entry?.type is "CoffeeClassPublic"
       if assignment := entry.assignment
         { expression, lhs: [[,id]] } := assignment
         switch expression.type
           when "FunctionExpression"
             replaceNode assignment, convertFunctionToMethod(id, expression)
+            staticMethods.add entry
           when "ArrowFunction"
             replaceNode assignment, convertArrowFunctionToMethod(id, expression)
+            staticMethods.add entry
 
     // In a CoffeeScript method, `super(args)` calls the parent's method
     // of the same name: `super.name(args)`.  `super` is lexical, so look
@@ -2144,13 +2148,16 @@ function processCoffeeClasses(statements: StatementTuple[]): void
     // function) is a prototype assignment Class.prototype.name = value,
     // and an executable statement like `@include M` runs on the class;
     // both are lifted out of the class body via the same IIFE wrapper.
-    // Privates, prototype fields and statements keep their source order.
+    // Static fields like `@x = y` also run code, so they may be lifted
+    // too, to keep source order (see the split below).
     // Iterate-and-narrow to get properly-typed nodes:
     // `filter` can't carry a tuple-element narrowing into the result.
-    lifted: [StatementTuple, CoffeeClassPrivate | CoffeeClassPrototype | CoffeeClassStatement][] := []
+    lifted: [StatementTuple, CoffeeClassPrivate | CoffeeClassPrototype | CoffeeClassStatement | CoffeeClassPublic][] := []
     for entry of expressions
       p := entry[1]
       if p?.type is "CoffeeClassPrivate" or p?.type is "CoffeeClassPrototype" or p?.type is "CoffeeClassStatement"
+        lifted.push [entry, p]
+      else if p?.type is "CoffeeClassPublic" and not staticMethods.has p
         lifted.push [entry, p]
 
     // In `NS.A = class A extends A`, the heritage sees the class's own
@@ -2168,23 +2175,37 @@ function processCoffeeClasses(statements: StatementTuple[]): void
         extendsClause[2] = superRef
         superArgs.push [superRef, superclass]
 
-    unless lifted# or superArgs#
+    // The class runs its static field initializers where it's defined.
+    // Split the body at the first element that can't keep source order
+    // relative to that point: one that needs the class (a prototype
+    // field, a statement, or a private using `this`), or a static field
+    // followed by a private that would otherwise run before it.
+    // Before the split, privates run before the class and static fields
+    // stay in it.  From the split on, everything runs after the class in
+    // source order, as in CoffeeScript.
+    split .= lifted.findIndex ([, p]) =>
+      p.type is "CoffeeClassPrototype" or p.type is "CoffeeClassStatement" or
+      (p.type is "CoffeeClassPrivate" and gatherRecursive(p, isThis, isThisScope)#)
+    split = lifted# if split < 0
+    lastPrivate := lifted[...split].findLastIndex &[1].type is "CoffeeClassPrivate"
+    firstStatic := lifted.findIndex &[1].type is "CoffeeClassPublic"
+    split = firstStatic if 0 <= firstStatic < lastPrivate
+    before := lifted[...split].filter &[1].type is "CoffeeClassPrivate"
+    after := lifted[split..]
+
+    unless before# or after# or superArgs#
       // `class NS.A` becomes `NS.A = class A`
       if target
         replaceNode ce, makeClassTargetAssignment(target, ce), parent
       continue
 
     // Remove lifted nodes from class body, in place
-    liftedEntries := new Set lifted.map &[0]
+    liftedEntries := new Set [...before, ...after].map &[0]
     for i of [expressions# >.. 0]
       expressions.splice i, 1 if liftedEntries.has expressions[i]
 
-    // Privates before the first prototype field or statement run before
-    // the class, so static initializers can see them.
-    firstIndex .= lifted.findIndex &[1].type is not "CoffeeClassPrivate"
-    firstIndex = lifted# if firstIndex < 0
-    body: StatementTuple[] := lifted[...firstIndex].map &[0]
-    if firstIndex is lifted#
+    body: StatementTuple[] := before.map &[0]
+    unless after#
       body.push [indent, wrapWithReturn ce]
     else
       // The class needs a local name to receive prototype assignments.
@@ -2205,32 +2226,51 @@ function processCoffeeClasses(statements: StatementTuple[]): void
         } as! Declaration
       body.push [indent, classStatement]
       classIndex := body#
-      // Ref for the class in statements that shadow its name
+      // Ref for the class in elements that shadow its name
       let shadowRef: ASTRef?
-      for each [entry, p] of lifted[firstIndex..]
-        if p.type is "CoffeeClassPrivate"
-          body.push entry
-        else if p.type is "CoffeeClassPrototype"
-          body.push [indent, makePrototypeAssignment(className, p.id, p.exp)]
+      // `this` in the class body is the class, but the IIFE is an arrow
+      // function, so substitute the class name, or a ref if the element
+      // may bind that name (`(A) => @x()`).
+      replaceThis := (node: ASTNode) =>
+        thisNodes := gatherRecursive node, isThis, isThisScope
+        return unless thisNodes#
+        if className <? "string" and gatherRecursive(node, isIdentifierNamed className)#
+          unless shadowRef
+            shadowRef = makeRef "_Class"
+            body.splice classIndex, 0, [indent, makeNode {
+              type: "Declaration"
+              children: ["const ", shadowRef, " = ", className]
+              names: []
+            } as! Declaration]
+          for each t of thisNodes
+            replaceNode t, shadowRef
         else
-          // `this` in the class body is the class, but the IIFE is an
-          // arrow function, so substitute the class name, or a ref if
-          // the statement may bind that name (`(A) => @x()`).
-          thisNodes := gatherRecursive p.expression, isThis, isThisScope
-          if className <? "string" and gatherRecursive(p.expression, isIdentifierNamed className)#
-            unless shadowRef
-              shadowRef = makeRef "_Class"
-              body.splice classIndex, 0, [indent, makeNode {
-                type: "Declaration"
-                children: ["const ", shadowRef, " = ", className]
-                names: []
-              } as! Declaration]
-            for each t of thisNodes
-              replaceNode t, shadowRef
+          for each t of thisNodes
+            replaceNode t, className <? "string" ? makeThisReplacement(t, className) : className
+      for each [entry, p] of after
+        switch p.type
+          when "CoffeeClassPrivate"
+            replaceThis p
+            body.push entry
+          when "CoffeeClassPrototype"
+            assignment := makePrototypeAssignment className, p.id, p.exp
+            // The value wasn't in the class body's children, so it has
+            // no parent pointers yet
+            addParentPointers assignment
+            replaceThis p.exp
+            body.push [indent, assignment]
+          when "CoffeeClassStatement"
+            replaceThis p.expression
+            body.push [indent, p.expression]
           else
-            for each t of thisNodes
-              replaceNode t, className <? "string" ? makeThisReplacement(t, className) : className
-          body.push [indent, p.expression]
+            // Static field `@x = y` becomes `A.x = y`.  The field name
+            // itself isn't a reference to the class.
+            { assignment } := p
+            replaceThis [assignment.lhs[1..], assignment.expression]
+            [, id] := assignment.lhs[0]
+            replaceNode id, [className, makeElementAccess(id as ClassElementName)], assignment
+            assignment.names = assignment.lhs[1..].flatMap ([, l]) => namesOf l
+            body.push [indent, assignment]
       body.push [indent, makeNode {
         type: "ReturnStatement"
         children: ["return ", className]
