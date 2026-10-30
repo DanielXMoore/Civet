@@ -108,6 +108,7 @@ import type {
   BindingIdentifier,
   BindingRestElement,
   BlockStatement,
+  BreakStatement,
   CallExpression,
   CaseBlock,
   CaseClause,
@@ -118,6 +119,7 @@ import type {
   CommentNode,
   ComptimeStatement,
   ComputedPropertyName,
+  ContinueStatement,
   Condition,
   ConstructedExportSpecifier,
   Declaration,
@@ -1601,6 +1603,23 @@ ClassElementPart
   !EOS _?:ws ClassElement:element StatementDelimiter:delimiter ->
     element = prepend(ws, element) if ws
     return [element, delimiter]
+  # CoffeeScript executable class body statement that isn't a class
+  # element, like `log.push x`.  Class elements take priority: this only
+  # applies when no class element parses up to a delimiter.
+  CoffeeClassesEnabled !EOS _?:ws CoffeeClassBodyStatement:element StatementDelimiter:delimiter ->
+    return [prepend(ws, element), delimiter]
+
+CoffeeClassStatementKeyword
+  /(?:if|unless|for|while|until|loop|do|switch|try|throw)/ NonIdContinue
+
+# processCoffeeClasses runs it after the class, with `this` as the class
+CoffeeClassBodyStatement
+  PostfixedStatement:statement ::CoffeeClassStatement ->
+    return {
+      type: "CoffeeClassStatement",
+      statement,
+      children: [statement],
+    }
 
 # https://262.ecma-international.org/#prod-ClassElement
 ClassElement
@@ -1631,9 +1650,13 @@ ClassElement
     return $skip unless expression is like {type: "CallExpression"}
     return {
       type: "CoffeeClassStatement",
-      expression: expression as CallExpression,
+      statement: expression,
       children: [expression],
     }
+  # CoffeeScript executable class body statement led by a keyword, like
+  # `if flag` or `for x in xs`.  A class element named like the keyword
+  # (`if: -> 1`) doesn't parse as a statement, so it falls through.
+  CoffeeClassesEnabled &( CoffeeClassStatementKeyword !( _? Colon ) ) CoffeeClassBodyStatement:statement &StatementDelimiter -> statement
   # CoffeeScript static bound method `@name: =>` is a static arrow field,
   # so `this` is the class: `static name = () => ...`
   CoffeeClassesEnabled StaticModifier:static_ ClassElementName:id _? Colon __ AssignmentExpression:exp ::CoffeeClassStaticArrow ->
@@ -4321,9 +4344,12 @@ NestedPropertyDefinition
 # They must start with a snug property, and all properties must have a colon.
 ImplicitObjectLiteral
   InsertInlineOpenBrace:open SnugNamedProperty:first ( ImplicitObjectPropertyDelimiter NamedProperty )*:rest ( _? Comma )?:trailing InsertCloseBrace:close ->
+    properties := [first, ...rest.map(([, prop]) => prop)]
     return {
       type: "ObjectExpression",
       children: [open, first, ...rest, trailing, close],
+      names: properties.flatMap(namesOf),
+      properties,
     }
 
 # This is different from ObjectPropertyDelimiter because the braces are implicit so we can't look ahead to find the closing one
@@ -4589,6 +4615,7 @@ SnugNamedProperty
       children: [name, colon, expression],
       name,
       names: namesOf(expression),
+      value: expression,
     }
 
 PropertyName
@@ -5263,10 +5290,11 @@ StatementListItem ::ASTNode
   # NOTE: Added postfix conditionals/loops
   PostfixedStatement
 
-PostfixedStatement
+PostfixedStatement ::ASTNode
   Statement:statement ( _? PostfixStatement )?:post ->
-    return addPostfixStatement(statement, ...post) if post
-    return statement
+    node: ASTNode := statement
+    return addPostfixStatement(node, ...post) if post
+    return node
 
 NoCommaStatementListItem ::ASTNode
   Declaration
@@ -6506,7 +6534,7 @@ ExpressionStatement
 KeywordStatement
   # https://262.ecma-international.org/#prod-BreakStatement
   # NOTE: Also allow `break :label` for symmetry
-  Break ( _ LabelIdentifier )? ( _ With MaybeNestedExpression )? ->
+  Break ( _ LabelIdentifier )? ( _ With MaybeNestedExpression )? ::BreakStatement ->
     children: Children := [ $1 ]
     children.push($2) if $2
     if $3
@@ -6523,16 +6551,18 @@ KeywordStatement
     }
 
   # NOTE: `continue switch` for fallthrough
-  Continue _ Switch ->
+  Continue _ Switch ::ContinueStatement ->
     return {
       type: "ContinueStatement",
       special: $3.token,
+      label: undefined,
+      with: undefined,
       children: [],
     }
 
   # https://262.ecma-international.org/#prod-ContinueStatement
   # NOTE: Also allow `continue :label` for symmetry
-  Continue ( _ LabelIdentifier )? ( _ With MaybeNestedExpression )? ->
+  Continue ( _ LabelIdentifier )? ( _ With MaybeNestedExpression )? ::ContinueStatement ->
     children: Children := [ $1 ]
     children.push($2) if $2
     if $3

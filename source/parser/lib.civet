@@ -2081,6 +2081,22 @@ function superIndex(call: CallExpression): number
   i := children.findIndex & is like {token: "super"}
   i >= 0 and children[...i].every(isWhitespaceOrEmpty) ? i : -1
 
+/**
+ * Object literal statements like `({a: 1})` whose properties are all
+ * `name: value`, in the blocks of a node outside nested functions and
+ * classes, with their block and properties
+ */
+function gatherPropertiesStatements(node: ASTNode): [BlockStatement, StatementTuple, Property[]][]
+  gatherRecursive(node, .type is "BlockStatement", isThisScope).flatMap (block) =>
+    block.expressions.flatMap (statement) =>
+      [, exp] := statement
+      object := exp is like {type: "ParenthesizedExpression"} ? exp.expression : exp
+      if object is like {type: "ObjectExpression"}
+        properties := object.properties.filter .type is "Property"
+        if properties# is object.properties#
+          return [[block, statement, properties]]
+      gatherPropertiesStatements exp
+
 function isThis(node: ASTNodeObject): node is Identifier
   node.type is "Identifier" and node.name is "this"
 
@@ -2308,8 +2324,16 @@ function processCoffeeClasses(statements: StatementTuple[]): void
             replaceThis p.exp
             body.push [indent, assignment]
           when "CoffeeClassStatement"
-            replaceThis p.expression
-            body.push [indent, p.expression]
+            // Inside a statement, `name: value` lines still define
+            // prototype properties, as in the class body: they parse as
+            // an object literal statement, `({m: function() {...}})`
+            for each [block, statement, properties] of gatherPropertiesStatements p.statement
+              [ws, , delim] := statement
+              block.expressions.splice block.expressions.indexOf(statement), 1,
+                ...for each prop of properties
+                  [ws, makePrototypeAssignment(className, prop.name as ClassElementName, trimFirstSpace(prop.value) as ExpressionNode), delim] satisfies StatementTuple
+            replaceThis p.statement
+            body.push [indent, p.statement]
           else
             // Static field `@x = y` becomes `A.x = y`.  The field name
             // itself isn't a reference to the class.
