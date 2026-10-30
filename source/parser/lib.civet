@@ -2022,13 +2022,15 @@ function gatherSuperCalls(node: ASTNode): CallExpression[]
  * class is defined, so cache it in a ref for `super[ref](...)`:
  * `[ref = getKey()]() { return super[ref]() }`.
  * Literal keys are returned unchanged.
+ * Each new ref is added to `refs`, for `declareKeyRefs` to declare.
  */
-function cacheComputedKey(ce: ClassExpression, id: ClassElementName): ClassElementName
+function cacheComputedKey(id: ClassElementName, refs: ASTRef[]): ClassElementName
   return id unless id is like {type: "ComputedPropertyName"}
   { expression } := id
   // Literals, including the implicit signed number `-1:`, can be reevaluated
   return id if expression is like {type: "Literal"}, {type: "StringLiteral"}, {type: "NumericLiteral"} or (id.implicit and Array.isArray expression)
   ref := makeRef "key"
+  refs.push ref
   replaceNode expression, makeNode({
     type: "AssignmentExpression"
     children: [ref, " = ", expression]
@@ -2037,20 +2039,41 @@ function cacheComputedKey(ce: ClassExpression, id: ClassElementName): ClassEleme
     expression: expression as any
     names: []
   }), id
-  // Declare the ref outside the class, in the block containing it
-  { ancestor, child } := findAncestor ce, (ancestor): ancestor is BlockStatement => Boolean
-    ancestor.type is "BlockStatement" and (!ancestor.bare or ancestor.root) and not (ancestor is like {subtype: "ClassBody"})
-  assert ancestor, "cacheComputedKey: block not found"
-  insertBeforeInBlock ancestor, child, ["", {
-    type: "Declaration"
-    children: ["let ", ref]
-    names: []
-  } as! Declaration, ";"]
   return {
     type: "ComputedPropertyName"
     children: ["[", ref, "]"]
     expression: ref
   }
+
+/** `let ref;` statements declaring cached computed keys */
+function keyRefDeclarations(refs: ASTRef[], indent: ASTNode = ""): StatementTuple[]
+  refs.map (ref) => [indent, {
+    type: "Declaration"
+    children: ["let ", ref]
+    names: []
+  } as! Declaration, ";"]
+
+/**
+ * Declare the cached computed keys of a class that has no IIFE wrapper.
+ * Methods close over the keys, so each evaluation of the class needs its
+ * own bindings.  If the class can't be evaluated again without
+ * reentering its block, declare them there; otherwise, as in a parameter
+ * default or loop condition, wrap the class in an IIFE that declares them.
+ */
+function declareKeyRefs(ce: ClassExpression, refs: ASTRef[]): void
+  return unless refs#
+  { ancestor, child } := findAncestor ce,
+    (ancestor): ancestor is BlockStatement => Boolean
+      ancestor.type is "BlockStatement" and (!ancestor.bare or ancestor.root) and not (ancestor is like {subtype: "ClassBody"})
+    (ancestor) => isFunction(ancestor) or ancestor.type is "IterationStatement" or ancestor.type is "ForStatement"
+  if ancestor
+    insertBeforeInBlock ancestor, child, ...keyRefDeclarations refs
+  else
+    { parent } := ce
+    replaceNode ce, wrapIIFE([
+      ...keyRefDeclarations refs
+      ["", wrapWithReturn ce]
+    ]), parent
 
 /** Index of the leading `super` keyword in a call, skipping whitespace */
 function superIndex(call: CallExpression): number
@@ -2152,10 +2175,11 @@ function processCoffeeClasses(statements: StatementTuple[]): void
     // In a CoffeeScript method, `super(args)` calls the parent's method
     // of the same name: `super.name(args)`.  `super` is lexical, so look
     // inside arrow functions but not nested functions or classes.
+    keyRefs: ASTRef[] := []
     rewriteSuperCalls := (id: ClassElementName, node: ASTNode) =>
       superCalls := gatherSuperCalls node
       return unless superCalls#
-      access := makeElementAccess cacheComputedKey ce, id
+      access := makeElementAccess cacheComputedKey id, keyRefs
       for each call of superCalls
         call.children.splice superIndex(call) + 1, 0, deepCopy access
     for each method of gatherRecursive ce.body, .type is "MethodDefinition", .type is "ClassExpression"
@@ -2216,6 +2240,7 @@ function processCoffeeClasses(statements: StatementTuple[]): void
     after := lifted[split..]
 
     unless before# or after# or superArgs#
+      declareKeyRefs ce, keyRefs
       // `class NS.A` becomes `NS.A = class A`
       if target
         replaceNode ce, makeClassTargetAssignment(target, ce), parent
@@ -2226,7 +2251,8 @@ function processCoffeeClasses(statements: StatementTuple[]): void
     for i of [expressions# >.. 0]
       expressions.splice i, 1 if liftedEntries.has expressions[i]
 
-    body: StatementTuple[] := before.map &[0]
+    // The IIFE runs for each evaluation of the class, so it holds the keys
+    body: StatementTuple[] := [...keyRefDeclarations(keyRefs, indent), ...before.map &[0]]
     unless after#
       body.push [indent, wrapWithReturn ce]
     else
