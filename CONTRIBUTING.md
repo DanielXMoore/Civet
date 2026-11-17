@@ -116,6 +116,9 @@ For a one-off run from the CLI without editing the test file:
 pnpm test:grep "name of test"
 ```
 
+Bun plugin integration tests run when `bun` is on PATH. After `pnpm build`,
+run them with `pnpm test:grep "Bun plugin"`.
+
 ## Coverage
 
 CI gates this repo at 100% on every c8 metric (statements / branches /
