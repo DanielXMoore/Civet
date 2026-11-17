@@ -95,6 +95,7 @@ import type {
   ArrayBindingPatternContent as ArrayBindingPatternContentType,
   ArrowFunction,
   AssignmentExpression,
+  AssignmentExpressionLHS,
   ASTError,
   ASTLeaf,
   ASTNode,
@@ -107,12 +108,18 @@ import type {
   BindingIdentifier,
   BindingRestElement,
   BlockStatement,
+  BreakStatement,
   CallExpression,
   CaseBlock,
   CaseClause,
   Children,
+  ClassBody,
+  CoffeeClassStatement,
+  CoffeeClassStaticArrow,
   CommentNode,
   ComptimeStatement,
+  ComputedPropertyName,
+  ContinueStatement,
   Condition,
   ConstructedExportSpecifier,
   Declaration,
@@ -1380,13 +1387,15 @@ ClassDeclaration
 
 # https://262.ecma-international.org/#prod-ClassExpression
 ClassExpression
-  Decorators?:decorators ( Abstract __ )?:abstract Class:class_ !":" ClassBinding?:binding ClassHeritage?:heritage ClassBody:body ->
+  Decorators?:decorators ( Abstract __ )?:abstract Class:class_ !":" ( CoffeeClassTarget / ClassBinding )?:b ClassHeritage?:heritage ClassBody:body ->
+    { binding, target } := b and "target" in b ? b : { binding: b, target: undefined }
     id := binding?.[0]
     return {
       type: "ClassExpression",
       decorators,
       abstract,
       binding,
+      target,
       id,
       name: id is like {name} ? id.name : undefined,
       heritage,
@@ -1396,6 +1405,23 @@ ClassExpression
 
 ClassBinding
   !EOS BindingIdentifier TypeParameters? -> [$2, $3]
+
+# CoffeeScript qualified class name: `class NS.A` or `class @A`.
+# The class is named by the last segment, and processCoffeeClasses
+# assigns it to the full target: `NS.A = class A {}`.
+CoffeeClassTarget
+  CoffeeClassesEnabled !EOS __:ws CoffeeClassTargetBase:base ( Dot Identifier )*:rest ->
+    target := [...base, ...rest.flat()]
+    id := target.at(-1) as Identifier
+    return {
+      // The class name is a copy of the last segment, which stays in target
+      binding: [prepend(ws, { ...id, children: [...id.children] }), undefined] as const
+      target
+    }
+
+CoffeeClassTargetBase
+  AtThis Identifier -> [$1, ".", $2]
+  IdentifierReference Dot Identifier
 
 # https://262.ecma-international.org/#prod-ClassHeritage
 ClassHeritage
@@ -1520,7 +1546,7 @@ ImplementsTarget
 
 # https://262.ecma-international.org/#prod-ClassBody
 # NOTE: Nesting and indentation sensitive
-ClassBody
+ClassBody ::ClassBody
   # NOTE: ClassBracedContent single-line alternative always succeeds with
   # (possibly empty) array, so `?:expressions` never captures undefined.
   __:ws1 OpenBrace:open AllowAll ClassBracedContent:expressions RestoreAll __:ws2 CloseBrace:close ->
@@ -1528,6 +1554,14 @@ ClassBody
       type: "BlockStatement",
       subtype: "ClassBody",
       children: [ws1, open, expressions, ws2, close],
+      expressions,
+    }
+  # CoffeeScript single-line class body: `class A then m: -> 1`
+  CoffeeClassesEnabled Then InsertOpenBrace:open ClassBracedContent:expressions InsertCloseBrace:close ->
+    return {
+      type: "BlockStatement",
+      subtype: "ClassBody",
+      children: [open, expressions, expressions# ? " " : "", close],
       expressions,
     }
   InsertOpenBrace NestedClassElements?:expressions InsertNewline InsertIndent InsertCloseBrace ->
@@ -1540,22 +1574,22 @@ ClassBody
     }
 
 # based on BracedContent
-ClassBracedContent
+ClassBracedContent ::StatementTuple[]
   NestedClassElements
   # based on SingleLineStatements
   ForbidNewlineBinaryOp ( ( _? !EOS ) ClassElement StatementDelimiter )*:stmts RestoreNewlineBinaryOp ->
-    return stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
+    return stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim]) as StatementTuple[]
 
-NestedClassElements
+NestedClassElements ::StatementTuple[]
   PushIndent NestedClassElement*:elements TrailingNestedCommentLine*:trailing PopIndent ->
     return $skip unless elements# or trailing#
     // Each element of elements is a list of same-line class elements. Flatten.
-    expressions := elements.flat()
+    expressions := elements.flat() as StatementTuple[]
     // Standalone same-or-deeper-indent comment-only trailing lines (#832)
     // stay inside the class body's braces.  Inline trailing comments on
     // the last element continue to escape — those typically annotate the
     // surrounding class, not a member.
-    trailing# ? [...expressions, ...trailing] : expressions
+    trailing# ? [...expressions, ...trailing] as StatementTuple[] : expressions
 
 NestedClassElement
   Nested:nested ClassElementPart+:elements ->
@@ -1570,28 +1604,77 @@ ClassElementPart
   !EOS _?:ws ClassElement:element StatementDelimiter:delimiter ->
     element = prepend(ws, element) if ws
     return [element, delimiter]
+  # CoffeeScript executable class body statement that isn't a class
+  # element, like `log.push x`.  Class elements take priority: this only
+  # applies when no class element parses up to a delimiter.
+  CoffeeClassesEnabled !EOS _?:ws CoffeeClassBodyStatement:element StatementDelimiter:delimiter ->
+    return [prepend(ws, element), delimiter]
+
+CoffeeClassStatementKeyword
+  /(?:if|unless|for|while|until|loop|do|switch|try|throw)/ NonIdContinue
+
+# processCoffeeClasses runs it after the class, with `this` as the class
+CoffeeClassBodyStatement
+  PostfixedStatement:statement ::CoffeeClassStatement ->
+    return {
+      type: "CoffeeClassStatement",
+      statement,
+      children: [statement],
+    }
 
 # https://262.ecma-international.org/#prod-ClassElement
 ClassElement
   # CoffeeScript public static class variable: @identifier = Expression
   # CoffeeScript private static class variable: identifier = Expression
   CoffeeClassesEnabled Decorators?:decorators DeclareModifier?:declare AccessModifier?:access StaticModifier?:static_ OverrideModifier?:override ActualAssignment:assignment ->
-    // Fall through to the standard class field rule when the LHS is a
-    // :symbol literal; that rule wraps it as a computed `[Symbol.x]`
-    // name, whereas this one would emit invalid `static Symbol.x = ...`.
-    if(assignment.assigned?.type === "SymbolLiteral") return $skip
+    // A :symbol literal name needs brackets: `static [Symbol.x] = ...`.
+    // A private can't have a symbol name, so fall through to the
+    // standard class field rule, which makes it an instance field.
+    if assignment.assigned?.type is "SymbolLiteral"
+      return $skip unless static_
+      [[ws, symbol, ...rest], ...more] := assignment.lhs
+      name: ComputedPropertyName :=
+        type: "ComputedPropertyName"
+        children: ["[", symbol, "]"]
+        expression: symbol
+      lhs: AssignmentExpressionLHS := [[ws, name, ...rest], ...more]
+      assignment = { ...assignment, lhs, assigned: name, children: [lhs, assignment.expression] }
     return {
       type: static_ ? "CoffeeClassPublic" : "CoffeeClassPrivate",
       children: [decorators, declare, access, static_, override, assignment],
       assignment
     }
+  # CoffeeScript executable class body statement: `@include M` or `setup()`
+  # processCoffeeClasses runs it after the class, with `this` as the class
+  # (but `@name(params)` or `name(params)` followed by an indented block
+  # is a method)
+  CoffeeClassesEnabled !"@@" &( "@" / ( IdentifierName "(" ) ) ForbidIndentedApplication AssignmentExpression?:expression RestoreIndentedApplication !IndentedFurther &StatementDelimiter ::CoffeeClassStatement ->
+    return $skip unless expression is like {type: "CallExpression"}
+    return {
+      type: "CoffeeClassStatement",
+      statement: expression,
+      children: [expression],
+    }
+  # CoffeeScript executable class body statement led by a keyword, like
+  # `if flag` or `for x in xs`.  A class element named like the keyword
+  # (`if: -> 1`) doesn't parse as a statement, so it falls through.
+  CoffeeClassesEnabled &( CoffeeClassStatementKeyword !( _? Colon ) ) CoffeeClassBodyStatement:statement &StatementDelimiter -> statement
+  # CoffeeScript static bound method `@name: =>` is a static arrow field,
+  # so `this` is the class: `static name = () => ...`
+  CoffeeClassesEnabled StaticModifier:static_ ClassElementName:id _? Colon __ AssignmentExpression:exp ::CoffeeClassStaticArrow ->
+    return $skip unless exp is like {type: "ArrowFunction"}
+    return {
+      type: "CoffeeClassStaticArrow",
+      id,
+      exp,
+      children: [static_, id, " = ", exp],
+    }
   # NOTE: Combined optional static and Method/Field definition
-  Decorators?:decorators DeclareModifier?:declare AccessModifier?:access StaticModifier?:static_ OverrideModifier?:override ClassElementDefinition:d ->
-    // CoffeeScript `@name: value` is a static field, like `@name = value`
-    definition := static_ and d is like {type: "CoffeeClassPrototype"}
-      ? { type: "FieldDefinition", id: d.id, children: [d.id, " = ", d.exp] } as FieldDefinition
-      : d
+  Decorators?:decorators DeclareModifier?:declare AccessModifier?:access StaticModifier?:static_ OverrideModifier?:override ClassElementDefinition:definition ->
     ts := definition.ts || !!declare
+    // CoffeeScript `@name: value` is a static property: `Class.name = value`
+    if definition.type is "CoffeeClassPrototype" and static_
+      return { ...definition, static: true }
     if definition.type is "MultiMethodDefinition"
       // If shorthand method definition has multiple expansions each one should get the decorators
       return {
@@ -1681,9 +1764,10 @@ FieldDefinition
 
     // CoffeeScript-compatible: `name: value` becomes a prototype
     // assignment (`Class.prototype.name = value`) lifted out of the
-    // class body in processCoffeeClasses, which removes this entry.
-    // Until then, children hold the name and value so that passes
-    // like implicit returns process functions inside the value.
+    // class body in processCoffeeClasses, which always removes this
+    // entry from the class body.  The name and value are children so
+    // that earlier passes process them like any other expressions,
+    // including a computed name like `[key(-> 'x')]`.
     // PrivateIdentifier (`#x`) is JS-only — CoffeeScript has no
     // private fields — so leave the original class-field semantics
     // intact rather than emit invalid `Foo.prototype.#x = ...`.
@@ -4263,9 +4347,13 @@ NestedPropertyDefinition
 # They must start with a snug property, and all properties must have a colon.
 ImplicitObjectLiteral
   InsertInlineOpenBrace:open SnugNamedProperty:first ( ImplicitObjectPropertyDelimiter NamedProperty )*:rest ( _? Comma )?:trailing InsertCloseBrace:close ->
+    properties := [first, ...rest.map(([, prop]) => prop)]
     return {
       type: "ObjectExpression",
       children: [open, first, ...rest, trailing, close],
+      names: properties.flatMap(namesOf),
+      properties,
+      implicit: true,
     }
 
 # This is different from ObjectPropertyDelimiter because the braces are implicit so we can't look ahead to find the closing one
@@ -4531,6 +4619,7 @@ SnugNamedProperty
       children: [name, colon, expression],
       name,
       names: namesOf(expression),
+      value: expression,
     }
 
 PropertyName
@@ -5205,10 +5294,11 @@ StatementListItem ::ASTNode
   # NOTE: Added postfix conditionals/loops
   PostfixedStatement
 
-PostfixedStatement
+PostfixedStatement ::ASTNode
   Statement:statement ( _? PostfixStatement )?:post ->
-    return addPostfixStatement(statement, ...post) if post
-    return statement
+    node: ASTNode := statement
+    return addPostfixStatement(node, ...post) if post
+    return node
 
 NoCommaStatementListItem ::ASTNode
   Declaration
@@ -6448,7 +6538,7 @@ ExpressionStatement
 KeywordStatement
   # https://262.ecma-international.org/#prod-BreakStatement
   # NOTE: Also allow `break :label` for symmetry
-  Break ( _ LabelIdentifier )? ( _ With MaybeNestedExpression )? ->
+  Break ( _ LabelIdentifier )? ( _ With MaybeNestedExpression )? ::BreakStatement ->
     children: Children := [ $1 ]
     children.push($2) if $2
     if $3
@@ -6465,16 +6555,18 @@ KeywordStatement
     }
 
   # NOTE: `continue switch` for fallthrough
-  Continue _ Switch ->
+  Continue _ Switch ::ContinueStatement ->
     return {
       type: "ContinueStatement",
       special: $3.token,
+      label: undefined,
+      with: undefined,
       children: [],
     }
 
   # https://262.ecma-international.org/#prod-ContinueStatement
   # NOTE: Also allow `continue :label` for symmetry
-  Continue ( _ LabelIdentifier )? ( _ With MaybeNestedExpression )? ->
+  Continue ( _ LabelIdentifier )? ( _ With MaybeNestedExpression )? ::ContinueStatement ->
     children: Children := [ $1 ]
     children.push($2) if $2
     if $3
@@ -9719,7 +9811,7 @@ TypeBulletedTuple ::TypeNode
     last := content.-1
     if { children } := last
       if children and children.-1 is like { implicit: true }
-        content.-1 = { ...last, children: children[...-1] }
+        content.-1 = { ...last, children: children[...-1] } as ASTNode
 
     return {
       type: "TypeTuple",
