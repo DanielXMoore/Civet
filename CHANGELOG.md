@@ -4,6 +4,33 @@ This changelog is generated automatically by [`build/changelog.civet`](build/cha
 For each version of Civet, it lists and links to all incorporated PRs,
 as well as a full diff and commit list.
 
+## 0.11.17 (2026-11-18, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.16...v0.11.17), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.17))
+* Fix tests on macOS that typecheck files under `os.tmpdir()` [[#2209](https://github.com/DanielXMoore/Civet/pull/2209)]
+* Fix compiler crash when misusing `operator` [[#2207](https://github.com/DanielXMoore/Civet/pull/2207)]
+* Dev: Improve various types such as operators [[#2201](https://github.com/DanielXMoore/Civet/pull/2201)]
+* Fix private getter/shorter shorthand with `!` non-null assertion [[#2202](https://github.com/DanielXMoore/Civet/pull/2202)]
+* LSP: improve `import` and `@` completions [[#2206](https://github.com/DanielXMoore/Civet/pull/2206)]
+* Docs: How to configure build systems in Civet [[#2214](https://github.com/DanielXMoore/Civet/pull/2214)]
+* Docs: New styling and conversion tools [[#2219](https://github.com/DanielXMoore/Civet/pull/2219)]
+* Better declaration error handling, and fix more type diagnostics [[#2210](https://github.com/DanielXMoore/Civet/pull/2210)]
+* Empty slice `x[..]` compiles to `x.slice()` [[#2218](https://github.com/DanielXMoore/Civet/pull/2218)]
+* Dev: Separate `{types,config}.d.ts`; use public types internally [[#2222](https://github.com/DanielXMoore/Civet/pull/2222)]
+* String interpolation `if` without `else` defaults to empty string [[#2221](https://github.com/DanielXMoore/Civet/pull/2221)]
+* Playground: cursor mapping matches hover tooltip [[#2225](https://github.com/DanielXMoore/Civet/pull/2225)]
+* CI: Update Claude GitHub Action to Opus 5.5 and upstream v1.0.233 [[#2226](https://github.com/DanielXMoore/Civet/pull/2226)]
+* Fix yet more type diagnostics [[#2223](https://github.com/DanielXMoore/Civet/pull/2223)]
+* Fix object literals as blocks, comptime shorthand, keyword boundaries [[#2233](https://github.com/DanielXMoore/Civet/pull/2233)]
+* Fix even more type diagnostics [[#2227](https://github.com/DanielXMoore/Civet/pull/2227)]
+* Fix multiline `x.{...y}` [[#2237](https://github.com/DanielXMoore/Civet/pull/2237)]
+* LSP: preserve case of filenames [[#2242](https://github.com/DanielXMoore/Civet/pull/2242)]
+* Use Node's source-map registration, reducing dependencies; fix CLI source mapping [[#2241](https://github.com/DanielXMoore/Civet/pull/2241)]
+* CI: Give the Claude agent a working env and committed instructions [[#2245](https://github.com/DanielXMoore/Civet/pull/2245)]
+* coffeeClasses: fix functions inside `name: value` fields; `@name: value` is static [[#2247](https://github.com/DanielXMoore/Civet/pull/2247)]
+* Build: support Node 26 (bump yargs, add Node 26 CI job) [[#2244](https://github.com/DanielXMoore/Civet/pull/2244)]
+* Error on unbraced object followed by an indented non-property line, instead of calling the object [[#2248](https://github.com/DanielXMoore/Civet/pull/2248)]
+* coffeeClasses: run executable statements in class bodies [[#2250](https://github.com/DanielXMoore/Civet/pull/2250)]
+* coffeeClasses: method super calls, executable statements in class bodies, source-order static fields, static @name: and bound methods, qualified class names [[#2246](https://github.com/DanielXMoore/Civet/pull/2246)]
+
 ## 0.11.16 (2026-08-22, [diff](https://github.com/DanielXMoore/Civet/compare/v0.11.15...v0.11.16), [commits](https://github.com/DanielXMoore/Civet/commits/v0.11.16))
 * Fix semantic highlighting of generated code [[#2177](https://github.com/DanielXMoore/Civet/pull/2177)]
 * Fix crash on empty-braces property definitions or invalid globs [[#2179](https://github.com/DanielXMoore/Civet/pull/2179)]
