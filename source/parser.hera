@@ -1610,13 +1610,6 @@ ClassElementPart
   CoffeeClassesEnabled !EOS _?:ws CoffeeClassBodyStatement:element StatementDelimiter:delimiter ->
     return [prepend(ws, element), delimiter]
 
-# Executable call in a CoffeeScript class body.  After `name(`, an
-# indented block is a method body, not an argument; without parens,
-# like `@configure` above an indented object, it is an argument.
-CoffeeClassStatementCall
-  &( "@"? IdentifierName _? /[?(<]/ ) ForbidIndentedApplication AssignmentExpression?:expression RestoreIndentedApplication -> expression
-  AssignmentExpression
-
 CoffeeClassStatementKeyword
   /(?:if|unless|for|while|until|loop|do|switch|try|throw)/ NonIdContinue
 
@@ -1631,6 +1624,9 @@ CoffeeClassBodyStatement
 
 # https://262.ecma-international.org/#prod-ClassElement
 ClassElement
+  # Prefer methods with indented bodies to implicit calls. Reuse the
+  # signature grammar for spacing, optional markers, and type parameters.
+  CoffeeClassesEnabled &( StaticModifier? MethodSignature IndentedFurther ) ClassMember -> $3
   # CoffeeScript public static class variable: @identifier = Expression
   # CoffeeScript private static class variable: identifier = Expression
   CoffeeClassesEnabled Decorators?:decorators DeclareModifier?:declare AccessModifier?:access StaticModifier?:static_ OverrideModifier?:override ActualAssignment:assignment ->
@@ -1653,10 +1649,8 @@ ClassElement
     }
   # CoffeeScript executable class body statement: `@include M` or `setup()`
   # processCoffeeClasses runs it after the class, with `this` as the class
-  # (but `@name(params)` or `name(params)` followed by an indented block
-  # is a method; a braced object after the call is an argument, as in
-  # CoffeeScript)
-  CoffeeClassesEnabled !"@@" &( "@" / ( IdentifierName ( "(" / IndentedFurther ) ) ) CoffeeClassStatementCall:expression !IndentedFurther ( _? PostfixStatement )?:post &StatementDelimiter ::CoffeeClassStatement ->
+  # Indented methods take priority above; braced objects remain arguments.
+  CoffeeClassesEnabled !"@@" &( "@" / ( IdentifierName ( "(" / IndentedFurther ) ) ) AssignmentExpression:expression !IndentedFurther ( _? PostfixStatement )?:post &StatementDelimiter ::CoffeeClassStatement ->
     return $skip unless expression is like {type: "CallExpression"}
     statement := post ? addPostfixStatement(expression, ...post) : expression
     return {
@@ -1678,7 +1672,20 @@ ClassElement
       exp,
       children: [static_, id, " = ", exp],
     }
-  # NOTE: Combined optional static and Method/Field definition
+  ClassMember
+  # ClassStaticBlock
+  Static BracedBlock ->
+    return {
+      type: "ClassStaticBlock",
+      children: $0,
+    }
+  EmptyStatement
+
+# Class method or field with modifiers.
+# Shared by the CoffeeScript-specific indented-method alternative and the
+# general method/field fallback in ClassElement.
+# Static blocks and empty statements remain separate ClassElement alternatives.
+ClassMember
   Decorators?:decorators DeclareModifier?:declare AccessModifier?:access StaticModifier?:static_ OverrideModifier?:override ClassElementDefinition:definition ->
     ts := definition.ts || !!declare
     // CoffeeScript `@name: value` is a static property: `Class.name = value`
@@ -1700,13 +1707,6 @@ ClassElement
       ts,
       children: [decorators, declare, access, static_, override, ...definition.children],
     }
-  # ClassStaticBlock
-  Static BracedBlock ->
-    return {
-      type: "ClassStaticBlock",
-      children: $0,
-    }
-  EmptyStatement
 
 ClassElementDefinition
   ( MethodDefinition / FieldDefinition )
