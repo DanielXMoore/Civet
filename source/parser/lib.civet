@@ -1419,71 +1419,75 @@ function processAssignments(statements: ASTNode): void
         // @ts-ignore
         $2 = ref
 
-    // identifier=, xor=, ++=
-    foldedNames: string[] := []
-    if $1.some((x: any) => x.-1.special)
+    // Split chained assignments containing special operators (xor=, ++=, etc.)
+    // into nested AssignmentExpressions so each segment runs every rewrite
+    // (special ops, optional chains, destructuring, auto-declarations).
+    if len > 1 and $1.some((x: any) => x.-1.special)
       firstSpecial := $1.findIndex (x: any) => x.-1.special
-      rhs .= $2
-      j .= $1.length - 1
-      while j >= firstSpecial
-        entry := $1[j]
-        [, lhs, , op] := entry
-        if (op as any).special
-          { call, omitLhs } := op
-          callLhs .= lhs
-          // For non-omitLhs operators (e.g. `min=`, `xor=`), `lhs` is referenced
-          // twice (assignment target and inside the call). Cache every
-          // side-effectful Index expression so each runs once. Critical for
-          // `arr[?]` (Math.random) and for `obj[i++]` / `obj[f()][g()]`. Non-
-          // Index children (base Identifier, PropertyAccess) are shared by
-          // reference between the two `lhs` occurrences — pre-existing
-          // limitation if the base itself has side effects.
-          if not omitLhs and (lhs as MemberExpression).type is "MemberExpression"
-            memberLhs := lhs as MemberExpression
-            { children: memberChildren } := memberLhs
-            mutated .= false
-            callChildren := memberChildren.map (child) =>
-              return child unless child?.type is "Index"
-              indexNode := child as Index
-              { ref, refAssignment } := maybeRefAssignment indexNode.expression
-              return child unless refAssignment
-              mutated = true
-              // Assignment-target side: inline `ref = idx` in the Index —
-              // runs first as part of evaluating the LHS reference.
-              // replaceNode also updates `indexNode.expression` since it
-              // aliases `indexNode.children[1]`.
-              replaceNode indexNode.expression, refAssignment, indexNode
-              // Call-side copy: new Index with bare ref.
-              makeNode {
-                type: "Index"
-                children: ["[", ref, "]"]
-                expression: ref
-              }
-            if mutated
-              callLhs = makeNode {
-                ...memberLhs
-                children: callChildren
-              }
-          rhs = [call, "(", callLhs, ", ", rhs, ")"]
-          if omitLhs
-            $1.pop()
-          else if j > firstSpecial
-            $1.pop()
-            foldedNames.push ...namesOf lhs
-            rhs = [entry, rhs]
-        else
-          $1.pop()
-          foldedNames.push ...namesOf lhs
-          rhs = [entry, rhs]
-        j--
+      splitAt := firstSpecial or 1
+      suffix := $1.splice splitAt
+      len = $1.length
+      inner := makeNode {
+        type: "AssignmentExpression"
+        children: [suffix, $2]
+        names: null
+        lhs: suffix
+        assigned: suffix[0][1]
+        expression: $2
+      }
+      index := exp.children.indexOf($2)
+      assert.notEqual index, -1, "processAssignments: $2 must be directly in exp.children"
+      exp.children.splice index, 1, inner
+      updateParentPointers inner, exp
+      processAssignments inner
+      exp.expression = $2 = exp.children[index] as NonNullASTNode
+
+    // identifier=, xor=, ++=
+    if $1.some((x: any) => x.-1.special)
+      [, lhs, , op] := $1[0]
+      { call, omitLhs } := op
+      callLhs .= lhs
+      // For non-omitLhs operators (e.g. `min=`, `xor=`), `lhs` is referenced
+      // twice (assignment target and inside the call). Cache every
+      // side-effectful Index expression so each runs once. Critical for
+      // `arr[?]` (Math.random) and for `obj[i++]` / `obj[f()][g()]`. Non-
+      // Index children (base Identifier, PropertyAccess) are shared by
+      // reference between the two `lhs` occurrences — pre-existing
+      // limitation if the base itself has side effects.
+      if not omitLhs and (lhs as MemberExpression).type is "MemberExpression"
+        memberLhs := lhs as MemberExpression
+        { children: memberChildren } := memberLhs
+        mutated .= false
+        callChildren := memberChildren.map (child) =>
+          return child unless child?.type is "Index"
+          indexNode := child as Index
+          { ref, refAssignment } := maybeRefAssignment indexNode.expression
+          return child unless refAssignment
+          mutated = true
+          // Assignment-target side: inline `ref = idx` in the Index —
+          // runs first as part of evaluating the LHS reference.
+          // replaceNode also updates `indexNode.expression` since it
+          // aliases `indexNode.children[1]`.
+          replaceNode indexNode.expression, refAssignment, indexNode
+          // Call-side copy: new Index with bare ref.
+          makeNode {
+            type: "Index"
+            children: ["[", ref, "]"]
+            expression: ref
+          }
+        if mutated
+          callLhs = makeNode {
+            ...memberLhs
+            children: callChildren
+          }
       // Wrap right-hand side with call
       index := exp.children.indexOf($2)
       assert.notEqual index, -1, "processAssignments: $2 must be directly in exp.children"
       exp.children.splice index, 1,
-        exp.expression = $2 = rhs
-      len = $1.length
-      if len is 0
+        exp.expression = $2 = [call, "(", callLhs, ", ", $2, ")"]
+      if omitLhs
         replaceNode exp, $2
+        updateParentPointers $2, exp.parent
         continue
 
     // Polyfill private-field glob assignment: `obj.{#x, #y} = src` cannot use
@@ -1641,7 +1645,7 @@ function processAssignments(statements: ASTNode): void
           names: []
 
     // Gather all identifier names from the lhs array
-    exp.names = [...$1.flatMap(([, l]) => namesOf l), ...foldedNames]
+    exp.names = $1.flatMap(([, l]) => namesOf l)
 
     if tail#
       index := exp.children.indexOf($2)
