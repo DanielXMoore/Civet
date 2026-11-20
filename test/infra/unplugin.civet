@@ -1690,3 +1690,102 @@ describe "unplugin: emitDeclaration without esbuild outdir", ->
       console.error = origError
       await rm filePath, { force: true }
     assert errored, "should throw when emitDeclaration is true without outdir"
+
+describe "unplugin: watch-mode cache registration and postfix keys", ->
+  it "re-registers cached files with TSService across watch rebuilds (typecheck & emitDeclaration)", ->
+    @timeout 30000
+    tmpSub := path.join tmpdir(), `civet-watch-cache-${Date.now()}`
+    await mkdir tmpSub, recursive: true
+    outDir := path.join tmpSub, "dist"
+    badFile := path.join tmpSub, "bad.civet"
+    goodFile := path.join tmpSub, "good.civet"
+    await writeFile badFile, "export x: number := 'wrong'\n"
+    await writeFile goodFile, "export y: number := 42\n"
+
+    origLog := console.log
+    origError := console.error
+    console.log = ->
+    console.error = ->
+    try
+      // 1. typecheck: true across two buildStart -> load -> buildEnd cycles
+      tcPlugin := rawPlugin {
+        ts: 'civet'
+        config: false
+        cache: true
+        typecheck: true
+        tsConfig:
+          rootDir: tmpSub
+          compilerOptions:
+            target: 'es2020'
+            module: 'esnext'
+            moduleResolution: 'bundler'
+            strict: true
+            skipLibCheck: true
+          files: []
+      }, { framework: 'esbuild' }
+      tcCtx := { ...nullContext, ...tcPlugin }
+      tcPlugin.esbuild.config { outdir: outDir }
+
+      for cycle of [1, 2]
+        await tcPlugin.buildStart.call tcCtx
+        await tcPlugin.load.call tcCtx, badFile + ".jsx"
+        let threw = false
+        try
+          await tcPlugin.buildEnd.call tcCtx
+        catch
+          threw = true
+        assert threw, `cycle ${cycle}: expected typecheck to fail on unchanged cached file`
+
+      // 2. emitDeclaration: true across two buildStart -> load -> buildEnd cycles
+      emitted: string[][] := []
+      dtsPlugin := rawPlugin {
+        ts: 'civet'
+        config: false
+        cache: true
+        emitDeclaration: true
+        tsConfig:
+          rootDir: tmpSub
+          compilerOptions:
+            target: 'es2020'
+            module: 'esnext'
+            moduleResolution: 'bundler'
+            skipLibCheck: true
+          files: []
+      }, { framework: 'rollup' }
+      for cycle of [1, 2]
+        cycleEmitted: string[] := []
+        dtsCtx := {
+          ...nullContext
+          ...dtsPlugin
+          emitFile: (file: any) => cycleEmitted.push file.fileName
+        }
+        await dtsPlugin.buildStart.call dtsCtx
+        await dtsPlugin.load.call dtsCtx, goodFile + ".jsx"
+        await dtsPlugin.buildEnd.call dtsCtx
+        emitted.push cycleEmitted
+        assert cycleEmitted.some(&.endsWith '.d.ts'),
+          `cycle ${cycle}: expected .d.ts emission for unchanged cached file, got ${JSON.stringify cycleEmitted}`
+    finally
+      console.log = origLog
+      console.error = origError
+      await rm tmpSub, { recursive: true, force: true }
+
+  it "keys load() cache by postfix so distinct query ids do not collide", ->
+    filePath := path.join tmpdir(), `civet-cache-postfix-${Date.now()}.civet`
+    await writeFile filePath, "x := 1\n"
+    try
+      plugin := rawPlugin {
+        ts: 'civet'
+        config: false
+        cache: true
+        transformOutput: (code, id) => { code: `/* ${id} */\n${code}` }
+      }, minMeta
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      res1 := await plugin.load.call ctx, filePath + ".jsx?v=1"
+      res2 := await plugin.load.call ctx, filePath + ".jsx?v=2"
+      assert res1 and res1 <? "object" and res2 and res2 <? "object"
+      assert res1.code.includes("?v=1"), `expected ?v=1 in first result, got ${res1.code}`
+      assert res2.code.includes("?v=2"), `expected ?v=2 in second result, got ${res2.code}`
+    finally
+      await rm filePath, { force: true }
