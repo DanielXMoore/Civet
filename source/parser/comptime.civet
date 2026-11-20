@@ -53,6 +53,12 @@ function processComptime(statements: StatementTuple[]): void | Promise<void>
       await.all promises
       ;
 
+function formatUnserializable(val: unknown): string
+  try
+    if val <? "symbol" then val.toString() else String val
+  catch
+    Object::toString.call val
+
 // Launch comptime evaluations, and return promises to await (in async mode)
 function runComptime(statements: StatementTuple[]): unknown[]
   sync := getSync()
@@ -124,24 +130,44 @@ function runComptime(statements: StatementTuple[]): unknown[]
         catch e
           exp.children = [
             type: "Error"
-            message: `comptime result ${output} not serializable: ${e}`
+            message: `comptime result ${formatUnserializable output} not serializable: ${e}`
           ]
           return
+        if string.startsWith("{")
+          p .= exp.parent
+          p = p.parent if p?.type is "StatementExpression"
+          if p is like { type: "BlockStatement", bare: true } and p.parent?.type is "ArrowFunction"
+            string = `(${string})`
         exp.children = [string]
       if sync
         finish()
       else
         promise = async do
-          output = await output
+          try
+            output = await output
+          catch e
+            exp.children = [
+              type: "Error"
+              message: `comptime block failed to execute: ${e}\n${js}`
+            ]
+            return
           finish()
     else
       // Statements do not need to have their result inlined,
       // but we still might need to await the output
-      promise = output
       exp.children = []
       if exp.parent is like {type: "BlockStatement", bare: true} and
          not (exp.parent as BlockStatement).root
         exp.children.push ";"
+      unless sync
+        promise = async do
+          try
+            await output
+          catch e
+            exp.children = [
+              type: "Error"
+              message: `comptime block failed to execute: ${e}\n${js}`
+            ]
     promise
 
 function serialize(value: ???, context?: NodeJS.Dict<any>): string
@@ -178,10 +204,11 @@ function serialize(value: ???, context?: NodeJS.Dict<any>): string
           // In general, the method name could be an arbitrary JS expression. This is not currently handled.
           throw new Error "cannot serialize method with computed name"
         // Test for old-style classes done by creating a regular function and assigning to its prototype
+        proto := if val::? then Object.getPrototypeOf val::
         protoHasProps := not (or)
           val:: is undefined
           (and)
-            Object:: is Object.getPrototypeOf val::
+            proto is Object:: or proto is context?.Object::
             Object.getOwnPropertyNames(val::)# <= 1 // constructor
             Object.getOwnPropertySymbols(val::)# is 0
             val::constructor is in [val, undefined]
@@ -249,6 +276,8 @@ function serialize(value: ???, context?: NodeJS.Dict<any>): string
                 if desc.enumerable and desc.configurable and desc.writable
                   if prop <? 'symbol'
                     objStr += `[${recurse prop}]`
+                  else if prop is '__proto__'
+                    objStr += '["__proto__"]'
                   else
                     objStr += JSON.stringify prop
                   objStr += `:${recurse desc.value},`
@@ -282,7 +311,8 @@ function serialize(value: ???, context?: NodeJS.Dict<any>): string
               `Buffer.from([${(val as Buffer).join ','}])`
             else
               if Array.isArray val
-                `[${(val as ???[]).map(recurse).join ","}]`
+                trailingComma := val.length > 0 and (val.length - 1) not in val ? "," : ""
+                `[${(val as ???[]).map(recurse).join ","}${trailingComma}]`
               else
                 // One day we may handle other classes like so:
                 // str += `__proto__:${val.constructor.name}`
