@@ -1,0 +1,75 @@
+assert from node:assert/strict
+{ execFileSync, spawnSync } from node:child_process
+fs from node:fs
+{ tmpdir } from node:os
+path from node:path
+{ pathToFileURL } from node:url
+
+describe "Bun plugin", ->
+  @timeout 20000
+  let bunPath: string, tmpDir: string
+
+  before ->
+    // Resolve through the shell to support Bun's Windows .cmd shim.
+    { status, stdout } := spawnSync "bun --print process.execPath", shell: true, encoding: "utf8"
+    @skip() unless status is 0
+    bunPath = stdout.trim()
+
+    tmpDir = fs.mkdtempSync path.join(tmpdir(), "civet-bun-")
+    fs.writeFileSync path.join(tmpDir, "double.civet"), '''
+      export default (x: number): number => x * 2
+    '''
+    fs.writeFileSync path.join(tmpDir, "main.civet"), '''
+      double from ./double.civet
+      export answer := double 21
+      console.log answer
+    '''
+
+  after ->
+    if tmpDir?
+      fs.rmSync tmpDir, recursive: true, force: true
+
+  it "still registers the runtime loader when preloaded", ->
+    output := execFileSync bunPath, [
+      "--preload", path.resolve("dist/bun-civet.mjs")
+      path.join(tmpDir, "main.civet")
+    ], encoding: "utf8"
+    assert.equal output.trim(), "42"
+
+  it "runs build.civet with a bunfig preload and bundles with the same plugin", ->
+    pluginPath := path.resolve "dist/bun-civet.mjs"
+    fs.writeFileSync path.join(tmpDir, "bunfig.toml"), `preload = [${JSON.stringify pluginPath}]`
+    fs.writeFileSync path.join(tmpDir, "build.civet"), `
+      civetPlugin from ${JSON.stringify pathToFileURL(pluginPath).href}
+
+      result := await Bun.build {
+        entrypoints: ['./main.civet']
+        outdir: './dist'
+        plugins: [civetPlugin]
+      }
+      unless result.success
+        throw new AggregateError result.logs, 'Build failed'
+    `
+    execFileSync bunPath, ["build.civet"], cwd: tmpDir
+    output := execFileSync bunPath, [path.join(tmpDir, "dist/main.js")], encoding: "utf8"
+    assert.equal output.trim(), "42"
+
+  for target of ["bun", "browser"]
+    it `exports a plugin that bundles Civet for ${target}`, ->
+      outputFile := path.join tmpDir, `${target}.mjs`
+      output := execFileSync bunPath, ["--eval", `
+        import assert from 'node:assert/strict';
+        import civetPlugin from '@danielx/civet/bun-civet';
+
+        const result = await Bun.build({
+          entrypoints: [${JSON.stringify path.join(tmpDir, "main.civet")}],
+          target: ${JSON.stringify target},
+          plugins: [civetPlugin],
+        });
+        assert.equal(result.success, true);
+        assert.equal(result.outputs.length, 1);
+        await Bun.write(${JSON.stringify outputFile}, result.outputs[0]);
+        const { answer } = await import(${JSON.stringify pathToFileURL(outputFile).href});
+        assert.equal(answer, 42);
+      `], encoding: "utf8"
+      assert.equal output.trim(), "42"
