@@ -1,0 +1,62 @@
+import assert from assert
+import { spawnSync } from child_process
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from fs
+import { tmpdir } from os
+import { join } from path
+import { compile } from ../../source/main.civet
+
+diffScriptSource := join process.cwd(), 'scripts/typecheck-diff.civet'
+
+describe "scripts/typecheck-diff.civet", ->
+  @timeout 15000
+
+  let workDir: string
+  let compiledScript: string
+
+  before ->
+    workDir = mkdtempSync join(tmpdir(), 'civet-typecheck-diff-')
+    compiledScript = join workDir, 'typecheck-diff.mjs'
+    source := readFileSync diffScriptSource, 'utf8'
+    js := compile source, { js: true, sync: true, filename: diffScriptSource }
+    writeFileSync compiledScript, js, 'utf8'
+
+  after ->
+    rmSync workDir, { recursive: true, force: true } if workDir
+
+  function runTypecheckDiff(oldLog: string, newLog: string, extraArgs: string[] = [])
+    oldPath := join workDir, 'old.log'
+    newPath := join workDir, 'new.log'
+    writeFileSync oldPath, oldLog, 'utf8'
+    writeFileSync newPath, newLog, 'utf8'
+    spawnSync process.execPath, [compiledScript, ...extraArgs, oldPath, newPath], {
+      encoding: 'utf8'
+    }
+
+  it "does not cross-pair unrelated non-assignability errors on the same line", ->
+    oldLog := "source/a.civet:10:5 - error TS2339: Property 'foo' does not exist on type 'Bar'.\n"
+    newLog := "source/a.civet:10:5 - error TS2339: Property 'baz' does not exist on type 'Bar'.\n"
+    res := runTypecheckDiff oldLog, newLog, ['--fail-on-regressions']
+    assert.equal res.status, 1, `expected regression failure, got stdout:\n${res.stdout}\nstderr:\n${res.stderr}`
+    assert.match res.stdout, /Regressions: 1/
+    assert.match res.stdout, /Fixed: 1/
+    assert.match res.stdout, /Property 'baz'/
+
+  it "runs Pass 3 (message-only) to completion before Pass 4 (source-type-only)", ->
+    oldLog := "source/a.civet:10:1 - error TS2322: Type 'string' is not assignable to type 'number'.\n"
+    newLog := [
+      "source/a.civet:1:1 - error TS2322: Type 'string' is not assignable to type 'boolean'."
+      "source/a.civet:10:1 - error TS2719: Type 'string' is not assignable to type 'number'. Two different types with this name exist, but they are unrelated."
+    ].join('\n') + '\n'
+    res := runTypecheckDiff oldLog, newLog, ['--fail-on-regressions']
+    assert.equal res.status, 1
+    assert.match res.stdout, /Regressions: 1/
+    assert.match res.stdout, /1:1 TS2322 Type 'string' is not assignable to type 'boolean'\./
+    assert.doesNotMatch res.stdout, /10:1 TS2719/
+
+  it "still pairs assignability errors whose target type changed via Pass 4", ->
+    oldLog := "source/a.civet:10:1 - error TS2322: Type 'Foo' is not assignable to type 'Bar'.\n"
+    newLog := "source/a.civet:12:1 - error TS2322: Type 'Foo' is not assignable to type 'Bar | Baz'.\n"
+    res := runTypecheckDiff oldLog, newLog, ['--fail-on-regressions']
+    assert.equal res.status, 0, `expected 0 regressions, got stdout:\n${res.stdout}\nstderr:\n${res.stderr}`
+    assert.match res.stdout, /Regressions: 0/
+    assert.match res.stdout, /Fixed: 0/
