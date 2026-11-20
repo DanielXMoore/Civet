@@ -1624,6 +1624,9 @@ CoffeeClassBodyStatement
 
 # https://262.ecma-international.org/#prod-ClassElement
 ClassElement
+  # Prefer methods with indented bodies to implicit calls. Reuse the
+  # signature grammar for spacing, optional markers, and type parameters.
+  CoffeeClassesEnabled &( StaticModifier? MethodSignature IndentedFurther ) ClassMember -> $3
   # CoffeeScript public static class variable: @identifier = Expression
   # CoffeeScript private static class variable: identifier = Expression
   CoffeeClassesEnabled Decorators?:decorators DeclareModifier?:declare AccessModifier?:access StaticModifier?:static_ OverrideModifier?:override ActualAssignment:assignment ->
@@ -1646,14 +1649,14 @@ ClassElement
     }
   # CoffeeScript executable class body statement: `@include M` or `setup()`
   # processCoffeeClasses runs it after the class, with `this` as the class
-  # (but `@name(params)` or `name(params)` followed by an indented block
-  # is a method)
-  CoffeeClassesEnabled !"@@" &( "@" / ( IdentifierName "(" ) ) ForbidIndentedApplication AssignmentExpression?:expression RestoreIndentedApplication !IndentedFurther &StatementDelimiter ::CoffeeClassStatement ->
+  # Indented methods take priority above; braced objects remain arguments.
+  CoffeeClassesEnabled !"@@" &( "@" / ( IdentifierName ( "(" / IndentedFurther ) ) ) AssignmentExpression:expression !IndentedFurther ( _? PostfixStatement )?:post &StatementDelimiter ::CoffeeClassStatement ->
     return $skip unless expression is like {type: "CallExpression"}
+    statement := post ? addPostfixStatement(expression, ...post) : expression
     return {
       type: "CoffeeClassStatement",
-      statement: expression,
-      children: [expression],
+      statement,
+      children: [statement],
     }
   # CoffeeScript executable class body statement led by a keyword, like
   # `if flag` or `for x in xs`.  A class element named like the keyword
@@ -1669,7 +1672,20 @@ ClassElement
       exp,
       children: [static_, id, " = ", exp],
     }
-  # NOTE: Combined optional static and Method/Field definition
+  ClassMember
+  # ClassStaticBlock
+  Static BracedBlock ->
+    return {
+      type: "ClassStaticBlock",
+      children: $0,
+    }
+  EmptyStatement
+
+# Class method or field with modifiers.
+# Shared by the CoffeeScript-specific indented-method alternative and the
+# general method/field fallback in ClassElement.
+# Static blocks and empty statements remain separate ClassElement alternatives.
+ClassMember
   Decorators?:decorators DeclareModifier?:declare AccessModifier?:access StaticModifier?:static_ OverrideModifier?:override ClassElementDefinition:definition ->
     ts := definition.ts || !!declare
     // CoffeeScript `@name: value` is a static property: `Class.name = value`
@@ -1691,13 +1707,6 @@ ClassElement
       ts,
       children: [decorators, declare, access, static_, override, ...definition.children],
     }
-  # ClassStaticBlock
-  Static BracedBlock ->
-    return {
-      type: "ClassStaticBlock",
-      children: $0,
-    }
-  EmptyStatement
 
 ClassElementDefinition
   ( MethodDefinition / FieldDefinition )
@@ -2590,7 +2599,8 @@ FunctionRestParameter
 
 # NOTE: Similar to BindingElement but appears in formal parameters list
 ParameterElement
-  _? AccessModifier?:accessModifier _? ( BindingPattern / NWBindingIdentifier ):binding TypeSuffix?:typeSuffix Initializer?:initializer ParameterElementDelimiter:delim ->
+  # Literals are matching patterns, not parameter bindings.
+  _? AccessModifier?:accessModifier _? !LiteralPattern ( BindingPattern / NWBindingIdentifier ):binding TypeSuffix?:typeSuffix Initializer?:initializer ParameterElementDelimiter:delim ->
     typeSuffix ??= binding.typeSuffix
     return {
       type: "Parameter",
@@ -2674,14 +2684,6 @@ PinPattern ::PinPattern
       expression,
       typeSuffix: typeSuffixForExpression(expression),
     }
-  # Handle unary numeric in switch patterns
-  ([+-] NumericLiteral):expression ->
-    return {
-      type: "PinPattern",
-      children: [expression],
-      expression: expression as ASTNode,
-      typeSuffix: typeSuffixForExpression(expression as ASTNode),
-    }
   # Handle undefined in switch patterns
   Undefined:expression ->
     return {
@@ -2711,9 +2713,20 @@ BindingPattern
   ObjectBindingPattern
   ArrayBindingPattern
   PinPattern
+  LiteralPattern
+  NamedBindingPattern
+
+# Literals used in matching patterns, including signed numbers.
+LiteralPattern
   Literal
   RegularExpressionLiteral
-  NamedBindingPattern
+  ([+-] NumericLiteral):expression ->
+    return {
+      type: "PinPattern",
+      children: [expression],
+      expression: expression as ASTNode,
+      typeSuffix: typeSuffixForExpression(expression as ASTNode),
+    }
 
 # https://262.ecma-international.org/#prod-ObjectBindingPattern
 # NOTE: Simplified from spec
