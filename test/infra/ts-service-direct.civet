@@ -1134,3 +1134,63 @@ describe "ts-service config recurse", ->
     assert.equal parsed.imports['#nested']['#deep'], './lib/deep.civet.tsx'
     // The boolean is untouched (recurse bailed on it).
     assert.equal parsed.imports['#truthy-non-object'], true
+
+describe "ts-service getScriptVersion for transpiled siblings", ->
+  it "reflects updated source document versions immediately so TS invalidates dependents", ->
+    @timeout 15000
+    rootDir := mkdtempSync path.join tmpdir(), 'civet-script-ver-'
+    try
+      depPath := path.join rootDir, 'dep.civet'
+      mainPath := path.join rootDir, 'main.civet'
+      writeFileSync path.join(rootDir, 'tsconfig.json'), JSON.stringify
+        compilerOptions:
+          target: 'ES2020'
+          module: 'ESNext'
+          moduleResolution: 'Bundler'
+          strict: true
+          skipLibCheck: true
+          jsx: 'preserve'
+          noEmit: true
+        include: ['**/*.civet']
+      writeFileSync depPath, 'export val: number := 1\n'
+      writeFileSync mainPath, "import { val } from './dep.civet'\nexport out: number := val\n"
+
+      docFactory := {
+        create: (uri: string, languageId: string, version: number, text: string) =>
+          TextDocument.create uri, languageId, version, text
+        update: (doc: any, text: string, version: number) =>
+          TextDocument.update doc, [{ text }], version
+        uriToPath: (uri: string) => URI.parse(uri).fsPath
+        pathToUri: (p: string) => URI.file(p).toString()
+      }
+      service := SharedTSService rootDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory
+        logger: nullLogger
+      }
+
+      depDoc1 := TextDocument.create URI.file(depPath).toString(), 'civet', 1, 'export val: number := 1\n'
+      mainDoc := TextDocument.create URI.file(mainPath).toString(), 'civet', 1, "import { val } from './dep.civet'\nexport out: number := val\n"
+      service.host.addOrUpdateDocument depDoc1
+      service.host.addOrUpdateDocument mainDoc
+
+      // Initial check: clean, no diagnostics
+      diags1 := service.getSemanticDiagnostics mainPath + '.tsx'
+      assert.equal diags1.length, 0, "initial diagnostics should be empty"
+      assert.equal service.host.getScriptVersion(depPath + '.tsx'), '1'
+      // Non-matching target extension falls back to canonical pathMap lookup
+      assert.equal service.host.getScriptVersion(depPath + '.js'), '0'
+
+      // Update dep.civet to export a string instead of a number (version 2)
+      depDoc2 := TextDocument.create URI.file(depPath).toString(), 'civet', 2, "export val: string := 'oops'\n"
+      service.host.addOrUpdateDocument depDoc2
+
+      // Version for the synthetic .civet.tsx sibling must reflect version 2 immediately
+      assert.equal service.host.getScriptVersion(depPath + '.tsx'), '2',
+        "getScriptVersion(.civet.tsx) should immediately reflect updated source doc version"
+
+      // TS must re-snapshot dep.civet.tsx and report the type mismatch in main.civet
+      diags2 := service.getSemanticDiagnostics mainPath + '.tsx'
+      assert diags2.length > 0, "expected type mismatch diagnostic in main.civet after dep.civet changed"
+    finally
+      rmSync rootDir, recursive: true, force: true
