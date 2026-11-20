@@ -16,12 +16,15 @@ const path = require('path');
 const { compile: heraCompile } = require('@danielx/hera/dist/main.js');
 const heraVersion = require('@danielx/hera/package.json').version;
 
-const civetSourceRaw = process.env.CIVET_SOURCE ?? './node_modules/@danielx/civet';
-const civetSourceResolved = require.resolve(path.resolve(civetSourceRaw));
+const repoRoot = path.resolve(__dirname, '..');
+const civetSourceRaw = process.env.CIVET_SOURCE ??
+  (process.env.CIVET_SELF_BUILD === '1' ? './dist/main.js' : './node_modules/@danielx/civet');
+const civetSourceResolved = require.resolve(path.resolve(repoRoot, civetSourceRaw));
 const civetSourceMtime = fs.statSync(civetSourceResolved).mtime.getTime().toString();
 const { compile: civetCompile } = require(civetSourceResolved);
 
-const { makeCacheKey, createDiskCache } = require('../dist/cache.js');
+const civetDist = process.env.CIVET_DIST || 'dist';
+const { makeCacheKey, createDiskCache } = require(path.resolve(repoRoot, civetDist, 'cache.js'));
 
 function findPackageVersion(resolvedPath) {
   let dir = path.dirname(resolvedPath);

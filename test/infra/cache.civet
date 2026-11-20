@@ -12,6 +12,7 @@ assert from assert
 * as path from "node:path"
 * as fs from "node:fs"
 * as os from "node:os"
+{ spawnSync } from "node:child_process"
 
 describe "cache primitives", ->
   it "hashParts produces stable SHA1 hex", ->
@@ -221,3 +222,70 @@ describe "makeHeraPlugin cache option", ->
     transpiler.compile filename, heraSource
     assert.equal sets.length, setsAfterFirst, "second compile should hit cache, not write"
     assert gets.length >= 2, "should have attempted reads on both compiles"
+
+describe "build/cache-utils.js and build-self.sh", ->
+  repoRoot := process.cwd()
+  cacheUtilsPath := path.join repoRoot, "build/cache-utils.js"
+
+  it "resolves relative CIVET_SOURCE against the repo root regardless of cwd", ->
+    env: NodeJS.ProcessEnv := { ...process.env, CIVET_SOURCE: "./node_modules/@danielx/civet" }
+    delete env.CIVET_DIST
+    delete env.CIVET_SELF_BUILD
+    res := spawnSync process.execPath, [
+      "-e"
+      `require(${JSON.stringify cacheUtilsPath}); console.log("ok")`
+    ], {
+      cwd: path.join repoRoot, "test"
+      env
+      encoding: "utf8"
+    }
+    assert.equal res.status, 0, `expected exit 0 from subdirectory cwd, got:\n${res.stderr}`
+    assert.equal res.stdout.trim(), "ok"
+
+  it "loads cache.js from CIVET_DIST when set", ->
+    tmpDist := fs.mkdtempSync path.join(os.tmpdir(), "civet-dist-")
+    try
+      fs.writeFileSync path.join(tmpDist, "cache.js"), """
+        module.exports = {
+          makeCacheKey: () => "sentinel-key",
+          createDiskCache: () => ({
+            get: () => "// from-custom-civet-dist",
+            set: () => {},
+          }),
+        };
+      """
+      env: NodeJS.ProcessEnv := { ...process.env, CIVET_DIST: tmpDist }
+      delete env.CIVET_SOURCE
+      delete env.CIVET_SELF_BUILD
+      res := spawnSync process.execPath, [
+        "-e"
+        `const { compileWithCache } = require(${JSON.stringify cacheUtilsPath}); process.stdout.write(compileWithCache("x = 1", "a.civet"));`
+      ], {
+        cwd: repoRoot
+        env
+        encoding: "utf8"
+      }
+      assert.equal res.status, 0, `expected exit 0 with custom CIVET_DIST, got:\n${res.stderr}`
+      assert.equal res.stdout, "// from-custom-civet-dist"
+    finally
+      fs.rmSync tmpDist, { recursive: true, force: true }
+
+  it "build-self.sh exports CIVET_SOURCE=./dist/main.js and CIVET_SELF_BUILD=1 uses ./dist/main.js", ->
+    script := fs.readFileSync path.join(repoRoot, "build/build-self.sh"), "utf8"
+    assert.match script, /^\s*export\s+CIVET_SOURCE=(?:"\.\/dist\/main\.js"|'\.\/dist\/main\.js'|\.\/dist\/main\.js)\s*$/m,
+      "expected build/build-self.sh to export CIVET_SOURCE=./dist/main.js"
+    distMain := path.join repoRoot, "dist/main.js"
+    if fs.existsSync distMain
+      env: NodeJS.ProcessEnv := { ...process.env, CIVET_SELF_BUILD: "1" }
+      delete env.CIVET_SOURCE
+      delete env.CIVET_DIST
+      res := spawnSync process.execPath, [
+        "-e"
+        `require(${JSON.stringify cacheUtilsPath}); console.log(Boolean(require.cache[require.resolve(${JSON.stringify distMain})]))`
+      ], {
+        cwd: repoRoot
+        env
+        encoding: "utf8"
+      }
+      assert.equal res.status, 0, `expected exit 0 with CIVET_SELF_BUILD=1, got:\n${res.stderr}`
+      assert.equal res.stdout.trim(), "true"
