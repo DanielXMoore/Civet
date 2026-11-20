@@ -181,3 +181,120 @@ describe "WorkerPool", ->
     // Worker is now idle; second job should reuse it via the @idle path
     result := await pool.run "compile", "y := 2", {}
     assert typeof result is "string"
+
+  it "rejects and pumps queued jobs when startWorker fails", ->
+    @timeout 15000
+    pool = new WorkerPool 1
+    origStart := pool.startWorker.bind pool
+    failOnce .= true
+    pool.startWorker = =>
+      if failOnce
+        failOnce = false
+        return Promise.reject new Error "spawn failed"
+      origStart()
+
+    p1 := pool.run "compile", "a := 1", {}
+    p2 := pool.run "compile", "b := 2", {}
+
+    let err: unknown
+    try
+      await Promise.race [
+        p1
+        new Promise (_, rej) => setTimeout (-> rej new Error "timed out waiting for p1"), 1000
+      ]
+    catch e
+      err = e
+    assert err instanceof Error
+    assert.match err.message, /spawn failed/
+
+    res2 := await Promise.race [
+      p2
+      new Promise (_, rej) => setTimeout (-> rej new Error "timed out waiting for p2"), 5000
+    ]
+    assert typeof res2 is "string"
+    assert.equal pool.spawned, 1
+
+  it "rejects active job and drains queued jobs when a worker emits error", ->
+    @timeout 15000
+    pool = new WorkerPool 1
+    // Warm up one worker so we have a handle to it
+    await pool.run "compile", "warm := 1", {}
+    worker := pool.idle[0]
+    assert worker
+
+    origConsoleError := console.error
+    console.error = ->
+    try
+      p1 := pool.run "compile", "a := 1", {}
+      p2 := pool.run "compile", "b := 2", {}
+      worker.emit 'error', new Error 'worker exploded'
+      // Emit a subsequent exit to verify error+exit cleanup is idempotent
+      worker.emit 'exit', 1
+
+      let err: unknown
+      try
+        await Promise.race [
+          p1
+          new Promise (_, rej) => setTimeout (-> rej new Error "timed out waiting for p1"), 1000
+        ]
+      catch e
+        err = e
+      assert err instanceof Error
+      assert.match err.message, /worker exploded/
+
+      res2 := await Promise.race [
+        p2
+        new Promise (_, rej) => setTimeout (-> rej new Error "timed out waiting for p2"), 5000
+      ]
+      assert typeof res2 is "string"
+      assert.equal pool.spawned, 1
+    finally
+      console.error = origConsoleError
+
+  it "rejects active job and recovers when a worker exits unexpectedly while busy", ->
+    @timeout 15000
+    pool = new WorkerPool 1
+    await pool.run "compile", "warm := 1", {}
+    worker := pool.idle[0]
+    assert worker
+
+    p1 := pool.run "compile", "a := 1", {}
+    p2 := pool.run "compile", "b := 2", {}
+    // Unexpected external termination (not via setThreads) triggers real 'exit'
+    void worker.terminate()
+
+    let err: unknown
+    try
+      await Promise.race [
+        p1
+        new Promise (_, rej) => setTimeout (-> rej new Error "timed out waiting for p1"), 1000
+      ]
+    catch e
+      err = e
+    assert err instanceof Error
+    assert.match err.message, /exited unexpectedly/
+
+    res2 := await Promise.race [
+      p2
+      new Promise (_, rej) => setTimeout (-> rej new Error "timed out waiting for p2"), 5000
+    ]
+    assert typeof res2 is "string"
+    assert.equal pool.spawned, 1
+
+  it "evicts an idle worker that exits unexpectedly and spawns a replacement", ->
+    @timeout 15000
+    pool = new WorkerPool 1
+    await pool.run "compile", "warm := 1", {}
+    worker := pool.idle[0]
+    assert worker
+
+    await worker.terminate()
+    assert.equal pool.idle.length, 0, "exited idle worker should be removed from idle list"
+    assert.equal pool.spawned, 0, "spawned count should drop to 0"
+
+    res := await Promise.race [
+      pool.run "compile", "ok := 42", {}
+      new Promise (_, rej) => setTimeout (-> rej new Error "timed out waiting for replacement"), 5000
+    ]
+    assert typeof res is "string"
+    assert.equal pool.spawned, 1

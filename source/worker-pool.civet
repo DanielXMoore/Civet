@@ -12,29 +12,71 @@ export class WorkerPool
   jobId: number
   callbacks: Map<number, {job: Job, resolve: (result: ???) =>, reject: (error: ???) =>}>
   todo: Job[]
+  active: Map<Worker, number>
+  terminated: WeakSet<Worker>
   @(@threads: number)
     @idle = []
     @spawned = 0
     @jobId = 0
     @callbacks = new Map
     @todo = []
+    @active = new Map
+    @terminated = new WeakSet
 
   run(op: string, ...args: ???[]): Promise<???>
     id := @jobId++
-    await new Promise (resolve, reject): void =>
+    new Promise (resolve, reject): void =>
       job := {id, op, args}
       @callbacks.set id, {job, resolve, reject}
-      if @idle#
-        worker := @idle.shift()!
-        worker.ref()
-        worker.postMessage job
-      else if @spawned < @threads
-        @startWorker() |> await |> .postMessage job
-      else
-        @todo.push job
+      @dispatch job
+
+  dispatch(job: Job): void
+    if @idle#
+      worker := @idle.shift()!
+      worker.ref()
+      @active.set worker, job.id
+      worker.postMessage job
+    else if @spawned < @threads
+      @spawned++
+      @startWorker().then
+        (worker) =>
+          @active.set worker, job.id
+          worker.postMessage job
+        (error) =>
+          @spawned--
+          @failJob job.id, error
+          @pump()
+    else
+      @todo.push job
+
+  failJob(id: number, error: ???): void
+    callback := @callbacks.get(id)!
+    @callbacks.delete id
+    callback.reject error
+
+  pump(): void
+    while @todo# and @spawned < @threads
+      @dispatch @todo.shift()!
+
+  terminateWorker(worker: Worker): void
+    @terminated.add worker
+    @spawned--
+    worker.terminate()
+
+  handleWorkerFailure(worker: Worker, error: ???, terminate: boolean): void
+    return if @terminated.has worker
+    @terminated.add worker
+    idx := @idle.indexOf worker
+    @idle.splice idx, 1 if idx >= 0
+    @spawned--
+    activeId := @active.get worker
+    if activeId?
+      @active.delete worker
+      @failJob activeId, error
+    worker.terminate() if terminate
+    @pump()
 
   startWorker(): Promise<Worker>
-    @spawned++
     { Worker } from node:worker_threads
     path from node:path
     :ESM_ONLY globalThis.__dirname = do
@@ -42,6 +84,9 @@ export class WorkerPool
       path.dirname fileURLToPath import.meta.url
     worker := new Worker path.join __dirname, 'node-worker.mjs'
     worker.on 'message', (response: {id: number, errors?: unknown[]?, result?: ???, error?: ???}) =>
+      /* c8 ignore next -- defensive: ignore late message after worker was already marked terminated */
+      return if @terminated.has worker
+      @active.delete worker
       callback := @callbacks.get(response.id)!
       @callbacks.delete response.id
       if response.error
@@ -64,20 +109,22 @@ export class WorkerPool
         callback.resolve response.result
       // Worker is now available
       if @spawned > @threads // kill if now too many workers
-        @spawned--
-        worker.terminate()
+        @terminateWorker worker
       else if @todo# // send job if any already available
-        worker.postMessage @todo.shift()
+        nextJob := @todo.shift()!
+        @active.set worker, nextJob.id
+        worker.postMessage nextJob
       else // otherwise add to idle set and don't block program exit
         @idle.push worker
         worker.unref()
-    /* c8 ignore next 2 -- worker process crash is not reproducible in unit tests */
     worker.on 'error', (error) =>
       console.error "Civet worker failed:", error
+      @handleWorkerFailure worker, error, true
+    worker.on 'exit', (code) =>
+      @handleWorkerFailure worker, new Error(`Civet worker exited unexpectedly with code ${code}`), false
     worker
 
   setThreads(@threads: number): void
     while @spawned > @threads
       return unless @idle#
-      @spawned--
-      @idle.pop()!.terminate()
+      @terminateWorker @idle.pop()!
