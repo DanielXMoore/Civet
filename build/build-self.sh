@@ -13,10 +13,11 @@ fi
 export CIVET_SELF_BUILD=1
 export CIVET_DIST=dist-self
 export CIVET_BIN="./dist/civet"
+export CIVET_SOURCE="./dist/main.js"
 
 bash ./build/build.sh "$@"
 
 # diff old to new
 echo
-diff -ru --color=always dist dist-self
+diff -ru --color=always dist dist-self || true
 exit 0
