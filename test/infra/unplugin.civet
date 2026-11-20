@@ -6,6 +6,8 @@ assert from assert
 esbuildCivetPlugin from ../../source/unplugin/esbuild.civet
 viteCivetPlugin from ../../source/unplugin/vite.civet
 { slash, rawPlugin, type PluginOptions } from ../../source/unplugin/unplugin.civet
+{ SourceMap, type SourceMapJSON } from ../../source/sourcemap.civet
+{ remapPosition } from ../../source/ts-diagnostic.civet
 { readFile, readdir, writeFile, mkdir, rm, realpath } from fs/promises
 // Default import: the same mutable module object whose readFileSync the
 // plugin's vinxi support substitutes during route analysis.  Call it via
@@ -1690,3 +1692,35 @@ describe "unplugin: emitDeclaration without esbuild outdir", ->
       console.error = origError
       await rm filePath, { force: true }
     assert errored, "should throw when emitDeclaration is true without outdir"
+
+describe "unplugin: downstream sourcemap composition", ->
+  it "composes Civet sourcemaps with esbuild and tsc output maps", ->
+    @timeout 15000
+    // Civet `type` + indented arrow function shifts lines/columns across Civet -> TS -> JS
+    src := "type N = number\nfn := (a: N): N =>\n  a + 1\nconsole.log fn 41\n"
+    filePath := path.join tmpdir(), "civet-compose-sm-" + Date.now() + ".civet"
+    await writeFile filePath, src
+    try
+      for tsMode of ['esbuild', 'tsc'] as const
+        plugin := rawPlugin { ts: tsMode, config: false, typecheck: false }, { framework: 'rollup' }
+        ctx := { ...nullContext, ...plugin }
+        await plugin.buildStart.call ctx
+        res := await plugin.load.call ctx, filePath + ".jsx"
+        assert res and res <? "object"
+        map := res.map as SourceMapJSON
+        assert map, `expected sourcemap for ts: ${tsMode}`
+        assert.equal map.sources?[0], path.basename(filePath),
+          `ts: ${tsMode} map should reference the .civet source`
+        assert.equal map.sourcesContent?[0], src,
+          `ts: ${tsMode} map sourcesContent should be raw Civet source, not intermediate TS`
+        // Find generated line/col of `console.log` and verify it remaps to Civet line 3, col 0
+        genLines := res.code.split '\n'
+        genLine := genLines.findIndex (l) => l.includes 'console.log'
+        assert genLine >= 0, `expected console.log in ${tsMode} output`
+        genCol := genLines[genLine].indexOf 'console.log'
+        parsed := SourceMap.parseWithLines map
+        pos := remapPosition { line: genLine, character: genCol }, parsed.lines as any
+        assert.deepEqual pos, { line: 3, character: 0 },
+          `ts: ${tsMode} should map console.log back to Civet line 3 col 0, got ${JSON.stringify pos}`
+    finally
+      await rm filePath, { force: true }

@@ -828,7 +828,6 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
       finally resolve?()
 
       let compiled: string
-      let sourceMap: SourceMap | string | undefined
       civetOptions := {
         // buildStart ensured compileOptions is loading before any load()
         ...await compileOptions
@@ -864,7 +863,6 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
           js: true
           sourceMap: civetSourceMap
         }
-        sourceMap = civetSourceMap
         checkErrors()
       else
         compiledTS := await civet.generate ast, {
@@ -884,17 +882,16 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
               sourcemap: "external"
 
             compiled = result.code
-            sourceMap = result.map
+            civetSourceMap.composeDownstream JSON.parse result.map
           when "tsc"
             tsTranspile := tsPromise! |> await |> .transpileModule
             result := tsTranspile compiledTS,
               compilerOptions: compilerOptionsWithSourceMap
 
             compiled = result.outputText
-            sourceMap = result.sourceMapText
+            civetSourceMap.composeDownstream JSON.parse result.sourceMapText!
           when "preserve"
             compiled = compiledTS
-            sourceMap = civetSourceMap
 
       if transformTS
         // When working with TypeScript, disable rewriteCivetImports and
@@ -908,10 +905,12 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
             spec.module.token = spec.module.input
             .replace /\.([mc])?ts(['"])$/, ".$1js$2"
 
+        tsSourceMap := new SourceMap rawCivetSource,
+          normalizePath sourceMapSource
         compiledTS := await civet.generate ast, {
           ...civetOptions
           js: false
-          sourceMap: civetSourceMap
+          sourceMap: tsSourceMap
         }
         checkErrors()
 
@@ -919,14 +918,14 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         // Otherwise, TypeScript complains about types in .jsx files.
         tsx := filename + '.tsx'
         fsMap.set tsx, compiledTS
-        sourceMaps.set tsx, civetSourceMap
+        sourceMaps.set tsx, tsSourceMap
         // Vite and Rollup normalize filenames to use `/` instead of `\`.
         // We give the TypeScript VFS both versions just in case.
         slashed := slash tsx
         /* c8 ignore next 3 -- Windows-only backslash path deduplication */
         unless tsx is slashed
           fsMap.set slashed, compiledTS
-          sourceMaps.set slashed, civetSourceMap
+          sourceMaps.set slashed, tsSourceMap
 
         // Hand the source to TSService so buildEnd's diagnostics + d.ts
         // emit sees it.  Independent of unplugin's fsMap; the host runs
@@ -940,11 +939,9 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
           )
           service.host.addOrUpdateDocument doc
 
-      jsonSourceMap := sourceMap and
-        if sourceMap <? "string"
-          JSON.parse(sourceMap)
-        else
-          sourceMap.json normalizePath path.relative outDir, id
+      jsonSourceMap := civetSourceMap.json(
+        normalizePath path.relative outDir, id
+      ) as Extract<TransformResult, { map?: unknown }>['map']
 
       transformed: TransformResult .=
         code: compiled
