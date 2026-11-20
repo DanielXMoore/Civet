@@ -3,6 +3,7 @@ import type {
   ASTLeaf
   ASTError
   Binding
+  BlockStatement
   Children
   Declaration
   ForControlDeclaration
@@ -47,6 +48,49 @@ import {
 import {
   getPatternBlockPrefix
 } from ./pattern-matching.civet
+
+import {
+  blockWithPrefix
+  bracedBlock
+} from ./block.civet
+
+function lexicalDeclarationNames(stmt: ASTNode): string[]
+  if stmt?.type is "Declaration" and stmt.decl is not "var"
+    namesOf stmt
+  else if (stmt?.type is "ClassExpression" or stmt?.type is "FunctionExpression") and stmt.name
+    [stmt.name]
+  else
+    []
+
+/**
+ * Attach `blockPrefix` to a `for`-loop body. If `blockPrefix` declares lexical
+ * (`const`/`let`) names that are directly shadowed by lexical declarations in
+ * `block`, wrap `block` in a nested braced block first so body declarations
+ * keep a separate scope (matching JS `for (const ...)` header scoping).
+ */
+function forBlockWithPrefix(
+  prefixStatements: StatementTuple[] | undefined
+  block: BlockStatement
+): BlockStatement
+  if prefixStatements?.length and block.expressions.length
+    prefixLexNames := new Set<string>
+    for [, stmt] of prefixStatements
+      if stmt?.type is "Declaration" and stmt.decl is not "var"
+        for name of namesOf stmt
+          prefixLexNames.add name
+    if prefixLexNames.size
+      shadows := block.expressions.some ([, stmt]) =>
+        lexicalDeclarationNames(stmt).some (name) => prefixLexNames.has name
+      if shadows
+        inner := bracedBlock block
+        innerExpressions: StatementTuple[] := [["", inner]]
+        block = makeNode {
+          type: "BlockStatement"
+          expressions: innerExpressions
+          children: [" {", innerExpressions, "}"]
+          bare: false
+        }
+  blockWithPrefix prefixStatements, block
 
 /**
  * Build the loop-body statements required by a source `ForDeclaration`
@@ -642,8 +686,9 @@ function processForInOf($0: [
   if pattern?.type is "NamedBindingPattern"
     pattern = pattern.binding
 
+  let ownKeyPattern: ASTNode = undefined
   if binding?.typeSuffix or (
-    inOf.token is "in" and indexDeclaration and pattern?.type is not "Identifier"
+    inOf.token is "in" and (indexDeclaration or own) and pattern?.type is not "Identifier"
   )
     itemRef := makeRef if inOf.token is "in" then "key" else "item"
     pushForBlockDeclaration blockPrefix, declaration, itemRef
@@ -660,11 +705,13 @@ function processForInOf($0: [
       children: ["const ", itemRef]
       decl: "const"
       names: []
+    ownKeyPattern = itemRef
     unless pattern?.type is "Identifier"
       pattern = itemRef
 
+  blockPrefix.unshift ...forDeclarationPatternPrefix(declaration)
+
   unless indexDeclaration or own
-    blockPrefix.unshift ...forDeclarationPatternPrefix(declaration)
     return {
       declaration
       iterand
@@ -703,7 +750,7 @@ function processForInOf($0: [
       // for own..in
       if own
         hasPropRef := getHelperRef("hasProp")
-        blockPrefix.push ["", ["if (!", hasPropRef, "(", trimFirstSpace(expRef), ", ", trimFirstSpace(pattern), ")) continue"], ";"]
+        blockPrefix.unshift ["", ["if (!", hasPropRef, "(", trimFirstSpace(expRef), ", ", trimFirstSpace(ownKeyPattern ?? pattern), ")) continue"], ";"]
       if indexDeclaration
         trimmedPattern := trimFirstSpace pattern
         expression := makeNode
@@ -719,7 +766,6 @@ function processForInOf($0: [
         pushForBlockDeclaration indexPrefix, indexDecl, expression
         blockPrefix.push ...indexPrefix
 
-  blockPrefix.unshift ...forDeclarationPatternPrefix(declaration)
   return {
     declaration,
     iterand,
@@ -730,6 +776,7 @@ function processForInOf($0: [
 
 export {
   declarationIterand
+  forBlockWithPrefix
   forDeclarationPatternPrefix
   forRange
   processForInOf
