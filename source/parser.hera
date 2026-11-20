@@ -5725,6 +5725,7 @@ CoffeeForStatementParameters ::ForStatementControl
     blockPrefix: StatementTuple[] := []
     exp = trimFirstSpace(exp)
     declaration = trimFirstSpace(declaration)
+    origDeclaration := declaration
 
     if kind.token is "from"
       if step
@@ -5733,6 +5734,7 @@ CoffeeForStatementParameters ::ForStatementControl
           message: "Can't use 'by' with 'from' in CoffeeScript for loops",
         }])
       kind = { ...kind, token: "of" }
+      blockPrefix.unshift ...forDeclarationPatternPrefix(declaration)
     else if kind.token is "of"
       if step
         blockPrefix./**/push(["", {
@@ -5746,20 +5748,59 @@ CoffeeForStatementParameters ::ForStatementControl
       // its children render as `const a`; use just the binding (with leading
       // whitespace trimmed) when emitting it as an expression operand for the
       // hasProp guard or the value-index lookup.
-      declarationExp := declaration.binding
+      binding := (declaration.type is "ForDeclaration" ? declaration.binding : declaration.assigned) as Binding
+      pattern .= binding.pattern
+      if pattern.type is "NamedBindingPattern"
+        pattern = pattern.binding
+      declarationExp: ASTNode := declaration.type is "ForDeclaration"
         ? trimFirstSpace(declaration.binding)
         : declaration
 
-      if declaration.own
+      keyExp: ASTNode .= declarationExp
+      keyBindPrefix: StatementTuple[] := []
+      if binding.typeSuffix or ((origDeclaration.own or index) and pattern.type is not "Identifier")
+        keyRef := makeRef("key")
+        keyExp = keyRef
+        if declaration.type is "ForDeclaration"
+          pushForBlockDeclaration keyBindPrefix, declaration, keyRef
+        else
+          keyBindPrefix./**/push(["", {
+            type: "AssignmentExpression",
+            lhs: [],
+            expression: keyRef,
+            children: pattern.type is "ObjectBindingPattern"
+              ? ["(", declarationExp, " = ", keyRef, ")"]
+              : [declarationExp, " = ", keyRef],
+            names: declaration.names,
+          } as unknown as AssignmentExpression, ";"])
+        declaration = {
+          type: "ForDeclaration",
+          own: origDeclaration.own,
+          decl: "const",
+          binding: {
+            type: "Binding",
+            pattern: keyRef,
+            children: [keyRef],
+            names: [],
+            splices: [],
+            thisAssignments: [],
+          } as unknown as Binding,
+          children: ["const ", keyRef],
+          names: [],
+        } as unknown as CoffeeForDeclarationType
+
+      if origDeclaration.own
         hasPropRef := getHelperRef("hasProp")
 
-        blockPrefix./**/push(["", ["if (!", hasPropRef, "(", exp, ", ", declarationExp, ")) continue"], ";"])
+        blockPrefix./**/push(["", ["if (!", hasPropRef, "(", exp, ", ", keyExp, ")) continue"], ";"])
+
+      blockPrefix./**/push(...forDeclarationPatternPrefix(declaration), ...keyBindPrefix)
 
       // index is actually value in Coffee "for of", y = z[x]
       if index
         blockPrefix./**/push(["", {
           type: "AssignmentExpression",
-          children: [index, " = ", exp, "[", declarationExp, "]"],
+          children: [index, " = ", exp, "[", keyExp, "]"],
           names: index.names,
         }, ";"])
 
@@ -5840,10 +5881,9 @@ CoffeeForStatementParameters ::ForStatementControl
         blockPrefix
       }
 
-    blockPrefix.unshift ...forDeclarationPatternPrefix(declaration)
     return {
       declaration
-      iterand: declarationIterand declaration
+      iterand: declarationIterand origDeclaration
       children: [$1, open, declaration, $5, kind, " ", exp, close]
       blockPrefix
     }
