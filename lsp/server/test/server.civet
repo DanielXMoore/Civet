@@ -2,6 +2,8 @@
 // through the browser worker integration under coverage.
 
 import assert from assert
+import ts from typescript
+import { URI } from vscode-uri
 { startServer } from ../source/server.civet
 
 nullLogger :=
@@ -47,22 +49,27 @@ function createMockTsSys()
   watchDirectory: =>
     close: =>
 
-function createMockTsServiceFactory(services: any[])
+function createMockTsServiceFactory(
+  services: any[]
+  getSemanticDiagnostics?: (filePath: string, docs: Map<string, any>) => any[]
+)
   return async (projPath: string, logger: any) =>
+    docs := new Map<string, any>()
     service: any := {
       projPath
       logger
       host: {
-        addOrUpdateDocument: => {}
-        closeDocument: => {}
-        removeDocument: => {}
+        addOrUpdateDocument: (doc: any) => docs.set URI.parse(doc.uri).fsPath, doc
+        closeDocument: (filePath: string) => docs.delete filePath
+        removeDocument: (filePath: string) => docs.delete filePath
       }
       loadPlugins: async => {}
       dispose: => {}
       getProgram: =>
         getSourceFiles: => []
       getSyntacticDiagnostics: => []
-      getSemanticDiagnostics: => []
+      getSemanticDiagnostics: (filePath: string) =>
+        getSemanticDiagnostics?(filePath, docs) ?? []
       getSuggestionDiagnostics: => []
     }
     services.push service
@@ -117,12 +124,24 @@ describe "server core", ->
   it "suppresses push sendDiagnostics and uses workspace/diagnostic/refresh for pull-capable clients", async ->
     mock := createMockConnection()
     services: any[] := []
+    getSemanticDiagnostics := (filePath: string, docs: Map<string, any>) =>
+      doc := docs.get filePath
+      return [] unless doc?.getText().includes '"bad"'
+      [{
+        category: ts.DiagnosticCategory.Error
+        code: 2322
+        file: undefined
+        start: 0
+        length: 5
+        messageText: "Type 'string' is not assignable to type 'number'."
+      }]
+
     startServer mock.connection as any,
-      TSService: createMockTsServiceFactory(services) as any
+      TSService: createMockTsServiceFactory(services, getSemanticDiagnostics) as any
       tsSys: createMockTsSys() as any
       configureBrowserLibs: async =>
 
-    mock.notificationHandlers.get('onInitialize')
+    initResult := mock.notificationHandlers.get('onInitialize')
       capabilities:
         textDocument:
           diagnostic: {}
@@ -130,10 +149,12 @@ describe "server core", ->
           diagnostics:
             refreshSupport: true
       workspaceFolders: [{ uri: 'file:///workspace' }]
+    assert initResult.capabilities.diagnosticProvider,
+      "expected diagnosticProvider for pull+refresh client"
 
     uri := 'file:///workspace/pull.ts'
     mock.notificationHandlers.get('onDidOpenTextDocument')
-      textDocument: { uri, languageId: 'typescript', version: 1, text: 'const x = 1' }
+      textDocument: { uri, languageId: 'typescript', version: 1, text: 'const x: number = "bad"' }
     await new Promise (r) => setTimeout r, 50
 
     assert.equal mock.diagnostics#, 0,
@@ -141,10 +162,24 @@ describe "server core", ->
     assert mock.sentRequests.includes('workspace/diagnostic/refresh'),
       `expected workspace/diagnostic/refresh request, got: ${JSON.stringify mock.sentRequests}`
 
-    // Pull request still computes and returns diagnostics
+    // Pull request computes and returns the real diagnostic
     pullDiag := mock.requestHandlers.get('textDocument/diagnostic')
     report := await pullDiag { textDocument: { uri } }
     assert.equal report.kind, 'full'
+    assert.equal report.items#, 1
+    assert report.items[0].message.includes("not assignable"),
+      `unexpected diagnostic message: ${report.items[0].message}`
+
+    // Editing the document updates the next pull report without pushing
+    mock.notificationHandlers.get('onDidChangeTextDocument')
+      textDocument: { uri, version: 2 }
+      contentChanges: [{ text: 'const x: number = 1' }]
+    await new Promise (r) => setTimeout r, 50
+    assert.equal mock.diagnostics#, 0, "edit must not push diagnostics for pull-capable client"
+
+    fixedReport := await pullDiag { textDocument: { uri } }
+    assert.equal fixedReport.kind, 'full'
+    assert.equal fixedReport.items#, 0
 
     // Project reload via civet/setLibs refreshes instead of pushing
     mock.sentRequests.length = 0
@@ -160,23 +195,46 @@ describe "server core", ->
       changes: [{ uri: 'file:///workspace/deleted.ts', type: 3 }]
     assert.equal mock.diagnostics#, 0, "close/delete must not push diagnostics for pull-capable client"
 
-  it "skips workspace/diagnostic/refresh when pull client lacks refreshSupport", async ->
+  it "falls back to push-only mode when pull client lacks refreshSupport", async ->
     mock := createMockConnection()
     services: any[] := []
-    startServer mock.connection as any,
-      TSService: createMockTsServiceFactory(services) as any
-      tsSys: createMockTsSys() as any
+    getSemanticDiagnostics := (filePath: string, docs: Map<string, any>) =>
+      doc := docs.get filePath
+      return [] unless doc?.getText().includes '"bad"'
+      [{
+        category: ts.DiagnosticCategory.Error
+        code: 2322
+        file: undefined
+        start: 0
+        length: 5
+        messageText: "Type 'string' is not assignable to type 'number'."
+      }]
 
-    mock.notificationHandlers.get('onInitialize')
+    startServer mock.connection as any,
+      TSService: createMockTsServiceFactory(services, getSemanticDiagnostics) as any
+      tsSys: createMockTsSys() as any
+      configureBrowserLibs: async =>
+
+    initResult := mock.notificationHandlers.get('onInitialize')
       capabilities:
         textDocument:
           diagnostic: {}
       workspaceFolders: [{ uri: 'file:///workspace' }]
+    assert.equal initResult.capabilities.diagnosticProvider, undefined,
+      "expected diagnosticProvider to be omitted when client lacks refreshSupport"
 
     uri := 'file:///workspace/pull-norefresh.ts'
     mock.notificationHandlers.get('onDidOpenTextDocument')
-      textDocument: { uri, languageId: 'typescript', version: 1, text: 'const x = 1' }
+      textDocument: { uri, languageId: 'typescript', version: 1, text: 'const x: number = "bad"' }
     await new Promise (r) => setTimeout r, 50
 
-    assert.equal mock.diagnostics#, 0
+    assert mock.diagnostics.some((p) => p.uri is uri and p.diagnostics# is 1),
+      `expected push diagnostic for pull client without refreshSupport, got: ${JSON.stringify mock.diagnostics}`
+    assert.deepEqual mock.sentRequests, []
+
+    // Reload re-pushes diagnostics instead of leaving them stale
+    mock.diagnostics.length = 0
+    await mock.requestHandlers.get('civet/setLibs')({ lib: ['ES2025'] })
+    assert mock.diagnostics.some((p) => p.uri is uri and p.diagnostics# is 1),
+      "expected reload to push updated diagnostics when client lacks refreshSupport"
     assert.deepEqual mock.sentRequests, []
