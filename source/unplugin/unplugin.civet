@@ -93,6 +93,10 @@ type CacheEntry
   mtime: number
   result?: TransformResult
   promise?: Promise<void>
+  tsData?:
+    compiledTS: string
+    sourceMap: SourceMap
+    rawCivetSource: string
 
 // vinxi (the framework underlying SolidStart and similar) attaches its
 // router schema to each router's vite config.  Filesystem routers analyze
@@ -804,27 +808,56 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
       filename.endsWith civetSuffix
 
     load(id)
-      {filename} .= extractCivetFilename id, outExt
+      {filename, postfix} .= extractCivetFilename id, outExt
       // We're guaranteed to have .civet extension here by loadInclude
 
       filename = path.resolve rootDir, filename
       @addWatchFile filename
 
+      registerTS := (compiledTS: string, tsSourceMap: SourceMap, rawCivetSource: string): void =>
+        // Force .tsx extension for type checking purposes.
+        // Otherwise, TypeScript complains about types in .jsx files.
+        tsx := filename + '.tsx'
+        fsMap.set tsx, compiledTS
+        sourceMaps.set tsx, tsSourceMap
+        // Vite and Rollup normalize filenames to use `/` instead of `\`.
+        // We give the TypeScript VFS both versions just in case.
+        slashed := slash tsx
+        /* c8 ignore next 3 -- Windows-only backslash path deduplication */
+        unless tsx is slashed
+          fsMap.set slashed, compiledTS
+          sourceMaps.set slashed, tsSourceMap
+
+        // Hand the source to TSService so buildEnd's diagnostics + d.ts
+        // emit sees it.  Independent of unplugin's fsMap; the host runs
+        // the registered makeCivetPlugin to cache its own .tsx sibling.
+        if service? and docFactory?
+          doc := docFactory.create(
+            pathToFileURL(filename).toString()
+            "civet"
+            ++nextDocVersion
+            rawCivetSource
+          )
+          service.host.addOrUpdateDocument doc
+
+      cacheKey := filename + postfix
       let mtime: number?, cached: CacheEntry?, resolve: =>?
       if cache?
         try
           mtime = fs.promises.stat(filename) |> await |> .mtimeMs
         // If we fail to stat file, ignore cache
         if mtime?
-          cached = cache.get filename
+          cached = cache.get cacheKey
           if cached and cached.mtime is mtime
             // If the file is currently being compiled, wait for it to finish
             await cached.promise if cached.promise
             if result? := cached.result
+              if cached.tsData
+                registerTS cached.tsData.compiledTS, cached.tsData.sourceMap, cached.tsData.rawCivetSource
               return result
           // We're the first to compile this file with this mtime
           promise := new Promise<void> (r): void => resolve = r
-          cache.set filename, cached = {mtime, promise}
+          cache.set cacheKey, cached = {mtime, promise}
       finally resolve?()
 
       let compiled: string
@@ -915,30 +948,9 @@ export rawPlugin := (options: PluginOptions = {}, meta: UnpluginContextMeta) =>
         }
         checkErrors()
 
-        // Force .tsx extension for type checking purposes.
-        // Otherwise, TypeScript complains about types in .jsx files.
-        tsx := filename + '.tsx'
-        fsMap.set tsx, compiledTS
-        sourceMaps.set tsx, civetSourceMap
-        // Vite and Rollup normalize filenames to use `/` instead of `\`.
-        // We give the TypeScript VFS both versions just in case.
-        slashed := slash tsx
-        /* c8 ignore next 3 -- Windows-only backslash path deduplication */
-        unless tsx is slashed
-          fsMap.set slashed, compiledTS
-          sourceMaps.set slashed, civetSourceMap
-
-        // Hand the source to TSService so buildEnd's diagnostics + d.ts
-        // emit sees it.  Independent of unplugin's fsMap; the host runs
-        // the registered makeCivetPlugin to cache its own .tsx sibling.
-        if service? and docFactory?
-          doc := docFactory.create(
-            pathToFileURL(filename).toString()
-            "civet"
-            ++nextDocVersion
-            rawCivetSource
-          )
-          service.host.addOrUpdateDocument doc
+        registerTS compiledTS, civetSourceMap, rawCivetSource
+        if cached?
+          cached.tsData = { compiledTS, sourceMap: civetSourceMap, rawCivetSource }
 
       jsonSourceMap := sourceMap and
         if sourceMap <? "string"
