@@ -34,20 +34,36 @@ export class WorkerPool
     if @idle#
       worker := @idle.shift()!
       worker.ref()
-      @active.set worker, job.id
-      worker.postMessage job
+      @sendJob worker, job
     else if @spawned < @threads
       @spawned++
       @startWorker().then
         (worker) =>
-          @active.set worker, job.id
-          worker.postMessage job
+          @sendJob worker, job
         (error) =>
           @spawned--
           @failJob job.id, error
           @pump()
     else
       @todo.push job
+
+  sendJob(worker: Worker, job: Job): void
+    @active.set worker, job.id
+    try
+      worker.postMessage job
+    catch error
+      @active.delete worker
+      @failJob job.id, error
+      @releaseWorker worker
+
+  releaseWorker(worker: Worker): void
+    if @spawned > @threads // kill if now too many workers
+      @terminateWorker worker
+    else if @todo# // send job if any already available
+      @sendJob worker, @todo.shift()!
+    else // otherwise add to idle set and don't block program exit
+      @idle.push worker
+      worker.unref()
 
   failJob(id: number, error: ???): void
     callback := @callbacks.get(id)!
@@ -108,15 +124,7 @@ export class WorkerPool
           errors[..] = response.errors!
         callback.resolve response.result
       // Worker is now available
-      if @spawned > @threads // kill if now too many workers
-        @terminateWorker worker
-      else if @todo# // send job if any already available
-        nextJob := @todo.shift()!
-        @active.set worker, nextJob.id
-        worker.postMessage nextJob
-      else // otherwise add to idle set and don't block program exit
-        @idle.push worker
-        worker.unref()
+      @releaseWorker worker
     worker.on 'error', (error) =>
       console.error "Civet worker failed:", error
       @handleWorkerFailure worker, error, true
