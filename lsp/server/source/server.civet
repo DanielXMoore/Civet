@@ -19,6 +19,7 @@
   TextEdit
   SemanticTokensRequest
   DocumentDiagnosticRequest
+  DiagnosticRefreshRequest
   DocumentDiagnosticReportKind
   type DocumentDiagnosticParams
   type DocumentDiagnosticReport
@@ -156,6 +157,7 @@ export function startServer(connection: Connection, dependencies: ServerDependen
 
   hasConfigurationCapability .= false
   hasWorkspaceFolderCapability .= false
+  usePullDiagnostics .= false
   // let hasDiagnosticRelatedInformationCapability = false
   // comment out unused variable
 
@@ -274,6 +276,14 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     // If not, we fall back using global settings.
     hasConfigurationCapability = !!capabilities.workspace?.configuration
     hasWorkspaceFolderCapability = !!capabilities.workspace?.workspaceFolders
+    // Only negotiate pull-only diagnostics when the client also supports
+    // `workspace/diagnostic/refresh`; without refresh support, cross-file edits
+    // and tsconfig reloads would leave stale diagnostics. If a pull-capable
+    // client lacks refreshSupport, omit `diagnosticProvider` below so it uses
+    // push-only mode instead of duplicating push and pull diagnostics.
+    clientSupportsPullDiagnostics := !!capabilities.textDocument?.diagnostic
+    clientSupportsDiagnosticRefresh := !!capabilities.workspace?.diagnostics?.refreshSupport
+    usePullDiagnostics = clientSupportsPullDiagnostics and clientSupportsDiagnosticRefresh
 
     result: InitializeResult := {
       capabilities: {
@@ -317,14 +327,18 @@ export function startServer(connection: Connection, dependencies: ServerDependen
             tokenTypes: semanticTokenTypes as! string[]
             tokenModifiers: semanticTokenModifiers as! string[]
           full: true
-        // Pull-model diagnostics (LSP 3.17). interFileDependencies: our
-        // results can change when other files do (cross-file TS types).
-        diagnosticProvider:
-          interFileDependencies: true
-          workspaceDiagnostics: false
 
       }
     }
+
+    // Pull-model diagnostics (LSP 3.17). interFileDependencies: our
+    // results can change when other files do (cross-file TS types).
+    // Omit when a pull-capable client lacks workspace/diagnostic/refresh so we
+    // negotiate clean push-only mode without duplicate diagnostics.
+    unless clientSupportsPullDiagnostics and not clientSupportsDiagnosticRefresh
+      result.capabilities.diagnosticProvider =
+        interFileDependencies: true
+        workspaceDiagnostics: false
 
     if hasWorkspaceFolderCapability
       result.capabilities.workspace =
@@ -1374,9 +1388,10 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     // before executeQueue captures the doc — drop it too.
     changeQueue.delete(document)
     documentUpdateStatus.delete(document.uri)
-    // Clear diagnostics on the client side; without this the Problems panel
-    // keeps showing the last-known errors for a closed file.
-    connection.sendDiagnostics { uri: document.uri, diagnostics: [] }
+    // Clear diagnostics on the client side for push-model clients; pull-model
+    // clients clear diagnostics on close themselves.
+    unless usePullDiagnostics
+      connection.sendDiagnostics { uri: document.uri, diagnostics: [] }
 
   documents.onDidOpen ({ document }) =>
     logger.log "open " + document.uri
@@ -1525,8 +1540,14 @@ export function startServer(connection: Connection, dependencies: ServerDependen
 
     return diagnostics
 
-  /** Compute and push diagnostics via `textDocument/publishDiagnostics`. */
+  function refreshDiagnostics(): void
+    void Promise.resolve(connection.sendRequest(DiagnosticRefreshRequest.type)).catch (e) =>
+      /* c8 ignore next -- defensive: client rejecting workspace/diagnostic/refresh */
+      logger.log `workspace/diagnostic/refresh failed: ${e}`
+
+  /** Compute and push diagnostics via `textDocument/publishDiagnostics` (push-model clients only). */
   function updateDiagnosticsForDoc(document: TextDocument, service: ResolvedService)
+    return if usePullDiagnostics
     connection.sendDiagnostics {
       uri: document.uri
       version: document.version
@@ -1567,6 +1588,10 @@ export function startServer(connection: Connection, dependencies: ServerDependen
 
   // Schedule an update of diagnostics for all projects affected by recent changes.
   function scheduleUpdateDiagnostics(changedDocs: Set<TextDocument>)
+    if usePullDiagnostics
+      refreshDiagnostics()
+      return
+
     if runningDiagnosticsUpdate
       runningDiagnosticsUpdate.isCanceled = true
 
@@ -1662,8 +1687,11 @@ export function startServer(connection: Connection, dependencies: ServerDependen
         if docProjPath is projPath
           openDocs.add(doc)
           newService.host.addOrUpdateDocument(doc)
-      for doc of openDocs
-        await updateDiagnosticsForDoc(doc, newService)
+      if usePullDiagnostics
+        refreshDiagnostics()
+      else
+        for doc of openDocs
+          await updateDiagnosticsForDoc(doc, newService)
     /* c8 ignore start — defensive: TSService constructor throwing during
        reload would leave us without a working service; log and move on. */
     catch e
@@ -1688,12 +1716,15 @@ export function startServer(connection: Connection, dependencies: ServerDependen
       filePath := URI.parse(fileEvent.uri).fsPath
       basename := path.basename(filePath)
 
-      // Source file deletion: purge from the owning service and clear diagnostics
+      // Source file deletion: purge from the owning service and refresh/clear diagnostics
       if fileEvent.type is FileChangeType.Deleted and basename is not 'tsconfig.json'
         projPath := getProjectPathFromSourcePath(filePath)
         service := projectPathToServiceMap.get(projPath)
         service?.host.removeDocument(filePath)
-        connection.sendDiagnostics { uri: fileEvent.uri, diagnostics: [] }
+        if usePullDiagnostics
+          refreshDiagnostics()
+        else
+          connection.sendDiagnostics { uri: fileEvent.uri, diagnostics: [] }
         continue
 
       // Only react to tsconfig.json creates and changes (not deletes)
