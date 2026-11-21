@@ -770,10 +770,17 @@ describe "lsp/server browser TSService wrapper", ->
       assert not fs.existsSync(marker), "untrusted workspace must not execute workspace packages or JS configs"
       assert.equal service1.hera, undefined, "untrusted workspace must not require project @danielx/hera"
 
-      // 2. Untrusted dir with static civetconfig.json loads safely
+      // 2. Untrusted dir with static civetconfig.json loads safely and strips
+      // file-writing compiler options like trace/hits
       safeDir := path.join tmpDir, 'safe-json'
       mkdirSync safeDir, recursive: true
-      writeFileSync path.join(safeDir, 'civetconfig.json'), JSON.stringify { parseOptions: { autoLet: true } }
+      traceMarker := path.join tmpDir, 'trace-pwned.log'
+      hitsMarker := path.join tmpDir, 'hits-pwned.log'
+      writeFileSync path.join(safeDir, 'civetconfig.json'), JSON.stringify {
+        trace: traceMarker
+        hits: hitsMarker
+        parseOptions: { autoLet: true }
+      }
       writeFileSync path.join(safeDir, 'tsconfig.json'), '{"compilerOptions":{"target":"es2020"}}'
       safeFile := path.join safeDir, 'a.civet'
       writeFileSync safeFile, 'x = 1\n'
@@ -783,6 +790,30 @@ describe "lsp/server browser TSService wrapper", ->
       meta2 := service2.host.getMeta safeFile
       assert meta2?.transpiledDoc?.getText().includes('let x = 1'),
         `expected static civetconfig.json to apply in untrusted mode, got: ${meta2?.transpiledDoc?.getText()}`
+      assert not fs.existsSync(traceMarker),
+        "untrusted static config must not write trace file"
+      assert not fs.existsSync(hitsMarker),
+        "untrusted static config must not write hits file"
+
+      // 2b. Untrusted static civetconfig.json with inline tsConfig (no parseOptions)
+      inlineTsDir := path.join tmpDir, 'safe-inline-ts'
+      mkdirSync inlineTsDir, recursive: true
+      writeFileSync path.join(inlineTsDir, 'civetconfig.json'), JSON.stringify {
+        trace: traceMarker
+        hits: hitsMarker
+        tsConfig: { compilerOptions: { target: 'es2020' } }
+      }
+      inlineFile := path.join inlineTsDir, 'c.civet'
+      writeFileSync inlineFile, 'z := 3\n'
+
+      service2b := await TSService pathToFileURL(inlineTsDir + path.sep).href, nullLogger, { isTrusted: false }
+      assert.equal service2b.configFound, true,
+        "untrusted static config should preserve inline tsConfig"
+      loadFile service2b, inlineFile
+      assert not fs.existsSync(traceMarker),
+        "untrusted static config with tsConfig must not write trace file"
+      assert not fs.existsSync(hitsMarker),
+        "untrusted static config with tsConfig must not write hits file"
 
       // 3. Untrusted nested dir does not walk up into ancestor configs
       parentDir := path.join tmpDir, 'parent'
