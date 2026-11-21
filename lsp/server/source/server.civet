@@ -245,7 +245,8 @@ export function startServer(connection: Connection, dependencies: ServerDependen
 
   ensureServiceForSourcePath := (sourcePath: string) =>
     projPath := getProjectPathFromSourcePath(sourcePath)
-    await projectPathToPendingPromiseMap.get(projPath)
+    while pending := projectPathToPendingPromiseMap.get(projPath)
+      await pending
     service .= projectPathToServiceMap.get(projPath)
     return service if service
 
@@ -1419,23 +1420,24 @@ export function startServer(connection: Connection, dependencies: ServerDependen
         unless docsByProject.has(projPath)
           service := await ensureServiceForSourcePath(sourcePath)
           if service then docsByProject.set(projPath, { service, docs: [] })
-        // Skip documents that closed while awaiting service initialization.
-        continue unless documents.get(doc.uri)
         docsByProject.get(projPath)?.docs.push(doc)
 
       for { service, docs } of docsByProject.values()
+        // Re-check right before staging so a doc that closed while another
+        // project's TSService initialized is never re-added or analyzed.
+        openDocs := docs.filter (doc) => documents.get(doc.uri)?
         // Phase 1: Stage all changes within this project.
-        docs.forEach (doc) => service.host.addOrUpdateDocument(doc)
+        openDocs.forEach (doc) => service.host.addOrUpdateDocument(doc)
 
         // Phase 1b: refresh the Hera-grammar analyzer cache for any .hera docs
         // in this batch so grammar-level requests (definition, references,
         // outline) see up-to-date data without waiting on the TS pipeline.
-        for doc of docs
+        for doc of openDocs
           if doc.uri.endsWith('.hera')
             parseHeraDocument(doc, service.hera)
 
         // Phase 2: Analyze all staged documents within this project.
-        for doc of docs
+        for doc of openDocs
           await updateDiagnosticsForDoc(doc, service)
           resolvePendingUpdate doc.uri, true
           processed.push doc
