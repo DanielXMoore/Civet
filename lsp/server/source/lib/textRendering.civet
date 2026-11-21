@@ -2,20 +2,39 @@ import type ts from typescript
 type SymbolDisplayPart = ts.server.protocol.SymbolDisplayPart
 type FileSpan = ts.server.protocol.FileSpan
 type JSDocTagInfo = ts.server.protocol.JSDocTagInfo
+type LinkTarget = FileSpan | ts.DocumentSpan
+
+export type ResolveTargetPosition = (target: ts.DocumentSpan) => { file: string, lineNumber: number, column: number }?
 
 // Based on https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/util/textRendering.ts
+
+function resolveLinkTarget(target: LinkTarget, resolveTarget?: ResolveTargetPosition)
+  if "start" in target and target.start?
+    return
+      file: target.file
+      position:
+        lineNumber: target.start.line - 1
+        column: target.start.offset - 1
+  if "textSpan" in target and resolveTarget
+    if resolved := resolveTarget target
+      return
+        file: resolved.file
+        position:
+          lineNumber: resolved.lineNumber
+          column: resolved.column
+  undefined
 
 export function asPlainText(parts: SymbolDisplayPart[] | string)
   return parts if parts <? 'string'
   parts.map((part) => part.text).join('')
 
-export function asPlainTextWithLinks(parts: SymbolDisplayPart[] | string | undefined)
+export function asPlainTextWithLinks(parts: SymbolDisplayPart[] | string | undefined, resolveTarget?: ResolveTargetPosition)
   return '' unless parts
   return parts if parts <? 'string'
   out .= ""
   let currentLink: {
     name?: string
-    target?: FileSpan
+    target?: LinkTarget
     text?: string
     linkcode: boolean
   }?
@@ -24,15 +43,7 @@ export function asPlainTextWithLinks(parts: SymbolDisplayPart[] | string | undef
     switch part.kind
       case "link":
         if currentLink
-          if currentLink.target
-            //const file = filePathConverter.toResource(currentLink.target.file)
-            args :=
-              //file: { ...file.toJSON(), $mid: undefined }
-              file: currentLink.target.file
-              position:
-                lineNumber: currentLink.target.start.line - 1
-                column: currentLink.target.start.offset - 1
-
+          if args := currentLink.target and resolveLinkTarget(currentLink.target, resolveTarget)
             command := "command:_typescript.openJsDocLink?" +
               encodeURIComponent(JSON.stringify([args]))
             linkText := currentLink.text or escapeBackTicks(currentLink.name or "")
@@ -72,13 +83,13 @@ export function asPlainTextWithLinks(parts: SymbolDisplayPart[] | string | undef
 function escapeBackTicks(text: string)
   text.replace(/`/g, '\\$&')
 
-export function tagsToMarkdown(tags: JSDocTagInfo[])
-  tags.map(getTagDocumentation).join('  \n\n')
+export function tagsToMarkdown(tags: JSDocTagInfo[], resolveTarget?: ResolveTargetPosition)
+  tags.map((tag) => getTagDocumentation(tag, resolveTarget)).join('  \n\n')
 
-function getTagDocumentation(tag: JSDocTagInfo)
+function getTagDocumentation(tag: JSDocTagInfo, resolveTarget?: ResolveTargetPosition)
   switch tag.name
     when "augments", "extends", "param", "template"
-      body := getTagBody(tag)
+      body := getTagBody(tag, resolveTarget)
       if body?.length is 3
         [, param, doc] := body
         label := `*@${tag.name}* \`${param}\``
@@ -89,11 +100,11 @@ function getTagDocumentation(tag: JSDocTagInfo)
       return undefined unless tag.text?.length
 
   label := `*@${tag.name}*`
-  text := getTagBodyText(tag)
+  text := getTagBodyText(tag, resolveTarget)
   return label unless text
   return label + (text.match(/\r\n|\n/g) ? '  \n' + text : ` \u2014 ${text}`)
 
-function getTagBody(tag: JSDocTagInfo)
+function getTagBody(tag: JSDocTagInfo, resolveTarget?: ResolveTargetPosition)
   if tag.name is "template"
     parts := tag.text
     if parts and parts !<? "string"
@@ -104,20 +115,20 @@ function getTagBody(tag: JSDocTagInfo)
 
       docs := parts
       .filter .kind is "text"
-      .map((p) => asPlainTextWithLinks(p.text.replace(/^\s*-?\s*/, "")))
+      .map((p) => asPlainTextWithLinks(p.text.replace(/^\s*-?\s*/, ""), resolveTarget))
       .join(", ")
       return params ? ["", params, docs] : undefined
 
-  return asPlainTextWithLinks(tag.text).split(/^(\S+)\s*-?\s*/)
+  return asPlainTextWithLinks(tag.text, resolveTarget).split(/^(\S+)\s*-?\s*/)
 
-function getTagBodyText(tag: JSDocTagInfo)
+function getTagBodyText(tag: JSDocTagInfo, resolveTarget?: ResolveTargetPosition)
   if (!tag.text) return
 
   function makeCodeblock(text: string)
     if (/^\s*[~`]{3}/m.test(text)) return text
     return '```\n' + text + '\n```'
 
-  text .= asPlainTextWithLinks(tag.text)
+  text .= asPlainTextWithLinks(tag.text, resolveTarget)
 
   switch tag.name
     when "example":
