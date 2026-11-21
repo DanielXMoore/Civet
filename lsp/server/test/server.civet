@@ -2,6 +2,7 @@
 // through the browser worker integration under coverage.
 
 import assert from assert
+{ TextDocument } from vscode-languageserver-textdocument
 { startServer } from ../source/server.civet
 
 nullLogger :=
@@ -21,6 +22,7 @@ function createMockConnection()
     workspace:
       onDidChangeWorkspaceFolders: =>
     listen: =>
+    sendNotification: =>
     sendDiagnostics: (params: any) =>
       diagnostics.push params
     onRequest: (method: any, handler: any) =>
@@ -109,3 +111,94 @@ describe "server core", ->
     assert.equal services#, 2
     assert mock.diagnostics.some (params) =>
       params.uri is 'file:///workspace/index.ts'
+
+  it "passes adjusted completion offset to onCompletionResolve and skips TS lookup for Civet file items", async ->
+    mock := createMockConnection()
+    let completionOffset: number?
+    resolveOffsets: number[] := []
+    transpiledText := "class Foo {\n  bar = 1\n  m() { this. }\n}\n"
+    transpiledDoc := TextDocument.create 'file:///workspace/app.civet.tsx', 'typescriptreact', 1, transpiledText
+    // Map Civet (2, 8) (`@`) to the start of `this` at transpiled (2, 8) — before bare-@ adjusts to after `this.` (2, 13)
+    sourcemapLines := [
+      [[0, 0, 0, 0]]
+      [[0, 0, 1, 0]]
+      [[8, 0, 2, 7]]
+    ]
+
+    factory := async (projPath: string, logger: any) =>
+      service := await createMockTsServiceFactory([])(projPath, logger)
+      service.host.getMeta = => { transpiledDoc, sourcemapLines }
+      service.host.getCompilationSettings = => {}
+      service.getCompletionsAtPosition = (_file: string, offset: number) =>
+        completionOffset = offset
+        isGlobalCompletion: false
+        isMemberCompletion: true
+        isNewIdentifierLocation: false
+        entries: [{ name: 'bar', kind: 'property', kindModifiers: '', sortText: '0' }]
+      service.getCompletionEntryDetails = (_file: string, offset: number, name: string) =>
+        resolveOffsets.push offset
+        {
+          name
+          kind: 'property'
+          kindModifiers: ''
+          displayParts: [{ kind: 'text', text: '(property) Foo.bar: number' }]
+        }
+      service
+
+    tsSys: any := {
+      ...createMockTsSys()
+      readDirectory: => ['/workspace/helper.civet']
+    }
+
+    startServer mock.connection as any, {
+      TSService: factory as any
+      tsSys
+    }
+
+    mock.notificationHandlers.get('onInitialize')
+      capabilities: {}
+      workspaceFolders: [{ uri: 'file:///workspace' }]
+
+    // 1. Bare `@` completion adjusts p from `this` to `this.`
+    uri := 'file:///workspace/app.civet'
+    mock.notificationHandlers.get('onDidOpenTextDocument')
+      textDocument: { uri, languageId: 'civet', version: 1, text: "class Foo\n  bar = 1\n  m() { @\n" }
+    await new Promise (r) => setTimeout r, 50
+
+    onCompletion := mock.notificationHandlers.get 'onCompletion'
+    onResolve := mock.notificationHandlers.get 'onCompletionResolve'
+
+    compResult := await onCompletion {
+      textDocument: { uri }
+      position: { line: 2, character: 9 }
+      context: { triggerKind: 2, triggerCharacter: '@' }
+    }
+    items := Array.isArray(compResult) ? compResult : compResult.items
+    barItem := items.find (i: any) => i.label is 'bar'
+    assert barItem, "expected 'bar' completion item"
+    assert completionOffset?, "expected getCompletionsAtPosition to be called"
+
+    await onResolve barItem
+    assert.equal resolveOffsets[0], completionOffset,
+      `onCompletionResolve should query adjusted offset ${completionOffset}, got ${resolveOffsets[0]}`
+
+    // 2. Civet file completion items must skip TS getCompletionEntryDetails
+    importUri := 'file:///workspace/imp.civet'
+    mock.notificationHandlers.get('onDidOpenTextDocument')
+      textDocument: { uri: importUri, languageId: 'civet', version: 1, text: "import './" }
+    await new Promise (r) => setTimeout r, 50
+
+    impResult := await onCompletion {
+      textDocument: { uri: importUri }
+      position: { line: 0, character: 10 }
+      context: { triggerKind: 2, triggerCharacter: '/' }
+    }
+    impItems := Array.isArray(impResult) ? impResult : impResult.items
+    civetFileItem := impItems.find (i: any) => i.label is 'helper.civet'
+    assert civetFileItem, `expected helper.civet file completion, got: ${JSON.stringify impItems.map(.label)}`
+
+    resolveCountBefore := resolveOffsets#
+    resolvedFile := await onResolve civetFileItem
+    assert.equal resolvedFile, civetFileItem
+    assert.equal resolveOffsets#, resolveCountBefore,
+      "Civet file completion should not invoke TS getCompletionEntryDetails"
