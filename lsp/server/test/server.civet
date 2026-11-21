@@ -109,3 +109,230 @@ describe "server core", ->
     assert.equal services#, 2
     assert mock.diagnostics.some (params) =>
       params.uri is 'file:///workspace/index.ts'
+
+  it "resolves waiters across rapid edits without stranding earlier handlers", async ->
+    mock := createMockConnection()
+    services: any[] := []
+    let releaseService!: () => void
+    serviceGate := new Promise<void> (r) => releaseService = r
+    gatedFactory := async (projPath: string, logger: any) =>
+      await serviceGate
+      await createMockTsServiceFactory(services)(projPath, logger)
+
+    startServer mock.connection as any,
+      TSService: gatedFactory as any
+      tsSys: createMockTsSys() as any
+
+    mock.notificationHandlers.get('onInitialize')
+      capabilities: {}
+      workspaceFolders: [{ uri: 'file:///workspace' }]
+
+    uri := 'file:///workspace/rapid.ts'
+    mock.notificationHandlers.get('onDidOpenTextDocument')
+      textDocument: { uri, languageId: 'typescript', version: 1, text: 'const a = 1' }
+
+    // Start a semanticTokens request while edit v1 is pending — it awaits updating()
+    // immediately before ensureServiceForSourcePath.
+    semTokens := mock.requestHandlers.get('textDocument/semanticTokens/full')
+    tokPromise := semTokens { textDocument: { uri } }
+
+    // Second edit arrives while v1 is still queued (previously overwrote & orphaned v1's resolver)
+    mock.notificationHandlers.get('onDidChangeTextDocument')
+      textDocument: { uri, version: 2 }
+      contentChanges: [{ text: 'const a = 2' }]
+
+    releaseService()
+    res := await Promise.race [
+      tokPromise
+      new Promise (_, rej) => setTimeout (-> rej new Error "timed out waiting for semanticTokens"), 1000
+    ]
+    assert res
+
+  it "resolves waiters and skips re-adding when document closes mid-service init", async ->
+    mock := createMockConnection()
+    addedUris: string[] := []
+    let releaseService!: () => void
+    serviceGate := new Promise<void> (r) => releaseService = r
+    gatedFactory := async (projPath: string, logger: any) =>
+      await serviceGate
+      service := await createMockTsServiceFactory([])(projPath, logger)
+      service.host.addOrUpdateDocument = (doc: any) => addedUris.push doc.uri
+      service
+
+    startServer mock.connection as any,
+      TSService: gatedFactory as any
+      tsSys: createMockTsSys() as any
+
+    mock.notificationHandlers.get('onInitialize')
+      capabilities: {}
+      workspaceFolders: [{ uri: 'file:///workspace' }]
+
+    uri := 'file:///workspace/closing.ts'
+    mock.notificationHandlers.get('onDidOpenTextDocument')
+      textDocument: { uri, languageId: 'typescript', version: 1, text: 'const a = 1' }
+
+    // Await updating() via semanticTokens before close
+    semTokens := mock.requestHandlers.get('textDocument/semanticTokens/full')
+    tokPromise := semTokens { textDocument: { uri } }
+
+    // Wait for debounce to enter executeQueue and suspend on TSService
+    await new Promise (r) => setTimeout r, 35
+
+    // Close the document while TSService is still starting
+    mock.notificationHandlers.get('onDidCloseTextDocument')
+      textDocument: { uri }
+
+    releaseService()
+    await Promise.race [
+      tokPromise
+      new Promise (_, rej) => setTimeout (-> rej new Error "timed out waiting for closed doc waiter"), 1000
+    ]
+    await new Promise (r) => setTimeout r, 50
+    assert.deepEqual addedUris, [],
+      `closed document must not be re-added after service init completes, got: ${JSON.stringify addedUris}`
+
+  it "recovers from TSService startup failure without deadlocking subsequent edits", async ->
+    mock := createMockConnection()
+    services: any[] := []
+    failOnce .= true
+    flakyFactory := async (projPath: string, logger: any) =>
+      if failOnce
+        failOnce = false
+        throw new Error "transient init failure"
+      await createMockTsServiceFactory(services)(projPath, logger)
+
+    startServer mock.connection as any,
+      TSService: flakyFactory as any
+      tsSys: createMockTsSys() as any
+
+    mock.notificationHandlers.get('onInitialize')
+      capabilities: {}
+      workspaceFolders: [{ uri: 'file:///workspace' }]
+
+    uri := 'file:///workspace/recover.ts'
+    mock.notificationHandlers.get('onDidOpenTextDocument')
+      textDocument: { uri, languageId: 'typescript', version: 1, text: 'const x = 1' }
+
+    // Wait for first executeQueue attempt to fail and clean up
+    await new Promise (r) => setTimeout r, 50
+    assert.equal services#, 0
+
+    // Subsequent edit must not deadlock on stuck pending promise or executeTimeout
+    mock.notificationHandlers.get('onDidChangeTextDocument')
+      textDocument: { uri, version: 2 }
+      contentChanges: [{ text: 'const x = 2' }]
+
+    await new Promise (r) => setTimeout r, 60
+    assert.equal services#, 1, "expected service to initialize cleanly after transient failure"
+
+  it "drains edits that arrive while executeQueue is awaiting service init", async ->
+    mock := createMockConnection()
+    stagedTexts: string[] := []
+    let releaseService!: () => void
+    serviceGate := new Promise<void> (r) => releaseService = r
+    gatedFactory := async (projPath: string, logger: any) =>
+      await serviceGate
+      service := await createMockTsServiceFactory([])(projPath, logger)
+      service.host.addOrUpdateDocument = (doc: any) => stagedTexts.push doc.getText()
+      service
+
+    startServer mock.connection as any,
+      TSService: gatedFactory as any
+      tsSys: createMockTsSys() as any
+
+    mock.notificationHandlers.get('onInitialize')
+      capabilities: {}
+      workspaceFolders: [{ uri: 'file:///workspace' }]
+
+    uri := 'file:///workspace/mid-batch.ts'
+    mock.notificationHandlers.get('onDidOpenTextDocument')
+      textDocument: { uri, languageId: 'typescript', version: 1, text: 'const v = 1' }
+
+    // Let executeQueue start and suspend on TSService
+    await new Promise (r) => setTimeout r, 35
+
+    // Edit arrives while executeQueue is mid-await
+    mock.notificationHandlers.get('onDidChangeTextDocument')
+      textDocument: { uri, version: 2 }
+      contentChanges: [{ text: 'const v = 2' }]
+
+    releaseService()
+    await new Promise (r) => setTimeout r, 80
+    assert stagedTexts.includes('const v = 2'),
+      `expected mid-batch edit v2 to be staged, got: ${JSON.stringify stagedTexts}`
+
+  it "deduplicates competing service retries when multiple waiters wake after a failed init", async ->
+    mock := createMockConnection()
+    spawnCount .= 0
+    let failFirst!: (err: Error) => void
+    firstAttempt := new Promise<any> (_, rej) => failFirst = rej
+    factory := async (projPath: string, logger: any) =>
+      attempt := ++spawnCount
+      if attempt is 1
+        return await firstAttempt
+      await new Promise (r) => setTimeout r, 20
+      await createMockTsServiceFactory([])(projPath, logger)
+
+    startServer mock.connection as any,
+      TSService: factory as any
+      tsSys: createMockTsSys() as any
+
+    mock.notificationHandlers.get('onInitialize')
+      capabilities: {}
+      workspaceFolders: [{ uri: 'file:///workspace' }]
+
+    uri := 'file:///workspace/retry.ts'
+    mock.notificationHandlers.get('onDidOpenTextDocument')
+      textDocument: { uri, languageId: 'typescript', version: 1, text: 'const a = 1' }
+    // Wait for executeQueue to start attempt 1 and suspend on firstAttempt
+    await new Promise (r) => setTimeout r, 35
+    assert.equal spawnCount, 1
+
+    // Queue two concurrent waiters while attempt 1 is still pending
+    pullDiag := mock.requestHandlers.get('textDocument/diagnostic')
+    w1 := pullDiag { textDocument: { uri } }
+    w2 := pullDiag { textDocument: { uri } }
+
+    failFirst new Error "first init failed"
+    await Promise.all [w1, w2]
+    assert.equal spawnCount, 2,
+      `expected exactly one retry spawn (total 2), got ${spawnCount}`
+
+  it "skips staging a project A doc that closed while project B's service initialized", async ->
+    mock := createMockConnection()
+    stagedUris: string[] := []
+    let releaseProjB!: () => void
+    projBGate := new Promise<void> (r) => releaseProjB = r
+    factory := async (projPath: string, logger: any) =>
+      if projPath.includes('proj-b')
+        await projBGate
+      service := await createMockTsServiceFactory([])(projPath, logger)
+      service.host.addOrUpdateDocument = (doc: any) => stagedUris.push doc.uri
+      service
+
+    startServer mock.connection as any,
+      TSService: factory as any
+      tsSys: createMockTsSys() as any
+
+    mock.notificationHandlers.get('onInitialize')
+      capabilities: {}
+      workspaceFolders: []
+
+    uriA := 'file:///proj-a/a.ts'
+    uriB := 'file:///proj-b/b.ts'
+    mock.notificationHandlers.get('onDidOpenTextDocument')
+      textDocument: { uri: uriA, languageId: 'typescript', version: 1, text: 'const a = 1' }
+    mock.notificationHandlers.get('onDidOpenTextDocument')
+      textDocument: { uri: uriB, languageId: 'typescript', version: 1, text: 'const b = 1' }
+
+    // Wait until proj-a is grouped and executeQueue is suspended awaiting proj-b
+    await new Promise (r) => setTimeout r, 35
+
+    // Close proj-a doc while proj-b is still initializing
+    mock.notificationHandlers.get('onDidCloseTextDocument')
+      textDocument: { uri: uriA }
+
+    releaseProjB()
+    await new Promise (r) => setTimeout r, 50
+    assert.deepEqual stagedUris, [uriB],
+      `expected only open proj-b doc to be staged, got: ${JSON.stringify stagedUris}`

@@ -245,7 +245,8 @@ export function startServer(connection: Connection, dependencies: ServerDependen
 
   ensureServiceForSourcePath := (sourcePath: string) =>
     projPath := getProjectPathFromSourcePath(sourcePath)
-    await projectPathToPendingPromiseMap.get(projPath)
+    while pending := projectPathToPendingPromiseMap.get(projPath)
+      await pending
     service .= projectPathToServiceMap.get(projPath)
     return service if service
 
@@ -253,15 +254,16 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     initP := new Promise<void> (^resolveInit) =>
     projectPathToPendingPromiseMap.set(projPath, initP)  // guard set BEFORE await
 
-    logger.log("Spawning language server for project path: " + projPath)
-    service = await TSService(projPath, connection.console)
-    await service.loadPlugins()
-    projectPathToServiceMap.set(projPath, service)
-    projectPathToPendingPromiseMap.delete(projPath)
-    warnIfConfigMissing(projPath, service)
-    resolveInit!()
-
-    return service
+    try
+      logger.log("Spawning language server for project path: " + projPath)
+      service = await TSService(projPath, connection.console)
+      await service.loadPlugins()
+      projectPathToServiceMap.set(projPath, service)
+      warnIfConfigMissing(projPath, service)
+      return service
+    finally
+      projectPathToPendingPromiseMap.delete(projPath)
+      resolveInit!()
 
   // TODO Propagate this to an extension setting
   diagnosticsDelay := 16  // ms delay for primary updated file
@@ -1372,8 +1374,10 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     // re-add it to the host after close. The status resolver set by
     // onDidChangeContent can leak if close fires inside the debounce window
     // before executeQueue captures the doc — drop it too.
-    changeQueue.delete(document)
+    changeQueue.delete(document.uri)
+    pending := documentUpdateStatus.get(document.uri)
     documentUpdateStatus.delete(document.uri)
+    pending?.resolve(false)
     // Clear diagnostics on the client side; without this the Problems panel
     // keeps showing the last-known errors for a closed file.
     connection.sendDiagnostics { uri: document.uri, diagnostics: [] }
@@ -1382,15 +1386,23 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     logger.log "open " + document.uri
 
   // Buffer up changes to documents so we don't stack transpilations and become unresponsive
-  changeQueue .= new Set<TextDocument>()
+  changeQueue .= new Map<string, TextDocument>()
   let executeTimeout: Promise<void> | undefined
   documentUpdateStatus := new Map<string, WithResolvers<boolean>>()
+
+  function resolvePendingUpdate(uri: string, ok: boolean): void
+    // Keep the shared waiter pending if a newer edit for the same URI is already queued.
+    return if changeQueue.has uri
+    entry := documentUpdateStatus.get uri
+    documentUpdateStatus.delete uri
+    entry?.resolve ok
+
   function executeQueue(): Promise<void>
     // Cancel any in-flight project-wide diagnostics update to avoid conflicts
     if runningDiagnosticsUpdate
       runningDiagnosticsUpdate.isCanceled = true
-    changed := Array.from(changeQueue)
-    changeQueue = new Set()
+    changed := Array.from(changeQueue.values())
+    changeQueue = new Map()
     // `changed` may be empty if closeDocument.changeQueue.delete cleared the
     // queue during scheduleExecuteQueue's debounce; the rest of this function
     // is a no-op in that case (empty loops, empty diagnostics), so no early
@@ -1398,55 +1410,65 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     logger.log `executeQueue: Processing batch of ${changed#} documents.` if changed#
 
     docsByProject := new Map<string, { service: ResolvedService; docs: TextDocument[] }>()
+    processed: TextDocument[] := []
 
-    // Group documents by their project path to ensure atomic updates per project.
-    for doc of changed
-      sourcePath := documentToSourcePath(doc)
-      projPath := getProjectPathFromSourcePath(sourcePath)
-      unless docsByProject.has(projPath)
-        service := await ensureServiceForSourcePath(sourcePath)
-        if service then docsByProject.set(projPath, { service, docs: [] })
-      docsByProject.get(projPath)?.docs.push(doc)
+    try
+      // Group documents by their project path to ensure atomic updates per project.
+      for doc of changed
+        sourcePath := documentToSourcePath(doc)
+        projPath := getProjectPathFromSourcePath(sourcePath)
+        unless docsByProject.has(projPath)
+          service := await ensureServiceForSourcePath(sourcePath)
+          if service then docsByProject.set(projPath, { service, docs: [] })
+        docsByProject.get(projPath)?.docs.push(doc)
 
-    for { service, docs } of docsByProject.values()
-      // Phase 1: Stage all changes within this project.
-      docs.forEach (doc) => service.host.addOrUpdateDocument(doc)
+      for { service, docs } of docsByProject.values()
+        // Re-check right before staging so a doc that closed while another
+        // project's TSService initialized is never re-added or analyzed.
+        openDocs := docs.filter (doc) => documents.get(doc.uri)?
+        // Phase 1: Stage all changes within this project.
+        openDocs.forEach (doc) => service.host.addOrUpdateDocument(doc)
 
-      // Phase 1b: refresh the Hera-grammar analyzer cache for any .hera docs
-      // in this batch so grammar-level requests (definition, references,
-      // outline) see up-to-date data without waiting on the TS pipeline.
-      for doc of docs
-        if doc.uri.endsWith('.hera')
-          parseHeraDocument(doc, service.hera)
+        // Phase 1b: refresh the Hera-grammar analyzer cache for any .hera docs
+        // in this batch so grammar-level requests (definition, references,
+        // outline) see up-to-date data without waiting on the TS pipeline.
+        for doc of openDocs
+          if doc.uri.endsWith('.hera')
+            parseHeraDocument(doc, service.hera)
 
-      // Phase 2: Analyze all staged documents within this project.
-      for doc of docs
-        await updateDiagnosticsForDoc(doc, service)
-        documentUpdateStatus.get(doc.uri)?.resolve(true)
-        Promise.resolve().then () => documentUpdateStatus.delete(doc.uri)
-    executeTimeout = undefined
-    /* c8 ignore start — race: another change arriving mid-execute is timing-
-       dependent and not reproducible in tests. */
-    if changeQueue.size
-      scheduleExecuteQueue()
-    /* c8 ignore stop */
-    else
-      scheduleUpdateDiagnostics(new Set(changed))
+        // Phase 2: Analyze all staged documents within this project.
+        for doc of openDocs
+          await updateDiagnosticsForDoc(doc, service)
+          resolvePendingUpdate doc.uri, true
+          processed.push doc
+    finally
+      // Release any waiters left unresolved if a doc was skipped or an error threw.
+      for doc of changed
+        resolvePendingUpdate doc.uri, false
+      executeTimeout = undefined
+      if changeQueue.size
+        void scheduleExecuteQueue()
+      else if processed#
+        scheduleUpdateDiagnostics(new Set(processed))
 
   function scheduleExecuteQueue()
     // Schedule executeQueue() if there isn't one already running or scheduled
     return if executeTimeout
     return unless changeQueue.size
     await (executeTimeout = sleep(diagnosticsDelay))
-    await executeQueue()
+    try
+      await executeQueue()
+    catch e
+      logger.error `executeQueue failed: ${e}`
 
   // The content of a text document has changed. This event is emitted
   // when the text document first opened or when its content has changed.
   documents.onDidChangeContent ({ document }) =>
     logger.log "onDidChangeContent " + document.uri
-    documentUpdateStatus.set(document.uri, withResolvers())
-    changeQueue.add(document)
-    scheduleExecuteQueue()
+    unless documentUpdateStatus.has document.uri
+      documentUpdateStatus.set(document.uri, withResolvers())
+    changeQueue.set(document.uri, document)
+    void scheduleExecuteQueue()
 
   /**
    * Diagnostics for an already-staged document. Returns `[]` when there's
