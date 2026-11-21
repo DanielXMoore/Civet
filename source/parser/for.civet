@@ -111,6 +111,24 @@ function pushForBlockDeclaration(
     patternPrevious.names!.push ...namesOf patternDeclaration
   blockPrefix.push ...patternPrefix
 
+simpleEscapes: Record<string, string> := { n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", v: "\v", "0": "\0" }
+
+function decodeStringEscapes(content: string): string
+  content.replace /\\(?:\r\n|[\r\n\u2028\u2029]|u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|(.))/g,
+    (_, uBrace: string?, u4: string?, x2: string?, ch: string?) =>
+      if hex := uBrace ?? u4 ?? x2
+        String.fromCodePoint parseInt hex, 16
+      else if ch?
+        simpleEscapes[ch] ?? ch
+      else
+        ""
+
+function stringLiteralValue(node: ASTNode): string?
+  if node is like { type: "Literal", subtype: "StringLiteral" }
+    decodeStringEscapes literalValue(node) as string
+  else if node is like { type: "StringLiteral" }
+    decodeStringEscapes node.token[1...-1]
+
 function processRangeExpression(start: ASTNode, ws1: ASTNode, range: RangeDots, end: ASTNode)
   ws1 = [ws1, range.children[0]] // whitespace before ..
   ws2 := range.children[1]       // whitespace after ..
@@ -128,38 +146,40 @@ function processRangeExpression(start: ASTNode, ws1: ASTNode, range: RangeDots, 
     1 - Number(not range.left.inclusive) - Number(not range.right.inclusive)
 
   let children: Children?
-  if start is like {type: "Literal"} and end is like {type: "Literal"}
+  startStr := stringLiteralValue start
+  endStr := stringLiteralValue end
+  if startStr? and endStr?
+    unless startStr# is 1 is endStr#
+      throw new Error "String range start and end must be a single character"
+
+    startCode .= startStr.charCodeAt(0)
+    endCode .= endStr.charCodeAt(0)
+    step := startCode <= endCode ? 1 : -1
+
+    length := abs(endCode - startCode) + lengthAdjust
+    startCode += step unless range.left.inclusive
+
+    if length <= 26
+      children =
+        . "["
+        . Array.from { length }, (_, i) =>
+            JSON.stringify String.fromCharCode startCode + i * step
+          .join ", "
+        . "]"
+    else
+      children =
+        . getHelperRef startCode <= endCode ? "stringRange" : "revStringRange"
+        . "("
+        . startCode.toString()
+        . ", "
+        . length.toString()
+        . ")"
+    children.unshift range.error if range.error?
+  else if start is like {type: "Literal"} and end is like {type: "Literal"}
     startValue .= literalValue start
     endValue .= literalValue end
 
-    if startValue <? "string" and endValue <? "string"
-      unless startValue# is 1 is endValue#
-        throw new Error "String range start and end must be a single character"
-
-      startCode .= startValue.charCodeAt(0)
-      endCode .= endValue.charCodeAt(0)
-      step := startCode <= endCode ? 1 : -1
-
-      length := abs(endCode - startCode) + lengthAdjust
-      startCode += step unless range.left.inclusive
-
-      if length <= 26
-        children =
-          . "["
-          . Array.from { length }, (_, i) =>
-              JSON.stringify String.fromCharCode startCode + i * step
-            .join ", "
-          . "]"
-      else
-        children =
-          . getHelperRef startCode <= endCode ? "stringRange" : "revStringRange"
-          . "("
-          . startCode.toString()
-          . ", "
-          . length.toString()
-          . ")"
-      children.unshift range.error if range.error?
-    else if startValue <? "number" and endValue <? "number"
+    if startValue <? "number" and endValue <? "number"
       step := startValue <= endValue ? 1 : -1
       length := abs(endValue - startValue) + lengthAdjust
       startValue += step unless range.left.inclusive
@@ -254,6 +274,14 @@ function forRange(
 ): ForStatementControl
   { start, end, left, right, increasing } .= range
 
+  isStringRange .= false
+  startStr := stringLiteralValue start
+  endStr := stringLiteralValue end
+  if startStr? and endStr?
+    isStringRange = true
+    start = makeNumericLiteral startStr.charCodeAt(0)
+    end = makeNumericLiteral endStr.charCodeAt(0)
+
   counterRef := makeRef("i")
 
   infinite := end is like {type: "Identifier", name: "Infinity"}
@@ -294,14 +322,6 @@ function forRange(
   if start?.type is "Literal" is end?.type
     // @ts-ignore Allow comparison of any literal values, as in JS
     asc = literalValue(start) <= literalValue(end)
-    if "StringLiteral" is start.subtype is end.subtype
-      startChar := (literalValue(start) as string).charCodeAt(0).toString()
-      startRef =
-        type: "Literal"
-        subtype: "NumericLiteral"
-        raw: startChar
-        children: [startChar]
-      endRef = (literalValue(end) as string).charCodeAt(0).toString()
 
   else unless stepExp
     ascRef = makeRef("asc")
@@ -319,15 +339,18 @@ function forRange(
   names .= namesOf forDeclaration
   if forDeclaration?
     if forDeclaration.type is "AssignmentExpression" // Coffee-style for loop
-      varAssign = varLetAssign = [forDeclaration, " = "]
       names = [] // assigned but not declared
+      if isStringRange
+        pushForBlockDeclaration blockPrefix, forDeclaration, ["String.fromCharCode(", counterRef, ")"], true
+        bindingInBlock = true
+      else
+        varAssign = varLetAssign = [forDeclaration, " = "]
     else if forDeclaration is like {type: "ForDeclaration", decl: "let"} // let: declare within loop
       varName := forDeclaration.children.splice(1)  // strip let
       varAssign = [...trimFirstSpace(varName) as ASTNode[], " = "]
-      varLet = [",", ...varName, " = ", counterRef]
+      varLet = [",", ...varName, " = ", isStringRange ? ["String.fromCharCode(", counterRef, ")"] : counterRef]
     else // const or var or assignment like `for x[y] of z`: put inside loop
-      value := start?.type is "Literal" and start.subtype is "StringLiteral" ? ["String.fromCharCode(", counterRef, ")"] : counterRef
-      pushForBlockDeclaration blockPrefix, forDeclaration, value, true
+      pushForBlockDeclaration blockPrefix, forDeclaration, isStringRange ? ["String.fromCharCode(", counterRef, ")"] : counterRef, true
       bindingInBlock = true
 
   unless bindingInBlock
@@ -351,19 +374,25 @@ function forRange(
     stepRef ? [stepRef, " != 0 && (", stepRef, " > 0 ? ", ...counterPart, ")"] :
     [ascRef, " ? ", ...counterPart]
 
-  increment :=
-    stepValue is +1 or stepValue is 1n ? [...varAssign, "++", counterRef] :
-    stepValue is -1 or stepValue is -1n ? [...varAssign, "--", counterRef] :
+  counterUpdate :=
+    stepValue is +1 or stepValue is 1n ? ["++", counterRef] :
+    stepValue is -1 or stepValue is -1n ? ["--", counterRef] :
     stepRef
-      ? [...varAssign, counterRef, " += ", stepRef]
+      ? [counterRef, " += ", stepRef]
       : ascRef
-        ? [...varAssign, ascRef, " ? ++", counterRef, " : --", counterRef]
-        : [...varAssign, asc ? "++" : "--", counterRef]
+        ? [ascRef, " ? ++", counterRef, " : --", counterRef]
+        : [asc ? "++" : "--", counterRef]
+
+  increment :=
+    if isStringRange and varAssign#
+      [...varAssign, "String.fromCharCode(", ...counterUpdate, ")"]
+    else
+      [...varAssign, ...counterUpdate]
 
   return {
     // This declaration doesn't always appear in the output,
     // but it's still helpful for determining the primary loop variable
-    declaration: forDeclaration
+    declaration: isStringRange and forDeclaration?.type is "AssignmentExpression" ? declaration : forDeclaration
     iterand: declarationIterand forDeclaration
     children: [range.error, open, declaration, "; ", ...condition, "; ", ...increment, close]
     blockPrefix
