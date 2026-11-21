@@ -1134,3 +1134,127 @@ describe "ts-service config recurse", ->
     assert.equal parsed.imports['#nested']['#deep'], './lib/deep.civet.tsx'
     // The boolean is untouched (recurse bailed on it).
     assert.equal parsed.imports['#truthy-non-object'], true
+
+describe "ts-service getScriptVersion for transpiled siblings", ->
+  it "reflects updated source document versions immediately so TS invalidates dependents", ->
+    @timeout 15000
+    rootDir := mkdtempSync path.join tmpdir(), 'civet-script-ver-'
+    try
+      depPath := path.join rootDir, 'dep.civet'
+      mainPath := path.join rootDir, 'main.civet'
+      writeFileSync path.join(rootDir, 'tsconfig.json'), JSON.stringify
+        compilerOptions:
+          target: 'ES2020'
+          module: 'ESNext'
+          moduleResolution: 'Bundler'
+          strict: true
+          skipLibCheck: true
+          jsx: 'preserve'
+          noEmit: true
+        include: ['**/*.civet']
+      writeFileSync depPath, 'export val: number := 1\n'
+      writeFileSync mainPath, "import { val } from './dep.civet'\nexport out: number := val\n"
+
+      docFactory := {
+        create: (uri: string, languageId: string, version: number, text: string) =>
+          TextDocument.create uri, languageId, version, text
+        update: (doc: any, text: string, version: number) =>
+          TextDocument.update doc, [{ text }], version
+        uriToPath: (uri: string) => URI.parse(uri).fsPath
+        pathToUri: (p: string) => URI.file(p).toString()
+      }
+      service := SharedTSService rootDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory
+        logger: nullLogger
+      }
+
+      depDoc1 := TextDocument.create URI.file(depPath).toString(), 'civet', 1, 'export val: number := 1\n'
+      mainDoc := TextDocument.create URI.file(mainPath).toString(), 'civet', 1, "import { val } from './dep.civet'\nexport out: number := val\n"
+      service.host.addOrUpdateDocument depDoc1
+      service.host.addOrUpdateDocument mainDoc
+
+      // Initial check: clean, no diagnostics
+      diags1 := service.getSemanticDiagnostics mainPath + '.tsx'
+      assert.equal diags1.length, 0, "initial diagnostics should be empty"
+      v1 := service.host.getScriptVersion(depPath + '.tsx')
+      assert.notEqual v1, '0'
+      // Non-matching target extension falls back to canonical pathMap lookup
+      assert.equal service.host.getScriptVersion(depPath + '.js'), '0'
+
+      // Update dep.civet to export a string instead of a number (version 2)
+      depDoc2 := TextDocument.create URI.file(depPath).toString(), 'civet', 2, "export val: string := 'oops'\n"
+      service.host.addOrUpdateDocument depDoc2
+
+      // Version for the synthetic .civet.tsx sibling must advance immediately
+      assert.notEqual service.host.getScriptVersion(depPath + '.tsx'), v1,
+        "getScriptVersion(.civet.tsx) should immediately advance after source doc update"
+
+      // TS must re-snapshot dep.civet.tsx and report the type mismatch in main.civet
+      diags2 := service.getSemanticDiagnostics mainPath + '.tsx'
+      assert diags2.length > 0, "expected type mismatch diagnostic in main.civet after dep.civet changed"
+    finally
+      rmSync rootDir, recursive: true, force: true
+
+  it "invalidates dependents when a disk-loaded dependency is opened at version 0 with unsaved edits", ->
+    @timeout 15000
+    rootDir := mkdtempSync path.join tmpdir(), 'civet-disk-to-v0-'
+    try
+      depPath := path.join rootDir, 'dep.civet'
+      mainPath := path.join rootDir, 'main.civet'
+      writeFileSync path.join(rootDir, 'tsconfig.json'), JSON.stringify
+        compilerOptions:
+          target: 'ES2020'
+          module: 'ESNext'
+          moduleResolution: 'Bundler'
+          strict: true
+          skipLibCheck: true
+          jsx: 'preserve'
+          noEmit: true
+        include: ['**/*.civet']
+      // Disk versions agree (number -> number)
+      writeFileSync depPath, 'export val: number := 1\n'
+      writeFileSync mainPath, "import { val } from './dep.civet'\nexport out: number := val\n"
+
+      docFactory := {
+        create: (uri: string, languageId: string, version: number, text: string) =>
+          TextDocument.create uri, languageId, version, text
+        update: (doc: any, text: string, version: number) =>
+          TextDocument.update doc, [{ text }], version
+        uriToPath: (uri: string) => URI.parse(uri).fsPath
+        pathToUri: (p: string) => URI.file(p).toString()
+      }
+      service := SharedTSService rootDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory
+        logger: nullLogger
+      }
+
+      // First check loads dep.civet from disk (revision 0)
+      diags1 := service.getSemanticDiagnostics mainPath + '.tsx'
+      assert.equal diags1.length, 0, "initial disk-backed diagnostics should be empty"
+      assert.equal service.host.getScriptVersion(depPath + '.tsx'), '0'
+
+      // Now open dep.civet at document version 0 with unsaved incompatible export
+      depDocV0 := TextDocument.create URI.file(depPath).toString(), 'civet', 0, "export val: string := 'unsaved'\n"
+      service.host.addOrUpdateDocument depDocV0
+
+      assert.notEqual service.host.getScriptVersion(depPath + '.tsx'), '0',
+        "opening a disk-loaded file at version 0 must advance getScriptVersion"
+      diags2 := service.getSemanticDiagnostics mainPath + '.tsx'
+      assert diags2.length > 0,
+        "expected type mismatch diagnostic in main.civet after opening dep.civet at version 0"
+
+      // Close and immediately reopen dep.civet (without an intervening diagnostics check)
+      // with a compatible number export — script version must NOT reuse the previous open revision!
+      verBeforeClose := service.host.getScriptVersion(depPath + '.tsx')
+      service.host.closeDocument depPath
+      depDocReopen := TextDocument.create URI.file(depPath).toString(), 'civet', 0, 'export val: number := 42\n'
+      service.host.addOrUpdateDocument depDocReopen
+      assert.notEqual service.host.getScriptVersion(depPath + '.tsx'), verBeforeClose,
+        "reopening after close must assign a new script version"
+      diags3 := service.getSemanticDiagnostics mainPath + '.tsx'
+      assert.equal diags3.length, 0,
+        "expected diagnostics in main.civet to clear after closing and reopening dep.civet"
+    finally
+      rmSync rootDir, recursive: true, force: true
