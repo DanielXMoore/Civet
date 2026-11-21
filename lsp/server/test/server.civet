@@ -13,6 +13,7 @@ function createMockConnection()
   requestHandlers := new Map<string, any>
   notificationHandlers := new Map<string, any>
   diagnostics: any[] := []
+  sentRequests: any[] := []
 
   base: any :=
     console: nullLogger
@@ -23,6 +24,8 @@ function createMockConnection()
     listen: =>
     sendDiagnostics: (params: any) =>
       diagnostics.push params
+    sendRequest: async (method: any) =>
+      sentRequests.push method.method ?? method
     onRequest: (method: any, handler: any) =>
       requestHandlers.set method.method ?? method, handler
 
@@ -34,7 +37,7 @@ function createMockConnection()
           notificationHandlers.set prop, handler
       return undefined
 
-  { connection, requestHandlers, notificationHandlers, diagnostics }
+  { connection, requestHandlers, notificationHandlers, diagnostics, sentRequests }
 
 function createMockTsSys()
   fileExists: => false
@@ -52,6 +55,7 @@ function createMockTsServiceFactory(services: any[])
       host: {
         addOrUpdateDocument: => {}
         closeDocument: => {}
+        removeDocument: => {}
       }
       loadPlugins: async => {}
       dispose: => {}
@@ -109,3 +113,70 @@ describe "server core", ->
     assert.equal services#, 2
     assert mock.diagnostics.some (params) =>
       params.uri is 'file:///workspace/index.ts'
+
+  it "suppresses push sendDiagnostics and uses workspace/diagnostic/refresh for pull-capable clients", async ->
+    mock := createMockConnection()
+    services: any[] := []
+    startServer mock.connection as any,
+      TSService: createMockTsServiceFactory(services) as any
+      tsSys: createMockTsSys() as any
+      configureBrowserLibs: async =>
+
+    mock.notificationHandlers.get('onInitialize')
+      capabilities:
+        textDocument:
+          diagnostic: {}
+        workspace:
+          diagnostics:
+            refreshSupport: true
+      workspaceFolders: [{ uri: 'file:///workspace' }]
+
+    uri := 'file:///workspace/pull.ts'
+    mock.notificationHandlers.get('onDidOpenTextDocument')
+      textDocument: { uri, languageId: 'typescript', version: 1, text: 'const x = 1' }
+    await new Promise (r) => setTimeout r, 50
+
+    assert.equal mock.diagnostics#, 0,
+      `expected zero push diagnostics for pull-capable client, got: ${JSON.stringify mock.diagnostics}`
+    assert mock.sentRequests.includes('workspace/diagnostic/refresh'),
+      `expected workspace/diagnostic/refresh request, got: ${JSON.stringify mock.sentRequests}`
+
+    // Pull request still computes and returns diagnostics
+    pullDiag := mock.requestHandlers.get('textDocument/diagnostic')
+    report := await pullDiag { textDocument: { uri } }
+    assert.equal report.kind, 'full'
+
+    // Project reload via civet/setLibs refreshes instead of pushing
+    mock.sentRequests.length = 0
+    await mock.requestHandlers.get('civet/setLibs')({ lib: ['ES2025'] })
+    assert.equal mock.diagnostics#, 0, "reload must not push diagnostics for pull-capable client"
+    assert mock.sentRequests.includes('workspace/diagnostic/refresh'),
+      "reload should trigger workspace/diagnostic/refresh for pull-capable client"
+
+    // Close and file deletion do not push empty publishDiagnostics
+    mock.notificationHandlers.get('onDidCloseTextDocument')
+      textDocument: { uri }
+    mock.notificationHandlers.get('onDidChangeWatchedFiles')
+      changes: [{ uri: 'file:///workspace/deleted.ts', type: 3 }]
+    assert.equal mock.diagnostics#, 0, "close/delete must not push diagnostics for pull-capable client"
+
+  it "skips workspace/diagnostic/refresh when pull client lacks refreshSupport", async ->
+    mock := createMockConnection()
+    services: any[] := []
+    startServer mock.connection as any,
+      TSService: createMockTsServiceFactory(services) as any
+      tsSys: createMockTsSys() as any
+
+    mock.notificationHandlers.get('onInitialize')
+      capabilities:
+        textDocument:
+          diagnostic: {}
+      workspaceFolders: [{ uri: 'file:///workspace' }]
+
+    uri := 'file:///workspace/pull-norefresh.ts'
+    mock.notificationHandlers.get('onDidOpenTextDocument')
+      textDocument: { uri, languageId: 'typescript', version: 1, text: 'const x = 1' }
+    await new Promise (r) => setTimeout r, 50
+
+    assert.equal mock.diagnostics#, 0
+    assert.deepEqual mock.sentRequests, []

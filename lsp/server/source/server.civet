@@ -19,6 +19,7 @@
   TextEdit
   SemanticTokensRequest
   DocumentDiagnosticRequest
+  DiagnosticRefreshRequest
   DocumentDiagnosticReportKind
   type DocumentDiagnosticParams
   type DocumentDiagnosticReport
@@ -156,6 +157,8 @@ export function startServer(connection: Connection, dependencies: ServerDependen
 
   hasConfigurationCapability .= false
   hasWorkspaceFolderCapability .= false
+  hasPullDiagnosticsCapability .= false
+  hasDiagnosticRefreshCapability .= false
   // let hasDiagnosticRelatedInformationCapability = false
   // comment out unused variable
 
@@ -274,6 +277,8 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     // If not, we fall back using global settings.
     hasConfigurationCapability = !!capabilities.workspace?.configuration
     hasWorkspaceFolderCapability = !!capabilities.workspace?.workspaceFolders
+    hasPullDiagnosticsCapability = !!capabilities.textDocument?.diagnostic
+    hasDiagnosticRefreshCapability = !!capabilities.workspace?.diagnostics?.refreshSupport
 
     result: InitializeResult := {
       capabilities: {
@@ -1374,9 +1379,10 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     // before executeQueue captures the doc — drop it too.
     changeQueue.delete(document)
     documentUpdateStatus.delete(document.uri)
-    // Clear diagnostics on the client side; without this the Problems panel
-    // keeps showing the last-known errors for a closed file.
-    connection.sendDiagnostics { uri: document.uri, diagnostics: [] }
+    // Clear diagnostics on the client side for push-model clients; pull-model
+    // clients clear diagnostics on close themselves.
+    unless hasPullDiagnosticsCapability
+      connection.sendDiagnostics { uri: document.uri, diagnostics: [] }
 
   documents.onDidOpen ({ document }) =>
     logger.log "open " + document.uri
@@ -1525,8 +1531,15 @@ export function startServer(connection: Connection, dependencies: ServerDependen
 
     return diagnostics
 
-  /** Compute and push diagnostics via `textDocument/publishDiagnostics`. */
+  function refreshDiagnostics(): void
+    return unless hasDiagnosticRefreshCapability
+    void Promise.resolve(connection.sendRequest(DiagnosticRefreshRequest.type)).catch (e) =>
+      /* c8 ignore next -- defensive: client rejecting workspace/diagnostic/refresh */
+      logger.log `workspace/diagnostic/refresh failed: ${e}`
+
+  /** Compute and push diagnostics via `textDocument/publishDiagnostics` (push-model clients only). */
   function updateDiagnosticsForDoc(document: TextDocument, service: ResolvedService)
+    return if hasPullDiagnosticsCapability
     connection.sendDiagnostics {
       uri: document.uri
       version: document.version
@@ -1567,6 +1580,10 @@ export function startServer(connection: Connection, dependencies: ServerDependen
 
   // Schedule an update of diagnostics for all projects affected by recent changes.
   function scheduleUpdateDiagnostics(changedDocs: Set<TextDocument>)
+    if hasPullDiagnosticsCapability
+      refreshDiagnostics()
+      return
+
     if runningDiagnosticsUpdate
       runningDiagnosticsUpdate.isCanceled = true
 
@@ -1662,8 +1679,11 @@ export function startServer(connection: Connection, dependencies: ServerDependen
         if docProjPath is projPath
           openDocs.add(doc)
           newService.host.addOrUpdateDocument(doc)
-      for doc of openDocs
-        await updateDiagnosticsForDoc(doc, newService)
+      if hasPullDiagnosticsCapability
+        refreshDiagnostics()
+      else
+        for doc of openDocs
+          await updateDiagnosticsForDoc(doc, newService)
     /* c8 ignore start — defensive: TSService constructor throwing during
        reload would leave us without a working service; log and move on. */
     catch e
@@ -1693,7 +1713,8 @@ export function startServer(connection: Connection, dependencies: ServerDependen
         projPath := getProjectPathFromSourcePath(filePath)
         service := projectPathToServiceMap.get(projPath)
         service?.host.removeDocument(filePath)
-        connection.sendDiagnostics { uri: fileEvent.uri, diagnostics: [] }
+        unless hasPullDiagnosticsCapability
+          connection.sendDiagnostics { uri: fileEvent.uri, diagnostics: [] }
         continue
 
       // Only react to tsconfig.json creates and changes (not deletes)
