@@ -1697,15 +1697,18 @@ describe "unplugin: watch-mode cache registration and postfix keys", ->
     tmpSub := path.join tmpdir(), `civet-watch-cache-${Date.now()}`
     await mkdir tmpSub, recursive: true
     outDir := path.join tmpSub, "dist"
+    placeholderFile := path.join tmpSub, "_placeholder.ts"
     badFile := path.join tmpSub, "bad.civet"
     goodFile := path.join tmpSub, "good.civet"
+    await writeFile placeholderFile, "export {}\n"
     await writeFile badFile, "export x: number := 'wrong'\n"
     await writeFile goodFile, "export y: number := 42\n"
 
     origLog := console.log
     origError := console.error
+    capturedErrors: string[] .= []
     console.log = ->
-    console.error = ->
+    console.error = (...args: unknown[]) => capturedErrors.push args.map(String).join(' ')
     try
       // 1. typecheck: true across two buildStart -> load -> buildEnd cycles
       tcPlugin := rawPlugin {
@@ -1721,12 +1724,13 @@ describe "unplugin: watch-mode cache registration and postfix keys", ->
             moduleResolution: 'bundler'
             strict: true
             skipLibCheck: true
-          files: []
+          files: [placeholderFile]
       }, { framework: 'esbuild' }
       tcCtx := { ...nullContext, ...tcPlugin }
       tcPlugin.esbuild.config { outdir: outDir }
 
       for cycle of [1, 2]
+        capturedErrors = []
         await tcPlugin.buildStart.call tcCtx
         await tcPlugin.load.call tcCtx, badFile + ".jsx"
         let threw = false
@@ -1734,7 +1738,10 @@ describe "unplugin: watch-mode cache registration and postfix keys", ->
           await tcPlugin.buildEnd.call tcCtx
         catch
           threw = true
+        output := capturedErrors.join '\n'
         assert threw, `cycle ${cycle}: expected typecheck to fail on unchanged cached file`
+        assert output.includes('TS2322') and output.includes('bad.civet'),
+          `cycle ${cycle}: expected TS2322 diagnostic for bad.civet, got:\n${output}`
 
       // 2. emitDeclaration: true across two buildStart -> load -> buildEnd cycles
       emitted: string[][] := []
@@ -1750,7 +1757,7 @@ describe "unplugin: watch-mode cache registration and postfix keys", ->
             module: 'esnext'
             moduleResolution: 'bundler'
             skipLibCheck: true
-          files: []
+          files: [placeholderFile]
       }, { framework: 'rollup' }
       for cycle of [1, 2]
         cycleEmitted: string[] := []
