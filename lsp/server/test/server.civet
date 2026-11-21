@@ -236,3 +236,87 @@ describe "server core", ->
     assert.equal resolvedFile, civetFileItem
     assert.equal resolveOffsets#, resolveCountBefore,
       "Civet file completion should not invoke TS getCompletionEntryDetails"
+
+  it "resolves completion items with ts.DocumentSpan JSDoc {@link} targets without crashing", async ->
+    mock := createMockConnection()
+    let currentDetail: any
+    factory := async (projPath: string, logger: any) =>
+      service := await createMockTsServiceFactory([])(projPath, logger)
+      service.getCompletionEntryDetails = => currentDetail
+      service.getSourceFileName = (f: string) =>
+        if f.endsWith('.civet.tsx') then f.slice(0, -4) else f
+      service.host.getMeta = (p: string) =>
+        if p.endsWith('target.civet')
+          { sourcemapLines: [[], [[0, 0, 5, 2]]] }
+        else
+          undefined
+      service.getProgram = =>
+        getSourceFile: (f: string) =>
+          if f is '/workspace/target.civet.tsx'
+            { getLineAndCharacterOfPosition: => { line: 1, character: 0 } }
+          else if f is '/workspace/nomap.civet.tsx'
+            { getLineAndCharacterOfPosition: => { line: 2, character: 3 } }
+          else if f is '/workspace/plain.ts'
+            { getLineAndCharacterOfPosition: => { line: 4, character: 6 } }
+          else
+            undefined
+      service
+
+    startServer mock.connection as any,
+      TSService: factory as any
+      tsSys: createMockTsSys() as any
+
+    mock.notificationHandlers.get('onInitialize')
+      capabilities: {}
+      workspaceFolders: [{ uri: 'file:///workspace' }]
+
+    uri := 'file:///workspace/index.ts'
+    mock.notificationHandlers.get('onDidOpenTextDocument')
+      textDocument: { uri, languageId: 'typescript', version: 1, text: 'const x = 1' }
+    await new Promise (r) => setTimeout r, 50
+
+    resolveCompletion := mock.notificationHandlers.get 'onCompletionResolve'
+
+    // 1. Transpiled .civet.tsx DocumentSpan target remaps back to .civet coordinates
+    currentDetail = {
+      name: 'foo'
+      kind: 'function'
+      kindModifiers: ''
+      displayParts: [{ kind: 'text', text: 'function foo(): void' }]
+      documentation: [
+        { kind: 'link', text: '{@link ' }
+        { kind: 'linkName', text: 'Bar', target: { fileName: '/workspace/target.civet.tsx', textSpan: { start: 10, length: 3 } } }
+        { kind: 'link', text: '}' }
+      ]
+      tags: [
+        {
+          name: 'see'
+          text: [
+            { kind: 'link', text: '{@link ' }
+            { kind: 'linkName', text: 'Plain', target: { fileName: '/workspace/plain.ts', textSpan: { start: 20, length: 5 } } }
+            { kind: 'link', text: '}' }
+            { kind: 'text', text: ' ' }
+            { kind: 'link', text: '{@link ' }
+            { kind: 'linkName', text: 'NoMap', target: { fileName: '/workspace/nomap.civet.tsx', textSpan: { start: 5, length: 5 } } }
+            { kind: 'link', text: '}' }
+            { kind: 'text', text: ' ' }
+            { kind: 'link', text: '{@link ' }
+            { kind: 'linkName', text: 'Missing', target: { fileName: '/workspace/missing.ts', textSpan: { start: 0, length: 7 } } }
+            { kind: 'link', text: '}' }
+          ]
+        }
+      ]
+    }
+    resolved := await resolveCompletion {
+      label: 'foo'
+      data: { sourcePath: '/workspace/index.ts', position: { line: 0, character: 0 }, name: 'foo' }
+    }
+    docVal := (resolved.documentation as { value: string }).value
+    assert docVal.includes(encodeURIComponent('"/workspace/target.civet"')),
+      `expected remapped .civet file in link, got: ${docVal}`
+    assert docVal.includes(encodeURIComponent('"lineNumber":5')),
+      `expected remapped line 5 in link, got: ${docVal}`
+    assert docVal.includes(encodeURIComponent('"/workspace/plain.ts"')),
+      `expected plain.ts target in tag link, got: ${docVal}`
+    assert docVal.includes('Missing'),
+      `expected missing target to degrade gracefully to text, got: ${docVal}`
