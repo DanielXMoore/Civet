@@ -79,61 +79,84 @@ docFactory: DocFactory<TextDocument> := {
  * plugins, and bridges vscode-uri / vscode-languageserver-textdocument
  * through DocFactory.
  */
-function TSService(projectURL = "./", logger: Logger = console): Promise<ResolvedService>
+export interface TSServiceOptions
+  /** When false (e.g. VS Code Restricted Mode), skip workspace packages, plugins, ancestor configs, and executable JS/Civet configs. */
+  isTrusted?: boolean
+
+function TSService(projectURL = "./", logger: Logger = console, options: TSServiceOptions = {}): Promise<ResolvedService>
+  isTrusted := options.isTrusted ?? true
   logger.info("CIVET VSCODE PLUGIN " + version)
   logger.info("TYPESCRIPT " + typescriptVersion)
 
   projectPath := projectURL.startsWith("file:") ? URI.parse(projectURL).fsPath : path.resolve(projectURL)
 
-  // Project-Civet detection: prefer the project's installed @danielx/civet so
-  // tsconfig changes don't drift across versions.  Falls back to the bundled
-  // copy when the project doesn't have one or it's incompatible.
-  projectRequire := createRequire(projectURL)
-
   Civet .= BundledCivetModule
   CivetLib .= BundledCivetLib
   CivetConfig .= BundledCivetConfigModule
   CivetVersion .= BundledCivetPackage.version
-  civetPath := "@danielx/civet"
-  try
-    projectRequire(`${civetPath}/lsp/package.json`)
-    logger.info("USING DEVELOPMENT VERSION OF CIVET -- BE SURE TO pnpm build")
-
-  try
-    Civet = projectRequire(civetPath)
-    if (Civet as { lib?: typeof BundledCivetLib }).lib?
-      CivetLib = (Civet as! { lib: typeof BundledCivetLib }).lib
-    else
-      logger.error `PROJECT CIVET ${civetPath} IS MISSING lib EXPORT; USING BUNDLED lib`
-    ProjectVersion := projectRequire(`${civetPath}/package.json`).version
-    try
-      CivetConfig = projectRequire(`${civetPath}/config`)
-    catch e
-      logger.info `PROJECT CIVET ${ProjectVersion} IS MISSING CONFIG MODULE`
-      throw e
-    CivetVersion = ProjectVersion
-    logger.info(`LOADED PROJECT CIVET ${CivetVersion}: ${path.join(projectURL + " " + civetPath)} \n\n`)
-  catch e
-    logger.info(`USING BUNDLED CIVET ${CivetVersion}`)
-
-  // Hera: prefer the project's install so `.hera` grammar-level features parse
-  // with the same version the project builds with (mirrors Civet detection
-  // above).  Optional peer — absent when the workspace has no `.hera` files,
-  // in which case grammar features no-op.
   let hera: HeraModule?
   let heraVersion: string?
-  try
-    hera = projectRequire("@danielx/hera") as HeraModule
-    heraVersion = (projectRequire("@danielx/hera/package.json") as { version: string }).version
-    logger.info `LOADED PROJECT HERA ${heraVersion}`
+
+  if isTrusted
+    // Project-Civet detection: prefer the project's installed @danielx/civet so
+    // tsconfig changes don't drift across versions.  Falls back to the bundled
+    // copy when the project doesn't have one or it's incompatible.
+    projectRequire := createRequire(projectURL)
+
+    civetPath := "@danielx/civet"
+    try
+      projectRequire(`${civetPath}/lsp/package.json`)
+      logger.info("USING DEVELOPMENT VERSION OF CIVET -- BE SURE TO pnpm build")
+
+    try
+      Civet = projectRequire(civetPath)
+      if (Civet as { lib?: typeof BundledCivetLib }).lib?
+        CivetLib = (Civet as! { lib: typeof BundledCivetLib }).lib
+      else
+        logger.error `PROJECT CIVET ${civetPath} IS MISSING lib EXPORT; USING BUNDLED lib`
+      ProjectVersion := projectRequire(`${civetPath}/package.json`).version
+      try
+        CivetConfig = projectRequire(`${civetPath}/config`)
+      catch e
+        logger.info `PROJECT CIVET ${ProjectVersion} IS MISSING CONFIG MODULE`
+        throw e
+      CivetVersion = ProjectVersion
+      logger.info(`LOADED PROJECT CIVET ${CivetVersion}: ${path.join(projectURL + " " + civetPath)} \n\n`)
+    catch e
+      logger.info(`USING BUNDLED CIVET ${CivetVersion}`)
+
+    // Hera: prefer the project's install so `.hera` grammar-level features parse
+    // with the same version the project builds with (mirrors Civet detection
+    // above).  Optional peer — absent when the workspace has no `.hera` files,
+    // in which case grammar features no-op.
+    try
+      hera = projectRequire("@danielx/hera") as HeraModule
+      heraVersion = (projectRequire("@danielx/hera/package.json") as { version: string }).version
+      logger.info `LOADED PROJECT HERA ${heraVersion}`
+  else
+    logger.info(`UNTRUSTED WORKSPACE: USING BUNDLED CIVET ${CivetVersion}`)
 
   civetConfig: CompileOptions .= {}
   try
-    if configPath := await CivetConfig.findConfig(projectPath)
-      logger.info("Loading Civet config @ " + configPath)
-      config := await CivetConfig.loadConfig(configPath)
-      logger.info("Found civet config!")
-      civetConfig = config
+    configPath := if isTrusted
+      await CivetConfig.findConfig(projectPath)
+    else
+      await CivetConfig.findInDir(projectPath)
+    if configPath
+      if not isTrusted and not /\.(?:json|ya?ml)$/i.test(configPath)
+        logger.info("Skipping executable Civet config in untrusted workspace: " + configPath)
+      else
+        logger.info("Loading Civet config @ " + configPath)
+        config := await CivetConfig.loadConfig(configPath)
+        logger.info("Found civet config!")
+        if isTrusted
+          civetConfig = config
+        else
+          // Allowlist safe static fields in untrusted workspaces: options like
+          // `trace` and `hits` write files to arbitrary paths during compilation.
+          civetConfig = {}
+          civetConfig.parseOptions = config.parseOptions if config.parseOptions?
+          civetConfig.tsConfig = config.tsConfig if config.tsConfig?
     else
       logger.info("No Civet config found")
   catch e
