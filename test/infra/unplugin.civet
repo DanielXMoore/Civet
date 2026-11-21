@@ -1749,3 +1749,68 @@ describe "unplugin: downstream sourcemap composition", ->
           `ts: ${tsMode} mappings should match regardless of typecheck`
     finally
       await rm filePath, { force: true }
+
+  it "composes tsc sourcemaps even when tsconfig enables inlineSourceMap", ->
+    @timeout 15000
+    src := "x: number := 1\nconsole.log x\n"
+    filePath := path.join tmpdir(), "civet-inline-sm-" + Date.now() + ".civet"
+    await writeFile filePath, src
+    try
+      plugin := rawPlugin {
+        ts: 'tsc'
+        config: false
+        typecheck: false
+        tsConfig:
+          compilerOptions:
+            inlineSourceMap: true
+      }, { framework: 'rollup' }
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      res := await plugin.load.call ctx, filePath + ".jsx"
+      assert res and res <? "object"
+      map := res.map as SourceMapJSON
+      assert map and map.sources?[0] is path.basename(filePath)
+      assert not res.code.includes('sourceMappingURL=data:'),
+        "tsc transpile should emit an external map, not an inline base64 sourceMappingURL"
+      genLines := res.code.split '\n'
+      genLine := genLines.findIndex (l) => l.includes 'console.log'
+      assert genLine >= 0
+      parsed := SourceMap.parseWithLines map
+      pos := remapPosition { line: genLine, character: genLines[genLine].indexOf 'console.log' }, parsed.lines as any
+      assert.deepEqual pos, { line: 1, character: 0 }
+    finally
+      await rm filePath, { force: true }
+
+  it "preserves 5-field esbuild identifier mappings (e.g. enum E -> E2) when rendering composed maps", ->
+    @timeout 15000
+    src := "export enum E\n  A\n"
+    filePath := path.join tmpdir(), "civet-enum-sm-" + Date.now() + ".civet"
+    await writeFile filePath, src
+    try
+      plugin := rawPlugin { ts: 'esbuild', config: false, typecheck: false }, { framework: 'rollup' }
+      ctx := { ...nullContext, ...plugin }
+      await plugin.buildStart.call ctx
+      res := await plugin.load.call ctx, filePath + ".jsx"
+      assert res and res <? "object"
+      map := res.map as SourceMapJSON
+      // esbuild lowers `export enum E { A }` using an inner renamed identifier (e.g. `E2`)
+      // whose downstream sourcemap entry has 5 fields (including a name index).
+      genLines := res.code.split '\n'
+      genLine := genLines.findIndex (l) => /\bE2\b/.test l
+      assert genLine >= 0, `expected renamed E2 identifier in esbuild output, got:\n${res.code}`
+      genCol := genLines[genLine].search /\bE2\b/
+      parsed := SourceMap.parseWithLines map
+      // Verify the exact segment at (genLine, genCol) is a 4-field mapping back to `E` on Civet line 0
+      col .= 0
+      let matched: number[]?
+      for entry of parsed.lines[genLine]
+        col += entry[0]
+        if col is genCol
+          matched = entry
+          break
+      assert matched and matched.length is 4,
+        `expected 4-field source mapping at E2 (${genLine}:${genCol}), got ${JSON.stringify matched}`
+      assert.equal matched[2], 0, "E2 should map back to Civet line 0"
+      assert.equal matched[3], src.indexOf('E'), "E2 should map back to `E` column in Civet"
+    finally
+      await rm filePath, { force: true }
