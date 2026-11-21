@@ -752,3 +752,51 @@ describe "lsp/server browser TSService wrapper", ->
         (globalThis as any).Civet = originalCivet
       else
         delete (globalThis as any).Civet
+
+  it "restricts workspace code execution when isTrusted is false", async ->
+    tmpDir := mkdtempSync path.join tmpdir(), 'civet-untrusted-'
+    try
+      // 1. Untrusted dir with malicious workspace @danielx/civet and civetconfig.js
+      malDir := path.join tmpDir, 'malicious'
+      fakePkg := path.join malDir, 'node_modules', '@danielx', 'civet'
+      mkdirSync fakePkg, recursive: true
+      marker := path.join tmpDir, 'pwned.txt'
+      writeFileSync path.join(fakePkg, 'package.json'), JSON.stringify { name: '@danielx/civet', version: '9.9.9', main: 'index.js' }
+      writeFileSync path.join(fakePkg, 'index.js'), `require('fs').writeFileSync(${JSON.stringify marker}, 'pkg'); module.exports = {}`
+      writeFileSync path.join(malDir, 'civetconfig.js'), `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify marker}, 'cfg'); export default {}`
+      writeFileSync path.join(malDir, 'tsconfig.json'), '{"compilerOptions":{"target":"es2020"}}'
+
+      service1 := await TSService pathToFileURL(malDir + path.sep).href, nullLogger, { isTrusted: false }
+      assert not fs.existsSync(marker), "untrusted workspace must not execute workspace packages or JS configs"
+      assert.equal service1.hera, undefined, "untrusted workspace must not require project @danielx/hera"
+
+      // 2. Untrusted dir with static civetconfig.json loads safely
+      safeDir := path.join tmpDir, 'safe-json'
+      mkdirSync safeDir, recursive: true
+      writeFileSync path.join(safeDir, 'civetconfig.json'), JSON.stringify { parseOptions: { autoLet: true } }
+      writeFileSync path.join(safeDir, 'tsconfig.json'), '{"compilerOptions":{"target":"es2020"}}'
+      safeFile := path.join safeDir, 'a.civet'
+      writeFileSync safeFile, 'x = 1\n'
+
+      service2 := await TSService pathToFileURL(safeDir + path.sep).href, nullLogger, { isTrusted: false }
+      loadFile service2, safeFile
+      meta2 := service2.host.getMeta safeFile
+      assert meta2?.transpiledDoc?.getText().includes('let x = 1'),
+        `expected static civetconfig.json to apply in untrusted mode, got: ${meta2?.transpiledDoc?.getText()}`
+
+      // 3. Untrusted nested dir does not walk up into ancestor configs
+      parentDir := path.join tmpDir, 'parent'
+      childDir := path.join parentDir, 'child'
+      mkdirSync childDir, recursive: true
+      writeFileSync path.join(parentDir, 'civetconfig.json'), JSON.stringify { parseOptions: { autoLet: true } }
+      writeFileSync path.join(childDir, 'tsconfig.json'), '{"compilerOptions":{"target":"es2020"}}'
+      childFile := path.join childDir, 'b.civet'
+      writeFileSync childFile, 'y = 2\n'
+
+      service3 := await TSService pathToFileURL(childDir + path.sep).href, nullLogger, { isTrusted: false }
+      loadFile service3, childFile
+      meta3 := service3.host.getMeta childFile
+      assert not meta3?.transpiledDoc?.getText().includes('let y'),
+        `untrusted workspace must not walk into ancestor config, got: ${meta3?.transpiledDoc?.getText()}`
+    finally
+      rmSync tmpDir, recursive: true, force: true
