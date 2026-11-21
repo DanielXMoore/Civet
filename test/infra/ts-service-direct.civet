@@ -1321,3 +1321,54 @@ describe "ts-service getScriptVersion for transpiled siblings", ->
       assert diags2.length > 0, "expected type mismatch diagnostic in main.civet after dep.civet changed"
     finally
       rmSync rootDir, recursive: true, force: true
+
+  it "invalidates dependents when a disk-loaded dependency is opened at version 0 with unsaved edits", ->
+    @timeout 15000
+    rootDir := mkdtempSync path.join tmpdir(), 'civet-disk-to-v0-'
+    try
+      depPath := path.join rootDir, 'dep.civet'
+      mainPath := path.join rootDir, 'main.civet'
+      writeFileSync path.join(rootDir, 'tsconfig.json'), JSON.stringify
+        compilerOptions:
+          target: 'ES2020'
+          module: 'ESNext'
+          moduleResolution: 'Bundler'
+          strict: true
+          skipLibCheck: true
+          jsx: 'preserve'
+          noEmit: true
+        include: ['**/*.civet']
+      // Disk versions agree (number -> number)
+      writeFileSync depPath, 'export val: number := 1\n'
+      writeFileSync mainPath, "import { val } from './dep.civet'\nexport out: number := val\n"
+
+      docFactory := {
+        create: (uri: string, languageId: string, version: number, text: string) =>
+          TextDocument.create uri, languageId, version, text
+        update: (doc: any, text: string, version: number) =>
+          TextDocument.update doc, [{ text }], version
+        uriToPath: (uri: string) => URI.parse(uri).fsPath
+        pathToUri: (p: string) => URI.file(p).toString()
+      }
+      service := SharedTSService rootDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory
+        logger: nullLogger
+      }
+
+      // First check loads dep.civet from disk (revision 0)
+      diags1 := service.getSemanticDiagnostics mainPath + '.tsx'
+      assert.equal diags1.length, 0, "initial disk-backed diagnostics should be empty"
+      assert.equal service.host.getScriptVersion(depPath + '.tsx'), '0'
+
+      // Now open dep.civet at document version 0 with unsaved incompatible export
+      depDocV0 := TextDocument.create URI.file(depPath).toString(), 'civet', 0, "export val: string := 'unsaved'\n"
+      service.host.addOrUpdateDocument depDocV0
+
+      assert.notEqual service.host.getScriptVersion(depPath + '.tsx'), '0',
+        "opening a disk-loaded file at version 0 must advance getScriptVersion"
+      diags2 := service.getSemanticDiagnostics mainPath + '.tsx'
+      assert diags2.length > 0,
+        "expected type mismatch diagnostic in main.civet after opening dep.civet at version 0"
+    finally
+      rmSync rootDir, recursive: true, force: true
