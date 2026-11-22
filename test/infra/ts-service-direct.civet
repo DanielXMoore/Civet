@@ -1206,3 +1206,58 @@ describe "makeCivetPlugin forces TS mode and disables inlineMap", ->
     assert.equal receivedOptions?.js, false, "legacy compile must receive js: false"
     assert.equal receivedOptions?.inlineMap, false, "legacy compile must receive inlineMap: false"
     assert.equal res.code, 'export const x: number = 1\n'
+
+describe "ts-service empty .civet files", ->
+  it "transpiles newly opened empty files and clears stale text when a file is emptied", ->
+    @timeout 15000
+    rootDir := mkdtempSync path.join tmpdir(), 'civet-empty-doc-'
+    try
+      emptyPath := path.join rootDir, 'empty.civet'
+      clearedPath := path.join rootDir, 'cleared.civet'
+      writeFileSync path.join(rootDir, 'tsconfig.json'), JSON.stringify
+        compilerOptions:
+          target: 'ES2020'
+          module: 'ESNext'
+          strict: true
+          skipLibCheck: true
+          jsx: 'preserve'
+          noEmit: true
+        include: ['**/*.civet']
+      writeFileSync emptyPath, ''
+      writeFileSync clearedPath, "x: number := 'bad'\n"
+
+      docFactory := {
+        create: (uri: string, languageId: string, version: number, text: string) =>
+          TextDocument.create uri, languageId, version, text
+        update: (doc: any, text: string, version: number) =>
+          TextDocument.update doc, [{ text }], version
+        uriToPath: (uri: string) => URI.parse(uri).fsPath
+        pathToUri: (p: string) => URI.file(p).toString()
+      }
+      service := SharedTSService rootDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory
+        logger: nullLogger
+      }
+
+      // 1. Newly opened empty file must still populate FileMeta
+      emptyDoc := TextDocument.create URI.file(emptyPath).toString(), 'civet', 1, ''
+      service.host.addOrUpdateDocument emptyDoc
+      emptyMeta := service.host.getMeta emptyPath
+      assert emptyMeta, "expected FileMeta for empty .civet file"
+      assert.equal emptyMeta.fatal, false
+
+      // 2. Clearing a non-empty file back to "" must replace stale transpiled output
+      doc1 := TextDocument.create URI.file(clearedPath).toString(), 'civet', 1, "x: number := 'bad'\n"
+      service.host.addOrUpdateDocument doc1
+      snap1 := service.host.getScriptSnapshot clearedPath + '.tsx'
+      assert snap1?.getText(0, snap1.getLength()).includes('bad')
+
+      doc2 := TextDocument.create URI.file(clearedPath).toString(), 'civet', 2, ''
+      service.host.addOrUpdateDocument doc2
+      snap2 := service.host.getScriptSnapshot clearedPath + '.tsx'
+      assert.equal snap2?.getText(0, snap2.getLength()), '',
+        "emptying a .civet file should clear its transpiled snapshot"
+      assert.equal service.getSemanticDiagnostics(clearedPath + '.tsx').length, 0
+    finally
+      rmSync rootDir, recursive: true, force: true
