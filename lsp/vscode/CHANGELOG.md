@@ -1,5 +1,29 @@
 # Civet VS Code Extension Changelog
 
+## 0.3.43 (2026-11-21)
+* LSP: improve `import` and `@` completions [[#2206](https://github.com/DanielXMoore/Civet/pull/2206)]
+* LSP: preserve case of filenames [[#2242](https://github.com/DanielXMoore/Civet/pull/2242)]
+* LSP: anchor `tsSuffix` regex so `.json`/`.tsx`/`.jsx` in `.civet` paths stay transpiled [[#2291](https://github.com/DanielXMoore/Civet/pull/2291)]
+* LSP: pass adjusted completion offset to `onCompletionResolve` and skip TS lookup for Civet file items [[#2294](https://github.com/DanielXMoore/Civet/pull/2294)]
+* LSP: support `ts.DocumentSpan` targets in JSDoc `{@link}` completion resolution [[#2292](https://github.com/DanielXMoore/Civet/pull/2292)]
+* `ts-service`: exclude backslashes in Windows path extension regexes [[#2266](https://github.com/DanielXMoore/Civet/pull/2266)]
+* `ts-service`: check `transpiler.target` before hijacking double-extension snapshots [[#2285](https://github.com/DanielXMoore/Civet/pull/2285)]
+* `ts-service`: force `js: false` and `inlineMap: false` in `makeCivetPlugin` [[#2287](https://github.com/DanielXMoore/Civet/pull/2287)]
+* `ts-service`: handle empty `.civet` files with existential checks [[#2286](https://github.com/DanielXMoore/Civet/pull/2286)]
+* `ts-service`: return source document revision from `getScriptVersion` for transpiled siblings [[#2284](https://github.com/DanielXMoore/Civet/pull/2284)]
+* Update bundled `@danielx/civet` to `0.11.17`
+
+## 0.3.42 (2026-08-21)
+* LSP: fix completions at EOL via better blank line handling [[#2197](https://github.com/DanielXMoore/Civet/pull/2197)]
+* Grammar: syntax highlighting improvements for backward declarations [[#2180](https://github.com/DanielXMoore/Civet/pull/2180)]
+* LSP: fix semantic highlighting of generated code [[#2177](https://github.com/DanielXMoore/Civet/pull/2177)]
+
+## 0.3.41 (2026-06-28)
+* LSP: fix sourcemapping of trimmed spaces and `#` length shorthand [[#2164](https://github.com/DanielXMoore/Civet/pull/2164)]
+
+## 0.3.40 (2026-06-10)
+* VS Code: use project's `@danielx/hera` when installed [[#2146](https://github.com/DanielXMoore/Civet/pull/2146)]
+
 ## 0.3.39 (2026-06-04)
 * LSP: grammar-level folding and selection ranges for `.hera`, fixing folds that landed in the transpiled parser's coordinates (past the source's last line)
 
