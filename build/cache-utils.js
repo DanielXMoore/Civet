@@ -58,14 +58,22 @@ function keyInput(source, filename, isHera, options) {
 function compileWithCache(source, filename, module = true) {
   const isHera = filename.endsWith('.hera');
   const compileOptions = { js: true, inlineMap: true, sync: true, module };
-  const key = makeCacheKey(keyInput(source, filename, isHera, compileOptions)) + '.mjs';
+  const keyOptions = isHera ? { ...compileOptions, transpileEmbedded: true } : compileOptions;
+  const key = makeCacheKey(keyInput(source, filename, isHera, keyOptions)) + '.mjs';
   const cached = diskCache.get(key);
   if (cached != null) return cached;
 
   let js;
   if (isHera) {
-    const civetOutput = heraCompile(source, { filename, module, inlineMap: true });
-    js = civetCompile(civetOutput, { filename, ...compileOptions });
+    // Hera writes the parser as JS and passes only the grammar's embedded
+    // Civet code (code blocks, handlers, heregex interpolations) to Civet.
+    js = heraCompile(source, {
+      filename, module, inlineMap: true, language: 'civet',
+      transpileEmbedded: (src, upstreamSourceMap) => civetCompile(src, {
+        filename, js: true, sync: true,
+        ...(upstreamSourceMap && { sourceMap: true, upstreamSourceMap }),
+      }),
+    });
   } else {
     js = civetCompile(source, { filename, ...compileOptions });
   }

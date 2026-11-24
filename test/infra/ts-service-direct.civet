@@ -681,6 +681,20 @@ describe "ts-service direct factory usage", ->
     assert.notEqual store.get(key), "{not valid json",
       "recompile should overwrite the corrupted entry"
 
+  it "makeHeraPlugin rejects a Hera without transpileEmbedded", ->
+    for HeraVersion of ["0.9.8", "0.8.19-pre.1"]
+      plugin := makeHeraPlugin { HeraVersion }
+      [t] := plugin.transpilers!
+      result := t.compile "x.hera", "Rules\n  A\n\nA\n  \"A\"\n"
+      assert.equal (result! as { code: string }).code, ""
+      message := String result!.errors![0]
+      assert message.includes(`needs @danielx/hera 0.9.10 or later; found ${HeraVersion}.`), message
+    for HeraVersion of ["0.9.10", "0.10.0", "1.0.0"]
+      plugin := makeHeraPlugin { HeraVersion }
+      [t] := plugin.transpilers!
+      result := t.compile "x.hera", "Rules\n  A\n\nA\n  \"A\"\n"
+      assert.deepEqual result!.errors, [], HeraVersion
+
   it "makeHeraPlugin honors options.Hera override", ->
     callLog: { source: string, filename: string }[] := []
     fakeHera := {
@@ -1078,10 +1092,10 @@ describe "ts-service mocked compilers", ->
       "legacy path passes sourceMap: true"
     assert.equal (result! as { code: string }).code, 'export const legacy = true\n'
 
-  it "makeHeraPlugin reads sourceMap.data.lines for legacy Civet sourcemap shape", ->
-    // Mock Civet to return a sourceMap with the pre-0.9.4 shape (`.data.lines`)
-    // — exercises the `?? sm?.data?.lines` fallback inside transpileHera's
-    // cache-write block.
+  it "makeHeraPlugin maps embedded code compiled by a Civet with the legacy sourcemap shape", ->
+    // Mock Civet to return a sourceMap with the pre-0.9.4 shape (`.data.lines`).
+    // Hera reads that shape when it splices the embedded code's map into the
+    // parser's, so the transpiled line keeps its mapping in the cached lines.
     fakeCivet :=
       compile: (_source: string, _options: any) =>
         code: 'export const x = 1\n'
@@ -1099,13 +1113,13 @@ describe "ts-service mocked compilers", ->
       cache
     }
     [t] := plugin.transpilers!
-    result := t.compile "x.hera", "Rules\n  A\n\nA\n  \"A\"\n"
+    result := t.compile "x.hera", "Rules\n  A\n\nA\n  \"A\" -> 1\n"
     assert result
-    // The fallback path stored the lines into the cache entry — pull them
-    // back out and assert they came from the .data.lines shape.
+    lineIndex := (result! as { code: string }).code.split("\n").findIndex (line) => line.includes "export const x = 1"
+    assert lineIndex >= 0, "expected the embedded code in the output"
     [key] := Array.from store.keys()
     cached := JSON.parse store.get(key)!
-    assert.deepEqual cached.lines, [[[0, 0, 0, 0]]]
+    assert.deepEqual cached.lines[lineIndex], [[0, 0, 0, 0]]
 
 describe "ts-service config recurse", ->
   it "mogrifyPackageJsonImports recurses into nested objects, skipping non-object values", ->
