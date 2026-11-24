@@ -1,0 +1,54 @@
+import assert from assert
+import { spawnSync } from child_process
+import { readFileSync } from fs
+import { join } from path
+
+function extractHeadTypecheckSnippet(): string
+  workflow := readFileSync join(process.cwd(), '.github/workflows/build.yml'), 'utf8'
+  lines := workflow.split /\r?\n/
+  start := lines.findIndex (l) => l.includes 'echo "Running head typecheck"'
+  end := lines.findIndex (l, idx) => idx > start and l.includes 'pnpm typecheck:diff'
+  assert start >= 0 and end > start, "expected head typecheck and typecheck:diff steps in build.yml"
+  lines.slice(start, end + 1).map(.trimStart()).join '\n'
+
+function runHeadTypecheckHarness(snippet: string, headExitCode: number)
+  harness := '''
+    set -euo pipefail
+    RUNNER_TEMP=$(mktemp -d)
+    trap 'rm -rf "$RUNNER_TEMP"' EXIT
+    head_log="$RUNNER_TEMP/head.log"
+    base_log="$RUNNER_TEMP/base.log"
+    CI_TYPECHECK_MAX_ERRORS=999
+    pnpm() {
+      if [ "$1" = "typecheck" ]; then
+        echo "simulated typecheck output"
+        return "$HEAD_EXIT_CODE"
+      fi
+      if [ "$1" = "typecheck:diff" ]; then
+        echo "REACHED_DIFF"
+        return 0
+      fi
+    }
+  ''' + '\n' + snippet
+  spawnSync 'bash', ['-c', harness], {
+    encoding: 'utf8'
+    env: { ...process.env, HEAD_EXIT_CODE: String(headExitCode) }
+  }
+
+describe "CI typecheck workflow", ->
+  it "fails on non-zero head typecheck exit before reaching typecheck:diff", ->
+    snippet := extractHeadTypecheckSnippet()
+    assert not /\|\|\s*true\b/.test(snippet),
+      "head typecheck snippet must not swallow failures with || true"
+
+    res := runHeadTypecheckHarness snippet, 2
+    assert.equal res.status, 1, `expected exit 1 on head typecheck crash, got ${res.status}:\n${res.stdout}\n${res.stderr}`
+    assert.match res.stdout, /Head typecheck failed \(exit 2\)/
+    assert.match res.stdout, /simulated typecheck output/
+    assert.doesNotMatch res.stdout, /REACHED_DIFF/
+
+  it "proceeds to typecheck:diff when head typecheck exits 0", ->
+    snippet := extractHeadTypecheckSnippet()
+    res := runHeadTypecheckHarness snippet, 0
+    assert.equal res.status, 0, `expected exit 0 on passing head typecheck, got ${res.status}:\n${res.stdout}\n${res.stderr}`
+    assert.match res.stdout, /REACHED_DIFF/
