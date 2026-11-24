@@ -472,9 +472,6 @@ TopLevelStatement
 Expression
   AssignmentExpression ::ExpressionNode
 
-SingleLineExpression
-  SingleLineAssignmentExpression
-
 NonPipelineExpression
   NonPipelineAssignmentExpression ::ExpressionNode
 
@@ -543,21 +540,6 @@ CommaExpressionSpread
     return $0
 
 AssignmentExpressionSpread
-  _? DotDotDot AssignmentExpression:expression ->
-    return {
-      type: "SpreadElement",
-      children: $0,
-      expression,
-      names: namesOf(expression),
-    }
-  AssignmentExpression:expression ( _? DotDotDot )? ->
-    return $1 unless $2
-    return {
-      type: "SpreadElement",
-      children: [ ...$2, $1 ],
-      expression,
-      names: namesOf(expression),
-    }
   _? DotDotDot AssignmentExpression:expression ->
     return {
       type: "SpreadElement",
@@ -767,18 +749,10 @@ NestedArgument
   # Exclude `a: b` property definition, leaving it for potentially multi-line
   # NestedImplicitObjectLiteral
   !NestedImplicitPropertyDefinition Nested:indent !Bullet SingleLinePostfixedArgumentExpressions:args ParameterElementDelimiter:comma ->
-    // Attach indentation to first argument in SingleLineArgumentExpressions
+    // Attach indentation to first argument in SingleLinePostfixedArgumentExpressions
     [ arg0, ...rest ] .= args
     arg0 = prepend(indent, arg0)
     return [ arg0, ...rest, comma ]
-
-SingleLineArgumentExpressions
-  WArgumentPart ( ( _? Comma ) WArgumentPart )* ->
-    return [ $1, ...$2.flat() ]
-
-WArgumentPart
-  _? ArgumentPart ->
-    return prepend($1, $2)
 
 SingleLinePostfixedArgumentExpressions
   WPostfixedArgumentPart ( ( _? Comma ) WPostfixedArgumentPart )* ->
@@ -2102,18 +2076,18 @@ MemberExpressionRest
 MemberExpressionRestBody
   # NOTE: Added shorthand x?[3] -> x?.[3]
   OptionalShorthand?:dot InlineComment*:comments MemberBracketContent:content ->
-    return content unless dot or comments#
-    if dot
-      // Optional followed by a slice expression
-      if dot.type is "Optional" and content.type is "SliceExpression"
-        // Remove '.' from optional since it is present in '.slice'
-        return [...dot.children.slice(0, -1), ...comments, content]
-      return {
-        ...content,
-        children: [dot, ...comments, ...content.children],
-        optional: dot,
-      }
-    return [...comments, content]
+    // MemberExpressionRest already consumed the comments before content,
+    // so there can only be comments here after an OptionalShorthand
+    return content unless dot
+    // Optional followed by a slice expression
+    if dot.type is "Optional" and content.type is "SliceExpression"
+      // Remove '.' from optional since it is present in '.slice'
+      return [...dot.children.slice(0, -1), ...comments, content]
+    return {
+      ...content,
+      children: [dot, ...comments, ...content.children],
+      optional: dot,
+    }
   # NOTE: Combined Optional and Property access
   PropertyAccess
   PropertyGlob
@@ -2809,11 +2783,6 @@ NestedBindingElementList
         children: [indent, ...element.children.slice(1)], // replace ws wth indent
       }
     })
-
-# https://262.ecma-international.org/#prod-Elision
-Elision
-  # NOTE: The repetition is handled from outside rather than using left recursion here
-  __ Comma
 
 NestedBindingProperties
   PushIndent NestedBindingPropertyList*:props PopIndent ->
@@ -4290,21 +4259,6 @@ BracedObjectLiteralContent
   # followed by nested comma-separated properties on further lines
   SingleLineObjectProperties:line NestedPropertyDefinitions?:nested ->
     return line.concat(nested || [])
-  # As a backup, allow for arbitrary untracked indentation
-  ( __ PropertyDefinition ObjectPropertyDelimiter )+ ->
-    return $0.flatMap(([ws, prop, delim]: [any, any, any]) => {
-      // Allow each prop to be a single Property object or an array of such
-      prop = Array.isArray(prop) ? prop : [prop]
-      last .= prop[prop#-1]
-      last = {
-        ...last,
-        delim,
-        // __ will consume all whitespace that _? in PropertyDefinition could,
-        // so replace _? (via slice) with __
-        children: [ ws, ...last.children.slice(1), delim ]
-      }
-      return [...prop.slice(0, prop#-1), last]
-    })
 
 # NOTE: Nested implicit object literal starts with an indentation.
 # All properties can be spaced out and must have a colon.
@@ -6689,18 +6643,6 @@ MaybeNestedPostfixedExpressionOrCommaLoop ::ASTNode
     return $skip unless expression
     return expression
 
-MaybeNestedPostfixedCommaExpression
-  # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
-  # the second case, where they get checked by PrimaryExpression,
-  # which then allows for trailing binary operators etc.
-  !NestedBulletedArray !CompleteNestedImplicitObjectLiteral PushIndent ( Nested PostfixedCommaExpression )?:expression PopIndent AllowedTrailingCallExpressions?:trailing ->
-    return $skip unless expression
-    return expression unless trailing
-    return [ expression, trailing ]
-  ForbidImplicitFragment PostfixedCommaExpression?:expression RestoreImplicitFragment ->
-    return $skip unless expression
-    return expression
-
 NestedPostfixedExpressionNoTrailing
   NestedBulletedArray
   NestedImplicitObjectLiteral
@@ -7322,12 +7264,12 @@ LexicalDeclaration ::LexicalDeclaration
   # NOTE: Using PostfixExpression to allow postfix if/unless/for
   Loc:loc ( BindingPattern / BindingIdentifier ):pattern TypeSuffix?:typeSuffix NotDedented:ws ( ConstAssignment / LetAssignment ):assign MaybeNestedPostfixedExpressionOrCommaLoop:e ->
     return processAssignmentDeclaration
-      { loc.$loc, token: assign.decl } // like InsertConst or InsertLet
+      { loc.$loc, token: assign.decl } // like InsertConst
       pattern, typeSuffix, ws, assign, e
   # Backward const/let shorthands: `y =: x` -> `const x = y`
   Loc:loc PostfixedExpressionOrCommaLoop:e NotDedented:ws ( BackwardConstAssignment / BackwardLetAssignment ):assign NotDedented:bindingWs ( BindingPattern / BackwardBindingIdentifier / BindingIdentifier ):pattern TypeSuffix?:typeSuffix ->
     return processAssignmentDeclaration
-      { loc.$loc, token: assign.decl } // like InsertConst or InsertLet
+      { loc.$loc, token: assign.decl } // like InsertConst
       prepend trimFirstSpace(bindingWs), pattern
       typeSuffix
       getTrimmingSpace bindingWs
@@ -7833,13 +7775,6 @@ __
 Whitespace ::ASTLeaf
   [\s]+ ->
     return { $loc, token: $0 }
-
-# Fake a blocklike form for single expressions
-ExpressionDelimiter
-  _? Semicolon InsertComma TrailingComment ->
-    // Replace semicolon with comma
-    return [$1, $3, $4]
-  &EOS InsertComma -> $2
 
 SimpleStatementDelimiter
   # Hera 0.9.0 returns `true` for assertions; normalize to undefined here
@@ -8435,12 +8370,12 @@ JSXFragment ::ASTNode
     return { type: "JSXFragment", children, jsxChildren: mixedChildren.jsxChildren }
   # NOTE: In CoffeeScript JSX mode, JSX children do not need to be properly
   # indented, but tags must be explicitly closed.
-  CoffeeJSXEnabled "<>" JSXChildren?:children Whitespace? JSXClosingFragment ->
+  CoffeeJSXEnabled "<>" JSXChildren:children Whitespace? JSXClosingFragment ->
     nodes := $0[1..]
     return {
       type: "JSXFragment",
       children: nodes,
-      jsxChildren: children ? children.jsxChildren : []
+      jsxChildren: children.jsxChildren
     }
 
 PushJSXOpeningFragment
@@ -9944,8 +9879,6 @@ TypeLiteral
     return { type: "VoidType", $loc, token: $1 } as const
   "unique" _ "symbol" NonIdContinue ->
     return { type: "UniqueSymbolType", children: $0 }
-  "[]" ->
-    return { $loc, token: "[]" }
 
 InlineInterfaceLiteral
   InsertInlineOpenBrace InlineBasicInterfaceProperty ( SameLineOrIndentedFurther InlineBasicInterfaceProperty )* InsertCloseBrace
@@ -10262,10 +10195,6 @@ InsertConst
   "" ->
     return { $loc, token: "const " }
 
-InsertLet
-  "" ->
-    return { $loc, token: "let " }
-
 InsertReadonly
   # NOTE: Includes a trailing space
   "" ->
@@ -10387,11 +10316,6 @@ JSXCodeNestedEnabled
 JSXCodeSameLineEnabled
   "" ->
     if(config.jsxCodeSameLine) return
-    return $skip
-
-ObjectIsEnabled
-  "" ->
-    if(config.objectIs) return
     return $skip
 
 IsBare
