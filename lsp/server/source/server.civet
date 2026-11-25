@@ -362,7 +362,7 @@ export function startServer(connection: Connection, dependencies: ServerDependen
   heraGrammarLevel := (doc: TextDocument, position: Position): boolean =>
     doc.uri.endsWith('.hera') and isHeraGrammarLevel(doc.getText(), position.line, position.character)
 
-  tsSuffix := /\.[cm]?[jt]s$|\.json|\.[jt]sx/
+  tsSuffix := /\.(?:[cm]?[jt]s|[jt]sx|json)$/i
 
   connection.onHover ({ textDocument, position }) =>
     sourcePath := documentToSourcePath(textDocument)
@@ -613,7 +613,7 @@ export function startServer(connection: Connection, dependencies: ServerDependen
       tslCompletions
       transpiledDoc
       sourcePath
-      position
+      transpiledDoc.positionAt(p)
       sourcemapLines
       true
       rootDir
@@ -631,9 +631,13 @@ export function startServer(connection: Connection, dependencies: ServerDependen
   connection.onCompletionResolve (item) =>
     // Hera-grammar completions carry `{ hera: true, uri }` in `data`; the
     // analyzer fills in detail + rule-body documentation.
-    heraData := item.data as { hera?: boolean } | undefined
-    if heraData?.hera
+    // Civet file path completions carry `{ civetFile: true }` and have no TS
+    // symbol details to resolve.
+    itemData := item.data as { hera?: boolean, civetFile?: boolean } | undefined
+    if itemData?.hera
       return resolveHeraCompletion(item)
+    if itemData?.civetFile
+      return item
 
     { sourcePath, position, name, source, data } .= item.data
     service := await ensureServiceForSourcePath(sourcePath)
@@ -722,15 +726,29 @@ export function startServer(connection: Connection, dependencies: ServerDependen
           additionalEdits.push { range: { start, end }, newText }
     if additionalEdits#
       item.additionalTextEdits = additionalEdits
-    details.push asPlainTextWithLinks(detail.displayParts)
+    resolveJsDocTarget := (target: ts.DocumentSpan) =>
+      sf := service.getProgram()?.getSourceFile target.fileName
+      return unless sf
+      { line, character } := sf.getLineAndCharacterOfPosition target.textSpan.start
+      file .= target.fileName
+      let pos: Position = { line, character }
+      sourceFile := service.getSourceFileName target.fileName
+      if sourceFile is not target.fileName
+        targetSourcemap := service.host.getMeta(sourceFile)?.sourcemapLines
+        return unless targetSourcemap
+        file = sourceFile
+        pos = remapPosition pos, targetSourcemap
+      { file, lineNumber: pos.line, column: pos.character }
+
+    details.push asPlainTextWithLinks(detail.displayParts, resolveJsDocTarget)
     item.detail = details.join("\n\n")
 
     // getDocumentation from https://github.com/microsoft/vscode/blob/main/extensions/typescript-language-features/src/languageFeatures/completions.ts
     documentations: string[] := []
     if detail.documentation
-      documentations.push asPlainTextWithLinks(detail.documentation)
+      documentations.push asPlainTextWithLinks(detail.documentation, resolveJsDocTarget)
     if detail.tags
-      documentations.push tagsToMarkdown(detail.tags)
+      documentations.push tagsToMarkdown(detail.tags, resolveJsDocTarget)
     if documentations#
       item.documentation = {
         kind: "markdown"
@@ -1502,8 +1520,7 @@ export function startServer(connection: Connection, dependencies: ServerDependen
     if sourcePath.match tsSuffix
       return getTypeScriptDiagnostics(sourcePath, document)
 
-    // Transpiled file. No meta/transpiledDoc yet (e.g. an empty source that
-    // hasn't produced a snapshot) means there's nothing to report.
+    // Transpiled file. No meta/transpiledDoc means there's nothing to report.
     meta := service.host.getMeta(sourcePath)
     transpiledDoc := meta?.transpiledDoc
     unless transpiledDoc

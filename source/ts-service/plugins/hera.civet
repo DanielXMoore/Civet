@@ -36,7 +36,7 @@ interface HeraCompileResult
   sourceMap?: unknown
 
 interface HeraModule
-  compile(source: string, options: { filename: string, module: boolean, sourceMap: boolean, language?: string }): HeraCompileResult
+  compile(source: string, options: { filename: string, module: boolean, sourceMap: boolean, language?: string, types?: boolean, transpileEmbedded?: (source: string, upstreamSourceMap?: unknown) => unknown }): HeraCompileResult
 
 export interface HeraPluginOptions
   /**
@@ -104,14 +104,24 @@ export function makeHeraPlugin(options: HeraPluginOptions = {}): Plugin
       resolvedHeraVersion = 'unknown'
     resolvedHeraVersion
 
+  // `transpileEmbedded` is new in Hera 0.9.10.  Older versions ignore it and
+  // return the whole parser as Civet code, which TypeScript can't check.
+  function checkHeraVersion(): void
+    version := getHeraVersion()
+    m := version.match /^(\d+)\.(\d+)\.(\d+)/
+    return unless m
+    if +m[1] * 1e6 + +m[2] * 1e3 + +m[3] < 9010
+      throw new Error `Type-checking .hera files needs @danielx/hera 0.9.10 or later; found ${version}.`
+
   // Folded into the cache key (alongside civetConfig) so future option
-  // changes invalidate entries.  `language: 'civet'` is required for
-  // Hera to emit TS-typed Civet — without it, `::Type` annotations are
-  // stripped.
+  // changes invalidate entries.  With `transpileEmbedded`, Hera writes the
+  // parser as TypeScript around the grammar's embedded Civet code; `types`
+  // keeps it typed, including handler parameters and `::Type` annotations.
   heraOptions := {
     module: true
     sourceMap: true
     language: 'civet'
+    types: true
   }
 
   function transpileHera(p: string, source: string): TranspileResult
@@ -123,7 +133,7 @@ export function makeHeraPlugin(options: HeraPluginOptions = {}): Plugin
       compilerName: 'hera'
       compilerVersion: getHeraVersion()
       civetVersion: CivetVersion
-      options: { heraOptions, civetConfig }
+      options: { heraOptions, transpileEmbedded: true, civetConfig }
     } else undefined
 
     if cacheKey
@@ -140,33 +150,39 @@ export function makeHeraPlugin(options: HeraPluginOptions = {}): Plugin
           // corrupt cache entry — fall through and recompile
 
     try
-      // Stage 1: Hera grammar → Civet code, with a Hera→Civet sourcemap.
-      heraResult := getHera().compile source, { ...heraOptions, filename: p }
-
-      // Stage 2: Civet code → TS, composing the upstream Hera→Civet map so
-      // the final lines table maps `.hera.tsx` positions all the way back
-      // to `.hera` source coordinates.  `sync: true` forces the synchronous
-      // overload of Civet.compile (matching makeCivetPlugin).
-      civetOptions: CompileOptions & { sync: true, sourceMap: true } := {}
-        ...civetConfig
+      checkHeraVersion()
+      // Hera writes the parser as TS and hands only the grammar's embedded
+      // Civet code (code blocks, handlers, heregex interpolations) to Civet,
+      // composing Civet's map with its own so the final lines table maps
+      // `.hera.tsx` positions back to `.hera` source coordinates.
+      // `sync: true` forces the synchronous overload of Civet.compile
+      // (matching makeCivetPlugin).
+      heraResult := getHera().compile source, {
+        ...heraOptions
         filename: p
-        js: false
-        sync: true
-        sourceMap: true
-        upstreamSourceMap: heraResult.sourceMap as string | object
-        parseOptions: {}
-          ...civetConfig.parseOptions
-          comptime: false
-      civetResult := Civet.compile heraResult.code, civetOptions
+        transpileEmbedded: (src: string, upstreamSourceMap?: unknown) ->
+          civetOptions: CompileOptions & { sync: true, sourceMap: true } := {}
+            ...civetConfig
+            filename: p
+            js: false
+            sync: true
+            sourceMap: true
+            inlineMap: false
+            upstreamSourceMap: upstreamSourceMap as string | object
+            parseOptions: {}
+              ...civetConfig.parseOptions
+              comptime: false
+          Civet.compile src, civetOptions
+      }
 
       if cacheKey
-        sm := civetResult.sourceMap as SourceMap?
-        lines := sm?.lines ?? sm?.data?.lines
-        cache!.set cacheKey, JSON.stringify { code: civetResult.code, lines }
+        // Hera's map, with the embedded code's lines spliced in
+        lines := (heraResult.sourceMap as SourceMap?)?.lines
+        cache!.set cacheKey, JSON.stringify { code: heraResult.code, lines }
 
       {
-        code: civetResult.code
-        sourceMap: civetResult.sourceMap
+        code: heraResult.code
+        sourceMap: heraResult.sourceMap as SourceMap
         errors
       }
     catch e

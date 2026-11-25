@@ -244,15 +244,27 @@ function declarationIterand(decl: ASTNode): ASTNode
   else
     decl
 
-// Construct for loop from RangeLiteral
+/**
+ * Error for `for await` on a loop that compiles to `for (;;)`,
+ * where JavaScript has no place for the `await`
+ */
+function forAwaitError(awaits: ASTNode, message: string): ASTError
+  [token] := awaits as [ASTLeaf, ASTNode]
+  return { type: "Error", message, $loc: token.$loc }
+
+// Construct for loop from RangeLiteral, with an optional `by step` clause
+// given as its `[ws, by, exp]` parse
 function forRange(
+  awaits: ASTNode
   open: ASTLeaf
   forDeclaration: ASTNode
   range: RangeExpression
-  stepExp: ASTNode
+  step: [ASTNode, ASTNode, ASTNode]?
   close: ASTLeaf
 ): ForStatementControl
   { start, end, left, right, increasing } .= range
+  // Keep comments around `by`, but omit the token itself
+  stepExp: ASTNode .= step and prepend(trimFirstSpace(step[0]), trimFirstSpace(step[2]))
 
   counterRef := makeRef("i")
 
@@ -293,7 +305,7 @@ function forRange(
 
   if start?.type is "Literal" is end?.type
     // @ts-ignore Allow comparison of any literal values, as in JS
-    asc = literalValue(start) <= literalValue(end)
+    asc = literalValue(start) <= literalValue(end) unless stepExp
     if "StringLiteral" is start.subtype is end.subtype
       startChar := (literalValue(start) as string).charCodeAt(0).toString()
       startRef =
@@ -365,7 +377,7 @@ function forRange(
     // but it's still helpful for determining the primary loop variable
     declaration: forDeclaration
     iterand: declarationIterand forDeclaration
-    children: [range.error, open, declaration, "; ", ...condition, "; ", ...increment, close]
+    children: [awaits and forAwaitError(awaits, "'for await' can't iterate a range"), range.error, open, declaration, "; ", ...condition, "; ", ...increment, close]
     blockPrefix
   }
 
@@ -466,10 +478,7 @@ function processForInOf($0: [
   // `for item, index of [a..b]` without constructing `[a..b]` array
   if exps[0].type is "RangeExpression" and inOf.token is "of" and declarations# is exps# is 1
     // TODO: add support for `indexDeclaration` to efficient `forRange`
-    return forRange
-      open, declarations[0], exps[0]
-      step and prepend(trimFirstSpace(step[0]), trimFirstSpace(step[2])) // omit "by" token
-      close
+    return forRange awaits, open, declarations[0], exps[0], step, close
   else if step
     throw new Error("for..of/in cannot use 'by' except with range literals")
 
@@ -494,6 +503,7 @@ function processForInOf($0: [
   // for each item1, item2[, index] of array1, array2
   if each
     if inOf.token is "of"
+      errors.unshift forAwaitError(awaits, "'for await' can't be used with 'each'") if awaits
       counterRef := makeRef "i"
       endRef := makeRef exps# > 1 ? "end" : "len"
 

@@ -85,6 +85,12 @@ export function TSHost(
 
   pathMap: Map<string, TranspiledDoc> := new Map
   snapshotMap: Map<string, IScriptSnapshot> := new Map
+  // Monotonic host revision per open document (starting at 1) so transitioning
+  // a disk-loaded file (revision 0) to an open document at version 0, or closing
+  // and reopening without an intervening check, always advances both
+  // getScriptVersion() and snapshot re-transpilation.
+  documentRevision: Map<string, number> := new Map
+  nextDocumentRevision .= 0
 
   projectVersion .= 0
 
@@ -171,6 +177,7 @@ export function TSHost(
       rawPath := path.normalize docFactory.uriToPath(doc.uri)
       p := getCanonicalFileName rawPath
       snapshotMap.delete(p)
+      documentRevision.set p, ++nextDocumentRevision
       projectVersion++
 
       extension := getExtensionFromPath(p)
@@ -206,6 +213,7 @@ export function TSHost(
       transpiledPath := getCanonicalTranspiledPath(rawPath)
 
       pathMap.delete(canonical)
+      documentRevision.delete(canonical)
       snapshotMap.delete(canonical)
       fileMetaData.delete(canonical)
 
@@ -220,6 +228,7 @@ export function TSHost(
       transpiledPath := getCanonicalTranspiledPath(rawPath)
 
       pathMap.delete(canonical)
+      documentRevision.delete(canonical)
       snapshotMap.delete(canonical)
       fileMetaData.delete(canonical)
       scriptFileNames.delete(canonical)
@@ -247,7 +256,12 @@ export function TSHost(
     getScriptSnapshot(p: string)
       getOrCreatePathSnapshot(p)
     getScriptVersion(p: string)
-      pathMap.get(getCanonicalFileName p)?.version.toString() || "0"
+      canonical := getCanonicalFileName p
+      if exts := getTranspiledExtensionsFromPath canonical
+        transpiler := transpilers.get exts[0]
+        if transpiler and transpiler.target is exts[1]
+          return (documentRevision.get(removeExtension canonical) ?? 0).toString()
+      (documentRevision.get(canonical) ?? 0).toString()
 
     getScriptFileNames()
       Array.from(scriptFileNames.values())
@@ -317,7 +331,7 @@ export function TSHost(
     // (e.g. `foo.civet.tsx`); the second-to-last extension picks the
     // transpiler.
     exts := getTranspiledExtensionsFromPath(p)
-    if exts and (transpiler = transpilers.get(exts[0]))
+    if exts and (transpiler = transpilers.get(exts[0])) and transpiler.target is exts[1]
       sourcePath := removeExtension(p)
       sourceDoc := pathMap.get(sourcePath)
       transpiledDoc .= pathMap.get(p)
@@ -329,9 +343,9 @@ export function TSHost(
         source = getPathSource(sourcePath)
       else
         source = sourceDoc.getText()
-        sourceDocVersion = sourceDoc.version
+        sourceDocVersion = documentRevision.get(sourcePath)!
 
-      if source and sourceDocVersion > transpiledDoc.version
+      if source? and sourceDocVersion > transpiledDoc.version
         transpiledCode := doTranspileAndUpdateMeta(transpiledDoc, sourceDocVersion, transpiler, sourcePath, source)
         snapshot = Snap(transpiledCode) if transpiledCode?
 

@@ -24,6 +24,7 @@ ts from typescript
   makeCivetPlugin
 } from "../../source/ts-service/index.civet"
 { createBaseHost } from "../../source/ts-service/service.civet"
+{ type TranspileResult } from "../../source/ts-service/types.civet"
 { remapFileName, getCanonicalFileName } from "../../source/ts-service/path.civet"
 { makeHeraPlugin } from "../../source/ts-service/plugins/hera.civet"
 
@@ -681,6 +682,20 @@ describe "ts-service direct factory usage", ->
     assert.notEqual store.get(key), "{not valid json",
       "recompile should overwrite the corrupted entry"
 
+  it "makeHeraPlugin rejects a Hera without transpileEmbedded", ->
+    for HeraVersion of ["0.9.8", "0.8.19-pre.1"]
+      plugin := makeHeraPlugin { HeraVersion }
+      [t] := plugin.transpilers!
+      result := t.compile("x.hera", "Rules\n  A\n\nA\n  \"A\"\n") as TranspileResult
+      assert.equal result.code, ""
+      message := String result.errors![0]
+      assert message.includes(`needs @danielx/hera 0.9.10 or later; found ${HeraVersion}.`), message
+    for HeraVersion of ["0.9.10", "0.10.0", "1.0.0"]
+      plugin := makeHeraPlugin { HeraVersion }
+      [t] := plugin.transpilers!
+      result := t.compile("x.hera", "Rules\n  A\n\nA\n  \"A\"\n") as TranspileResult
+      assert.deepEqual result.errors, [], HeraVersion
+
   it "makeHeraPlugin honors options.Hera override", ->
     callLog: { source: string, filename: string }[] := []
     fakeHera := {
@@ -1078,10 +1093,10 @@ describe "ts-service mocked compilers", ->
       "legacy path passes sourceMap: true"
     assert.equal (result! as { code: string }).code, 'export const legacy = true\n'
 
-  it "makeHeraPlugin reads sourceMap.data.lines for legacy Civet sourcemap shape", ->
-    // Mock Civet to return a sourceMap with the pre-0.9.4 shape (`.data.lines`)
-    // — exercises the `?? sm?.data?.lines` fallback inside transpileHera's
-    // cache-write block.
+  it "makeHeraPlugin maps embedded code compiled by a Civet with the legacy sourcemap shape", ->
+    // Mock Civet to return a sourceMap with the pre-0.9.4 shape (`.data.lines`).
+    // Hera reads that shape when it splices the embedded code's map into the
+    // parser's, so the transpiled line keeps its mapping in the cached lines.
     fakeCivet :=
       compile: (_source: string, _options: any) =>
         code: 'export const x = 1\n'
@@ -1099,13 +1114,24 @@ describe "ts-service mocked compilers", ->
       cache
     }
     [t] := plugin.transpilers!
-    result := t.compile "x.hera", "Rules\n  A\n\nA\n  \"A\"\n"
+    result := t.compile "x.hera", "Rules\n  A\n\nA\n  \"A\" -> 1\n"
     assert result
-    // The fallback path stored the lines into the cache entry — pull them
-    // back out and assert they came from the .data.lines shape.
+    lineIndex := (result! as { code: string }).code.split("\n").findIndex (line) => line.includes "export const x = 1"
+    assert lineIndex >= 0, "expected the embedded code in the output"
     [key] := Array.from store.keys()
     cached := JSON.parse store.get(key)!
-    assert.deepEqual cached.lines, [[[0, 0, 0, 0]]]
+    assert.deepEqual cached.lines[lineIndex], [[0, 0, 0, 0]]
+
+  it "makeHeraPlugin keeps embedded code mapped when config sets inlineMap", ->
+    plugin := makeHeraPlugin config: { inlineMap: true }
+    [t] := plugin.transpilers!
+    result := t.compile "x.hera", "Rules\n  A\n\nA\n  \"A\" -> unknownName\n"
+    assert result and not (result <? Promise)
+    { code, sourceMap } := result as { code: string, sourceMap: { lines: number[][][] } }
+    lineIndex := code.split("\n").findIndex (line) => line.includes "unknownName"
+    assert lineIndex >= 0, "expected the handler in the output"
+    assert sourceMap.lines[lineIndex]?.some((entry) => entry[2] is 4),
+      `expected the handler to map to grammar line 5, got: ${JSON.stringify sourceMap.lines[lineIndex]}`
 
 describe "ts-service config recurse", ->
   it "mogrifyPackageJsonImports recurses into nested objects, skipping non-object values", ->
@@ -1134,3 +1160,254 @@ describe "ts-service config recurse", ->
     assert.equal parsed.imports['#nested']['#deep'], './lib/deep.civet.tsx'
     // The boolean is untouched (recurse bailed on it).
     assert.equal parsed.imports['#truthy-non-object'], true
+
+describe "ts-service transpiler target extension guard", ->
+  it "reads real .civet.js files from disk instead of transpiling .civet", ->
+    rootDir := mkdtempSync path.join tmpdir(), 'civet-target-guard-'
+    try
+      civetPath := path.join rootDir, 'foo.civet'
+      jsPath := path.join rootDir, 'foo.civet.js'
+      writeFileSync civetPath, 'export fromCivet: number := 123\n'
+      writeFileSync jsPath, 'export const fromRealJs = 456;\n'
+
+      docFactory := {
+        create: (uri: string, languageId: string, version: number, text: string) =>
+          TextDocument.create uri, languageId, version, text
+        update: (doc: any, text: string, version: number) =>
+          TextDocument.update doc, [{ text }], version
+        uriToPath: (uri: string) => URI.parse(uri).fsPath
+        pathToUri: (p: string) => URI.file(p).toString()
+      }
+      service := SharedTSService rootDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory
+        logger: nullLogger
+        discoverProjectFiles: false
+      }
+
+      snap := service.host.getScriptSnapshot jsPath
+      assert snap, "expected snapshot for foo.civet.js"
+      text := snap.getText 0, snap.getLength()
+      assert text.includes('fromRealJs'),
+        `expected real foo.civet.js contents, got: ${text}`
+      assert not text.includes('fromCivet'),
+        `should not have transpiled foo.civet for foo.civet.js, got: ${text}`
+    finally
+      rmSync rootDir, recursive: true, force: true
+
+describe "makeCivetPlugin forces TS mode and disables inlineMap", ->
+  it "preserves TypeScript annotations and omits inline sourcemaps even when config sets js and inlineMap", ->
+    plugin := makeCivetPlugin {
+      config: {
+        js: true
+        inlineMap: true
+      }
+    }
+    [t] := plugin.transpilers!
+    res := t.compile "typed.civet", "export x: number := 'bad'\n"
+    assert res and not (res <? Promise)
+    assert res.code.includes(': number'),
+      `expected TypeScript type annotation to be preserved, got: ${res.code}`
+    assert not res.code.includes('sourceMappingURL'),
+      `expected no inline sourceMappingURL comment, got: ${res.code}`
+
+  it "passes js: false and inlineMap: false on the legacy compile path", ->
+    let receivedOptions: Record<string, unknown>?
+    fakeCivet :=
+      compile: (_source: string, opts: Record<string, unknown>) =>
+        receivedOptions = opts
+        code: if opts.inlineMap then 'export const x: number = 1\n//# sourceMappingURL=data:...' else 'export const x: number = 1\n'
+        sourceMap: { data: { lines: [] } }
+    plugin := makeCivetPlugin {
+      Civet: fakeCivet as any
+      CivetVersion: "0.9.3"
+      config: {
+        js: true
+        inlineMap: true
+      }
+    }
+    [t] := plugin.transpilers!
+    res := t.compile "legacy.civet", "export x: number := 1\n"
+    assert res and not (res <? Promise)
+    assert.equal receivedOptions?.js, false, "legacy compile must receive js: false"
+    assert.equal receivedOptions?.inlineMap, false, "legacy compile must receive inlineMap: false"
+    assert.equal res.code, 'export const x: number = 1\n'
+
+describe "ts-service empty .civet files", ->
+  it "transpiles newly opened empty files and clears stale text when a file is emptied", ->
+    @timeout 15000
+    rootDir := mkdtempSync path.join tmpdir(), 'civet-empty-doc-'
+    try
+      emptyPath := path.join rootDir, 'empty.civet'
+      clearedPath := path.join rootDir, 'cleared.civet'
+      writeFileSync path.join(rootDir, 'tsconfig.json'), JSON.stringify
+        compilerOptions:
+          target: 'ES2020'
+          module: 'ESNext'
+          strict: true
+          skipLibCheck: true
+          jsx: 'preserve'
+          noEmit: true
+        include: ['**/*.civet']
+      writeFileSync emptyPath, ''
+      writeFileSync clearedPath, "x: number := 'bad'\n"
+
+      docFactory := {
+        create: (uri: string, languageId: string, version: number, text: string) =>
+          TextDocument.create uri, languageId, version, text
+        update: (doc: any, text: string, version: number) =>
+          TextDocument.update doc, [{ text }], version
+        uriToPath: (uri: string) => URI.parse(uri).fsPath
+        pathToUri: (p: string) => URI.file(p).toString()
+      }
+      service := SharedTSService rootDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory
+        logger: nullLogger
+      }
+
+      // 1. Newly opened empty file must still populate FileMeta
+      emptyDoc := TextDocument.create URI.file(emptyPath).toString(), 'civet', 1, ''
+      service.host.addOrUpdateDocument emptyDoc
+      emptyMeta := service.host.getMeta emptyPath
+      assert emptyMeta, "expected FileMeta for empty .civet file"
+      assert.equal emptyMeta.fatal, false
+
+      // 2. Clearing a non-empty file back to "" must replace stale transpiled output
+      doc1 := TextDocument.create URI.file(clearedPath).toString(), 'civet', 1, "x: number := 'bad'\n"
+      service.host.addOrUpdateDocument doc1
+      snap1 := service.host.getScriptSnapshot clearedPath + '.tsx'
+      assert snap1?.getText(0, snap1.getLength()).includes('bad')
+
+      doc2 := TextDocument.create URI.file(clearedPath).toString(), 'civet', 2, ''
+      service.host.addOrUpdateDocument doc2
+      snap2 := service.host.getScriptSnapshot clearedPath + '.tsx'
+      assert.equal snap2?.getText(0, snap2.getLength()), '',
+        "emptying a .civet file should clear its transpiled snapshot"
+      assert.equal service.getSemanticDiagnostics(clearedPath + '.tsx').length, 0
+    finally
+      rmSync rootDir, recursive: true, force: true
+
+describe "ts-service getScriptVersion for transpiled siblings", ->
+  it "reflects updated source document versions immediately so TS invalidates dependents", ->
+    @timeout 15000
+    rootDir := mkdtempSync path.join tmpdir(), 'civet-script-ver-'
+    try
+      depPath := path.join rootDir, 'dep.civet'
+      mainPath := path.join rootDir, 'main.civet'
+      writeFileSync path.join(rootDir, 'tsconfig.json'), JSON.stringify
+        compilerOptions:
+          target: 'ES2020'
+          module: 'ESNext'
+          moduleResolution: 'Bundler'
+          strict: true
+          skipLibCheck: true
+          jsx: 'preserve'
+          noEmit: true
+        include: ['**/*.civet']
+      writeFileSync depPath, 'export val: number := 1\n'
+      writeFileSync mainPath, "import { val } from './dep.civet'\nexport out: number := val\n"
+
+      docFactory := {
+        create: (uri: string, languageId: string, version: number, text: string) =>
+          TextDocument.create uri, languageId, version, text
+        update: (doc: any, text: string, version: number) =>
+          TextDocument.update doc, [{ text }], version
+        uriToPath: (uri: string) => URI.parse(uri).fsPath
+        pathToUri: (p: string) => URI.file(p).toString()
+      }
+      service := SharedTSService rootDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory
+        logger: nullLogger
+      }
+
+      depDoc1 := TextDocument.create URI.file(depPath).toString(), 'civet', 1, 'export val: number := 1\n'
+      mainDoc := TextDocument.create URI.file(mainPath).toString(), 'civet', 1, "import { val } from './dep.civet'\nexport out: number := val\n"
+      service.host.addOrUpdateDocument depDoc1
+      service.host.addOrUpdateDocument mainDoc
+
+      // Initial check: clean, no diagnostics
+      diags1 := service.getSemanticDiagnostics mainPath + '.tsx'
+      assert.equal diags1.length, 0, "initial diagnostics should be empty"
+      v1 := service.host.getScriptVersion(depPath + '.tsx')
+      assert.notEqual v1, '0'
+      // Non-matching target extension falls back to canonical pathMap lookup
+      assert.equal service.host.getScriptVersion(depPath + '.js'), '0'
+
+      // Update dep.civet to export a string instead of a number (version 2)
+      depDoc2 := TextDocument.create URI.file(depPath).toString(), 'civet', 2, "export val: string := 'oops'\n"
+      service.host.addOrUpdateDocument depDoc2
+
+      // Version for the synthetic .civet.tsx sibling must advance immediately
+      assert.notEqual service.host.getScriptVersion(depPath + '.tsx'), v1,
+        "getScriptVersion(.civet.tsx) should immediately advance after source doc update"
+
+      // TS must re-snapshot dep.civet.tsx and report the type mismatch in main.civet
+      diags2 := service.getSemanticDiagnostics mainPath + '.tsx'
+      assert diags2.length > 0, "expected type mismatch diagnostic in main.civet after dep.civet changed"
+    finally
+      rmSync rootDir, recursive: true, force: true
+
+  it "invalidates dependents when a disk-loaded dependency is opened at version 0 with unsaved edits", ->
+    @timeout 15000
+    rootDir := mkdtempSync path.join tmpdir(), 'civet-disk-to-v0-'
+    try
+      depPath := path.join rootDir, 'dep.civet'
+      mainPath := path.join rootDir, 'main.civet'
+      writeFileSync path.join(rootDir, 'tsconfig.json'), JSON.stringify
+        compilerOptions:
+          target: 'ES2020'
+          module: 'ESNext'
+          moduleResolution: 'Bundler'
+          strict: true
+          skipLibCheck: true
+          jsx: 'preserve'
+          noEmit: true
+        include: ['**/*.civet']
+      // Disk versions agree (number -> number)
+      writeFileSync depPath, 'export val: number := 1\n'
+      writeFileSync mainPath, "import { val } from './dep.civet'\nexport out: number := val\n"
+
+      docFactory := {
+        create: (uri: string, languageId: string, version: number, text: string) =>
+          TextDocument.create uri, languageId, version, text
+        update: (doc: any, text: string, version: number) =>
+          TextDocument.update doc, [{ text }], version
+        uriToPath: (uri: string) => URI.parse(uri).fsPath
+        pathToUri: (p: string) => URI.file(p).toString()
+      }
+      service := SharedTSService rootDir, {
+        plugins: [makeCivetPlugin()]
+        docFactory
+        logger: nullLogger
+      }
+
+      // First check loads dep.civet from disk (revision 0)
+      diags1 := service.getSemanticDiagnostics mainPath + '.tsx'
+      assert.equal diags1.length, 0, "initial disk-backed diagnostics should be empty"
+      assert.equal service.host.getScriptVersion(depPath + '.tsx'), '0'
+
+      // Now open dep.civet at document version 0 with unsaved incompatible export
+      depDocV0 := TextDocument.create URI.file(depPath).toString(), 'civet', 0, "export val: string := 'unsaved'\n"
+      service.host.addOrUpdateDocument depDocV0
+
+      assert.notEqual service.host.getScriptVersion(depPath + '.tsx'), '0',
+        "opening a disk-loaded file at version 0 must advance getScriptVersion"
+      diags2 := service.getSemanticDiagnostics mainPath + '.tsx'
+      assert diags2.length > 0,
+        "expected type mismatch diagnostic in main.civet after opening dep.civet at version 0"
+
+      // Close and immediately reopen dep.civet (without an intervening diagnostics check)
+      // with a compatible number export — script version must NOT reuse the previous open revision!
+      verBeforeClose := service.host.getScriptVersion(depPath + '.tsx')
+      service.host.closeDocument depPath
+      depDocReopen := TextDocument.create URI.file(depPath).toString(), 'civet', 0, 'export val: number := 42\n'
+      service.host.addOrUpdateDocument depDocReopen
+      assert.notEqual service.host.getScriptVersion(depPath + '.tsx'), verBeforeClose,
+        "reopening after close must assign a new script version"
+      diags3 := service.getSemanticDiagnostics mainPath + '.tsx'
+      assert.equal diags3.length, 0,
+        "expected diagnostics in main.civet to clear after closing and reopening dep.civet"
+    finally
+      rmSync rootDir, recursive: true, force: true
