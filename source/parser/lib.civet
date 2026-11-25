@@ -1258,7 +1258,8 @@ function makeGetterMethod(id: ClassElementName | ASTString, ws: ASTNode, value: 
     parameters
   }
 
-function processBindingPatternLHS(lhs: any, tail: any): void
+// Returns whether any comma-separated follow-up assignments were added to tail
+function processBindingPatternLHS(lhs: any, tail: any): boolean
   // Expand AtBindingProperty (@x shorthand in object patterns) to x: this.x
   adjustAtBindings lhs, true
   // In assignment (non-binding) context, @x can be used directly as this.x
@@ -1289,11 +1290,11 @@ function processBindingPatternLHS(lhs: any, tail: any): void
   subbindings := gatherSubbindings lhs
   simplifyBindingProperties lhs
   simplifyBindingProperties subbindings
-  // TODO: This isn't quite right for compound assignments, may need to wrap with parens and use comma to return the complete value
   tail.push
     ...splices.map (s) => [", ", s]
     ...thisAssignments.map (a) => [", ", a]
     ...subbindings
+  splices# + thisAssignments# + subbindings# > 0
 
 function processAssignments(statements: ASTNode): void
   // Move assignments/updates within LHS of assignments/updates
@@ -1548,6 +1549,7 @@ function processAssignments(statements: ASTNode): void
           tail.push(")")
 
     refsToDeclare := new Set<ASTRef>
+    commaTail .= false
 
     // Walk from right to left to handle splices
     i = len - 1
@@ -1596,7 +1598,7 @@ function processAssignments(statements: ASTNode): void
           break
 
         else if lhs.type is like "ObjectBindingPattern", "ArrayBindingPattern", "NamedBindingPattern"
-          processBindingPatternLHS(lhs, tail)
+          commaTail ||= processBindingPatternLHS(lhs, tail)
           // Extract temp refs that need to be declared from lhs
           gatherRecursiveAll(lhs, .type is "Ref").forEach refsToDeclare@add
 
@@ -1632,6 +1634,18 @@ function processAssignments(statements: ASTNode): void
           $2 = newMemberExp
 
       i--
+
+    // Outside statement level, a comma tail would split the enclosing
+    // expression (e.g. into extra call arguments), so parenthesize it and
+    // end with the assigned value
+    if commaTail and not blockContainingStatement exp
+      { ref, refAssignment } := maybeRefAssignment $2
+      if refAssignment
+        replaceNode $2, refAssignment, exp
+        $2 = refAssignment
+      exp.children.unshift "(" unless insideParens
+      tail.push ", ", ref
+      tail.push ")" unless insideParens
 
     // Add any additional binding refs that need to be declared to our hoisted declarations
     if refsToDeclare.size
