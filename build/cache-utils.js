@@ -55,10 +55,14 @@ function keyInput(source, filename, isHera, options) {
   };
 }
 
+// Civet's grammar is compiled with Hera's memo, and with trace hooks for the
+// compile options `hits` and `trace`
+const heraMemoOptions = { memo: true, trace: true };
+
 function compileWithCache(source, filename, module = true) {
   const isHera = filename.endsWith('.hera');
   const compileOptions = { js: true, inlineMap: true, sync: true, module };
-  const keyOptions = isHera ? { ...compileOptions, transpileEmbedded: true } : compileOptions;
+  const keyOptions = isHera ? { ...compileOptions, transpileEmbedded: true, ...heraMemoOptions } : compileOptions;
   const key = makeCacheKey(keyInput(source, filename, isHera, keyOptions)) + '.mjs';
   const cached = diskCache.get(key);
   if (cached != null) return cached;
@@ -68,7 +72,7 @@ function compileWithCache(source, filename, module = true) {
     // Hera writes the parser as JS and passes only the grammar's embedded
     // Civet code (code blocks, handlers, heregex interpolations) to Civet.
     js = heraCompile(source, {
-      filename, module, inlineMap: true, language: 'civet',
+      filename, module, inlineMap: true, language: 'civet', ...heraMemoOptions,
       transpileEmbedded: (src, upstreamSourceMap) => civetCompile(src, {
         filename, js: true, sync: true,
         ...(upstreamSourceMap && { sourceMap: true, upstreamSourceMap }),

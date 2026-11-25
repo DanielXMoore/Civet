@@ -87,6 +87,7 @@ import {
   wrapTypeInPromise,
 } from "./parser/lib.civet"
 import type { ParseOptions } from "../types/types.js"
+import type { Tracer } from "@danielx/hera/lib"
 import type {
   AccessStart,
   Argument,
@@ -358,7 +359,13 @@ function setOperatorBehavior(name: string, behavior: OperatorBehavior?)
     state.operators.set(name, behavior or existing)
   return
 
-export function getStateKey()
+/**
+Key the memo on the parser state that rules read: the forbid flags, the
+indentation level, and the innermost open JSX tag.  Call it after changing
+any of them.  Parser options aren't in the key: Init clears the memo after
+the directive prologue changes them.
+*/
+function updateStateKey(): void
   stateInt :=
     ((state.currentIndent.level % 256) << 11) |
     (state.classImplicitCallForbidden << 10) |
@@ -370,17 +377,11 @@ export function getStateKey()
     (state.implicitFragmentForbidden << 4) |
     (state.pipelineForbidden << 3) |
     (state.colonArgumentForbidden << 2) |
-    (state.inlineObjectLiteralForbidden << 1) |
-    // This is slightly different than the rest of the state,
-    // since it is affected by the directive prologue and may be hit
-    // by the EOL rule early in the parse. Later if we wanted to
-    // allow block scoping of the compat directives we would need to
-    // add them all here.
-    (config.coffeeComment << 0)
+    (state.inlineObjectLiteralForbidden << 1)
+  tag := state.currentJSXTag
+  $setStateKey tag is undefined ? stateInt : `${stateInt}<${tag}`
 
-  return [stateInt, state.currentJSXTag]
-
-export function parseProgram(input: string, options?: { filename?: string, parseOptions?: ParseOptions, sync?: boolean })
+export function parseProgram(input: string, options?: { filename?: string, parseOptions?: ParseOptions, sync?: boolean, memo?: boolean, trace?: Tracer })
   filename = options?.filename
   initialConfig = options?.parseOptions
   sync = options?.sync
@@ -417,6 +418,7 @@ export { ParseError }
 
 ```
 
+@nomemo
 Program
   # EOS allows for initial comment blocks and newlines,
   # when Init didn't already consume them.
@@ -3710,6 +3712,7 @@ TrailingInlineComment
     return [ws, c]
 
 # Can't reuse `Nested` here because its `EOS` would consume the comment.
+@state
 TrailingNestedCommentLine
   EOL:eol Indent:indent SingleLineComment:c ->
     return $skip unless indent.level >= state.currentIndent.level
@@ -4172,6 +4175,7 @@ ArrayBulletDelimiter
   &EOS InsertComma -> $2
 
 # NOTE: Unicode bullet doesn't need a space, but ASCII bullet does
+@nomemo @state
 BulletIndent
   Bullet ->
     [ bullet, ws ] := $1
@@ -4183,6 +4187,7 @@ BulletIndent
     /* c8 ignore next -- debug output for verbose config */
     console.log("pushing bullet indent", indent) if config.verbose
     state.indentLevels.push(indent)
+    updateStateKey()
     return indent
 
 Bullet
@@ -5750,7 +5755,9 @@ CoffeeForStatementParameters ::ForStatementControl
           names: index.names,
         }, ";"])
 
-      kind.token = "in"
+      // A copy: `kind` may be a memoized result, which another parse of
+      // this loop gets too
+      kind = { ...kind, token: "in" }
     else if kind.token is "in" // CoffeeScript loop comprehensions
       counterRef := makeRef("i")
       lenRef := makeRef("len")
@@ -6293,35 +6300,49 @@ LeftHandSideExpressionWithObjectApplicationForbidden
     return exp if exp
     return $skip
 
+@nomemo
 ForbidClassImplicitCall
   "" ->
     state.forbidClassImplicitCall.push(true);
+    updateStateKey();
 
+@nomemo
 AllowClassImplicitCall
   "" ->
     state.forbidClassImplicitCall.push(false);
+    updateStateKey();
 
+@nomemo
 RestoreClassImplicitCall
   "" ->
     state.forbidClassImplicitCall.pop();
+    updateStateKey();
 
+@state
 ClassImplicitCallForbidden
   "" ->
     return $skip unless state.classImplicitCallForbidden
     return
 
+@nomemo
 ForbidBracedApplication
   "" ->
     state.forbidBracedApplication.push(true);
+    updateStateKey();
 
+@nomemo
 AllowBracedApplication
   "" ->
     state.forbidBracedApplication.push(false);
+    updateStateKey();
 
+@nomemo
 RestoreBracedApplication
   "" ->
     state.forbidBracedApplication.pop();
+    updateStateKey();
 
+@state
 BracedApplicationAllowed
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6330,18 +6351,25 @@ BracedApplicationAllowed
     return $skip if state.bracedApplicationForbidden
     return
 
+@nomemo
 ForbidIndentedApplication
   "" ->
     state.forbidIndentedApplication.push(true);
+    updateStateKey();
 
+@nomemo
 AllowIndentedApplication
   "" ->
     state.forbidIndentedApplication.push(false);
+    updateStateKey();
 
+@nomemo
 RestoreIndentedApplication
   "" ->
     state.forbidIndentedApplication.pop();
+    updateStateKey();
 
+@state
 IndentedApplicationAllowed
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6350,18 +6378,25 @@ IndentedApplicationAllowed
     return $skip if state.indentedApplicationForbidden
     return
 
+@nomemo
 ForbidTrailingMemberProperty
   "" ->
     state.forbidTrailingMemberProperty.push(true);
+    updateStateKey();
 
+@nomemo
 AllowTrailingMemberProperty
   "" ->
     state.forbidTrailingMemberProperty.push(false);
+    updateStateKey();
 
+@nomemo
 RestoreTrailingMemberProperty
   "" ->
     state.forbidTrailingMemberProperty.pop();
+    updateStateKey();
 
+@state
 TrailingMemberPropertyAllowed
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6369,18 +6404,25 @@ TrailingMemberPropertyAllowed
       console.log("forbidTrailingMemberProperty:", state.forbidTrailingMemberProperty)
     return $skip if state.trailingMemberPropertyForbidden
 
+@nomemo
 AllowNestedBinaryOp
   "" ->
     state.forbidNestedBinaryOp.push(false);
+    updateStateKey();
 
+@nomemo
 ForbidNestedBinaryOp
   "" ->
     state.forbidNestedBinaryOp.push(true);
+    updateStateKey();
 
+@nomemo
 RestoreNestedBinaryOp
   "" ->
     state.forbidNestedBinaryOp.pop();
+    updateStateKey();
 
+@state
 NestedBinaryOpAllowed
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6388,18 +6430,25 @@ NestedBinaryOpAllowed
       console.log("forbidNestedBinaryOp:", state.forbidNestedBinaryOp)
     return $skip if state.nestedBinaryOpForbidden
 
+@nomemo
 AllowNewlineBinaryOp
   "" ->
     state.forbidNewlineBinaryOp.push(false);
+    updateStateKey();
 
+@nomemo
 ForbidNewlineBinaryOp
   "" ->
     state.forbidNewlineBinaryOp.push(true);
+    updateStateKey();
 
+@nomemo
 RestoreNewlineBinaryOp
   "" ->
     state.forbidNewlineBinaryOp.pop();
+    updateStateKey();
 
+@state
 NewlineBinaryOpAllowed
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6407,18 +6456,25 @@ NewlineBinaryOpAllowed
       console.log("forbidNewlineBinaryOp:", state.forbidNewlineBinaryOp)
     return $skip if state.newlineBinaryOpForbidden
 
+@nomemo
 AllowImplicitFragment
   "" ->
     state.forbidImplicitFragment.push(false);
+    updateStateKey();
 
+@nomemo
 ForbidImplicitFragment
   "" ->
     state.forbidImplicitFragment.push(true);
+    updateStateKey();
 
+@nomemo
 RestoreImplicitFragment
   "" ->
     state.forbidImplicitFragment.pop();
+    updateStateKey();
 
+@state
 ImplicitFragmentAllowed
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6426,18 +6482,25 @@ ImplicitFragmentAllowed
       console.log("forbidImplicitFragment:", state.forbidImplicitFragment)
     return $skip if state.implicitFragmentForbidden
 
+@nomemo
 AllowPipeline
   "" ->
     state.forbidPipeline.push(false);
+    updateStateKey();
 
+@nomemo
 ForbidPipeline
   "" ->
     state.forbidPipeline.push(true);
+    updateStateKey();
 
+@nomemo
 RestorePipeline
   "" ->
     state.forbidPipeline.pop();
+    updateStateKey();
 
+@state
 PipelineAllowed
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6447,18 +6510,25 @@ PipelineAllowed
 
 # forbidColonArgument: set in a ternary "then" expression, where the next `:`
 # is the ternary colon, so `b :foo` mustn't become `b(Symbol.for("foo"))`.
+@nomemo
 AllowColonArgument
   "" ->
     state.forbidColonArgument.push(false);
+    updateStateKey();
 
+@nomemo
 ForbidColonArgument
   "" ->
     state.forbidColonArgument.push(true);
+    updateStateKey();
 
+@nomemo
 RestoreColonArgument
   "" ->
     state.forbidColonArgument.pop();
+    updateStateKey();
 
+@state
 ColonArgumentForbidden
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6469,18 +6539,25 @@ ColonArgumentForbidden
 # forbidInlineObjectLiteral: set only in a snug ternary `a?b:c` so the
 # then-expression `b:c` doesn't become `{b:c}`. A separate flag because
 # spaced ternaries keep inline objects (`x ? a: b : c: d`).
+@nomemo
 AllowInlineObjectLiteral
   "" ->
     state.forbidInlineObjectLiteral.push(false);
+    updateStateKey();
 
+@nomemo
 ForbidInlineObjectLiteral
   "" ->
     state.forbidInlineObjectLiteral.push(true);
+    updateStateKey();
 
+@nomemo
 RestoreInlineObjectLiteral
   "" ->
     state.forbidInlineObjectLiteral.pop();
+    updateStateKey();
 
+@state
 InlineObjectLiteralForbidden
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6490,15 +6567,19 @@ InlineObjectLiteralForbidden
 
 # Set/restore both snug-ternary flags in one grammar slot (the snug ternary
 # rule would otherwise have 11 elements, over the $S overload limit of 10).
+@nomemo
 ForbidSnugTernaryThen
   ForbidColonArgument ForbidInlineObjectLiteral
 
+@nomemo
 RestoreSnugTernaryThen
   RestoreInlineObjectLiteral RestoreColonArgument
 
+@nomemo
 AllowAll
   AllowTrailingMemberProperty AllowBracedApplication AllowIndentedApplication AllowClassImplicitCall AllowNestedBinaryOp AllowNewlineBinaryOp AllowImplicitFragment AllowPipeline AllowColonArgument AllowInlineObjectLiteral
 
+@nomemo
 RestoreAll
   RestoreTrailingMemberProperty RestoreBracedApplication RestoreIndentedApplication RestoreClassImplicitCall RestoreNestedBinaryOp RestoreNewlineBinaryOp RestoreImplicitFragment RestorePipeline RestoreColonArgument RestoreInlineObjectLiteral
 
@@ -8268,6 +8349,7 @@ Yield
 
 ## JSX
 
+@state
 JSXImplicitFragment
   # Always allow a single JSX tag.
   # Implicit fragment can be explicitly forbidden; it also inherits
@@ -8304,6 +8386,7 @@ _JSXTag
   JSXComment
 
 # https://facebook.github.io/jsx/#prod-JSXElement
+@state
 JSXElement ::ASTNode
   JSXSelfClosingElement
   # NOTE: In default JSX mode, JSX children must be properly indented,
@@ -8338,20 +8421,25 @@ JSXSelfClosingElement
   "<" JSXElementName TypeArguments? JSXAttributes? Whitespace? "/>" ->
     return { type: "JSXElement", children: $0, tag: $2 }
 
+@nomemo
 PushJSXOpeningElement
   JSXOpeningElement ->
     state.JSXTagStack.push($1[1])
+    updateStateKey()
     return $1
 
+@nomemo
 PopJSXStack
   "" ->
     state.JSXTagStack.pop()
+    updateStateKey()
     return
 
 # https://facebook.github.io/jsx/#prod-JSXOpeningElement
 JSXOpeningElement
   "<" JSXElementName TypeArguments? JSXAttributes? Whitespace? ">"
 
+@state
 JSXOptionalClosingElement
   Whitespace? JSXClosingElement:close ->
     return $skip if state.currentJSXTag !== close[2]
@@ -8363,6 +8451,7 @@ JSXClosingElement
   "</" Whitespace? JSXElementName Whitespace? ">"
 
 # https://facebook.github.io/jsx/#prod-JSXFragment
+@state
 JSXFragment ::ASTNode
   # NOTE: In default JSX mode, JSX children must be properly indented,
   # and closing tags are optional (but still allowed).
@@ -8388,11 +8477,14 @@ JSXFragment ::ASTNode
       jsxChildren: children.jsxChildren
     }
 
+@nomemo
 PushJSXOpeningFragment
   "<>" ->
     state.JSXTagStack.push("")
+    updateStateKey()
     return $1
 
+@state
 JSXOptionalClosingFragment
   Whitespace? JSXClosingFragment ->
     /* c8 ignore next -- defensive JSX stack state check: if we reach this rule, we're closing a fragment and currentJSXTag is always "". $skip kept to protect JSX stack state if invariant ever breaks. */
@@ -8906,6 +8998,7 @@ JSXNestedChildren
 JSXEOS
   ( NonNewlineWhitespace? EOL )+
 
+@state
 JSXNested
   JSXEOS:eos Indent:indent ->
     { level } := indent
@@ -10145,6 +10238,7 @@ EOL
 
 # Debugging aid (see CONTRIBUTING.md), so not covered by tests
 # /* c8 ignore start */
+@nomemo
 DebugHere
   "" ->
     debugger
@@ -10219,6 +10313,7 @@ InsertNewline
   "" ->
     return "\n"
 
+@state
 InsertIndent
   "" ->
     return state.currentIndent.token
@@ -10338,6 +10433,7 @@ IsBare
     return $skip if config.iife or config.repl
 
 # Reset module level data
+@nomemo
 Reset
   "" ->
     // Storage for PushIndent/PopIndent
@@ -10499,14 +10595,19 @@ Reset
 
     // Pass in parser config from main
     Object.assign(config, initialConfig)
+    updateStateKey()
 
     return
 
+@nomemo
 Init
   Shebang? Prologue:directives ->
     directives.forEach (directive) =>
       if not Array.isArray(directive) and directive.type is "CivetPrologue"
         Object.assign(config, directive.config)
+    // Results memoized while reading the prologue may depend on the options
+    // its directives changed
+    $clearMemo()
 
     if config.strict
       return [...$0, '"use strict";\n']
@@ -10537,6 +10638,7 @@ Indent
     }
 
 # Used in PushIndent to keep track of the last indent level for nesting
+@nomemo @state
 TrackIndented
   Indent:indent ->
     {level} := indent
@@ -10544,11 +10646,13 @@ TrackIndented
     /* c8 ignore next -- debug output for verbose config */
     console.log("pushing indent", indent) if config.verbose
     state.indentLevels.push(indent)
+    updateStateKey()
     return $1
 
 # Indents one level deeper,
 # without consuming the indentation so it can be by Nested
 # Must be matched with PopIndent
+@nomemo
 PushIndent
   # TrackIndented pushes the indent level if it is deeper than the current level
   # it will skip if it is not deeper
@@ -10559,18 +10663,21 @@ PushIndent
   # comment line's own indent.
   &( EOL TrackIndented )
 
+@nomemo
 PopIndent
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
     if config.verbose
       console.log("popping indent", state.indentLevels[state.indentLevels#-1], "->", state.indentLevels[state.indentLevels#-2])
     state.indentLevels./**/pop()
+    updateStateKey()
     return
 
 # "Nested" actually means "new line at current indentation level",
 # where the current indentation level is set by TrackIndented / PushIndent
 # (which require strictly more indentation than previous levels)
 # Consumes and returns the newline and indentation
+@state
 Nested
   EOS Indent:indent ->
     return $0 if indent.level is state.currentIndent.level
@@ -10579,11 +10686,13 @@ Nested
       console.log(`failing Nested: ${indent.level} does not match current indent level ${state.currentIndent.level}`)
     return $skip
 
+@state
 IndentedFurther
   EOS Indent:indent ->
     return $0 if indent.level > state.currentIndent.level
     return $skip
 
+@state
 IndentedAtLeast
   EOS Indent:indent ->
     return $0 if indent.level >= state.currentIndent.level
@@ -10610,6 +10719,7 @@ SameLineOrIndentedFurther ::WSArray
 Dedented
   !IndentedAtLeast EOS -> $2
 
+@nomemo @state
 PushExtraIndent1
   "" ->
     indent := {
@@ -10620,4 +10730,5 @@ PushExtraIndent1
     /* c8 ignore next -- debug output for verbose config */
     console.log("pushing bonus indent", indent) if config.verbose
     state.indentLevels.push(indent)
+    updateStateKey()
     return indent

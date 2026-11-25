@@ -1,5 +1,6 @@
 import type { CompileOptions as PublicCompileOptions } from ../types/types.js
-import { parse, parseProgram, getConfig, getStateKey } from ./parser.hera
+import { parse, parseProgram, getConfig } from ./parser.hera
+import { FAIL, type Tracer } from @danielx/hera/lib
 import { ParseError } from ./error.civet
 import generate, { prune } from ./generate.civet
 import * as lib from ./parser/lib.civet
@@ -10,7 +11,6 @@ export { parse, parseProgram, ParseError, generate, prune, lib, sourcemap, Sourc
 import type { BlockStatement } from ./parser/types.civet
 export type { ASTError, BlockStatement } from ./parser/types.civet
 
-import StateCache from "./state-cache.civet"
 import { WorkerPool } from "./worker-pool.civet"
 
 export class ParseErrors extends Error
@@ -21,71 +21,6 @@ export class ParseErrors extends Error
     super errors.map(.message).join("\n")
     @message = message
     @errors = errors
-
-// Need to no-cache any rule that directly modifies parser state
-// indentation stack, jsx stack, etc.
-
-uncacheable := new Set [
-  // Meta
-  "DebugHere"
-  "Init"
-  "Program"
-  "Reset"
-
-  // Indentation
-  // We need to no-cache the state modifying rules up to the point where they
-  // balance within a parent so PushIndent needs to be marked no-cache even
-  // though it only calls TrackIndented which does the actual work.
-  "PushIndent"
-  "PopIndent"
-  "TrackIndented"
-  "BulletIndent"
-  "PushExtraIndent1"
-
-  // JSX
-  "PushJSXOpeningElement"
-  "PushJSXOpeningFragment"
-  "PopJSXStack"
-
-  // State
-  "AllowAll"
-  "AllowClassImplicitCall"
-  "AllowBracedApplication"
-  "AllowIndentedApplication"
-  "AllowNestedBinaryOp"
-  "AllowNewlineBinaryOp"
-  "AllowTrailingMemberProperty"
-  "AllowImplicitFragment"
-  "AllowPipeline"
-  "AllowColonArgument"
-  "AllowInlineObjectLiteral"
-
-  "ForbidClassImplicitCall"
-  "ForbidBracedApplication"
-  "ForbidIndentedApplication"
-  "ForbidNestedBinaryOp"
-  "ForbidNewlineBinaryOp"
-  "ForbidTrailingMemberProperty"
-  "ForbidImplicitFragment"
-  "ForbidPipeline"
-  "ForbidColonArgument"
-  "ForbidInlineObjectLiteral"
-  "ForbidSnugTernaryThen"
-
-  "RestoreAll"
-  "RestoreClassImplicitCall"
-  "RestoreBracedApplication"
-  "RestoreIndentedApplication"
-  "RestoreTrailingMemberProperty"
-  "RestoreNestedBinaryOp"
-  "RestoreNewlineBinaryOp"
-  "RestoreImplicitFragment"
-  "RestorePipeline"
-  "RestoreColonArgument"
-  "RestoreInlineObjectLiteral"
-  "RestoreSnugTernaryThen"
-
-]
 
 export type CompileOptions = Omit<PublicCompileOptions, "upstreamSourceMap"> &
   // Public callers may supply an object; internally we need the source-map
@@ -150,32 +85,26 @@ export function compile<const T extends CompileOptions>(src: string | Buffer, op
 
   {hits, trace, noCache} := options
 
-  let events: CacheEvents?
-  unless noCache
-    events = makeCache {
-      hits: !!hits
-      trace: !!trace
-    }
+  tracer := makeTracer(src) if hits or trace or options.parseOptions.verbose
 
   let ast
 
   try
-    //@ts-ignore
     ast = parseProgram(src, {
       options.parseOptions
       options.sync
       filename
-      events
+      memo: not noCache
+      trace: tracer
     })
   finally
-    if hits or trace
+    if tracer and (hits or trace)
       import("node:fs").then ({ writeFileSync }) ->
-        if { logs } := events?.meta
-          if trace
-            writeFileSync trace, logs.join "\n"
+        if trace
+          writeFileSync trace, tracer.logs.join "\n"
 
         if hits
-          if hitData := events?.meta.hits
+          if hitData := tracer.hits
             total .= 0
             data := [...hitData.entries()]
 
@@ -257,95 +186,36 @@ export function compile<const T extends CompileOptions>(src: string | Buffer, op
   else
     rest ast
 
-type CacheKey = [string, number, number, string]
-
-type ParseState =
-  input: string
-  pos: number
-
-type ParseResult = {
-  pos: number
-  value: unknown
-} | undefined
-
-type MetaData
-  hits?: Map<string, number>
-  logs?: string[]
-
-type CacheOptions
-  hits?: boolean | undefined
-  trace?: boolean | undefined
-
-type CacheEvents
-  meta: MetaData
-  enter: (ruleName: string, state: ParseState) => { cache: ParseResult } | undefined
-  exit: (ruleName: string, state: ParseState, result: ParseResult) => void
-
-makeCache := ({hits, trace}: CacheOptions = {}): CacheEvents ->
-  meta: MetaData := {}
-  let hitCount: Map<string, number>
-  if hits
-    hitCount = new Map
-    meta.hits = hitCount
-
-  let logs: string[]
-  if trace
-    logs = []
-    meta.logs = logs
-
-  stateCache := new StateCache<ParseResult>
-
-  stack: string[] := []
-
-  events := {
-    meta
-    enter: (ruleName: string, state: ParseState) ->
-      hitCount.set ruleName, (hitCount.get(ruleName) or 0) + 1 if hits
-
-      return if uncacheable.has(ruleName)
-
-      [stateKey, tagKey] := getStateKey()
-      key: CacheKey := [tagKey, stateKey, state.pos, ruleName ]
-
-      // We cache `undefined` when a rule fails to match so we need to use `has` here.
-      if stateCache.has(key)
-        result := stateCache.get(key)
-        if trace
-          logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "💰" + (if result then "✅" else "❌")
-        return {
-          cache: if result then { ...result }
-        }
-
-      if trace
-        logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "{"
-        stack.push ruleName
-
-      return
-
-    exit: (ruleName: string, state: ParseState, result: ParseResult) ->
-      if uncacheable.has(ruleName)
-        if trace
-          logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "⚠️ " + (if result then "✅" else "❌")
+/**
+Hooks around every grammar rule (the parser is compiled with Hera's `trace`
+option) that count rule attempts for `hits`, log the rules tried for
+`trace`, and log the rules matched with the `verbose` parse option
+*/
+makeTracer := (src: string) ->
+  hits := new Map<string, number>
+  logs: string[] := []
+  depth .= 0
+  indent := => "".padStart depth * 2, " "
+  tracer: Tracer & { hits: typeof hits, logs: typeof logs } := {
+    hits
+    logs
+    enter: (rule, pos) ->
+      hits.set rule, (hits.get(rule) or 0) + 1
+      logs.push indent() + rule + ":" + pos + "{"
+      depth++
+    exit: (rule, pos, end, value, cached) ->
+      depth--
+      result := if value is FAIL then "❌" else "✅"
+      if cached
+        // Replace the rule's own enter line, since nothing ran in between
+        logs[logs# - 1] = indent() + rule + ":" + pos + "💰" + result
         return
-
-      [stateKey, tagKey] := getStateKey()
-      key: CacheKey := [tagKey, stateKey, state.pos, ruleName ]
-      result = {...result} if result?
-      stateCache.set(key, result)
-
-      //@ts-ignore
+      logs.push indent() + rule + ":" + pos + "} " + result
       /* c8 ignore next 2 -- verbose mode requires parser-internal config; not exposed via compile options */
-      if getConfig().verbose and result
-        console.log `Parsed ${JSON.stringify state.input[state.pos...result.pos]} [pos ${state.pos}-${result.pos}] as ${ruleName}`//, JSON.stringify(result.value)
-
-      if trace
-        stack.pop()
-        logs.push "".padStart(stack.length * 2, " ") + ruleName + ":" + state.pos + "} " + (if result then "✅" else "❌")
-
-      return
+      if getConfig().verbose and value is not FAIL
+        console.log `Parsed ${JSON.stringify src[pos...end]} [pos ${pos}-${end}] as ${rule}`
   }
-
-  return events
+  tracer
 
 export isCompileError = (err: ???): err is ParseError | ParseErrors ->
   err <? ParseError or err <? ParseErrors
