@@ -87,6 +87,7 @@ import {
   wrapTypeInPromise,
 } from "./parser/lib.civet"
 import type { ParseOptions } from "../types/types.js"
+import type { Tracer } from "@danielx/hera/lib"
 import type {
   AccessStart,
   Argument,
@@ -358,7 +359,13 @@ function setOperatorBehavior(name: string, behavior: OperatorBehavior?)
     state.operators.set(name, behavior or existing)
   return
 
-export function getStateKey()
+/**
+Key the memo on the parser state that rules read: the forbid flags, the
+indentation level, and the innermost open JSX tag.  Call it after changing
+any of them.  Parser options aren't in the key: Init clears the memo after
+the directive prologue changes them.
+*/
+function updateStateKey(): void
   stateInt :=
     ((state.currentIndent.level % 256) << 11) |
     (state.classImplicitCallForbidden << 10) |
@@ -370,17 +377,11 @@ export function getStateKey()
     (state.implicitFragmentForbidden << 4) |
     (state.pipelineForbidden << 3) |
     (state.colonArgumentForbidden << 2) |
-    (state.inlineObjectLiteralForbidden << 1) |
-    // This is slightly different than the rest of the state,
-    // since it is affected by the directive prologue and may be hit
-    // by the EOL rule early in the parse. Later if we wanted to
-    // allow block scoping of the compat directives we would need to
-    // add them all here.
-    (config.coffeeComment << 0)
+    (state.inlineObjectLiteralForbidden << 1)
+  tag := state.currentJSXTag
+  $setStateKey tag is undefined ? stateInt : `${stateInt}<${tag}`
 
-  return [stateInt, state.currentJSXTag]
-
-export function parseProgram(input: string, options?: { filename?: string, parseOptions?: ParseOptions, sync?: boolean })
+export function parseProgram(input: string, options?: { filename?: string, parseOptions?: ParseOptions, sync?: boolean | undefined, memo?: boolean, trace?: Tracer })
   filename = options?.filename
   initialConfig = options?.parseOptions
   sync = options?.sync
@@ -417,6 +418,7 @@ export { ParseError }
 
 ```
 
+@nomemo
 Program
   # EOS allows for initial comment blocks and newlines,
   # when Init didn't already consume them.
@@ -432,6 +434,7 @@ Program
     processProgram(program)
     return program
 
+@nomemo
 TopLevelStatements
   # If first line is strictly indented, require all lines to be equally so
   # Use TrackIndented instead of PushIndent to avoid requiring leading EOS
@@ -450,6 +453,7 @@ TopLevelStatements
   # Empty case
   "" -> []
 
+@nomemo
 NestedTopLevelStatements
   Nested:nested TopLevelSingleLineStatements:statements ->
     return [
@@ -458,9 +462,11 @@ NestedTopLevelStatements
     ]
 
 # Multiple top-level semicolon-separated statements
+@nomemo
 TopLevelSingleLineStatements
   TopLevelStatement+
 
+@nomemo
 TopLevelStatement
   # NOTE: !EOS forces semicolon after all but last statement, forbids leading __
   # NOTE: _? allows for leading inline comments
@@ -472,9 +478,11 @@ TopLevelStatement
 Expression
   AssignmentExpression ::ExpressionNode
 
+@nomemo
 NonPipelineExpression
   NonPipelineAssignmentExpression ::ExpressionNode
 
+@nomemo
 NestedExpressionizedStatement
   # Allow trailing call expressions at two levels:
   # within the indentation and outside
@@ -508,6 +516,7 @@ ExpressionizedStatement
       children: [statement],
     }
 
+@nomemo
 StatementExpression
   DebuggerStatement ::DebuggerStatement
   IfStatement ::IfStatement
@@ -517,6 +526,7 @@ StatementExpression
   TryStatement ::TryStatement
 
 # https://262.ecma-international.org/#prod-Expression
+@nomemo
 CommaExpression
   # CommaOperator
   # https://262.ecma-international.org/#sec-comma-operator
@@ -557,6 +567,7 @@ AssignmentExpressionSpread
     }
 
 # https://262.ecma-international.org/#prod-Arguments
+@nomemo
 Arguments
   ExplicitArguments
 
@@ -569,6 +580,7 @@ Arguments
     return args if args
     return $skip
 
+@nomemo
 ImplicitArguments
   ApplicationStart InsertOpenParen:open Trimmed_?:ws ForbidNestedBinaryOp ForbidPipeline ArgumentList?:args RestorePipeline RestoreNestedBinaryOp InsertCloseParen:close ->
     return $skip unless args
@@ -598,12 +610,14 @@ ExplicitArguments
     }
 
 # Start of function application, inserts an open parenthesis, maintains spacing and comments when possible
+@nomemo
 ApplicationStart
   # Indented argument cannot start with a binary operator or a
   # trailing member expression
   IndentedApplicationAllowed &( IndentedFurther !IdentifierBinaryOp !ReservedBinary ) !IndentedTrailingCallExpressions
   !EOS &( _ ( BracedApplicationAllowed / !"{" ) !ForbiddenImplicitCalls )
 
+@nomemo
 ForbiddenImplicitCalls
   # Reserved words that prevent spaced implicit function application
   # eg: the 'of' in 'for x of ...'
@@ -635,11 +649,13 @@ ForbiddenImplicitCalls
 ReservedBinary
   /(as|of|by|satisfies|then|when|implements|xor|xnor)/ NonIdContinue
 
+@nomemo
 ArgumentsWithTrailingCallExpressions
   Arguments:args AllowedTrailingCallExpressions?:trailing ->
     return [ args, ...trailing ?? [] ]
 
 # Does not match in the empty case
+@nomemo
 TrailingCallExpressions
   # NOTE: Forbid nested implicit calls because trailing calls are dedented
   ExplicitCallExpressionRest* IndentedTrailingCallExpressions? ::ASTNode[] ->
@@ -649,6 +665,7 @@ TrailingCallExpressions
     return [...flat, ...$2]
 
 # Does not match in the empty case
+@nomemo
 IndentedTrailingCallExpressions
   # All trailing call expressions should be at the same indentation level:
   # either strictly indented, or at the same indentation level
@@ -658,6 +675,7 @@ IndentedTrailingCallExpressions
   NestedTrailingCallExpression+ ->
     return $1.flat()
 
+@nomemo
 NestedTrailingCallExpression
   Nested:ws &( "?"? "." ![0-9] ) CallExpressionRest+:rests ::ASTNode[] ->
     [ first, ...rest ] := rests.flat()
@@ -670,6 +688,7 @@ AllowedTrailingCallExpressions
 CommaDelimiter
   NotDedented Comma
 
+@nomemo
 OptionalCommaDelimiter
   CommaDelimiter
   &EOS InsertComma -> $2
@@ -735,11 +754,13 @@ PostfixedArgumentList
       ...$3.flatMap(([comma, ws, arg]) => [comma, prepend(ws, arg)]),
     ]
 
+@nomemo
 NestedArguments
   NestedBulletedArray
   NestedImplicitObjectLiteral
   NestedArgumentList
 
+@nomemo
 NestedArgumentList
   PushIndent AllowPipeline AllowTrailingMemberProperty NestedArgument*:args RestoreTrailingMemberProperty RestorePipeline PopIndent ->
     return $skip unless args#
@@ -754,10 +775,12 @@ NestedArgument
     arg0 = prepend(indent, arg0)
     return [ arg0, ...rest, comma ]
 
+@nomemo
 SingleLinePostfixedArgumentExpressions
   WPostfixedArgumentPart ( ( _? Comma ) WPostfixedArgumentPart )* ->
     return [ $1, ...$2.flat() ]
 
+@nomemo
 WPostfixedArgumentPart
   _? PostfixedArgumentPart ->
     return prepend($1, $2)
@@ -796,6 +819,7 @@ PostfixedArgumentPart ::Argument
       spread,
     }
 
+@nomemo
 BinaryOpExpression
   UnaryExpression BinaryOpRHS* ::ASTNode ->
     return $1 unless $2.length
@@ -835,6 +859,7 @@ IsLike ::BinaryOp
     }
 
 # Nonempty whitespace followed by RHS
+@nomemo
 WRHS
   NestedBulletedArray -> [undefined, $1]
   NestedImplicitObjectLiteral -> [undefined, $1]
@@ -843,12 +868,14 @@ WRHS
     return wrhs
   ( ( EOS __ ) / _ ) RHS
 
+@nomemo
 SingleLineBinaryOpRHS ::BinaryOpRHS
   # NOTE: It's named single line but that's only for the operator, the RHS can be after a newline
   # This is to maintain compatibility with CoffeeScript conditions
   _?:ws1 BinaryOp:op ( ( EOS __ ) / _ ):ws2 RHS:rhs ->
     return [ws1 || [], op, ws2, rhs]
 
+@nomemo
 RHS
   # NOTE: Check for comptime block first, to avoid matching as function call
   ExpressionizedStatementWithTrailingCallExpressions
@@ -857,6 +884,7 @@ RHS
     return exp
 
 # https://262.ecma-international.org/#prod-UnaryExpression
+@nomemo
 UnaryExpression ::ASTNode
   # NOTE: Added nested/array case, for e.g. indented await argument
   IndentedApplicationAllowed UnaryOp+:pre ( ArrayLiteral / NestedArgumentList ):args !CallExpressionRest UnaryPostfix?:post ->
@@ -868,10 +896,12 @@ UnaryExpression ::ASTNode
   UnaryOp*:pre UnaryBody:exp UnaryPostfix?:post ->
     return processUnaryExpression(pre, exp, post)
 
+@nomemo
 UnaryWithoutParenthesizedAssignment
   UnaryOp*:pre UnaryWithoutParenthesizedAssignmentBody:exp UnaryPostfix?:post ::ASTNode ->
     return processUnaryExpression(pre, exp, post)
 
+@nomemo
 UnaryBody
   CoffeeDoEnabled Do MaybeNestedCoffeeDoBody:body ->
     return processCoffeeDo(...body)
@@ -896,6 +926,7 @@ CoffeeDoBody
   LeftHandSideExpression !( __ AssignmentOpSymbol ) -> [$1, undefined]
   Expression
 
+@nomemo
 UnaryWithoutParenthesizedAssignmentBody
   UpdateExpression
   ExpressionizedStatementWithTrailingCallExpressions
@@ -903,6 +934,7 @@ UnaryWithoutParenthesizedAssignmentBody
 
 # NOTE: Parts of AssignmentExpression (specifically AssignmentExpressionTail)
 # that make sense as a UnaryBody, e.g. as the RHS of a binary op like `??`
+@nomemo
 ParenthesizedAssignment
   InsertOpenParen ( ActualAssignment / ArrowFunction ) InsertCloseParen
 
@@ -911,6 +943,7 @@ UnaryPostfix
   QuestionMark:q !SnugTernaryColonAhead -> q
   TypePostfix+
 
+@nomemo
 TypePostfix
   _:ws NWTypePostfix:postfix ->
     return prepend(ws, postfix)
@@ -925,6 +958,7 @@ Tuple
       token: "readonly unknown[] | []"
     }
 
+@nomemo
 NWTypePostfix
   As _ Tuple ->
     return {
@@ -992,25 +1026,30 @@ AssignmentExpression
   ( EOS _? ) AssignmentExpressionTail
   # NonPipelineAssignmentExpression
 
+@nomemo
 NonPipelineAssignmentExpression
   # NOTE: Try to match a single line assignment expression before matching newline then assignment expression
   NonPipelineSingleLineAssignmentExpression
   ( EOS _? ) NonPipelineAssignmentExpressionTail
 
+@nomemo
 SingleLineAssignmentExpression
   _?:ws AssignmentExpressionTail:tail ::ASTNode ->
     return prepend(ws, tail)
 
+@nomemo
 NonPipelineSingleLineAssignmentExpression
   _?:ws NonPipelineAssignmentExpressionTail:tail ::ASTNode ->
     return prepend(ws, tail)
 
+@nomemo
 AssignmentExpressionTail
   YieldExpression
   ArrowFunction
   ActualAssignment
   ConditionalExpression
 
+@nomemo
 NonPipelineAssignmentExpressionTail
   YieldExpression
   ArrowFunction
@@ -1037,6 +1076,7 @@ ActualAssignment
       expression: $2,
     }
 
+@nomemo
 NonPipelineActualAssignment
   # NOTE: Eliminated left recursion
   # NOTE: Consolidated assignment ops
@@ -1099,6 +1139,7 @@ FatArrow
   _?:ws FatArrowToken:arrow ->
     return [ ws || " ", arrow ]
 
+@nomemo
 FatArrowToken
   "=>" / "⇒" ->
     return { $loc, token: "=>" }
@@ -1114,6 +1155,7 @@ TrailingDeclaration
 TrailingPipe
   _? Pipe
 
+@nomemo
 TrailingPostfix
   _? PostfixStatement
 
@@ -1174,11 +1216,13 @@ SnugTernaryThen
     return $skip unless thenE
     return thenE
 
+@nomemo
 SpacedTernaryThen
   ForbidColonArgument MaybeNestedExpression?:thenE RestoreColonArgument ->
     return $skip unless thenE
     return thenE
 
+@nomemo
 NestedTernaryRest
   # ?/: on following line at same indentation level
   Nested QuestionMark MaybeNestedExpression Nested Colon MaybeNestedExpression
@@ -1188,10 +1232,12 @@ NestedTernaryRest
     return $skip
 
 # https://262.ecma-international.org/#prod-ShortCircuitExpression
+@nomemo
 ShortCircuitExpression
   # NOTE: We don't need to track the precedence of all the binary operators so they all collapse into this
   BinaryOpExpression
 
+@nomemo
 PipelineExpression
   PipelineAllowed _?:ws PipelineHeadItem:head PipelineExpressionBody:body AllowedTrailingCallExpressions?:trailing ->
     // NOTE: Ampersand-block heads (`&.foo |> bar`) are unwrapped later in
@@ -1230,6 +1276,7 @@ PipelineExpressionBody ::PipelineExpressionBody
 PipelineExpressionBodySameLine ::PipelineExpressionBody
   ( _? Pipe __ PipelineTailItem )*
 
+@nomemo
 PipelineHeadItem ::ASTNode
   # Needed to avoid left recursion
   NonPipelineExpression
@@ -1256,6 +1303,7 @@ PipelineTailItem
     return $2
 
 # https://262.ecma-international.org/#prod-PrimaryExpression
+@nomemo
 PrimaryExpression ::ASTNode
   ObjectLiteral ->
     return $1
@@ -1305,6 +1353,7 @@ OptimizedParenthesizedExpression
     return $1
 
 # https://262.ecma-international.org/#prod-ParenthesizedExpression
+@nomemo
 ParenthesizedExpression
   # NOTE: Currently ignoring early error checking in https://262.ecma-international.org/#prod-CoverParenthesizedExpressionAndArrowParameterList
   OpenParen:open AllowAll ( PostfixedCommaExpression __ CloseParen )? RestoreAll ::ParenthesizedExpression ->
@@ -1322,6 +1371,7 @@ ParenthesizedExpression
       expression,
     }
 
+@nomemo
 Placeholder
   # Partial function application: f(., x) -> $ => f($, x)
   Dot:dot NonIdContinue ![.#{=] PlaceholderTypeSuffix?:typeSuffix ->
@@ -1352,6 +1402,7 @@ Placeholder
 # One case of TypeSuffix, with no space before ?/: (for ternary ?:), and
 # Type replaced by TypePrimary: require parens where type operators
 # might be regular operators, like |, &, and ?: ternary
+@nomemo
 PlaceholderTypeSuffix
   QuestionMark?:optional Colon MaybeNestedTypePrimary:t -> {
     type: "TypeSuffix",
@@ -1362,6 +1413,7 @@ PlaceholderTypeSuffix
   }
 
 # https://262.ecma-international.org/#prod-ClassDeclaration
+@nomemo
 ClassDeclaration
   # NOTE: skipping syntax directed operation for now
   # Wrap nameless function declarations with parens, as needed in JS.
@@ -1387,12 +1439,14 @@ ClassExpression
       children: [decorators, abstract, class_, binding, heritage, body],
     }
 
+@nomemo
 ClassBinding
   !EOS BindingIdentifier TypeParameters? -> [$2, $3]
 
 # CoffeeScript qualified class name: `class NS.A` or `class @A`.
 # The class is named by the last segment, and processCoffeeClasses
 # assigns it to the full target: `NS.A = class A {}`.
+@nomemo
 CoffeeClassTarget
   CoffeeClassesEnabled !EOS __:ws CoffeeClassTargetBase:base ( Dot Identifier )*:rest ->
     target := [...base, ...rest.flat()]
@@ -1408,6 +1462,7 @@ CoffeeClassTargetBase
   IdentifierReference Dot Identifier
 
 # https://262.ecma-international.org/#prod-ClassHeritage
+@nomemo
 ClassHeritage
   ExtendsClause:extendsClause WithClause?:withClause ImplementsClause?:implementsClause ->
     clause := withClause ? convertWithClause(withClause, extendsClause) : extendsClause
@@ -1418,11 +1473,13 @@ ClassHeritage
     return implementsClause if implementsClause
     return $skip
 
+@nomemo
 ExtendsClause
   ExtendsToken __ ExtendsTarget
 
 # with for mixin shorthand
 # class A extends B with C, D -> class A extends D(C(B))
+@nomemo
 WithClause ::WithClause
   # Nested form where C, D appear on separate lines, indented
   # Also allows for arbitrary expressions
@@ -1441,6 +1498,7 @@ WithClause ::WithClause
       targets: [[ws, t], ...rest.map(([ws1, _comma, ws2, target]) => [prepend(ws1, ws2), target])] as WithClause["targets"],
     }
 
+@nomemo
 ExtendsToken ::Extends
   # NOTE: Added "<" extends shorthand
   NotDedented:ws InsertSpace:s ExtendsShorthand:t " "? ->
@@ -1484,10 +1542,12 @@ OmittedNegation
   ExclamationPoint -> ""
   Not " "? _? -> $3
 
+@nomemo
 ExtendsTarget
   LeftHandSideExpressionWithObjectApplicationForbidden:exp ->
     return makeLeftHandSideExpression(exp)
 
+@nomemo
 ImplementsClause
   # Nested form where interfaces appear on separate lines, indented
   # Allows for implicit type arguments
@@ -1520,16 +1580,19 @@ ImplementsToken
   NotDedented "implements" NonIdContinue ->
     return [$1, { $loc, token: $2 }]
 
+@nomemo
 ImplementsShorthand
   "<:" ->
     return { $loc, token: "implements " }
 
 # Like TypeIdentifier but forbidding implicit type arguments
+@nomemo
 ImplementsTarget
   __ IdentifierName (Dot IdentifierName)* TypeArguments?
 
 # https://262.ecma-international.org/#prod-ClassBody
 # NOTE: Nesting and indentation sensitive
+@nomemo
 ClassBody ::ClassBody
   # NOTE: ClassBracedContent single-line alternative always succeeds with
   # (possibly empty) array, so `?:expressions` never captures undefined.
@@ -1558,12 +1621,14 @@ ClassBody ::ClassBody
     }
 
 # based on BracedContent
+@nomemo
 ClassBracedContent ::StatementTuple[]
   NestedClassElements
   # based on SingleLineStatements
   ForbidNewlineBinaryOp ( ( _? !EOS ) ClassElement StatementDelimiter )*:stmts RestoreNewlineBinaryOp ->
     return stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim]) as StatementTuple[]
 
+@nomemo
 NestedClassElements ::StatementTuple[]
   PushIndent NestedClassElement*:elements TrailingNestedCommentLine*:trailing PopIndent ->
     return $skip unless elements# or trailing#
@@ -1575,6 +1640,7 @@ NestedClassElements ::StatementTuple[]
     // surrounding class, not a member.
     trailing# ? [...expressions, ...trailing] as StatementTuple[] : expressions
 
+@nomemo
 NestedClassElement
   Nested:nested ClassElementPart+:elements ->
     return [
@@ -1583,6 +1649,7 @@ NestedClassElement
     ]
 
 # based on BlockStatementPart
+@nomemo
 ClassElementPart
   # NOTE: !EOS forces semicolon after all but the last element on the line
   !EOS _?:ws ClassElement:element StatementDelimiter:delimiter ->
@@ -1607,6 +1674,7 @@ CoffeeClassBodyStatement
     }
 
 # https://262.ecma-international.org/#prod-ClassElement
+@nomemo
 ClassElement
   # Prefer methods with indented bodies to implicit calls. Reuse the
   # signature grammar for spacing, optional markers, and type parameters.
@@ -1677,6 +1745,7 @@ ClassElement
 # Shared by the CoffeeScript-specific indented-method alternative and the
 # general method/field fallback in ClassElement.
 # Static blocks and empty statements remain separate ClassElement alternatives.
+@nomemo
 ClassMember
   Decorators?:decorators DeclareModifier?:declare AccessModifier?:access StaticModifier?:static_ OverrideModifier?:override ClassElementDefinition:definition ->
     ts := definition.ts || !!declare
@@ -1700,10 +1769,12 @@ ClassMember
       children: [decorators, declare, access, static_, override, ...definition.children],
     }
 
+@nomemo
 ClassElementDefinition
   ( MethodDefinition / FieldDefinition )
 
 # `declare class` form of ClassDeclaration, where all methods are signatures
+@nomemo
 ClassSignature ::Children
   Decorators? AbstractModifier? Class ClassBinding? ClassHeritage? ClassSignatureBody
 
@@ -1724,18 +1795,23 @@ ClassSignatureElement
   # NOTE: MethodSignature instead of MethodDefinition
   Decorators? AccessModifier? StaticModifier? OverrideModifier? ( MethodSignature / FieldDefinition )
 
+@nomemo
 AbstractModifier
   Abstract NotDedented &ClassElementName -> [$1, $2]
 
+@nomemo
 DeclareModifier
   Declare NotDedented &ClassElementName -> [$1, $2]
 
+@nomemo
 OverrideModifier
   Override NotDedented &ClassElementName -> [$1, $2]
 
+@nomemo
 ReadonlyModifier
   Readonly NotDedented &( ClassElementName / [@#]) -> [$1, $2]
 
+@nomemo
 StaticModifier
   Static &IndentedFurther -> [$1, ""]
   Static NotDedented &ClassElementName -> [$1, $2]
@@ -1751,6 +1827,7 @@ AccessModifier
     }
 
 # https://262.ecma-international.org/#prod-FieldDefinition
+@nomemo
 FieldDefinition
   # name: (param1, param2) ->
   # name: (param1, param2) => which gets wrapped in bind in constructor
@@ -1876,6 +1953,7 @@ ThisLiteral
     }
   BasicThisLiteral
 
+@nomemo
 BasicThisLiteral
   This -> {
     type: "Identifier",
@@ -1889,6 +1967,7 @@ BasicThisLiteral
 # https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/in#using_the_in_operator_to_implement_branded_checks
 # This is slightly different from how https://262.ecma-international.org/#sec-relational-operators handles relational operators
 # grammatically but should be equivalent in practice
+@nomemo
 HashThis
   AtThis?:at LengthShorthand:id ( &( _ ( Not __ )? ActualIn ) "" )?:beforeIn ->
     return [ '"', id.name, '"' ] if beforeIn? and not at?
@@ -1942,6 +2021,7 @@ AtThis
     }
 
 # https://262.ecma-international.org/#prod-LeftHandSideExpression
+@nomemo
 LeftHandSideExpression
   # https://262.ecma-international.org/#prod-NewExpression
   # NOTE: Merged in NewExpression
@@ -1957,6 +2037,7 @@ LeftHandSideExpression
   # NOTE: OptionalExpression is merged into CallExpression
 
 # https://262.ecma-international.org/#prod-CallExpression
+@nomemo
 CallExpression
   # NOTE: Tracking trailing member expressions based on indentation level for implicit arguments
   Super ArgumentsWithTrailingCallExpressions CallExpressionRest*:rest ->
@@ -2010,6 +2091,7 @@ CallExpressionRest
       optional,
     }, ...argsWithTrailing.slice(1) ]
 
+@nomemo
 ExplicitCallExpressionRest
   MemberExpressionRest
   # NOTE: TypeScript instantiation expressions
@@ -2048,6 +2130,7 @@ NonNullAssertion
   ExclamationPoint !("^" / "<?" / "=") ::NonNullAssertion -> { type: "NonNullAssertion", ts: true, children: [$1] }
 
 # https://262.ecma-international.org/#prod-MemberExpression
+@nomemo
 MemberExpression
   # NOTE: "new" MemberExpression Arguments seems to be handled fine by other rules already
   # NOTE: Eliminated left recursion
@@ -2059,6 +2142,7 @@ MemberExpression
       })
     return $1
 
+@nomemo
 ActualMemberExpression
   MemberBase MemberExpressionRest+:rest ->
     return processCallMemberExpression({
@@ -2080,6 +2164,7 @@ MemberExpressionRest
       children: [...comments, ...body.children]
     }
 
+@nomemo
 MemberExpressionRestBody
   # NOTE: Added shorthand x?[3] -> x?.[3]
   OptionalShorthand?:dot InlineComment*:comments MemberBracketContent:content ->
@@ -2104,6 +2189,7 @@ MemberExpressionRestBody
   NonNullAssertion
 
 # Handles indexing and slicing
+@nomemo
 MemberBracketContent
   OpenBracket:open ( SliceParameters / PostfixedExpression ):expression __:ws CloseBracket:close ->
     // Some kind of slice
@@ -2146,6 +2232,7 @@ MemberBracketContent
       random: true,
     }
 
+@nomemo
 SliceParameters
   Loc:ls Expression?:startExpression __:ws RangeDots:dots Loc:le Expression?:endExpression ->
     reversed := dots.increasing === false
@@ -2238,6 +2325,7 @@ SnugTernaryColonAhead
 
 # Mirrors the content forms PropertyAccess accepts after AccessStart;
 # keep in sync if PropertyAccess gains a form.
+@nomemo
 PropertyAccessContent
   TemplateLiteral
   AccessLiteral
@@ -2265,6 +2353,7 @@ PropertyAccessModifier
   QuestionMark
   NonNullAssertion
 
+@nomemo
 PropertyAccess
   # NOTE: Added shorthand x."string" -> x["string"]
   # NOTE: Added shorthand x.3 -> x[3]
@@ -2399,9 +2488,11 @@ AccessLiteral
     }
 
 # Property glob that starts with "." or "?.", not a brace
+@nomemo
 ExplicitPropertyGlob
   &ExplicitAccessStart PropertyGlob -> $2
 
+@nomemo
 PropertyGlob
   # NOTE: Added shorthand obj.{a,b:c} -> {a: obj.a, c: obj.b}
   ( PropertyAccessModifier? OptionalDot ):dot InlineComment* BracedObjectLiteral:object ->
@@ -2412,6 +2503,7 @@ PropertyGlob
       children: $0,
     }
 
+@nomemo
 PropertyBind
   # NOTE: foo@.bar and foo@bar shorthand for foo.bar.bind(foo)
   # foo@bar(baz) shorthand for foo.bar.bind(foo, baz)
@@ -2443,10 +2535,12 @@ PropertyBindExplicitArguments
       args: args?.children.slice(1, -1) ?? [], // remove the parens from the arg list, or give an empty list
     }
 
+@nomemo
 SuperProperty
   Super MemberBracketContent
   Super !PropertyAccessModifier PropertyAccess -> [$1, $3]
 
+@nomemo
 MetaProperty
   New Dot Target
   "import.meta" NonIdContinue ->
@@ -2525,6 +2619,7 @@ ESArrowIdentifierParameters
     }
 
 # Parameters before =>
+@nomemo
 ArrowParameters
   # In esArrowFunction mode, try single bare identifier first
   # (before implicit empty params allowed by Parameters)
@@ -2533,10 +2628,12 @@ ArrowParameters
   Parameters
 
 # Parameters before ->
+@nomemo
 ThinArrowParameters
   ShortArrowParameters
   Parameters
 
+@nomemo
 NonEmptyParameters
   TypeParameters?:tp OpenParen:open ParameterList:parameters ( __ CloseParen ):close ::ParametersNode ->
     return {
@@ -2546,6 +2643,7 @@ NonEmptyParameters
       parameters,
     }
 
+@nomemo
 ParameterList
   # Nested case: Allow for one line of parameters followed by a nested list
   Parameter* NestedParameterList ->
@@ -2557,11 +2655,13 @@ ParameterList
       children: [eos, ...p.children],
     }))
 
+@nomemo
 NestedParameterList
   PushIndent NestedParameter*:params PopIndent ->
     return $skip unless params#
     return params
 
+@nomemo
 NestedParameter
   # Allow one or more parameters on one line
   Nested:ws Parameter+:params ->
@@ -2576,6 +2676,7 @@ Parameter
   FunctionRestParameter ::FunctionRestParameter
 
 # https://262.ecma-international.org/#prod-FunctionRestParameter
+@nomemo
 FunctionRestParameter
   # BindingRestElement has a leading _?
   # but also sometimes invokes __ via BindingIdentifier
@@ -2590,6 +2691,7 @@ FunctionRestParameter
     }
 
 # NOTE: Similar to BindingElement but appears in formal parameters list
+@nomemo
 ParameterElement
   # Literals are matching patterns, not parameter bindings.
   _? AccessModifier?:accessModifier _? !LiteralPattern ( BindingPattern / NWBindingIdentifier ):binding TypeSuffix?:typeSuffix Initializer?:initializer ParameterElementDelimiter:delim ->
@@ -2651,6 +2753,7 @@ AtIdentifierRef ::ASTRef
     if id.unicode then ref.unicode = id.unicode
     return ref
 
+@nomemo
 PinPattern ::PinPattern
   # Forbid ImplicitObjectLiterals such as `x: y` in pinned pattern,
   # to allow for typed arguments of the form `(^x: T) =>`
@@ -2740,6 +2843,7 @@ ObjectBindingPatternContent
 
     return reorderBindingRestProperty(props)
 
+@nomemo
 BindingPropertyList
   ( BindingProperty ObjectPropertyDelimiter )+:props ->
     return props.map(([prop, delim]) => {
@@ -2761,6 +2865,7 @@ ArrayBindingPattern
       children: [ws1, open, c.children, ws2, close],
     })
 
+@nomemo
 ArrayBindingPatternContent
   # NOTE: Added indentation based binding elements
   NestedBindingElements
@@ -2770,6 +2875,7 @@ ArrayBindingPatternContent
     return adjustBindingElements(elements as ArrayBindingPatternContentType)
 
 # children is an array of tuples of the form [ws, element, delim]
+@nomemo
 BindingElementList
   ( BindingElement ArrayElementDelimiter )+:elements ->
     return elements.map(([element, delim]) => {
@@ -2792,6 +2898,7 @@ NestedBindingElementList
       }
     })
 
+@nomemo
 NestedBindingProperties
   PushIndent NestedBindingPropertyList*:props PopIndent ->
     return $skip unless props#
@@ -2807,6 +2914,7 @@ NestedBindingPropertyList
     })
 
 # https://262.ecma-international.org/#prod-BindingProperty
+@nomemo
 BindingProperty
   # NOTE: Merged in BindingRestProperty
   # TS will mark errors about invalid multiple rest properties
@@ -2918,6 +3026,7 @@ BindingProperty
     }
 
 # https://262.ecma-international.org/#prod-BindingRestProperty
+@nomemo
 BindingRestProperty
   _?:ws DotDotDot:dots BindingIdentifier:id BindingTypeSuffix?:typeSuffix ->
     return {
@@ -2935,6 +3044,7 @@ BindingRestProperty
       children: [...(ws || []), dots, ...(id.children as any)],
     }
 
+@nomemo
 BindingTypeSuffix ::TypeSuffix
   _? QuestionMark?:optional _? DoubleColonAsColon:colon MaybeNestedType:t ->
     return {
@@ -2949,6 +3059,7 @@ BindingPropertyTypeSuffix ::TypeSuffix
   BindingTypeSuffix
   QuestionMarkTypeSuffix
 
+@nomemo
 NestedBindingElements
   PushIndent NestedBindingElementList*:elements PopIndent ->
     return $skip unless elements#
@@ -2959,6 +3070,7 @@ NestedBindingElements
 
 # https://262.ecma-international.org/#prod-BindingElement
 # children is an array of tuples of the form [ws, element]
+@nomemo
 BindingElement
   BindingRestElement
 
@@ -2982,6 +3094,7 @@ BindingElement
     }
 
 # https://262.ecma-international.org/#prod-BindingRestElement
+@nomemo
 BindingRestElement ::BindingRestElement
   _?:ws DotDotDot:dots ( BindingPattern / BindingIdentifier / EmptyBindingPattern ):binding BindingTypeSuffix?:typeSuffix ->
     return {
@@ -3018,6 +3131,7 @@ EmptyBindingPattern
     }
 
 # https://262.ecma-international.org/#prod-FunctionDeclaration
+@nomemo
 FunctionDeclaration ::FunctionExpression | ParenthesizedExpression
   # Wrap nameless function declarations with parens, as needed in JS.
   FunctionExpression:functionExpression ->
@@ -3190,6 +3304,7 @@ FunctionExpression
     }
 
 # NOTE: Dynamic infix operators
+@nomemo
 OperatorDeclaration ::OperatorDeclaration
   # `operator {x, y} := ...` declaration while blessing
   Operator OperatorBehavior?:behavior _:w Loc:loc LexicalDeclaration:decl ->
@@ -3232,6 +3347,7 @@ OperatorDeclaration ::OperatorDeclaration
 
 # NOTE: Like FunctionSignature, but no async or star or @,
 # and parameters are required (to be useful).
+@nomemo
 OperatorSignature
   ( Async _ )?:asyncKeyword Operator:op ( _ Function )?:func ( _? Star )?:generatorStar _:w1 Identifier:id OperatorBehavior?:behavior _?:w2 NonEmptyParameters:parameters ReturnTypeSuffix?:returnType ::OperatorSignature ->
     async := asyncKeyword || []
@@ -3298,6 +3414,7 @@ OperatorAssociativity ::OperatorBehavior
 
     return { assoc }
 
+@nomemo
 ThinArrowFunction
   ( Async _ )?:asyncKeyword ThinArrowParameters:parameters ReturnTypeSuffix?:returnType _?:ws ThinArrow:arrow ( BracedObjectSingleLineStatements / NoCommaBracedOrEmptyBlock ):block ->
     async := asyncKeyword || []
@@ -3343,6 +3460,7 @@ ThinArrow
   "->" / "→" ->
     return { $loc, token: "->" }
 
+@nomemo
 ExplicitBlock ::BlockStatement
   # Parse object literal application ({} followed by nested properties)
   # so that {} isn't treated as an empty block.
@@ -3377,6 +3495,7 @@ EmptyBracedContent
       empty: true,
     }
 
+@nomemo
 ImplicitNestedBlock
   # NOTE: Check &EOS needed by eventual PushIndent to skip work if not needed
   &EOS InsertOpenBrace:open AllowAll ( NestedBlockStatements InsertNewline InsertIndent InsertCloseBrace )? RestoreAll ::BlockStatement ->
@@ -3389,6 +3508,7 @@ ImplicitNestedBlock
     } as BlockStatement
 
 # NOTE: This is the body of if/else/for/when etc.
+@nomemo
 Block ::BlockStatement
   # NOTE: Added indentation based implied braces
   ImplicitNestedBlock
@@ -3408,6 +3528,7 @@ Block ::BlockStatement
       bare: true,
     }
 
+@nomemo
 BareNestedBlock
   # NOTE: Check &EOS needed by eventual PushIndent to skip work if not needed
   &EOS AllowAll NestedBlockStatements? RestoreAll ->
@@ -3417,6 +3538,7 @@ BareNestedBlock
 # NOTE: This is the body of a case, where no braces are necessary.
 # Essentially `Block` but with ImplicitNestedBlock replaced by BareNestedBlock,
 # and allowing EmptyBareBlock.
+@nomemo
 BareBlock ::BlockStatement
   BareNestedBlock
   # NOTE: Explicit block after implicit block so that a properly indented `{}`
@@ -3440,6 +3562,7 @@ ThenClause
 
 # `then` can be followed by nested block (unlike CoffeeScript)
 # or same-line statements separated by `;`, or empty
+@nomemo
 ThenBlock ::BlockStatement
   NoBlock EmptyBlock -> $2
   ImplicitNestedBlock
@@ -3450,6 +3573,7 @@ ThenBlock ::BlockStatement
   !ESBraceBlockEnabled ObjectSingleLineStatements -> $2
   SingleLineStatements
 
+@nomemo
 BracedThenClause
   &Then InsertOpenBrace:open ThenClause:exp InsertCloseBrace:close ::BlockStatement ->
     return {
@@ -3460,6 +3584,7 @@ BracedThenClause
     }
 
 # A block that must include braces (function body, try/catch/finally)
+@nomemo
 BracedOrEmptyBlock ::BlockStatement
   BracedBlock
   EmptyBlock
@@ -3468,6 +3593,7 @@ NoCommaBracedOrEmptyBlock ::BlockStatement
   NoCommaBracedBlock
   EmptyBlock
 
+@nomemo
 NoPostfixBracedOrEmptyBlock ::BlockStatement
   NoPostfixBracedBlock
   EmptyBlock
@@ -3486,12 +3612,14 @@ EmptyBlock
     }
 
 # NOTE: We allow loop bodies to be empty, in which case they get a ; body
+@nomemo
 BlockOrEmptyStatement
   Block ::BlockStatement
   NoBlock EmptyStatementBareBlock -> $2
 
 # NOTE: We allow if/else bodies to be empty, in which case they get a {} body
 # (`;` would also make sense, but TypeScript doesn't allow them.)
+@nomemo
 BlockOrEmpty ::BlockStatement
   # Under esBraceBlock, `{ ... }` in statement position is always a block (ES
   # semantics), not an object literal that gets unwrapped — skip
@@ -3514,6 +3642,7 @@ EmptyStatementBareBlock
       semicolon: s.children[0],
     }
 
+@nomemo
 EmptyBareBlock
   # Implied empty block with no braces. Used in case statements.
   "" ::BlockStatement ->
@@ -3527,6 +3656,7 @@ EmptyBareBlock
       implicit: true,
     }
 
+@nomemo
 NoBlock
   # Check that there isn't a block here. Used for empty loop bodies.
   &EOS !IndentedFurther !( Nested Then )
@@ -3534,6 +3664,7 @@ NoBlock
 
 # A nonempty block that must include braces
 # This version allows same-line postfixes like `while cond`.
+@nomemo
 BracedBlock
   NonSingleBracedBlock
   # Nonempty one liner.  A bare trailing `;` is an explicit empty body, as
@@ -3550,6 +3681,7 @@ BracedBlock
     }
 
 # This version forbids same-line postfixes like `while cond`, e.g., in do/try.
+@nomemo
 NoPostfixBracedBlock
   NonSingleBracedBlock
   # Nonempty one liner
@@ -3563,6 +3695,7 @@ NoPostfixBracedBlock
     }
 
 # This version forbids top-level , operator in one-liners
+@nomemo
 NoCommaBracedBlock
   NonSingleBracedBlock
   # Nonempty one liner
@@ -3575,6 +3708,7 @@ NoCommaBracedBlock
       children: [o, s.children, ws, c],
     }
 
+@nomemo
 NonSingleBracedBlock ::BlockStatement
   !EOS ExplicitBlock !TrailingOperator -> $2
 
@@ -3624,6 +3758,7 @@ SingleLineStatements
 
 # NOTE: Special case where SingleLineStatements at least starts with an object
 # literal, which should potentially be unwrapped if not used as a value.
+@nomemo
 ObjectSingleLineStatements
   &( _? BracedObjectLiteral ) SingleLineStatements:block ::BlockStatement ->
     if block.bare and block.expressions# is 1
@@ -3641,6 +3776,7 @@ BracedObjectSingleLineStatements
     return $skip if config.esBraceBlock
     return bracedBlock(block)
 
+@nomemo
 PostfixedSingleLineStatements
   ( ( _? !EOS ) StatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) StatementListItem SemicolonDelimiter? )?:last ->
     children: StatementTuple[] := stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
@@ -3653,6 +3789,7 @@ PostfixedSingleLineStatements
       bare: true,
     }
 
+@nomemo
 PostfixedSingleLineNoCommaStatements
   ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter )*:stmts ( ( _? !EOS ) NoCommaStatementListItem SemicolonDelimiter? )?:last ::BlockStatement ->
     children: StatementTuple[] := stmts.map(([prefix, statement, delim]) => [prefix[0], statement, delim])
@@ -3685,6 +3822,7 @@ NestedBlockStatements
       trailing: trailing# ? trailing : undefined,
     }
 
+@nomemo
 NestedBlockStatement
   Nested:nested BlockStatementPart+:statements ->
     return [
@@ -3696,6 +3834,7 @@ NestedBlockStatement
 # inline comment on the last statement's line, plus any number of same-or-
 # deeper-indent standalone comment lines.  Always succeeds (possibly with
 # zero entries) so the caller can simply check `trailing#`. (issue #832)
+@nomemo
 TrailingNestedComments
   TrailingInlineComment?:inline TrailingNestedCommentLine*:lines ->
     out := []
@@ -3710,11 +3849,13 @@ TrailingInlineComment
     return [ws, c]
 
 # Can't reuse `Nested` here because its `EOS` would consume the comment.
+@nomemo @state
 TrailingNestedCommentLine
   EOL:eol Indent:indent SingleLineComment:c ->
     return $skip unless indent.level >= state.currentIndent.level
     return [eol, indent, c]
 
+@nomemo
 BlockStatementPart
   # NOTE: !EOS forces semicolon after all but last statement, forbids leading __
   # NOTE: _? allows for leading inline comments
@@ -3732,6 +3873,7 @@ Literal
       raw: literal.token,
     }
 
+@nomemo
 LiteralContent
   NullLiteral
   BooleanLiteral
@@ -3739,20 +3881,24 @@ LiteralContent
   StringLiteral
 
 # https://262.ecma-international.org/#prod-NullLiteral
+@nomemo
 NullLiteral
   "null" NonIdContinue ->
     return { type: "NullLiteral", $loc, token: $1 } as const
 
 # https://262.ecma-international.org/#prod-BooleanLiteral
+@nomemo
 BooleanLiteral
   # perf: assertion to exit early
   /(?=true|false|yes|no|on|off)/ _BooleanLiteral -> $2
 
+@nomemo
 _BooleanLiteral
   CoffeeBooleansEnabled CoffeeScriptBooleanLiteral -> $2
   ( "true" / "false" ) NonIdContinue ->
     return { type: "BooleanLiteral", $loc, token: $1 } as const
 
+@nomemo
 CoffeeScriptBooleanLiteral
   ( "yes" / "on" ) NonIdContinue ->
     return { type: "BooleanLiteral", $loc, token: "true" } as const
@@ -3874,6 +4020,7 @@ ArrayLiteral
   # "/" is a potential comment before a bulleted array
   /(?=\[|\s*[.•\/])/ _ArrayLiteral -> $2
 
+@nomemo
 _ArrayLiteral
   # NOTE: Check ArrayBindingPattern case of lhs destructuring
   ArrayBindingPattern UpcomingAssignment ::ArrayBindingPattern -> $1
@@ -3949,6 +4096,7 @@ RangeDots ::RangeDots
       children: [ws1, ws2]
     }
 
+@nomemo
 OptionalRangeEnd ::RangeEnd
   RangeEnd
   "" -> { inclusive: true, raw: "" }
@@ -3970,6 +4118,7 @@ RangeEnd
       raw: $0,
     }
 
+@nomemo
 RangeExpression ::RangeExpression
   Expression:start __:ws RangeDots:range Expression:end ->
     return processRangeExpression(start, ws, range, end)
@@ -4040,6 +4189,7 @@ ArrayElementDelimiter
   &( __ "]" ) -> undefined
   &EOS InsertComma -> $2
 
+@nomemo
 ElementListWithIndentedApplicationForbidden
   ForbidIndentedApplication ElementList? RestoreIndentedApplication ->
     return $2 if $2
@@ -4047,10 +4197,12 @@ ElementListWithIndentedApplicationForbidden
 
 # https://262.ecma-international.org/#prod-ElementList
 # NOTE: Modified and simplified from the spec
+@nomemo
 ElementList ::ASTNode[]
   BulletedArray -> [$1]
   SingleLineElementList
 
+@nomemo
 SingleLineElementList
   # NOTE: Forbid EOS to prevent eating indentation in Expression
   !EOS ArrayElementExpression:first ElementListRest*:rest ::ASTNode[] ->
@@ -4061,12 +4213,14 @@ SingleLineElementList
       rest.map(([_, e], i) => append(e, rest[i+1]?.[0]))
     )
 
+@nomemo
 ElementListRest
   # NOTE: Within ElementList, forbid newlines (EOS) before and after comma,
   # to correctly handle indentation and nested lists
   ( _? Comma !EOS ) ArrayElementExpression -> [[$1[0], $1[1]], $2]
 
 # NOTE: Modified and simplified from the spec
+@nomemo
 ArrayElementExpression
   # NOTE: Prevent multiple JSX tags from combining implicitly into a fragment
   JSXTag
@@ -4111,6 +4265,7 @@ ArrayElementExpression
     }
 
 # NOTE: Nested bulleted array starts with an indentation.
+@nomemo
 NestedBulletedArray ::ArrayExpression
   ( InsertSpace InsertOpenBracket ):open PushIndent AllowPipeline NestedArrayBullet*:nestedContent RestorePipeline InsertCloseBracket:close PopIndent ->
     return $skip unless nestedContent#
@@ -4129,6 +4284,7 @@ NestedBulletedArray ::ArrayExpression
 
 # NOTE: Bulleted array intended for beginning of lines,
 # when leading indentation has already been consumed.
+@nomemo
 BulletedArray
   InsertOpenBracket:open ( ArrayBullet NestedArrayBullet* )?:nestedContent InsertCloseBracket:close ::ArrayExpression ->
     return $skip unless nestedContent
@@ -4153,6 +4309,7 @@ NestedArrayBullet
     // Prepend indent to first element
     return list.map (e, i) => i is 0 ? prepend(indent, e) : e
 
+@nomemo
 ArrayBullet
   BulletIndent:bullet ( ElementList ArrayBulletDelimiter )?:content PopIndent ->
     return $skip unless content
@@ -4167,11 +4324,13 @@ ArrayBullet
     return list
 
 # Like ArrayElementDelimiter but without `__ Comma` which eats unindented commas
+@nomemo
 ArrayBulletDelimiter
   _? Comma
   &EOS InsertComma -> $2
 
 # NOTE: Unicode bullet doesn't need a space, but ASCII bullet does
+@nomemo @state
 BulletIndent
   Bullet ->
     [ bullet, ws ] := $1
@@ -4183,12 +4342,14 @@ BulletIndent
     /* c8 ignore next -- debug output for verbose config */
     console.log("pushing bullet indent", indent) if config.verbose
     state.indentLevels.push(indent)
+    updateStateKey()
     return indent
 
 Bullet
   "•" [ \t]*
   "." [ \t]+
 
+@nomemo
 BulletedArrayWithTrailing
   BulletedArray:bulletedArray AllowedTrailingCallExpressions?:trailing ( NotDedented Pipe __ PipelineTailItem )*:pipeline ->
     array: ASTNode .= bulletedArray
@@ -4203,6 +4364,7 @@ BulletedArrayWithTrailing
 
 # https://262.ecma-international.org/#prod-ObjectLiteral
 # NOTE: Slightly simplified from spec
+@nomemo
 ObjectLiteral ::ASTNode
   # NOTE: Check for object binding pattern in case of destructuring to an object lhs
   ObjectBindingPattern UpcomingAssignment -> $1
@@ -4210,6 +4372,7 @@ ObjectLiteral ::ASTNode
   NestedImplicitObjectLiteral
   InlineObjectLiteral
 
+@nomemo
 BracedObjectLiteral ::ObjectExpression
   ObjectLiteralApplication
   OpenBrace:open AllowAll ( BracedObjectLiteralContent __ CloseBrace )? RestoreAll ->
@@ -4225,6 +4388,7 @@ BracedObjectLiteral ::ObjectExpression
 
 # {} followed by nested properties provides braced object literal features
 # without needing } at the end
+@nomemo
 ObjectLiteralApplication ::ObjectExpression
   OpenBrace:open CloseBrace:close ApplicationStart AllowAll ( NestedPropertyDefinitions / SingleLineObjectProperties )?:properties RestoreAll ->
     return $skip unless properties?#
@@ -4244,6 +4408,7 @@ ObjectLiteralApplication ::ObjectExpression
     }
 
 # Comma-separted properties on a single line. Allows for zero properties.
+@nomemo
 SingleLineObjectProperties
   ( PropertyDefinition ObjectPropertyDelimiter )*:line ->
     return line.flatMap(([prop, delim]: [any, any]) => {
@@ -4330,6 +4495,7 @@ NestedPropertyDefinition
 # but where the indentation has already been consumed.
 # They can span multiple lines at the same indentation level.
 # They must start with a snug property, and all properties must have a colon.
+@nomemo
 ImplicitObjectLiteral
   InsertInlineOpenBrace:open SnugNamedProperty:first ( ImplicitObjectPropertyDelimiter NamedProperty )*:rest ( _? Comma )?:trailing InsertCloseBrace:close ->
     properties := [first, ...rest.map(([, prop]) => prop)]
@@ -4343,6 +4509,7 @@ ImplicitObjectLiteral
 
 # This is different from ObjectPropertyDelimiter because the braces are implicit so we can't look ahead to find the closing one
 # Instead we see if the next line matches a NamedProperty and if so we insert a comma
+@nomemo
 ImplicitObjectPropertyDelimiter
   _? Comma ( NotDedented / _? )
   &( Nested NamedProperty ) InsertComma Nested -> [$2, $3]
@@ -4352,6 +4519,7 @@ ImplicitObjectPropertyDelimiter
 # They must start with a snug property, and all properties must have a colon.
 # Disabled in the "then" of a snug ternary `a?b:c` so `{b:c}` doesn't
 # swallow the ternary colon.
+@nomemo
 InlineObjectLiteral
   !InlineObjectLiteralForbidden InsertInlineOpenBrace:open SnugNamedProperty:first ( InlineObjectPropertyDelimiter NamedProperty )*:rest ( _? Comma &Dedented )?:trailing InsertCloseBrace:close ->
     return {
@@ -4371,6 +4539,7 @@ ObjectPropertyDelimiter
 
 # https://262.ecma-international.org/#prod-PropertyDefinition
 # NOTE: Must start on same line
+@nomemo
 PropertyDefinition
   # NOTE: This needs to be above NamedProperty so that
   # a `do` block doesn't get treated as {do} property
@@ -4640,6 +4809,7 @@ PropertyName
   LengthShorthand
   SymbolElement
 
+@nomemo
 ComputedPropertyName
   # https://262.ecma-international.org/#prod-ComputedPropertyName
   # NOTE: Using PostfixedExpression to allow If/Switch expressions and postfixes
@@ -4669,6 +4839,7 @@ ComputedPropertyName
       implicit: true,
     }
 
+@nomemo
 Decorator
   # Might want to disallow import, super, and return CallExpressions
   AtAt CallExpression
@@ -4679,6 +4850,7 @@ Decorators ::Children
     return [decorators, ws]
 
 # https://262.ecma-international.org/#prod-MethodDefinition
+@nomemo
 MethodDefinition ::MethodDefinition | MultiMethodDefinition
   Abstract __ MethodSignature:signature ->
     return {
@@ -4777,6 +4949,7 @@ MethodDefinition ::MethodDefinition | MultiMethodDefinition
 
     return makeGetterMethod(name, ws, value, returnType, block, kind, true, setValueSuffix)
 
+@nomemo
 MethodModifier
   # NOTE: Merged get/set definitions
   GetOrSet:kind _?:ws &ClassElementName ->
@@ -4806,6 +4979,7 @@ MethodModifier
       children: [ async, generator ],
     }
 
+@nomemo
 MethodSignature ::MethodSignature
   ConstructorShorthand:id NonEmptyParameters:parameters ->
     return {
@@ -4840,6 +5014,7 @@ MethodSignature ::MethodSignature
       parameters,
     }
 
+@nomemo
 ClassElementName
   PropertyName
   LengthShorthand
@@ -4888,6 +5063,7 @@ WAssignmentOp
   _? OperatorAssignmentOp
 
 # https://262.ecma-international.org/#prod-AssignmentOperator
+@nomemo
 AssignmentOp
   AssignmentOpSymbol _? ->
     if $2?#
@@ -4904,6 +5080,7 @@ AssignmentOp
 # NOTE: x foo= y expands to x = foo(x, y)
 # This is separate from AssignmentOp because it only works in certain contexts
 # (in particular, not at the beginning of a line).
+@nomemo
 OperatorAssignmentOp
   Xor Equals _? ->
     return {
@@ -4932,6 +5109,7 @@ OperatorAssignmentOp
       children: [$2, ...$3 || []]
     }
 
+@nomemo
 AssignmentOpSymbol
   "**="
   "*="
@@ -4980,12 +5158,14 @@ AssignmentOpSymbol
   "=" /(?![=>:.])|(?=\.[0-9])/ -> $1
   CoffeeWordAssignmentOp -> $1
 
+@nomemo
 CoffeeWordAssignmentOp
   "and=" -> "&&="
   "or=" -> "||="
 
 # NOTE: Similar to `NotDedented BinaryOp`,
 # but forbid Nested with custom infix operators
+@nomemo
 NotDedentedBinaryOp ::[ASTNode, BinaryOp]
   IndentedFurther?:ws1 _?:ws2 BinaryOp:op ->
     ws := []
@@ -5003,6 +5183,7 @@ IdentifierBinaryOp
 BinaryOp ::BinaryOp
   /(?=\p{ID_Start}|[_$^≪≫⋙≤≥∈∋∉∌≣≡≢≠=⩶⩵‖⁇&|*\/!?%÷<>⧺+-])/ _BinaryOp:op -> op
 
+@nomemo
 _BinaryOp ::BinaryOp
   BinaryOpSymbol ->
     if typeof $1 === "string" then return { $loc, token: $1 }
@@ -5026,6 +5207,7 @@ _BinaryOp ::BinaryOp
     }
 
 # NOTE: Condensed binary operator symbols into one rule
+@nomemo
 BinaryOpSymbol ::BinaryOp
   "**"
   "*"
@@ -5186,10 +5368,12 @@ BinaryOpSymbol ::BinaryOp
   "^"
   "|"
 
+@nomemo
 ActualIn
   CoffeeOfEnabled Of -> $2
   !CoffeeOfEnabled In -> $2
 
+@nomemo
 CoffeeOfOp ::BinaryOp
   Of -> "in"
   In ->
@@ -5219,6 +5403,7 @@ CoffeeOfOp ::BinaryOp
 
 # ASTLeaf forces an object, but TypeScript does not infer that it excludes
 # BinaryOp's string arm, so we do so explicitly.
+@nomemo
 NotOp ::ASTLeaf & Exclude<BinaryOp, string>
   "instanceof" NonIdContinue ->
     return {
@@ -5238,8 +5423,10 @@ NotOp ::ASTLeaf & Exclude<BinaryOp, string>
       negated: true,
     }
 
+@nomemo
 Xor
   "^^" / ( "xor" NonIdContinue )
+@nomemo
 Xnor
   /!\^\^?/ / "xnor"
 
@@ -5256,6 +5443,7 @@ UnaryOp
     [$1, $4] as const
 
 # https://github.com/tc39/proposal-await.ops
+@nomemo
 AwaitOp
   Await:a ( Dot IdentifierName )?:op _?:ws ->
     return {
@@ -5265,12 +5453,14 @@ AwaitOp
     }
 
 # https://262.ecma-international.org/#prod-ModuleItem
+@nomemo
 ModuleItem ::ASTNode
   IsBare ImportDeclaration:decl -> processStaticImport(decl)
   IsBare ExportDeclaration -> $2
   StatementListItem
 
 # https://262.ecma-international.org/#prod-StatementListItem
+@nomemo
 StatementListItem ::ASTNode
   Declaration ::Declaration
   # NOTE: Allow bulleted array literals as top-level statements.
@@ -5281,6 +5471,7 @@ StatementListItem ::ASTNode
   # NOTE: Added postfix conditionals/loops
   PostfixedStatement
 
+@nomemo
 PostfixedStatement ::ASTNode
   Statement:statement ( _? PostfixStatement )?:post ->
     node: ASTNode := statement
@@ -5292,6 +5483,7 @@ NoCommaStatementListItem ::ASTNode
   # NOTE: Added postfix conditionals/loops
   PostfixedNoCommaStatement
 
+@nomemo
 PostfixedNoCommaStatement ::ASTNode
   NoCommaStatement:statement ( _? PostfixStatement )?:post ->
     return addPostfixStatement(statement, ...post) if post
@@ -5309,10 +5501,12 @@ PostfixedExpression ::NonNullASTNode
 # Outside contexts where commas are too important (e.g. parameters/arguments),
 # postfixed loops can have comma expressions and spreads to accumulate multiple
 # items in the body, such as `pt.x, pt.y for pt of pts`
+@nomemo
 CommaLoop
   CommaExpressionSpread:expression _?:ws !IfClause PostfixStatement:post ->
     return attachPostfixStatementAsExpression(expression, [ws, post])
 
+@nomemo
 PostfixedExpressionOrCommaLoop ::NonNullASTNode
   CommaLoop
   PostfixedExpression
@@ -5331,6 +5525,7 @@ PostfixedCommaExpression
 PostfixStatement
   /(?=for|if|loop|unless|until|while)/ _PostfixStatement ::ForStatement | IfStatement | IterationStatement -> $2
 
+@nomemo
 _PostfixStatement
   ForClause ::ForStatement
   IfClause ::IfStatement
@@ -5338,6 +5533,7 @@ _PostfixStatement
   WhileClause ::IterationStatement
 
 # https://262.ecma-international.org/#prod-Statement
+@nomemo
 Statement
   KeywordStatement
   VariableStatement
@@ -5358,6 +5554,7 @@ Statement
 
   # NOTE: no WithStatement
 
+@nomemo
 IterationActualStatement
   IterationStatement !ShouldExpressionize ->
     // Leave generator forms for IterationExpression
@@ -5369,6 +5566,7 @@ IterationActualStatement
 # NOTE: Leave statement with trailing call expressions or pipe operator
 # to be expressionized by
 # ExpressionizedStatementWithTrailingCallExpressions
+@nomemo
 ShouldExpressionize
   AllowedTrailingCallExpressions
   NotDedented Pipe
@@ -5376,6 +5574,7 @@ ShouldExpressionize
   UnaryPostfix
 
 # Variant of Statement to forbid , operator (CommaExpression)
+@nomemo
 NoCommaStatement
   KeywordStatement
   VariableStatement
@@ -5389,6 +5588,7 @@ NoCommaStatement
   BlockStatement
 
 # NOTE: EmptyStatement handled differently than spec, consuming inline whitespace and comments then asserting following semi-colon
+@nomemo
 EmptyStatement
   _? &";" ::EmptyStatement ->
     return { type: "EmptyStatement", children: $1 || [] }
@@ -5398,11 +5598,13 @@ InsertEmptyStatement
     return { type: "EmptyStatement", children: [$1], implicit: true }
 
 # https://262.ecma-international.org/#prod-BlockStatement
+@nomemo
 BlockStatement
   # NOTE: Added lookahead for `=` to allow for destructuring assignment without parens
   ExplicitBlock !( __ "=" ) -> $1
 
 # https://262.ecma-international.org/#prod-LabelledStatement
+@nomemo
 LabelledStatement
   Label:label LabelledItem:statement ::LabelledStatement ->
     return {
@@ -5412,6 +5614,7 @@ LabelledStatement
       children: $0,
     }
 
+@nomemo
 Label
   # NOTE: `:label` instead of `label:` to not clash with implicit object literal
   Colon:colon IdentifierName:id Whitespace:w ::Label ->
@@ -5428,6 +5631,7 @@ Label
 # but should not have colon in output
 # Colon is required if the identifier is a Civet keyword,
 # except for iteration keywords which refer to containing anonymous loop
+@nomemo
 LabelIdentifier ::Label
   Colon IdentifierName:id ->
     return {
@@ -5485,6 +5689,7 @@ IfStatement ::IfStatement
       else: e,
     }
 
+@nomemo
 ElseClause
   ( Nested / _? ) Else BlockOrEmpty:block ::ElseClause -> {
     type: "ElseClause",
@@ -5509,6 +5714,7 @@ IfClause
 IterationStatement
   /(?=loop|comptime|do|for|until|while)/ _IterationStatement ::IterationFamily -> $2
 
+@nomemo
 _IterationStatement
   # NOTE: Added `loop` from CoffeeScript
   LoopStatement
@@ -5519,6 +5725,7 @@ _IterationStatement
   WhileStatement
   ForStatement
 
+@nomemo
 IterationExpression
   ( Async __ )?:async IterationStatement:statement ::IterationExpression ->
     return {
@@ -5532,6 +5739,7 @@ IterationExpression
     }
 
 # NOTE: Added from CoffeeScript
+@nomemo
 LoopStatement
   LoopClause:clause BlockOrEmptyStatement:block ->
     return {
@@ -5562,6 +5770,7 @@ LoopClause
     }
 
 # https://262.ecma-international.org/#prod-DoWhileStatement
+@nomemo
 DoWhileStatement
   # NOTE: Condition provides optional parens
   Do:d ( _? Star )?:generator NoPostfixBracedOrEmptyBlock:block __:ws WhileClause:clause ->
@@ -5574,6 +5783,7 @@ DoWhileStatement
       generator,
     }
 
+@nomemo
 DoStatement
   Do:d ( _? Star )?:generator NoPostfixBracedOrEmptyBlock:block ::DoStatement ->
     block = trimFirstSpace(block)
@@ -5584,6 +5794,7 @@ DoStatement
       generator,
     }
 
+@nomemo
 ComptimeStatement
   Comptime NoPostfixBracedOrEmptyBlock:t ElseClause?:e ::ComptimeStatement ->
     // Wrap the else block if present and comptime is off
@@ -5599,6 +5810,7 @@ ComptimeStatement
     }
 
 # https://262.ecma-international.org/#prod-WhileStatement
+@nomemo
 WhileStatement
   # NOTE: Condition provides optional parens
   WhileClause:clause BlockOrEmptyStatement:block ->
@@ -5608,6 +5820,7 @@ WhileStatement
       block,
     }
 
+@nomemo
 WhileClause
   ( While / Until ):kind ( _? Star )?:generator _?:ws Condition:condition ->
     subtype := kind.token
@@ -5627,6 +5840,7 @@ WhileClause
 # https://262.ecma-international.org/#prod-ForStatement
 # https://262.ecma-international.org/#prod-ForInOfStatement
 # NOTE: Merged into single rule
+@nomemo
 ForStatement
   ForClause:clause BlockOrEmptyStatement:block ->
     block = blockWithPrefix(clause.blockPrefix, block)
@@ -5637,6 +5851,7 @@ ForStatement
       block,
     }
 
+@nomemo
 ForClause
   For ( _? Star )?:generator __ ForStatementControlWithWhen:c ->
     {children, reduction} .= c
@@ -5655,6 +5870,7 @@ ForClause
       generator,
     }
 
+@nomemo
 ForStatementControlWithWhen ::ForStatementControl
   ForStatementControlWithReduction:control WhenCondition?:condition ->
     return control unless condition
@@ -5684,12 +5900,14 @@ ForStatementControlWithWhen ::ForStatementControl
       blockPrefix,
     }
 
+@nomemo
 ForStatementControlWithReduction ::ForStatementControl
   # Try without reduction first, to allow sum/count/etc as variables
   ForStatementControl
   ForReduction:reduction ForStatementControl:control ->
     return { ...control, reduction }
 
+@nomemo
 ForReduction ::ForReduction
   # Split so Hera's generated $C calls stay within typed overloads.
   ( ( "some" / "every" / "count" / "first" / "sum" ) / ( "product" / "min" / "max" / "join" / "concat" ) ):subtype NonIdContinue __:ws ->
@@ -5699,10 +5917,12 @@ ForReduction ::ForReduction
       children: [ ws ],
     }
 
+@nomemo
 ForStatementControl ::ForStatementControl
   !CoffeeForLoopsEnabled ForStatementParameters -> $2
   CoffeeForLoopsEnabled CoffeeForStatementParameters -> $2
 
+@nomemo
 WhenCondition
   __ When ExpressionWithObjectApplicationForbidden:exp -> exp
 
@@ -5750,7 +5970,9 @@ CoffeeForStatementParameters ::ForStatementControl
           names: index.names,
         }, ";"])
 
-      kind.token = "in"
+      // A copy: `kind` may be a memoized result, which another parse of
+      // this loop gets too
+      kind = { ...kind, token: "in", spaced: true }
     else if kind.token is "in" // CoffeeScript loop comprehensions
       counterRef := makeRef("i")
       lenRef := makeRef("len")
@@ -5868,6 +6090,7 @@ CoffeeForDeclaration ::CoffeeForDeclarationType | CoffeeForBindingAssignment
       expression: binding,
     }
 
+@nomemo
 ForStatementParameters ::ForStatementControl
   # https://262.ecma-international.org/#prod-ForStatement
   OpenParen __ ForStatementDeclaration:declaration __ Semicolon CommaExpression? Semicolon CommaExpression? __ CloseParen ->
@@ -5901,11 +6124,13 @@ ForStatementParameters ::ForStatementControl
     return processForInOf($0)
   ForRangeParameters
 
+@nomemo
 ForStatementDeclaration ::ASTNode
   LexicalDeclaration
   VariableStatement
   CommaExpression?
 
+@nomemo
 ForRangeParameters ::ForStatementControl
   # NOTE: CoffeeScript-style `for [start..end] by step` without declaration
   ( Await __ )? OpenParen:open OpenBracket RangeExpression:exp CloseBracket ( __ By ExpressionWithObjectApplicationForbidden )?:step CloseParen:close ->
@@ -5914,6 +6139,7 @@ ForRangeParameters ::ForStatementControl
     return forRange($1, open, undefined, exp, step, close)
 
 # NOTE: Consolidated declarations
+@nomemo
 ForInOfDeclarations ::NonNullASTNode[]
   ForInOfDeclaration:first ( __ Comma __ ForInOfDeclaration )*:rest ->
     return [first, ...rest.map [, , ws, decl] => prepend(ws, decl)]
@@ -5922,11 +6148,13 @@ ForInOfDeclaration ::NonNullASTNode
   ForDeclaration
   LeftHandSideExpression
 
+@nomemo
 ForInOfExpressions ::NonNullASTNode[]
   ExpressionWithObjectApplicationForbidden:first ( __ Comma __ ExpressionWithObjectApplicationForbidden )*:rest ->
     return [first, ...rest.map [, , , exp] => exp]
 
 # https://262.ecma-international.org/#prod-ForDeclaration
+@nomemo
 ForDeclaration ::ForDeclaration
   LetOrConstOrVar:c ForBinding:binding ->
     return {
@@ -5954,6 +6182,7 @@ ForDeclaration ::ForDeclaration
     }
 
 # https://262.ecma-international.org/#prod-ForBinding
+@nomemo
 ForBinding
   ( BindingPattern / BindingIdentifier ):pattern (_? "%")?:cycle TypeSuffix?:typeSuffix Initializer?:initializer ::Binding ->
     return {
@@ -6005,6 +6234,7 @@ EmptyCondition
     }
 
 # https://262.ecma-international.org/#prod-CaseBlock
+@nomemo
 CaseBlock ::CaseBlock
   ( Nested / _ )? OpenBrace NestedCaseClauses:clauses __ CloseBrace ->
     return {
@@ -6021,11 +6251,13 @@ CaseBlock ::CaseBlock
       children: $0,
     }
 
+@nomemo
 NestedCaseClauses
   PushIndent NestedCaseClause*:clauses PopIndent ->
     return clauses if clauses#
     return $skip
 
+@nomemo
 NestedCaseClause
   Nested:indent CaseClause:clause ->
     return {
@@ -6040,6 +6272,7 @@ NestedCaseClause
     }
 
 # https://262.ecma-international.org/#prod-CaseClause
+@nomemo
 CaseClause
   PatternExpressionList:patterns ( ThenClause / BareBlock ):block ::PatternClause ->
     return {
@@ -6090,10 +6323,12 @@ CaseClause
       children: [ defaultToken, colon, block ]
     }
 
+@nomemo
 PatternExpressionList
   PatternExpression:first ( _? Comma ( Nested / _ )? PatternExpression )*:rest ->
     return [first, ...rest.map(([, , , p]) => p)]
 
+@nomemo
 PatternExpression
   BindingPattern
   ForbidIndentedApplication ( ( BindingIdentifier Caret? )? SingleLineBinaryOpRHS+ )?:body RestoreIndentedApplication ->
@@ -6109,6 +6344,7 @@ PatternExpression
       rhs,
     }
 
+@nomemo
 CaseExpressionList
   ( _? CaseExpression InsertColon ):first ( __ Comma CaseExpression InsertColon )*:rest ->
     // Convert comma separated expression list to `case <exp>:`
@@ -6122,6 +6358,7 @@ CaseExpressionList
 
     return result
 
+@nomemo
 CaseExpression
   # NOTE: Explicitly matching `case foo:` to prevent this from looking like
   # an object literal, but treat `case [foo]:` like an array literal
@@ -6147,6 +6384,7 @@ TryStatement
     return processTryBlock($0)
 
 # https://262.ecma-international.org/#prod-Catch
+@nomemo
 CatchClause
   ( Nested / _ ):leadingWs Catch CatchBinding?:binding ( BracedThenClause / BracedOrEmptyBlock ):block ->
     return {
@@ -6158,6 +6396,7 @@ CatchClause
     }
 
 # NOTE: Added optional parentheses to catch binding
+@nomemo
 CatchBinding
   _?:ws1 OpenParen:open __:ws2 AllowAll CatchParameter?:parameter RestoreAll __:ws3 CloseParen:close ->
     return $skip unless parameter
@@ -6174,11 +6413,13 @@ CatchBinding
       children: [ ws, open, parameter, close ]
     }
 
+@nomemo
 WFinallyClause
   ( Nested / _ ) FinallyClause ->
     return prepend($1, $2)
 
 # https://262.ecma-international.org/#prod-Finally
+@nomemo
 FinallyClause
   Finally ( BracedThenClause / BracedOrEmptyBlock ):block ->
     return {
@@ -6188,6 +6429,7 @@ FinallyClause
     }
 
 # https://262.ecma-international.org/#prod-CatchParameter
+@nomemo
 CatchParameter
   ( ObjectBindingPattern / ArrayBindingPattern ):binding TypeSuffix:typeSuffix ->
     return {
@@ -6211,6 +6453,7 @@ CatchParameter
     }
 
 # An expression with explicit or implied parentheses, for use in if/while/switch
+@nomemo
 Condition ::Condition
   OpenParen:open _?:ws DeclarationCondition:expression CloseParen:close ->
     return {
@@ -6249,6 +6492,7 @@ Condition ::Condition
 
 # Variation of Condition where there's a trailing token (e.g. `then`)
 # that is guaranteed afterward, so we can use indented application.
+@nomemo
 BoundedCondition
   InsertOpenParen:open PostfixedExpression:expression InsertCloseParen:close ->
     // Don't double wrap parenthesized expressions
@@ -6260,6 +6504,7 @@ BoundedCondition
       expression,
     }
 
+@nomemo
 DeclarationCondition
   ForbidBracedApplication ForbidIndentedApplication ForbidNewlineBinaryOp LexicalDeclaration?:declaration RestoreNewlineBinaryOp RestoreBracedApplication RestoreIndentedApplication ->
     return $skip unless declaration
@@ -6270,11 +6515,13 @@ DeclarationCondition
       children: [declaration],
     }
 
+@nomemo
 ExpressionWithIndentedApplicationForbidden
   ForbidIndentedApplication ForbidNewlineBinaryOp Expression?:exp RestoreNewlineBinaryOp RestoreIndentedApplication ->
     return exp if exp
     return $skip
 
+@nomemo
 SingleLineExpressionWithIndentedApplicationForbidden
   ForbidIndentedApplication ForbidNewlineBinaryOp SingleLineAssignmentExpression?:exp RestoreNewlineBinaryOp RestoreIndentedApplication ->
     return exp if exp
@@ -6283,45 +6530,61 @@ SingleLineExpressionWithIndentedApplicationForbidden
 # NOTE: Forbid both explicit (braced) and implicit indented object literals
 # as arguments to implicit function calls.  This is useful in the context of
 # an `if` or `class` line where we don't want to treat the body as an object.
+@nomemo
 ExpressionWithObjectApplicationForbidden
   ForbidBracedApplication ForbidIndentedApplication ForbidImplicitFragment Expression?:exp RestoreBracedApplication RestoreIndentedApplication RestoreImplicitFragment ->
     return exp if exp
     return $skip
 
+@nomemo
 LeftHandSideExpressionWithObjectApplicationForbidden
   ForbidBracedApplication ForbidIndentedApplication ForbidNewlineBinaryOp LeftHandSideExpression?:exp RestoreNewlineBinaryOp RestoreBracedApplication RestoreIndentedApplication ->
     return exp if exp
     return $skip
 
+@nomemo
 ForbidClassImplicitCall
   "" ->
     state.forbidClassImplicitCall.push(true);
+    updateStateKey();
 
+@nomemo
 AllowClassImplicitCall
   "" ->
     state.forbidClassImplicitCall.push(false);
+    updateStateKey();
 
+@nomemo
 RestoreClassImplicitCall
   "" ->
     state.forbidClassImplicitCall.pop();
+    updateStateKey();
 
+@nomemo @state
 ClassImplicitCallForbidden
   "" ->
     return $skip unless state.classImplicitCallForbidden
     return
 
+@nomemo
 ForbidBracedApplication
   "" ->
     state.forbidBracedApplication.push(true);
+    updateStateKey();
 
+@nomemo
 AllowBracedApplication
   "" ->
     state.forbidBracedApplication.push(false);
+    updateStateKey();
 
+@nomemo
 RestoreBracedApplication
   "" ->
     state.forbidBracedApplication.pop();
+    updateStateKey();
 
+@nomemo @state
 BracedApplicationAllowed
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6330,18 +6593,25 @@ BracedApplicationAllowed
     return $skip if state.bracedApplicationForbidden
     return
 
+@nomemo
 ForbidIndentedApplication
   "" ->
     state.forbidIndentedApplication.push(true);
+    updateStateKey();
 
+@nomemo
 AllowIndentedApplication
   "" ->
     state.forbidIndentedApplication.push(false);
+    updateStateKey();
 
+@nomemo
 RestoreIndentedApplication
   "" ->
     state.forbidIndentedApplication.pop();
+    updateStateKey();
 
+@nomemo @state
 IndentedApplicationAllowed
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6350,18 +6620,25 @@ IndentedApplicationAllowed
     return $skip if state.indentedApplicationForbidden
     return
 
+@nomemo
 ForbidTrailingMemberProperty
   "" ->
     state.forbidTrailingMemberProperty.push(true);
+    updateStateKey();
 
+@nomemo
 AllowTrailingMemberProperty
   "" ->
     state.forbidTrailingMemberProperty.push(false);
+    updateStateKey();
 
+@nomemo
 RestoreTrailingMemberProperty
   "" ->
     state.forbidTrailingMemberProperty.pop();
+    updateStateKey();
 
+@nomemo @state
 TrailingMemberPropertyAllowed
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6369,18 +6646,25 @@ TrailingMemberPropertyAllowed
       console.log("forbidTrailingMemberProperty:", state.forbidTrailingMemberProperty)
     return $skip if state.trailingMemberPropertyForbidden
 
+@nomemo
 AllowNestedBinaryOp
   "" ->
     state.forbidNestedBinaryOp.push(false);
+    updateStateKey();
 
+@nomemo
 ForbidNestedBinaryOp
   "" ->
     state.forbidNestedBinaryOp.push(true);
+    updateStateKey();
 
+@nomemo
 RestoreNestedBinaryOp
   "" ->
     state.forbidNestedBinaryOp.pop();
+    updateStateKey();
 
+@state
 NestedBinaryOpAllowed
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6388,18 +6672,25 @@ NestedBinaryOpAllowed
       console.log("forbidNestedBinaryOp:", state.forbidNestedBinaryOp)
     return $skip if state.nestedBinaryOpForbidden
 
+@nomemo
 AllowNewlineBinaryOp
   "" ->
     state.forbidNewlineBinaryOp.push(false);
+    updateStateKey();
 
+@nomemo
 ForbidNewlineBinaryOp
   "" ->
     state.forbidNewlineBinaryOp.push(true);
+    updateStateKey();
 
+@nomemo
 RestoreNewlineBinaryOp
   "" ->
     state.forbidNewlineBinaryOp.pop();
+    updateStateKey();
 
+@state
 NewlineBinaryOpAllowed
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6407,18 +6698,25 @@ NewlineBinaryOpAllowed
       console.log("forbidNewlineBinaryOp:", state.forbidNewlineBinaryOp)
     return $skip if state.newlineBinaryOpForbidden
 
+@nomemo
 AllowImplicitFragment
   "" ->
     state.forbidImplicitFragment.push(false);
+    updateStateKey();
 
+@nomemo
 ForbidImplicitFragment
   "" ->
     state.forbidImplicitFragment.push(true);
+    updateStateKey();
 
+@nomemo
 RestoreImplicitFragment
   "" ->
     state.forbidImplicitFragment.pop();
+    updateStateKey();
 
+@nomemo @state
 ImplicitFragmentAllowed
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6426,18 +6724,25 @@ ImplicitFragmentAllowed
       console.log("forbidImplicitFragment:", state.forbidImplicitFragment)
     return $skip if state.implicitFragmentForbidden
 
+@nomemo
 AllowPipeline
   "" ->
     state.forbidPipeline.push(false);
+    updateStateKey();
 
+@nomemo
 ForbidPipeline
   "" ->
     state.forbidPipeline.push(true);
+    updateStateKey();
 
+@nomemo
 RestorePipeline
   "" ->
     state.forbidPipeline.pop();
+    updateStateKey();
 
+@nomemo @state
 PipelineAllowed
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6447,18 +6752,25 @@ PipelineAllowed
 
 # forbidColonArgument: set in a ternary "then" expression, where the next `:`
 # is the ternary colon, so `b :foo` mustn't become `b(Symbol.for("foo"))`.
+@nomemo
 AllowColonArgument
   "" ->
     state.forbidColonArgument.push(false);
+    updateStateKey();
 
+@nomemo
 ForbidColonArgument
   "" ->
     state.forbidColonArgument.push(true);
+    updateStateKey();
 
+@nomemo
 RestoreColonArgument
   "" ->
     state.forbidColonArgument.pop();
+    updateStateKey();
 
+@nomemo @state
 ColonArgumentForbidden
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6469,18 +6781,25 @@ ColonArgumentForbidden
 # forbidInlineObjectLiteral: set only in a snug ternary `a?b:c` so the
 # then-expression `b:c` doesn't become `{b:c}`. A separate flag because
 # spaced ternaries keep inline objects (`x ? a: b : c: d`).
+@nomemo
 AllowInlineObjectLiteral
   "" ->
     state.forbidInlineObjectLiteral.push(false);
+    updateStateKey();
 
+@nomemo
 ForbidInlineObjectLiteral
   "" ->
     state.forbidInlineObjectLiteral.push(true);
+    updateStateKey();
 
+@nomemo
 RestoreInlineObjectLiteral
   "" ->
     state.forbidInlineObjectLiteral.pop();
+    updateStateKey();
 
+@nomemo @state
 InlineObjectLiteralForbidden
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
@@ -6490,19 +6809,24 @@ InlineObjectLiteralForbidden
 
 # Set/restore both snug-ternary flags in one grammar slot (the snug ternary
 # rule would otherwise have 11 elements, over the $S overload limit of 10).
+@nomemo
 ForbidSnugTernaryThen
   ForbidColonArgument ForbidInlineObjectLiteral
 
+@nomemo
 RestoreSnugTernaryThen
   RestoreInlineObjectLiteral RestoreColonArgument
 
+@nomemo
 AllowAll
   AllowTrailingMemberProperty AllowBracedApplication AllowIndentedApplication AllowClassImplicitCall AllowNestedBinaryOp AllowNewlineBinaryOp AllowImplicitFragment AllowPipeline AllowColonArgument AllowInlineObjectLiteral
 
+@nomemo
 RestoreAll
   RestoreTrailingMemberProperty RestoreBracedApplication RestoreIndentedApplication RestoreClassImplicitCall RestoreNestedBinaryOp RestoreNewlineBinaryOp RestoreImplicitFragment RestorePipeline RestoreColonArgument RestoreInlineObjectLiteral
 
 # https://262.ecma-international.org/#prod-ExpressionStatement
+@nomemo
 CommaExpressionStatement
   # NOTE: semi-colons are being handled elsewhere
   # NOTE: Shouldn't need negative lookahead if shadowed in the proper order
@@ -6516,12 +6840,14 @@ CommaExpressionStatement
     return makeExpressionStatement($1)
 
 # CommaExpressionStatement, but forbidding comma operator
+@nomemo
 ExpressionStatement
   IterationExpression
   # NOTE: AssignmentExpression forbids , operator
   AssignmentExpression ->
     return makeExpressionStatement($1)
 
+@nomemo
 KeywordStatement
   # https://262.ecma-international.org/#prod-BreakStatement
   # NOTE: Also allow `break :label` for symmetry
@@ -6596,6 +6922,7 @@ ThrowStatement
     children: $0,
   }
 
+@nomemo
 Break
   "break" NonIdContinue ->
     return { $loc, token: $1 }
@@ -6604,6 +6931,7 @@ Continue
   "continue" NonIdContinue ->
     return { $loc, token: $1 }
 
+@nomemo
 Debugger
   "debugger" NonIdContinue ->
     return { $loc, token: $1 }
@@ -6612,9 +6940,11 @@ Debugger
 # would be its implicit call arguments.  An unbraced object can't be called,
 # so MaybeNested* rules parse anything else (like `a: 1` then a shorthand
 # `b` line) in the nested indentation, where the extra line is an error.
+@nomemo
 CompleteNestedImplicitObjectLiteral
   NestedImplicitObjectLiteral !ApplicationStart
 
+@nomemo
 MaybeNestedNonPipelineExpression
   # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
   # the second case, where they get checked by PrimaryExpression,
@@ -6627,6 +6957,7 @@ MaybeNestedNonPipelineExpression
     return $skip unless expression
     return expression
 
+@nomemo
 MaybeNestedPostfixedExpression
   # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
   # the second case, where they get checked by PrimaryExpression,
@@ -6639,6 +6970,7 @@ MaybeNestedPostfixedExpression
     return $skip unless expression
     return expression
 
+@nomemo
 MaybeNestedPostfixedExpressionOrCommaLoop ::ASTNode
   # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
   # the second case, where they get checked by PrimaryExpression,
@@ -6651,6 +6983,7 @@ MaybeNestedPostfixedExpressionOrCommaLoop ::ASTNode
     return $skip unless expression
     return expression
 
+@nomemo
 NestedPostfixedExpressionNoTrailing
   NestedBulletedArray
   NestedImplicitObjectLiteral
@@ -6658,6 +6991,7 @@ NestedPostfixedExpressionNoTrailing
     return $skip unless expression
     return expression
 
+@nomemo
 MaybeNestedExpression ::NonNullASTNode
   # Leave NestedBulletedArray and NestedImplicitObjectLiteral for
   # the second case, where they get checked by PrimaryExpression,
@@ -6674,6 +7008,7 @@ MaybeNestedExpression ::NonNullASTNode
 # parentheses if indented, so that the expression starts on the same line.
 # (e.g. for `return` or `yield`)
 # This also doesn't allow initial __ (whereas MaybeNestedExpression does)
+@nomemo
 MaybeParenNestedExpression
   # Skip if there's a postfix if/etc., possibly followed by `;` (see #2131).
   &( _? PostfixStatement ( NoBlock / ( _? Semicolon ) ) ) -> ""
@@ -6801,6 +7136,7 @@ ImpliedImport
     return { $loc, token: "import " }
 
 # https://262.ecma-international.org/#prod-ImportClause
+@nomemo
 ImportClause ::ImportClause
   ImportedBinding:binding ( __ Comma __ ( NameSpaceImport / NamedImports ) )?:rest ->
     if rest
@@ -6835,6 +7171,7 @@ NameSpaceImport ::ImportClause
     }
 
 # https://262.ecma-international.org/#prod-NamedImports
+@nomemo
 NamedImports ::ImportClause
   OpenBrace ( NamedImportRest / TypeAndImportSpecifier )*:items ( __ Comma )? __ CloseBrace ->
     // Rest can appear anywhere; reorder moves it to the tail.
@@ -6857,6 +7194,7 @@ NamedImports ::ImportClause
     }
 
 # `...rest` in named imports — triggers namespace+const desugar.
+@nomemo
 NamedImportRest
   __:ws DotDotDot:dots BindingIdentifier:binding ObjectPropertyDelimiter:delim ->
     return {
@@ -6880,6 +7218,7 @@ OperatorNamedImports ::OperatorImportClause
 
 # Allows { default, "foo bar" } because dynamic imports allow them;
 # forbids { type foo } because dynamic imports don't allow them
+@nomemo
 DynamicNamedImports
   OpenBrace DynamicImportSpecifier*:specifiers ( __ Comma )? __ CloseBrace ->
     return {
@@ -6888,6 +7227,7 @@ DynamicNamedImports
       specifiers,
     }
 
+@nomemo
 DynamicImportContents
   DynamicNamedImports
   IdentifierName
@@ -6914,6 +7254,7 @@ FromClause ::FromClause
 # https://github.com/tc39/proposal-import-attributes
 # https://devblogs.microsoft.com/typescript/announcing-typescript-5-3/#import-attributes
 # NOTE: Forbid newline before `with` which could mean a function call
+@nomemo
 ImportAssertion
   _? ( "with" / "assert" ):keyword NonIdContinue _? ObjectLiteral:object ->
     return {
@@ -6924,6 +7265,7 @@ ImportAssertion
     }
 
 # https://devblogs.microsoft.com/typescript/announcing-typescript-3-8-beta/#type-only-imports-exports
+@nomemo
 TypeAndImportSpecifier
   __ TypeKeyword ImportSpecifier ->
     // Flatten inner ImportSpecifier's children so reorderBindingRestProperty's
@@ -6945,6 +7287,7 @@ TypeAndImportSpecifier
 
 # https://262.ecma-international.org/#prod-ImportSpecifier
 # `delim` exposed for reorderBindingRestProperty.
+@nomemo
 ImportSpecifier
   __:ws1 ModuleExportName:source ImportAsToken:as __:ws2 ( BindingPattern / ImportedBinding ):binding ObjectPropertyDelimiter:delim ->
     // Pattern binding forces desugar — native ESM can't nest.
@@ -7025,6 +7368,7 @@ ModuleExportName
   IdentifierName
 
 # https://262.ecma-international.org/#prod-ModuleSpecifier
+@nomemo
 ModuleSpecifier
   UnprocessedModuleSpecifier:module ImportAssertion?:assertion ->
     module = rewriteModuleSpecifier(module)
@@ -7036,10 +7380,12 @@ ModuleSpecifier
       children: [ module, assertion ],
     }
 
+@nomemo
 UnprocessedModuleSpecifier
   SingleLineStringLiteral
   UnquotedSpecifier
 
+@nomemo
 UnquotedSpecifier
   # Currently allowing most non-whitespace characters
   # Forbidding ; (statement separator), = (assignment), > (function arrow)
@@ -7056,6 +7402,7 @@ ImportedBinding ::Identifier
   __:ws Identifier:id -> prepend(ws, id)
 
 # https://262.ecma-international.org/#prod-ExportDeclaration
+@nomemo
 ExportDeclaration
   # NOTE: TypeScript's CommonJS export syntax
   # https://www.typescriptlang.org/docs/handbook/modules/reference.html#export--and-import--require
@@ -7140,6 +7487,7 @@ ExportDeclaration
 # declaration so auto-dec.civet can split it into `<assign>; export {names}`
 # when any name is already declared, pre-declaring any new ones with `let`
 # (avoiding TDZ/redeclaration errors).
+@nomemo
 ExportVarDec ::Declaration
   InsertVar VariableDeclarationList ->
     decl := config.autoConst ? "const" : config.autoLet ? "let" : "var"
@@ -7151,6 +7499,7 @@ ExportVarDec ::Declaration
     }
 
 # https://262.ecma-international.org/#prod-ExportFromClause
+@nomemo
 ExportFromClause
   Star ( __ As __ ModuleExportName )?
   TypeAndNamedExports
@@ -7164,6 +7513,7 @@ TypeAndNamedExports
     return { ts: true, children: [$1, $2] }
 
 # https://262.ecma-international.org/#prod-NamedExports
+@nomemo
 NamedExports
   OpenBrace ExportSpecifier*:specifiers (__ Comma )? __ CloseBrace ::NamedExports ->
     return {
@@ -7177,6 +7527,7 @@ NamedExports
     return [open, first, ...rest, close]
 
 # https://262.ecma-international.org/#prod-ExportSpecifier
+@nomemo
 ExportSpecifier
   __:ws1 ( TypeKeyword __ )?:ts ModuleExportName:local ( __ As __ ModuleExportName )?:rename ObjectPropertyDelimiter:delim ->
     // Local stays mangled (JS variable ref); external side uses propertyKey
@@ -7215,6 +7566,7 @@ ExportSpecifier
       children: []
     }
 
+@nomemo
 ImplicitExportSpecifier
   !Default ModuleExportName:local ( __ As __ ModuleExportName )?:rename ->
     if rename
@@ -7224,6 +7576,7 @@ ImplicitExportSpecifier
     return [local, rename]
 
 # https://262.ecma-international.org/#prod-Declaration
+@nomemo
 Declaration
   ImportDeclaration:decl ->
     // NOTE: decl.imports always has binding or specifiers when we reach here
@@ -7250,10 +7603,12 @@ Declaration
   UsingDeclaration
 
 # https://262.ecma-international.org/#prod-HoistableDeclaration
+@nomemo
 HoistableDeclaration
   FunctionDeclaration
 
 # https://262.ecma-international.org/#prod-LexicalDeclaration
+@nomemo
 LexicalDeclaration ::LexicalDeclaration
   # NOTE: Eliminated left recursion
   LetOrConst:decl LexicalBinding:binding ( __ Comma __ LexicalBinding )*:tail ->
@@ -7312,6 +7667,7 @@ TypeAssignment
 
 # https://262.ecma-international.org/#prod-LexicalBinding
 # merged with https://262.ecma-international.org/#prod-VariableDeclaration
+@nomemo
 LexicalBinding ::Binding
   BindingPattern:pattern TypeSuffix?:typeSuffix Initializer:initializer ->
     [splices, thisAssignments] := gatherBindingCode(pattern)
@@ -7349,6 +7705,7 @@ Initializer ::Initializer
   }
 
 # https://262.ecma-international.org/#prod-VariableStatement
+@nomemo
 VariableStatement ::Declaration
   Var __ VariableDeclarationList ->
     return {
@@ -7359,6 +7716,7 @@ VariableStatement ::Declaration
     }
 
 # https://262.ecma-international.org/#prod-VariableDeclarationList
+@nomemo
 VariableDeclarationList ::Omit<Declaration, "decl">
   LexicalBinding:binding ( __ Comma __ LexicalBinding )*:tail ->
     bindings := [binding].concat(tail.map(([,,,b]) => b))
@@ -7377,6 +7735,7 @@ NumericLiteral
   /(?=[0-9.])/ NumericLiteralKind:token ::NumericLiteral ->
     return { type: "NumericLiteral", $loc, token } as const
 
+@nomemo
 NumericLiteralKind
   DecimalBigIntegerLiteral
   BinaryIntegerLiteral
@@ -7385,11 +7744,13 @@ NumericLiteralKind
   DecimalLiteral
 
 # https://262.ecma-international.org/#prod-DecimalBigIntegerLiteral
+@nomemo
 DecimalBigIntegerLiteral
   /(?:0|[1-9](?:_[0-9]|[0-9])*)n/
   # /[_0-9]*n/
 
 # https://262.ecma-international.org/#prod-DecimalLiteral
+@nomemo
 DecimalLiteral
   # NOTE: Not matching the dot as part of a number if it is followed by a valid JS identifier so that it will match as a property access
   $( /(?:0|[1-9](?:_[0-9]|[0-9])*)(?=\.(?:\p{ID_Start}|[_$]))/ ) !( "." ExponentPart ) ->
@@ -7398,27 +7759,33 @@ DecimalLiteral
   $( /(?:0|[1-9](?:_[0-9]|[0-9])*)(?:\.(?:[0-9](?:_[0-9]|[0-9])*))?/ ExponentPart? )
   $( /(?:\.[0-9](?:_[0-9]|[0-9])*)/ ExponentPart? )
 
+@nomemo
 ExponentPart
   /(?:[eE][+-]?[0-9]+(?:_[0-9]|[0-9])*)/
 
 # https://262.ecma-international.org/#prod-BinaryIntegerLiteral
+@nomemo
 BinaryIntegerLiteral
   /0[bB][01](?:[01]|_[01])*n?/
 
 # https://262.ecma-international.org/#prod-OctalIntegerLiteral
+@nomemo
 OctalIntegerLiteral
   /0[oO][0-7](?:[0-7]|_[0-7])*n?/
 
 # https://262.ecma-international.org/#prod-HexIntegerLiteral
+@nomemo
 HexIntegerLiteral
   /0[xX][0-9a-fA-F](?:[0-9a-fA-F]|_[0-9a-fA-F])*n?/
 
 # NOTE: Integer variation of NumericLiteral
+@nomemo
 IntegerLiteral
   # perf: short circuit if no possibility of being an integer
   /(?=[0-9])/ IntegerLiteralKind:token ::NumericLiteral ->
     return { type: "NumericLiteral", $loc, token } as const
 
+@nomemo
 IntegerLiteralKind
   DecimalBigIntegerLiteral
   BinaryIntegerLiteral
@@ -7426,6 +7793,7 @@ IntegerLiteralKind
   HexIntegerLiteral
   DecimalIntegerLiteral
 
+@nomemo
 DecimalIntegerLiteral
   /(?:0|[1-9](?:_[0-9]|[0-9])*)/
 
@@ -7453,11 +7821,13 @@ DoubleStringCharacters
   /(?:\\.|[^"])*/ ->
     return { $loc, token: $0 }
 
+@nomemo
 SingleStringCharacters
   /(?:\\.|[^'])*/ ->
     return { $loc, token: $0 }
 
 # StringLiteral but without literal newlines, used for module names
+@nomemo
 SingleLineStringLiteral
   $( DoubleQuote /(?:\\.|[^"\n])*/ DoubleQuote ) / $( SingleQuote /(?:\\.|[^'\n])*/ SingleQuote ) ::StringLiteral ->
     return {
@@ -7481,6 +7851,7 @@ UnclosedSingleLineStringLiteral ::Children
       },
     ]
 
+@nomemo
 TripleDoubleStringContents
   CoffeeInterpolationEnabled ( CoffeeTripleDoubleStringCharacters / CoffeeStringSubstitution )* -> $2
   !CoffeeInterpolationEnabled TripleDoubleStringCharacters -> [$2]
@@ -7489,19 +7860,23 @@ CoffeeTripleDoubleStringCharacters
   /(?:"(?!"")|#(?!\{)|\\.|[^#"])+/ ->
     return { $loc, token: $0 }
 
+@nomemo
 TripleDoubleStringCharacters
   /(?:"(?!"")|\\.|[^"])+/ ->
     return { $loc, token: $0 }
 
+@nomemo
 TripleSingleStringCharacters
   /(?:'(?!'')|\\.|[^'])*/ ->
     return { $loc, token: $0 }
 
+@nomemo
 CoffeeStringSubstitution
   CoffeeSubstitutionStart AllowAll ( StringSubstitutionExpression __ CloseBrace )? RestoreAll ->
     return $skip unless $3
     return [$1, ...$3]
 
+@nomemo
 CoffeeInterpolatedDoubleQuotedString
   CoffeeInterpolationEnabled DoubleQuote:s ( CoffeeDoubleQuotedStringCharacters / CoffeeStringSubstitution )*:parts DoubleQuote:e ->
     return processCoffeeInterpolation(s, parts, e, $loc)
@@ -7520,14 +7895,17 @@ RegularExpressionLiteral
       children: [ { $loc, token: raw } ]
     }
 
+@nomemo
 RegularExpressionClass
   $(OpenBracket RegularExpressionClassCharacters CloseBracket) ->
     return { $loc, token: $1 }
 
+@nomemo
 RegularExpressionClassCharacters
   /(?:\\.|[^\]])*/ ->
     return { $loc, token: $0 }
 
+@nomemo
 HeregexLiteral
   TripleSlash:open HeregexBody:body TripleSlash:close RegularExpressionFlags:flags ->
     hasSubstitutions := body.some (is like { type: "Substitution" })
@@ -7578,6 +7956,7 @@ HeregexLiteral
       children: $0,
     }
 
+@nomemo
 HeregexBody
   !"/" HeregexPart*:body -> body
 
@@ -7594,6 +7973,7 @@ heregexEscapes: Record<string, string> := {
 }
 ```
 
+@nomemo
 HeregexPart
   RegularExpressionClass
 
@@ -7614,6 +7994,7 @@ HeregexPart
   # but handle them as single characters if they're not
   /[^[\/\s#$\\]+|[#$]/ -> { $loc, token: $0 }
 
+@nomemo
 HeregexComment
   # NOTE: CoffeeScript doesn't treat JS comments as regex comments
   # We disable them when coffeeDiv flag (// operator) is enabled
@@ -7625,10 +8006,12 @@ HeregexComment
 RegularExpressionBody
   ![*\/\r\n] RegExpPart*
 
+@nomemo
 RegExpPart
   RegularExpressionClass
   RegExpCharacter
 
+@nomemo
 RegExpCharacter
   /(?:\\.|[^[\/\r\n])+/
 
@@ -7642,6 +8025,7 @@ TemplateLiteral
   # perf: assertion to exit early
   /(?=[`'"])/ _TemplateLiteral -> $2
 
+@nomemo
 _TemplateLiteral
   TripleTick ( TemplateBlockCharacters / TemplateSubstitution )* TripleTick ->
     return dedentBlockSubstitutions($0, config.tab)
@@ -7670,6 +8054,7 @@ _TemplateLiteral
   CoffeeInterpolatedDoubleQuotedString
 
 # NOTE: Simplified grammar
+@nomemo
 TemplateSubstitution
   SubstitutionStart AllowAll ( StringSubstitutionExpression __ CloseBrace )? RestoreAll ->
     return $skip unless $3
@@ -7694,6 +8079,7 @@ TemplateBlockCharacters
 # Keywords sorted longest-first so prefix conflicts (e.g. `instanceof`
 # before `in`) match the longest match first; boundary check via NonIdContinue.
 # `let` added since Civet assumes strict mode.
+@nomemo
 ReservedWord
   # `$` returns matched text; bare regex terminals return the full match array.
   $/(?:off|yes|on|no)/ NonIdContinue CoffeeBooleansEnabled -> $1
@@ -7706,6 +8092,7 @@ Comment
   # perf: assertion to exit early
   /(?=\/|#)/ _Comment ::CommentNode -> $2
 
+@nomemo
 _Comment
   MultiLineComment
   SingleLineComment
@@ -7716,21 +8103,25 @@ SingleLineComment
   JSSingleLineComment
   CoffeeCommentEnabled CoffeeSingleLineComment -> $2
 
+@nomemo
 JSSingleLineComment
   # Two or four+ slashes are comments; three slashes are heregexes/directives.
   /\/\/(?!\/(?!\/))[^\r\n]*/ ->
     return { type: "Comment", $loc, token: $0 } as const
 
 # https://262.ecma-international.org/#prod-MultiLineComment
+@nomemo
 MultiLineComment
   JSMultiLineComment
   # NOTE: Added CoffeeScript style ### multiline comments
   CoffeeMultiLineComment
 
+@nomemo
 JSMultiLineComment
   $( "/*" (!"*/" . )* "*/" ) ->
     return { type: "Comment", $loc, token: $1 } as const
 
+@nomemo
 CoffeeSingleLineComment
   # NOTE: CoffeeScript style single line comments
   /#(?!##(?!#))([^\r\n]*)/ ->
@@ -7738,11 +8129,13 @@ CoffeeSingleLineComment
 
 # NOTE: ###...### is currently always enabled; just # needs a flag.
 # We could check for CoffeeCommentEnabled here.
+@nomemo
 CoffeeMultiLineComment
   CoffeeHereCommentStart $/[^]*?###/ ->
     $2 = $2.slice(0, $2.length-3).replace(/\*\//g, "* /")
     return { type: "Comment", $loc, token: `/*${$2}*/` } as const
 
+@nomemo
 CoffeeHereCommentStart
   /###(?!#)/
 
@@ -7758,6 +8151,7 @@ RestOfLine
 # Matches any whitespace optionally followed by a rest of line comment
 # This will always succeed since each part is optional that's why it
 # doesn't have `?` when used in other rules.
+@nomemo
 TrailingComment
   _? SingleLineComment?
 
@@ -7782,10 +8176,12 @@ __
   /(?=\s|\/|#)/ ( Whitespace / Comment )* -> $2
   ""
 
+@nomemo
 Whitespace ::ASTLeaf
   [\s]+ ->
     return { $loc, token: $0 }
 
+@nomemo
 SimpleStatementDelimiter
   # Hera 0.9.0 returns `true` for assertions; normalize to undefined here
   # so downstream delimiter checks (e.g. insertSemicolon) treat missing delim as falsy.
@@ -7874,6 +8270,7 @@ Case
   "case" NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1 }
 
+@nomemo
 Catch
   "catch" NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1 }
@@ -7926,6 +8323,7 @@ Default
   "default" NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1 }
 
+@nomemo
 Delete
   "delete" NonIdContinue ->
     { $loc, token: $1 } as const
@@ -7968,6 +8366,7 @@ DoubleColonAsColon
   "::" ->
     return { $loc, token: ":" }
 
+@nomemo
 DoubleQuote
   "\"" ->
     return { $loc, token: $1 }
@@ -7996,6 +8395,7 @@ Extends
   "extends" NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1 }
 
+@nomemo
 Finally
   "finally" NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1 }
@@ -8055,10 +8455,12 @@ LetOrConstOrVar
   ( "let" / "const" / "var" ) NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1 }
 
+@nomemo
 Like
   "like" NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1 }
 
+@nomemo
 Loop
   # NOTE: loop becomes while
   "loop" NonIdContinue ->
@@ -8096,6 +8498,7 @@ Operator
   "operator" NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1 }
 
+@nomemo
 Override
   "override" NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1, ts: true }
@@ -8152,6 +8555,7 @@ Semicolon
   ";" ->
     return { $loc, token: $1 }
 
+@nomemo
 SingleQuote
   "'" ->
     return { $loc, token: $1 }
@@ -8241,10 +8645,12 @@ Using
   "using" NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1 }
 
+@nomemo
 Var
   "var" NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1 }
 
+@nomemo
 Void
   "void" NonIdContinue ->
     { $loc, token: $1 } as const
@@ -8268,6 +8674,7 @@ Yield
 
 ## JSX
 
+@nomemo @state
 JSXImplicitFragment
   # Always allow a single JSX tag.
   # Implicit fragment can be explicitly forbidden; it also inherits
@@ -8298,12 +8705,14 @@ JSXTag
   # perf: assertion to exit early
   /(?=[<])/ _JSXTag -> $2
 
+@nomemo
 _JSXTag
   JSXElement
   JSXFragment
   JSXComment
 
 # https://facebook.github.io/jsx/#prod-JSXElement
+@nomemo @state
 JSXElement ::ASTNode
   JSXSelfClosingElement
   # NOTE: In default JSX mode, JSX children must be properly indented,
@@ -8334,24 +8743,31 @@ JSXElement ::ASTNode
     return { type: "JSXElement", children: nodes, tag: open[1] }
 
 # https://facebook.github.io/jsx/#prod-JSXSelfClosingElement
+@nomemo
 JSXSelfClosingElement
   "<" JSXElementName TypeArguments? JSXAttributes? Whitespace? "/>" ->
     return { type: "JSXElement", children: $0, tag: $2 }
 
+@nomemo
 PushJSXOpeningElement
   JSXOpeningElement ->
     state.JSXTagStack.push($1[1])
+    updateStateKey()
     return $1
 
+@nomemo
 PopJSXStack
   "" ->
     state.JSXTagStack.pop()
+    updateStateKey()
     return
 
 # https://facebook.github.io/jsx/#prod-JSXOpeningElement
+@nomemo
 JSXOpeningElement
   "<" JSXElementName TypeArguments? JSXAttributes? Whitespace? ">"
 
+@nomemo @state
 JSXOptionalClosingElement
   Whitespace? JSXClosingElement:close ->
     return $skip if state.currentJSXTag !== close[2]
@@ -8363,6 +8779,7 @@ JSXClosingElement
   "</" Whitespace? JSXElementName Whitespace? ">"
 
 # https://facebook.github.io/jsx/#prod-JSXFragment
+@nomemo @state
 JSXFragment ::ASTNode
   # NOTE: In default JSX mode, JSX children must be properly indented,
   # and closing tags are optional (but still allowed).
@@ -8388,11 +8805,14 @@ JSXFragment ::ASTNode
       jsxChildren: children.jsxChildren
     }
 
+@nomemo
 PushJSXOpeningFragment
   "<>" ->
     state.JSXTagStack.push("")
+    updateStateKey()
     return $1
 
+@state
 JSXOptionalClosingFragment
   Whitespace? JSXClosingFragment ->
     /* c8 ignore next -- defensive JSX stack state check: if we reach this rule, we're closing a fragment and currentJSXTag is always "". $skip kept to protect JSX stack state if invariant ever breaks. */
@@ -8537,6 +8957,7 @@ JSXAttributes
         pair
 
 # NOTE: Merged SpreadAttribute and Attribute
+@nomemo
 JSXAttribute
   # https://facebook.github.io/jsx/#prod-JSXSpreadAttribute
   # allows something like
@@ -8679,6 +9100,7 @@ JSXAttribute
 JSXAttributeSpace
   /[\s>]|\/>/
 
+@nomemo
 JSXShorthandString
   /(?:[\w\-:]+|\([^()]*\)|\[[^\[\]]*\])+/ ->
     return quoteString($0)
@@ -8690,6 +9112,7 @@ JSXShorthandString
   OpenBrace PostfixedExpressionOrCommaLoop __ CloseBrace
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeName
+@nomemo
 JSXAttributeName ::NonNullASTNode
   # `<div 😊={x}>` — tried first so it claims the whole identifier (incl.
   # ASCII parts adjacent to unicode); wrapped as a synthetic
@@ -8707,6 +9130,7 @@ JSXAttributeName ::NonNullASTNode
   ComputedPropertyName
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeInitializer
+@nomemo
 JSXAttributeInitializer ::{children: Children, value: ASTNode}
   # Outside CoffeeScript compatibility mode,
   # allow attribute value to be an indented expression
@@ -8723,6 +9147,7 @@ JSXAttributeInitializer ::{children: Children, value: ASTNode}
   }
 
 # https://facebook.github.io/jsx/#prod-JSXAttributeValue
+@nomemo
 JSXAttributeValue
   # https://facebook.github.io/jsx/#prod-JSXDoubleStringCharacters
   # https://facebook.github.io/jsx/#prod-JSXSingleStringCharacters
@@ -8744,6 +9169,7 @@ JSXAttributeValue
   /"[^"]*"|'[^']*'/
 
 # JSX shorthand to avoid explicit braces when unnecessary (no whitespace)
+@nomemo
 InlineJSXAttributeValue
   InlineJSXUnaryExpression InlineJSXBinaryOpRHS* ->
     return processBinaryOpExpression($0) if $2.length
@@ -8758,11 +9184,13 @@ InlineJSXBinaryOpRHS ::BinaryOpRHS
     return [[], op, [], rhs]
 
 # JSXUnaryExpression, with InlineJSX prefixes and no Do (which has whitespace)
+@nomemo
 InlineJSXUnaryExpression
   InlineJSXUnaryOp*:pre InlineJSXUpdateExpression:exp InlineJSXUnaryPostfix?:post ->
     return processUnaryExpression(pre, exp, post)
 
 # UnaryOp, restricted to whitespace-free symbol operators
+@nomemo
 InlineJSXUnaryOp
   /[!~+-](?!\s|[!~+-]*&)/ ->
     return { $loc, token: $0 }
@@ -8772,6 +9200,7 @@ InlineJSXUnaryPostfix
   QuestionMark
 
 # UpdateExpression, with LeftHandSideExpression -> InlineJSXCallExpression
+@nomemo
 InlineJSXUpdateExpression
   UpdateExpressionSymbol UnaryExpression
   InlineJSXCallExpression UpdateExpressionSymbol? ->
@@ -8781,6 +9210,7 @@ InlineJSXUpdateExpression
 # CallExpression, with only explicit function calls.
 # This also acts as a replacement for LeftHandSideExpression
 # (we don't allow New because that has whitespace).
+@nomemo
 InlineJSXCallExpression
   Super ExplicitArguments:args InlineJSXCallExpressionRest*:rest ->
     return processCallMemberExpression({
@@ -8820,6 +9250,7 @@ InlineJSXCallExpressionRest
     return [ $1, args ]
 
 # MemberExpression, with PrimaryExpression -> InlineJSXPrimaryExpression
+@nomemo
 InlineJSXMemberExpression
   ( InlineJSXPrimaryExpression / SuperProperty / MetaProperty ) InlineJSXMemberExpressionRest*:rest ->
     if rest# or Array.isArray($1)
@@ -8847,6 +9278,7 @@ InlineJSXMemberExpressionRest
   NonNullAssertion
 
 # Subset of PrimaryExpression; omissions documented below.
+@nomemo
 InlineJSXPrimaryExpression
   NullLiteral
   BooleanLiteral
@@ -8863,6 +9295,7 @@ InlineJSXPrimaryExpression
   OptimizedParenthesizedExpression
   # Omitting JSXElement and JSXFragment which don't need braces
 
+@nomemo
 JSXMixedChildren
   # NOTE: c1 matches "same-line" children, while c2 matches indented children
   # Used in indentation-based JSX
@@ -8872,6 +9305,7 @@ JSXMixedChildren
       jsxChildren: c1.concat(c2.jsxChildren),
     }
 
+@nomemo
 JSXSameLineChildren
   # NOTE: In jsxCodeSameLine mode, we discard leading whitespace on same-line
   # children, which just serves to separate JSX tag from code.
@@ -8888,6 +9322,7 @@ JSXChildren
       jsxChildren: $1.map((children) => children[1]),
     }
 
+@nomemo
 JSXNestedChildren
   PushIndent ( JSXNested JSXChild+ )* PopIndent ->
     if $2.length
@@ -8906,6 +9341,7 @@ JSXNestedChildren
 JSXEOS
   ( NonNewlineWhitespace? EOL )+
 
+@nomemo @state
 JSXNested
   JSXEOS:eos Indent:indent ->
     { level } := indent
@@ -8914,6 +9350,7 @@ JSXNested
     return $0
 
 # https://facebook.github.io/jsx/#prod-JSXChild
+@nomemo
 JSXChild
   JSXChildGeneral
   JSXCodeNestedEnabled JSXCodeChild -> $2
@@ -8926,10 +9363,12 @@ JSXChildForcedCode
   JSXCodeChild
 
 # Simulate JSXChild with JSXCodeEnabled forced false (for same-line children)
+@nomemo
 JSXChildForcedNoCode
   JSXChildGeneral
   JSXText
 
+@nomemo
 JSXChildGeneral
   JSXElement
   JSXFragment
@@ -8980,6 +9419,7 @@ JSXText
     }
 
 # https://facebook.github.io/jsx/#prod-JSXChildExpression
+@nomemo
 JSXChildExpression
   # NOTE: Added lexical declaration, which gets hoisted,
   # converted into an assignment, and voided to avoid rendering.
@@ -9023,6 +9463,7 @@ JSXChildExpression
   # NOTE: Using PostfixedExpressionOrCommaLoop to allow If/Switch expressions and postfixes
   Whitespace? ( DotDotDot Whitespace? )? PostfixedExpressionOrCommaLoop
 
+@nomemo
 IndentedJSXChildExpression
   PushIndent NestedJSXChildExpression? PopIndent ->
     return $skip unless $2
@@ -9033,6 +9474,7 @@ NestedJSXChildExpression
 
 # > followed by expression or indented block is a way to avoid wrapping
 # JSX code children in braces
+@nomemo
 JSXAngleChild
   CloseAngleBracket JSXCodeChild -> $2
 
@@ -9061,6 +9503,7 @@ JSXCodeChildExpression
 
 ## Using Declaration
 
+@nomemo
 UsingDeclaration
   Using:decl _? UsingBinding:binding ( __ Comma __ UsingBinding )*:tail UsingJSModeError ->
     bindings := [binding].concat(tail.map(([,,,b]) => b))
@@ -9098,6 +9541,7 @@ UsingJSModeError
 
 ## Type Stuff
 
+@nomemo
 TypeDeclaration
   # NOTE: First check for forms with a `declare` keyword present
   ( Export _? )? ( Declare _? ) TypeLexicalDeclaration:d ->
@@ -9117,12 +9561,14 @@ TypeDeclaration
     }
 
 # NOTE: These are declarations even without a `declare` prefix
+@nomemo
 TypeDeclarationRest ::TypeDeclaration | InterfaceDeclaration | NamespaceDeclaration | FunctionSignature
   TypeAliasDeclaration
   InterfaceDeclaration
   NamespaceDeclaration
   FunctionSignature
 
+@nomemo
 TypeAliasDeclaration ::TypeDeclaration
   # TODO: ( __ Type ) can be refined further to check for consistently nested binary ops, etc.
   TypeKeyword _? IdentifierName:id TypeParameters? OptionalEquals ( MaybeNestedType / ( __ Type ) ) ->
@@ -9141,6 +9587,7 @@ TypeAliasDeclaration ::TypeDeclaration
       ts: true,
     }
 
+@nomemo
 InterfaceDeclaration ::InterfaceDeclaration
   Interface _? IdentifierName:id TypeParameters? InterfaceExtendsClause? InterfaceOrEmptyBlock ->
     return {
@@ -9150,6 +9597,7 @@ InterfaceDeclaration ::InterfaceDeclaration
       ts: true,
     }
 
+@nomemo
 NamespaceDeclaration
   Namespace _? IdentifierName:id ModuleOrEmptyBlock ::NamespaceDeclaration ->
     return {
@@ -9159,11 +9607,13 @@ NamespaceDeclaration
       ts: true,
     }
 
+@nomemo
 OptionalEquals
   __ Equals
   &IndentedFurther InsertSpaceEquals -> $2
 
 # NOTE: These are all guaranteed to be preceded by a `declare` keyword
+@nomemo
 TypeLexicalDeclaration ::ASTNode
   TypeLetOrConstDeclaration
   __ EnumDeclaration
@@ -9172,6 +9622,7 @@ TypeLexicalDeclaration ::ASTNode
   Module _ StringLiteral DeclareBlock?
   Global DeclareBlock?
 
+@nomemo
 TypeLetOrConstDeclaration ::TypeLexicalDeclaration
   __ LetOrConstOrVar TypeDeclarationBinding:first ( CommaDelimiter __ TypeDeclarationBinding )*:rest ->
     names := first.names.concat(...rest.map((b) => b[2].names))
@@ -9182,6 +9633,7 @@ TypeLetOrConstDeclaration ::TypeLexicalDeclaration
       names,
     }
 
+@nomemo
 TypeDeclarationBinding ::TypeDeclarationBinding
   # NOTE: This is almost the same as LexicalBinding except it cannot have an initializer
   ( BindingPattern / BindingIdentifier ) TypeSuffix? ->
@@ -9191,9 +9643,11 @@ TypeDeclarationBinding ::TypeDeclarationBinding
       names: $1.names,
     }
 
+@nomemo
 InterfaceExtendsClause
   ExtendsToken InterfaceExtendsTarget ( Comma InterfaceExtendsTarget )*
 
+@nomemo
 InterfaceExtendsTarget
   ImplementsTarget
 
@@ -9209,10 +9663,12 @@ Interface
   "interface" NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1 }
 
+@nomemo
 Global
   "global" NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1 }
 
+@nomemo
 Module
   "module" NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1 }
@@ -9221,10 +9677,12 @@ Namespace
   "namespace" NonIdContinue ->
     return { type: "Keyword" as const, $loc, token: $1 }
 
+@nomemo
 InterfaceOrEmptyBlock
   InterfaceBlock
   EmptyBlock
 
+@nomemo
 InterfaceBlock
   __ OpenBrace NestedInterfaceProperties __ CloseBrace
   __ OpenBrace ( __ InterfaceProperty )* __ CloseBrace
@@ -9234,19 +9692,23 @@ InterfaceBlock
 NestedInterfaceBlock
   InsertOpenBrace NestedInterfaceProperties InsertNewline InsertIndent InsertCloseBrace
 
+@nomemo
 NestedInterfaceProperties
   PushIndent NestedInterfaceProperty*:props PopIndent ::ASTNode[] ->
     return props if props#
     return $skip
 
+@nomemo
 NestedInterfaceProperty
   Nested InterfaceProperty
 
+@nomemo
 InterfaceProperty
   BasicInterfaceProperty
   NonEmptyParameters ReturnTypeSuffix InterfacePropertyDelimiter
   MethodSignature InterfacePropertyDelimiter
 
+@nomemo
 BasicInterfaceProperty
   ( TypeIndexSignature / TypeProperty ) _? TypeSuffix InterfacePropertyDelimiter
 
@@ -9272,26 +9734,31 @@ NestedModuleItems
 NestedModuleItem
   Nested ModuleItem StatementDelimiter
 
+@nomemo
 DeclareBlock ::Children
   __ OpenBrace NestedDeclareElements __ CloseBrace
   __ OpenBrace ( __ DeclareElement InterfacePropertyDelimiter)* __ CloseBrace
   # NOTE: Added indentation based implied braces
   InsertOpenBrace NestedDeclareElements InsertNewline InsertIndent InsertCloseBrace
 
+@nomemo
 NestedDeclareElements
   PushIndent NestedDeclareElement*:decs PopIndent ::ASTNode[] ->
     return decs if decs#
     return $skip
 
+@nomemo
 NestedDeclareElement
   Nested DeclareElement InterfacePropertyDelimiter
 
 # NOTE: Variation on TypeDeclaration where Declare already applied.
+@nomemo
 DeclareElement ::ASTNode
   Decorators? Export __ Default __ ( Identifier / ClassSignature / InterfaceDeclaration ):declaration
   Decorators? ( Export _? )? TypeLexicalDeclaration -> { ts: true, children: $0 }
   ( Export _? )? TypeDeclarationRest -> { ts: true, children: $0 }
 
+@nomemo
 EnumDeclaration ::EnumDeclaration
   ( Const _ )?:_isConst Enum _? IdentifierName:id EnumBlock:block ->
     ts := {
@@ -9403,6 +9870,7 @@ TypeIndexSignature
   ( [+-]? Readonly NotDedented )?:prefix OpenBracket:open TypeIndex:index CloseBracket:close ( __ [+-] &( _? QuestionMark ) )?:suffix ->
     return [prefix, open, index, close, suffix?[0...2]]
 
+@nomemo
 TypeIndex
   __ Identifier TypeSuffix
   __ PropertyName __ In Type ( __ As Type )?
@@ -9445,6 +9913,7 @@ QuestionMarkTypeSuffix
     children: $0
   }
 
+@nomemo
 MaybeNestedType
   NestedTypeBulletedTuple
   # NOTE: Let InterfaceBlock take first crack at an indented block
@@ -9471,6 +9940,7 @@ MaybeNestedTypePrimary
     return $2
   TypePrimary
 
+@nomemo
 MaybeNestedTypeUnary
   NestedTypeBulletedTuple
   # NOTE: Let InterfaceBlock take first crack at an indented block
@@ -9492,6 +9962,7 @@ ReturnTypeSuffix ::ReturnTypeAnnotation
       children: [ $1, optional, $3, $4, ...t.children ]
     }
 
+@nomemo
 ReturnType
   ( __ "asserts" NonIdContinue )?:asserts ForbidIndentedApplication TypePredicate?:t RestoreIndentedApplication ::ReturnTypeAnnotation ->
     return $skip unless t
@@ -9510,6 +9981,7 @@ ReturnType
       ts: true,
     }
 
+@nomemo
 TypePredicate ::TypeNode
   MaybeNestedType:lhs ( __ Is Type )?:rhs ->
     return lhs unless rhs
@@ -9520,6 +9992,7 @@ TypePredicate ::TypeNode
       children: [lhs, ...rhs]
     }
 
+@nomemo
 Type
   TypeWithPostfix
 
@@ -9530,6 +10003,7 @@ TypeBinary
     return [t, ...ops] unless optionalPrefix
     return [optionalPrefix, t, ops]
 
+@nomemo
 NestedTypeBinaryChain
   PushIndent NestedTypeBinary* PopIndent ::ASTNode[] ->
     return $skip unless $2.length
@@ -9541,6 +10015,7 @@ NestedTypeBinary
     return $skip unless t
     return [ indent, op, t ]
 
+@nomemo
 TypeUnary
   ( __ TypeUnaryOp )*:prefix TypePrimary:t TypeUnarySuffix*:suffix ::TypeNode ->
     return t unless prefix# or suffix#
@@ -9553,6 +10028,7 @@ TypeUnary
       children: (prefix# ? $0 : [t, suffix]) as Children,
     }
 
+@nomemo
 TypeUnarySuffix
   TypeIndexedAccess
   QuestionMark
@@ -9562,6 +10038,7 @@ TypeUnaryOp
   "keyof" NonIdContinue
   "readonly" NonIdContinue
 
+@nomemo
 TypeIndexedAccess
   OpenBracket Type? __ CloseBracket
   # NOTE: Added shorthand T."string" -> T["string"] and T.0 -> T[0]
@@ -9585,6 +10062,7 @@ UnknownAlias
   "???" ->
     return { $loc, token: "unknown" }
 
+@nomemo
 TypePrimary
   # NOTE: https://github.com/microsoft/TypeScript/blob/ae27e55b027c66bf5b80f596da866f8485ac491d/src/compiler/parser.ts#L4724-L4745
   _? Infer _? IdentifierName ( NotDedented ExtendsToken Type )?
@@ -9629,6 +10107,7 @@ TypePrimary
       children: [ $1, $2, $4, $6, $7 ],  // omit AllowAll/RestoreAll
     }
 
+@nomemo
 TypeIdentifier
   _? UnknownAlias ->
     return {
@@ -9651,11 +10130,13 @@ TypeIdentifier
       raw: $2.name,
     }
 
+@nomemo
 ImportType
   Import OpenParen __ StringLiteral __ CloseParen ( Dot IdentifierName )? TypeArguments?
   # NOTE: Added implicit import without parens
   Import InsertOpenParen Trimmed_? StringLiteral InsertCloseParen
 
+@nomemo
 TypeTuple
   OpenBracket:open AllowAll TypeTupleContent?:elements RestoreAll __:ws CloseBracket:close ::TypeTuple ->
     /* c8 ignore next -- structurally unreachable: empty `[]` matched by other rules, valid content produces TypeTupleContent. $skip kept as state-safety belt inside AllowAll/RestoreAll. */
@@ -9685,6 +10166,7 @@ TypeElementListWithIndentedApplicationForbidden
     return $2 if $2
     return $skip
 
+@nomemo
 TypeElementList ::ASTNode[]
   TypeBulletedTuple -> [$1]
   !EOS TypeElement:first ( ( _? Comma !EOS ) TypeElement )*:rest ->
@@ -9699,6 +10181,7 @@ TypeElementList ::ASTNode[]
       )
     )
 
+@nomemo
 TypeElement ::ASTNode
   # NOTE: Allow for postfix splat like CoffeeScript
   # NOTE: Match named form first, to avoid matching `foo: bar,` as Type
@@ -9730,11 +10213,13 @@ TypeElement ::ASTNode
       children: [ dots, type ]
     }
 
+@nomemo
 NestedTypeElementList
   PushIndent NestedTypeElement*:types PopIndent ->
     return types if types#
     return $skip
 
+@nomemo
 NestedTypeElement
   Nested:indent TypeElementList:list ArrayElementDelimiter:delimiter ->
     // NOTE: TypeElementList always returns a non-empty array.
@@ -9747,6 +10232,7 @@ NestedTypeElement
     })
 
 # NOTE: Nested bulleted tuple starts with an indentation.
+@nomemo
 NestedTypeBulletedTuple ::TypeTuple
   ( InsertSpace InsertOpenBracket ):open PushIndent NestedTypeBullet*:nestedContent InsertCloseBracket:close PopIndent ->
     return $skip unless nestedContent#
@@ -9770,6 +10256,7 @@ NestedTypeBulletedTuple ::TypeTuple
 
 # NOTE: Bulleted tuple intended for beginning of lines,
 # when leading indentation has already been consumed.
+@nomemo
 TypeBulletedTuple ::TypeNode
   InsertOpenBracket:open ( TypeBullet NestedTypeBullet* )?:nestedContent InsertCloseBracket:close ->
     return $skip unless nestedContent
@@ -9791,11 +10278,13 @@ TypeBulletedTuple ::TypeNode
       children: [open, ...content, close],
     }
 
+@nomemo
 NestedTypeBullet
   Nested:indent TypeBullet:list ->
     // Prepend indent to first element
     return list.map((e, i) => i is 0 ? prepend(indent, e) : e)
 
+@nomemo
 TypeBullet
   BulletIndent:bullet ( TypeElementList ArrayBulletDelimiter )?:content PopIndent ->
     return $skip unless content
@@ -9809,12 +10298,14 @@ TypeBullet
       list[last] = append(list[last], delimiter)
     return list
 
+@nomemo
 TypeWithPostfix
   TypeConditional:t ( _? TypeIfClause )?:postfix ::TypeNode ->
     return t unless postfix
     return prepend(postfix[0],
       expressionizeTypeIf([ ...postfix[1], $1, undefined ]))
 
+@nomemo
 TypeConditional ::ASTNode
   _? /(?=if|unless)/ TypeIfThenElse ::TypeConditional ->
     return prepend($1, expressionizeTypeIf($3))
@@ -9827,6 +10318,7 @@ TypeConditional ::ASTNode
     }
   TypeBinary
 
+@nomemo
 TypeCondition ::TypeCondition
   # NOTE: Type after `extends` needs to forbid TypePostfix,
   # or it could end up matching the "then" clause of an if/then/else
@@ -9837,10 +10329,12 @@ TypeCondition ::TypeCondition
       children: $0 as Children,
     }
 
+@nomemo
 TypeIfThenElse ::[ASTNode, TypeCondition, ASTNode, ASTNode]
   TypeIfClause TypeBlock TypeElse? ->
     return [...$1, $2, $3]
 
+@nomemo
 TypeIfClause ::[ASTNode, TypeCondition]
   ( If / Unless ) OpenParen AllowAll TypeCondition?:condition RestoreAll CloseParen ->
     return $skip unless condition
@@ -9863,6 +10357,7 @@ TypeBlock
 TypeTemplateSubstitution
   SubstitutionStart Type __ CloseBrace
 
+@nomemo
 TypeTemplateLiteral
   Backtick ( TemplateCharacters / TypeTemplateSubstitution )* Backtick ->
     return {
@@ -9874,10 +10369,12 @@ TypeTemplateLiteral
 CoffeeStringTypeSubstitution
   CoffeeSubstitutionStart Type __ CloseBrace
 
+@nomemo
 CoffeeInterpolatedDoubleQuotedTypeLiteral
   CoffeeInterpolationEnabled DoubleQuote:s ( CoffeeDoubleQuotedStringCharacters / CoffeeStringTypeSubstitution )*:parts DoubleQuote:e ->
     return processCoffeeInterpolation(s, parts, e, $loc)
 
+@nomemo
 TypeLiteral
   TypeTemplateLiteral
   # NOTE: TemplateLiteral must be before Literal, so that CoffeeScript
@@ -9892,9 +10389,11 @@ TypeLiteral
   "unique" _ "symbol" NonIdContinue ->
     return { type: "UniqueSymbolType", children: $0 }
 
+@nomemo
 InlineInterfaceLiteral
   InsertInlineOpenBrace InlineBasicInterfaceProperty ( SameLineOrIndentedFurther InlineBasicInterfaceProperty )* InsertCloseBrace
 
+@nomemo
 InlineBasicInterfaceProperty
   # NOTE: Not using TypeSuffix here to require a Colon, and to forbid spaces
   # before the colon (to enable conditional types like prop ? T1 : T2).
@@ -9912,6 +10411,7 @@ TypeBinaryOp
   "&" ->
     return { $loc, token: "&" }
 
+@nomemo
 TypeFunction
   # NOTE: Forbid declaration operators after return type to avoid treating `f: (x: T) => y := z`
   # as a typed const; prefer implicit object/arrow function interpretation.
@@ -9966,6 +10466,7 @@ TypeArguments
       children: [ open, flatArgs, ws, close ],
     }
 
+@nomemo
 ImplicitTypeArguments
   TypeApplicationStart InsertOpenAngleBracket:open Trimmed_?:ws TypeArgumentList:args InsertCloseAngleBracket:close ::TypeArguments ->
     // Remove trailing comma which is forbidden in TypeScript type arguments
@@ -9978,6 +10479,7 @@ ImplicitTypeArguments
       children: [open, ws, args, close],
     }
 
+@nomemo
 TypeApplicationStart
   IndentedApplicationAllowed &( IndentedFurther !ForbiddenImplicitTypeCalls )
   !EOS &( _ !ForbiddenImplicitTypeCalls )
@@ -9990,6 +10492,7 @@ ForbiddenImplicitTypeCalls
   /(extends|not|is)/ NonIdContinue
 
 # Based on ArgumentList
+@nomemo
 TypeArgumentList
   # Check for same line arguments then nested arguments
   !EOS TypeArgument ( CommaDelimiter !EOS WTypeArgument )* ( CommaDelimiter ( NestedTypeBulletedTuple / NestedInterfaceBlock / NestedTypeArgumentList ) )+ ->
@@ -10017,11 +10520,13 @@ TypeArgumentList
       ...$2.flatMap(([comma, arg]) => [comma, arg]),
     ]
 
+@nomemo
 NestedTypeArgumentList
   PushIndent NestedTypeArgument*:args PopIndent ->
     return $skip unless args#
     return args.flat()
 
+@nomemo
 NestedTypeArgument
   Nested:indent SingleLineTypeArgumentList:args TypeArgumentDelimiter:comma ->
     // Attach indentation to first argument in SingleLineTypeArgumentList
@@ -10029,14 +10534,17 @@ NestedTypeArgument
     arg0 = prepend(indent, arg0)
     return [ arg0, ...rest, comma ]
 
+@nomemo
 SingleLineTypeArgumentList
   WTypeArgument ( ( _? Comma ) WTypeArgument )* ->
     return [ $1, ...$2 ]
 
+@nomemo
 WTypeArgument
   _? TypeArgument ->
     return prepend($1, $2)
 
+@nomemo
 TypeArgumentDelimited
   TypeArgument TypeArgumentDelimiter
 
@@ -10055,12 +10563,15 @@ TypeParameters ::TypeParameters
       children: $0
     }
 
+@nomemo
 TypeParameter
   __ ( /const|in|out/ _ )* Identifier TypeConstraint? TypeInitializer? TypeParameterDelimiter
 
+@nomemo
 TypeConstraint
   __ ExtendsToken Type
 
+@nomemo
 TypeInitializer
   __ "=" Type
 
@@ -10070,6 +10581,7 @@ TypeParameterDelimiter
   &EOS InsertComma -> $2
 
 # TypeScript's this: T syntax in function parameters
+@nomemo
 ThisType
   _? ( This / AtThis ) Colon Type ParameterElementDelimiter -> {
     type: "ThisType",
@@ -10079,13 +10591,16 @@ ThisType
 
 ## Utility
 
+@nomemo
 Shebang
   /#![^\r\n]*/ EOL
 
+@nomemo
 CivetPrologue
   [\t ]* DoubleQuote CivetPrologueContent:content DoubleQuote SimpleStatementDelimiter [ \t]* ( EOL / &RestOfLine ) -> content
   [\t ]* SingleQuote CivetPrologueContent:content SingleQuote SimpleStatementDelimiter [ \t]* ( EOL / &RestOfLine ) -> content
 
+@nomemo
 CivetPrologueContent
   "civet" NonIdContinue CivetOption*:options [\s]* ->
     return {
@@ -10094,6 +10609,7 @@ CivetPrologueContent
       config: Object.fromEntries(options),
     }
 
+@nomemo
 CivetOption
   /\s+([+-]?)([a-zA-Z0-9-]+)(\s*=\s*([\p{ID_Continue}.,+-]*))?/ ->
     // Normalize option names to camelCase
@@ -10118,18 +10634,22 @@ CivetOption
 
     return [optionName, value]
 
+@nomemo
 UnknownPrologue
   # NOTE: $ is to keep source verbatim and not insert a semicolon if one was omitted
   # Can't use $EOS because it will prevent re-writing of coffee style comments
   [\t ]* StringLiteral:s $SimpleStatementDelimiter EOS
 
+@nomemo
 TripleSlashDirective
   # https://www.typescriptlang.org/docs/handbook/triple-slash-directives.html
   /\/\/\/[^\r\n]*/ EOS?
 
+@nomemo
 DirectivePrologue
   PrologueString !( __ ( AccessStart / Pipe ) ) -> $1
 
+@nomemo
 PrologueString
   CivetPrologue
   UnknownPrologue
@@ -10145,6 +10665,7 @@ EOL
 
 # Debugging aid (see CONTRIBUTING.md), so not covered by tests
 # /* c8 ignore start */
+@nomemo
 DebugHere
   "" ->
     debugger
@@ -10201,6 +10722,7 @@ InsertComma
   "" ->
     return { $loc, token: ",", implicit: true }
 
+@nomemo
 InsertSpaceEquals
   "" ->
     return { $loc, token: " =" }
@@ -10219,6 +10741,7 @@ InsertNewline
   "" ->
     return "\n"
 
+@state
 InsertIndent
   "" ->
     return state.currentIndent.token
@@ -10235,6 +10758,7 @@ InsertBreak
   "" ->
     return { $loc, token: ";break;" }
 
+@nomemo
 InsertVar
   "" ->
     return { $loc, token: "var " }
@@ -10248,6 +10772,7 @@ CoffeeBinaryExistentialEnabled
     if(config.coffeeBinaryExistential) return
     return $skip
 
+@nomemo
 CoffeeBooleansEnabled
   "" ->
     if(config.coffeeBooleans) return
@@ -10298,11 +10823,13 @@ CoffeeLineContinuationEnabled
     if(config.coffeeLineContinuation) return
     return $skip
 
+@nomemo
 CoffeeNotEnabled
   "" ->
     if(config.coffeeNot) return
     return $skip
 
+@nomemo
 CoffeeOfEnabled
   "" ->
     if(config.coffeeOf) return
@@ -10313,6 +10840,7 @@ CoffeePrototypeEnabled
     if(config.coffeePrototype) return
     return $skip
 
+@nomemo
 ESArrowFunctionEnabled
   "" ->
     if(config.esArrowFunction) return
@@ -10338,6 +10866,7 @@ IsBare
     return $skip if config.iife or config.repl
 
 # Reset module level data
+@nomemo
 Reset
   "" ->
     // Storage for PushIndent/PopIndent
@@ -10499,19 +11028,25 @@ Reset
 
     // Pass in parser config from main
     Object.assign(config, initialConfig)
+    updateStateKey()
 
     return
 
+@nomemo
 Init
   Shebang? Prologue:directives ->
     directives.forEach (directive) =>
       if not Array.isArray(directive) and directive.type is "CivetPrologue"
         Object.assign(config, directive.config)
+    // Results memoized while reading the prologue may depend on the options
+    // its directives changed
+    $clearMemo()
 
     if config.strict
       return [...$0, '"use strict";\n']
     return $0
 
+@nomemo
 Prologue
   ( TripleSlashDirective / ( ( JSSingleLineComment / JSMultiLineComment ) EOS ) / DirectivePrologue )*
 
@@ -10537,6 +11072,7 @@ Indent
     }
 
 # Used in PushIndent to keep track of the last indent level for nesting
+@nomemo @state
 TrackIndented
   Indent:indent ->
     {level} := indent
@@ -10544,11 +11080,13 @@ TrackIndented
     /* c8 ignore next -- debug output for verbose config */
     console.log("pushing indent", indent) if config.verbose
     state.indentLevels.push(indent)
+    updateStateKey()
     return $1
 
 # Indents one level deeper,
 # without consuming the indentation so it can be by Nested
 # Must be matched with PopIndent
+@nomemo
 PushIndent
   # TrackIndented pushes the indent level if it is deeper than the current level
   # it will skip if it is not deeper
@@ -10559,18 +11097,21 @@ PushIndent
   # comment line's own indent.
   &( EOL TrackIndented )
 
+@nomemo
 PopIndent
   "" ->
     /* c8 ignore next 2 -- debug output for verbose config */
     if config.verbose
       console.log("popping indent", state.indentLevels[state.indentLevels#-1], "->", state.indentLevels[state.indentLevels#-2])
     state.indentLevels./**/pop()
+    updateStateKey()
     return
 
 # "Nested" actually means "new line at current indentation level",
 # where the current indentation level is set by TrackIndented / PushIndent
 # (which require strictly more indentation than previous levels)
 # Consumes and returns the newline and indentation
+@state
 Nested
   EOS Indent:indent ->
     return $0 if indent.level is state.currentIndent.level
@@ -10579,11 +11120,13 @@ Nested
       console.log(`failing Nested: ${indent.level} does not match current indent level ${state.currentIndent.level}`)
     return $skip
 
+@state
 IndentedFurther
   EOS Indent:indent ->
     return $0 if indent.level > state.currentIndent.level
     return $skip
 
+@nomemo @state
 IndentedAtLeast
   EOS Indent:indent ->
     return $0 if indent.level >= state.currentIndent.level
@@ -10598,6 +11141,7 @@ NotDedented ::WSArray
     // TypeScript inference finite, unlike flat(Infinity).
     return ws.flat(3).filter(Boolean)
 
+@nomemo
 SameLineOrIndentedFurther ::WSArray
   IndentedFurther? _? ->
     ws := []
@@ -10610,6 +11154,7 @@ SameLineOrIndentedFurther ::WSArray
 Dedented
   !IndentedAtLeast EOS -> $2
 
+@nomemo @state
 PushExtraIndent1
   "" ->
     indent := {
@@ -10620,4 +11165,5 @@ PushExtraIndent1
     /* c8 ignore next -- debug output for verbose config */
     console.log("pushing bonus indent", indent) if config.verbose
     state.indentLevels.push(indent)
+    updateStateKey()
     return indent
