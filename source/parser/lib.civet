@@ -1258,7 +1258,8 @@ function makeGetterMethod(id: ClassElementName | ASTString, ws: ASTNode, value: 
     parameters
   }
 
-function processBindingPatternLHS(lhs: any, tail: any): void
+// Returns whether any comma-separated follow-up assignments were added to tail
+function processBindingPatternLHS(lhs: any, tail: any): boolean
   // Expand AtBindingProperty (@x shorthand in object patterns) to x: this.x
   adjustAtBindings lhs, true
   // In assignment (non-binding) context, @x can be used directly as this.x
@@ -1289,11 +1290,11 @@ function processBindingPatternLHS(lhs: any, tail: any): void
   subbindings := gatherSubbindings lhs
   simplifyBindingProperties lhs
   simplifyBindingProperties subbindings
-  // TODO: This isn't quite right for compound assignments, may need to wrap with parens and use comma to return the complete value
   tail.push
     ...splices.map (s) => [", ", s]
     ...thisAssignments.map (a) => [", ", a]
     ...subbindings
+  splices# + thisAssignments# + subbindings# > 0
 
 function processAssignments(statements: ASTNode): void
   // Move assignments/updates within LHS of assignments/updates
@@ -1419,8 +1420,31 @@ function processAssignments(statements: ASTNode): void
         // @ts-ignore
         $2 = ref
 
+    // Split chained assignments containing special operators (xor=, ++=, etc.)
+    // into nested AssignmentExpressions so each segment runs every rewrite
+    // (special ops, optional chains, destructuring, auto-declarations).
+    firstSpecial := $1.findIndex (x: any) => x.-1.special
+    if len > 1 and firstSpecial >= 0
+      splitAt := firstSpecial or 1
+      suffix := $1.splice splitAt
+      len = $1.length
+      inner := makeNode {
+        type: "AssignmentExpression"
+        children: [suffix, $2]
+        names: null
+        lhs: suffix
+        assigned: suffix[0][1]
+        expression: $2
+      }
+      index := exp.children.indexOf($2)
+      assert.notEqual index, -1, "processAssignments: $2 must be directly in exp.children"
+      exp.children.splice index, 1, inner
+      updateParentPointers inner, exp
+      processAssignments inner
+      exp.expression = $2 = exp.children[index] as NonNullASTNode
+
     // identifier=, xor=, ++=
-    if $1.some((x: any) => x.-1.special)
+    if firstSpecial is 0
       [, lhs, , op] := $1[0]
       { call, omitLhs } := op
       callLhs .= lhs
@@ -1464,6 +1488,7 @@ function processAssignments(statements: ASTNode): void
         exp.expression = $2 = [call, "(", callLhs, ", ", $2, ")"]
       if omitLhs
         replaceNode exp, $2
+        updateParentPointers $2, exp.parent
         continue
 
     // Polyfill private-field glob assignment: `obj.{#x, #y} = src` cannot use
@@ -1524,6 +1549,7 @@ function processAssignments(statements: ASTNode): void
           tail.push(")")
 
     refsToDeclare := new Set<ASTRef>
+    commaTail .= false
 
     // Walk from right to left to handle splices
     i = len - 1
@@ -1572,7 +1598,7 @@ function processAssignments(statements: ASTNode): void
           break
 
         else if lhs.type is like "ObjectBindingPattern", "ArrayBindingPattern", "NamedBindingPattern"
-          processBindingPatternLHS(lhs, tail)
+          commaTail = processBindingPatternLHS(lhs, tail) or commaTail
           // Extract temp refs that need to be declared from lhs
           gatherRecursiveAll(lhs, .type is "Ref").forEach refsToDeclare@add
 
@@ -1608,6 +1634,25 @@ function processAssignments(statements: ASTNode): void
           $2 = newMemberExp
 
       i--
+
+    // Outside statement level, a comma tail would split the enclosing
+    // expression (e.g. into extra call arguments), so parenthesize it and
+    // end with the assigned value, saved first if the patterns could overwrite it
+    if commaTail and not blockContainingStatement exp
+      rhs := $2
+      overwritten := isASTNodeObject(rhs) and rhs.type is "Identifier" and
+        $1.some ([, lhs]) => namesOf(lhs).includes rhs.name
+      { ref, refAssignment } := if overwritten
+        r := makeRef()
+        { ref: r, ...makeRefAssignment r, $2 }
+      else
+        maybeRefAssignment $2
+      if refAssignment
+        replaceNode $2, refAssignment, exp
+        $2 = refAssignment
+      exp.children.unshift "(" unless insideParens
+      tail.push ", ", ref
+      tail.push ")" unless insideParens
 
     // Add any additional binding refs that need to be declared to our hoisted declarations
     if refsToDeclare.size
